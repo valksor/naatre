@@ -1,0 +1,32 @@
+{
+  "profile": "core.value-1",
+  "types": [
+    {"id":"Strings","kind":"list","input":true,"element":"String"},
+    {"id":"NullableStrings","kind":"list","input":true,"element":"String","elementNullable":true},
+    {"id":"StringMap","kind":"map","input":true,"element":"String"},
+    {"id":"ProfileInput","kind":"input-object","input":true,"fields":{"name":{"type":"String"},"nickname":{"type":"String","nullable":true}}},
+    {"id":"Contact","kind":"oneof","input":true,"fields":{"email":{"type":"String","nullable":true},"phone":{"type":"String"}}},
+    {"id":"DefaultContact","kind":"oneof","input":true,"fields":{"email":{"type":"String"},"phone":{"type":"String","default":"1"}}},
+    {"id":"OpenColor","kind":"enum","input":true,"open":true,"enumValues":["RED","BLUE"]},
+    {"id":"ClosedColor","kind":"enum","input":true,"enumValues":["RED","BLUE"]},
+    {"id":"InputNode","kind":"input-object","input":true,"maxDepth":1,"fields":{"next":{"type":"InputNode","nullable":true}}}
+  ],
+  "vectors": [
+    {"name":"empty-map","type":"StringMap","input":"{}","valid":true,"canonical":"{}"},
+    {"name":"portable-map-keys","type":"StringMap","input":"{\"😀\":\"face\",\"0\":\"zero\",\"\":\"empty\",\"$literal\":\"inert\"}","valid":true,"canonical":"{\"\":\"empty\",\"$literal\":\"inert\",\"0\":\"zero\",\"😀\":\"face\"}"},
+    {"name":"utf16-map-key-order","type":"StringMap","input":"{\"\":\"bmp\",\"😀\":\"astral\"}","valid":true,"canonical":"{\"😀\":\"astral\",\"\":\"bmp\"}"},
+    {"name":"duplicate-map-member","type":"StringMap","input":"{\"x\":\"first\",\"x\":\"second\"}","valid":false},
+    {"name":"unpaired-surrogate-escape","type":"StringMap","input":"{\"\\ud800\":\"invalid\"}","valid":false},
+    {"name":"empty-list","type":"NullableStrings","input":"[]","valid":true,"canonical":"[]"},
+    {"name":"nullable-list-element","type":"NullableStrings","input":"[null,\"x\"]","valid":true,"canonical":"[null,\"x\"]"},
+    {"name":"non-null-list-element","type":"Strings","input":"[null]","valid":false},
+    {"name":"object-missing-and-null","type":"ProfileInput","input":"{\"nickname\":null}","valid":true,"canonical":"{\"nickname\":null}"},
+    {"name":"oneof-nullable-member","type":"Contact","input":"{\"email\":null}","valid":true,"canonical":"{\"email\":null}","activeMember":"email"},
+    {"name":"oneof-defaulted-member","type":"DefaultContact","input":"{}","valid":true,"canonical":"{\"phone\":\"1\"}","activeMember":"phone"},
+    {"name":"oneof-zero-members","type":"Contact","input":"{}","valid":false},
+    {"name":"oneof-multiple-members","type":"Contact","input":"{\"email\":null,\"phone\":\"1\"}","valid":false},
+    {"name":"open-enum-unknown","type":"OpenColor","input":"\"GREEN\"","valid":true,"canonical":"\"GREEN\"","enumKnown":false},
+    {"name":"closed-enum-unknown","type":"ClosedColor","input":"\"GREEN\"","valid":false},
+    {"name":"recursive-value-limit","type":"InputNode","input":"{\"next\":{\"next\":{\"next\":null}}}","valid":false}
+  ]
+}

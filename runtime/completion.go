@@ -9,6 +9,7 @@ import (
 	"slices"
 	"unicode/utf8"
 
+	"github.com/valksor/naatre/protocol"
 	"github.com/valksor/naatre/schema"
 )
 
@@ -66,66 +67,101 @@ func copyOutput(value reflect.Value, depth int, state *copyState) (any, error) {
 		}
 		value = value.Elem()
 	}
+	if copied, matched, err := copySpecialOutput(value, depth, state); matched || err != nil {
+		return copied, err
+	}
 
 	kind := value.Kind()
 	if kind == reflect.Pointer {
-		if value.IsNil() {
-			return nil, nil
-		}
-		if err := state.enter(copyReference{kind: value.Kind(), ptr: value.Pointer()}); err != nil {
-			return nil, err
-		}
-		defer state.leave(copyReference{kind: value.Kind(), ptr: value.Pointer()})
-		return copyOutput(value.Elem(), depth+1, state)
+		return copyPointerOutput(value, depth, state)
 	}
 	if kind == reflect.Map {
-		if value.IsNil() {
-			return nil, nil
-		}
-		if value.Type().Key().Kind() != reflect.String {
-			return nil, fmt.Errorf("%w: map keys must be strings", errInvalidOutput)
-		}
-		reference := copyReference{kind: value.Kind(), ptr: value.Pointer()}
-		if err := state.enter(reference); err != nil {
-			return nil, err
-		}
-		defer state.leave(reference)
-		result := make(map[string]any, value.Len())
-		iterator := value.MapRange()
-		for iterator.Next() {
-			copied, err := copyOutput(iterator.Value(), depth+1, state)
-			if err != nil {
-				return nil, err
-			}
-			result[iterator.Key().String()] = copied
-		}
-		return result, nil
-	}
-	if kind == reflect.Slice {
-		if value.IsNil() {
-			return nil, nil
-		}
-		reference := copyReference{kind: value.Kind(), ptr: value.Pointer()}
-		if err := state.enter(reference); err != nil {
-			return nil, err
-		}
-		defer state.leave(reference)
+		return copyMapOutput(value, depth, state)
 	}
 	if kind == reflect.Slice || kind == reflect.Array {
-		result := make([]any, value.Len())
-		for index := 0; index < value.Len(); index++ {
-			copied, err := copyOutput(value.Index(index), depth+1, state)
-			if err != nil {
-				return nil, err
-			}
-			result[index] = copied
-		}
-		return result, nil
+		return copyListOutput(value, depth, state)
 	}
 	if !value.CanInterface() {
 		return nil, fmt.Errorf("%w: inaccessible Go value", errInvalidOutput)
 	}
 	return value.Interface(), nil
+}
+
+func copySpecialOutput(value reflect.Value, depth int, state *copyState) (any, bool, error) {
+	if !value.CanInterface() {
+		return nil, false, nil
+	}
+	switch typed := value.Interface().(type) {
+	case schema.TaggedValue:
+		copied, err := copyOutput(reflect.ValueOf(typed.Value()), depth+1, state)
+		if err != nil {
+			return nil, true, err
+		}
+		tagged, err := schema.Tag(typed.Variant(), copied)
+		return tagged, true, err
+	case json.RawMessage:
+		return append(json.RawMessage(nil), typed...), true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func copyPointerOutput(value reflect.Value, depth int, state *copyState) (any, error) {
+	if value.IsNil() {
+		return nil, nil
+	}
+	reference := copyReference{kind: value.Kind(), ptr: value.Pointer()}
+	if err := state.enter(reference); err != nil {
+		return nil, err
+	}
+	defer state.leave(reference)
+	return copyOutput(value.Elem(), depth+1, state)
+}
+
+func copyMapOutput(value reflect.Value, depth int, state *copyState) (any, error) {
+	if value.IsNil() {
+		return nil, nil
+	}
+	if value.Type().Key().Kind() != reflect.String {
+		return nil, fmt.Errorf("%w: map keys must be strings", errInvalidOutput)
+	}
+	reference := copyReference{kind: value.Kind(), ptr: value.Pointer()}
+	if err := state.enter(reference); err != nil {
+		return nil, err
+	}
+	defer state.leave(reference)
+	result := make(map[string]any, value.Len())
+	iterator := value.MapRange()
+	for iterator.Next() {
+		copied, err := copyOutput(iterator.Value(), depth+1, state)
+		if err != nil {
+			return nil, err
+		}
+		result[iterator.Key().String()] = copied
+	}
+	return result, nil
+}
+
+func copyListOutput(value reflect.Value, depth int, state *copyState) (any, error) {
+	if value.Kind() == reflect.Slice && value.IsNil() {
+		return nil, nil
+	}
+	if value.Kind() == reflect.Slice {
+		reference := copyReference{kind: value.Kind(), ptr: value.Pointer()}
+		if err := state.enter(reference); err != nil {
+			return nil, err
+		}
+		defer state.leave(reference)
+	}
+	result := make([]any, value.Len())
+	for index := 0; index < value.Len(); index++ {
+		copied, err := copyOutput(value.Index(index), depth+1, state)
+		if err != nil {
+			return nil, err
+		}
+		result[index] = copied
+	}
+	return result, nil
 }
 
 func (s *copyState) enter(reference copyReference) error {
@@ -166,86 +202,13 @@ func (s *completionState) completeOutput(value any, output schema.TypeID, nullab
 
 	switch descriptor.Kind {
 	case schema.ScalarType:
-		return completeScalar(value, schema.ScalarKind(output), nullable, path)
+		return completeScalar(value, output, nullable, path, s.types)
 	case schema.ObjectType:
-		object, ok := value.(map[string]any)
-		if !ok {
-			return nil, issue(path, "object output must be a string-keyed map"), false
-		}
-		result := make(map[string]any, len(object))
-		names := make([]string, 0, len(descriptor.Fields))
-		for name := range descriptor.Fields {
-			names = append(names, name)
-		}
-		slices.Sort(names)
-		for _, name := range names {
-			field := descriptor.Fields[name]
-			fieldValue, exists := object[name]
-			fieldPath := appendPath(path, name)
-			if !exists {
-				if field.Required {
-					issues = append(issues, completionIssue{path: fieldPath, cause: fmt.Errorf("%w: required field is absent", errInvalidOutput)})
-				}
-				continue
-			}
-			fieldOutput, fieldIssues, fieldAvailable := s.completeOutput(fieldValue, field.Type, field.Nullable, depth+1, fieldPath)
-			issues = append(issues, fieldIssues...)
-			if fieldAvailable {
-				result[name] = fieldOutput
-			}
-		}
-		unknown := make([]string, 0)
-		for name := range object {
-			if _, known := descriptor.Fields[name]; !known {
-				unknown = append(unknown, name)
-			}
-		}
-		slices.Sort(unknown)
-		for _, name := range unknown {
-			message := "unknown object field"
-			if !utf8.ValidString(name) {
-				message = "object field name is invalid UTF-8"
-			}
-			issues = append(issues, completionIssue{path: appendPath(path, name), cause: fmt.Errorf("%w: %s", errInvalidOutput, message)})
-		}
-		return result, issues, true
+		return s.completeObject(value, descriptor, depth, path)
 	case schema.ListType:
-		list, ok := value.([]any)
-		if !ok {
-			return nil, issue(path, "list output must be a slice or array"), false
-		}
-		result := make([]any, len(list))
-		for index, item := range list {
-			itemOutput, itemIssues, itemAvailable := s.completeOutput(item, descriptor.Element, descriptor.ElementNullable, depth+1, appendPath(path, index))
-			issues = append(issues, itemIssues...)
-			if itemAvailable {
-				result[index] = itemOutput
-			}
-		}
-		return result, issues, true
+		return s.completeList(value, descriptor, depth, path)
 	case schema.MapType:
-		object, ok := value.(map[string]any)
-		if !ok {
-			return nil, issue(path, "map output must be a string-keyed map"), false
-		}
-		result := make(map[string]any, len(object))
-		keys := make([]string, 0, len(object))
-		for key := range object {
-			keys = append(keys, key)
-		}
-		slices.Sort(keys)
-		for _, key := range keys {
-			if !utf8.ValidString(key) {
-				issues = append(issues, completionIssue{path: appendPath(path, key), cause: fmt.Errorf("%w: map key is invalid UTF-8", errInvalidOutput)})
-				continue
-			}
-			itemOutput, itemIssues, itemAvailable := s.completeOutput(object[key], descriptor.Element, descriptor.ElementNullable, depth+1, appendPath(path, key))
-			issues = append(issues, itemIssues...)
-			if itemAvailable {
-				result[key] = itemOutput
-			}
-		}
-		return result, issues, true
+		return s.completeMap(value, descriptor, depth, path)
 	case schema.EnumType:
 		reflected := reflect.ValueOf(value)
 		if reflected.Kind() != reflect.String || !utf8.ValidString(reflected.String()) || (!descriptor.Open && !slices.Contains(descriptor.EnumValues, reflected.String())) {
@@ -253,17 +216,167 @@ func (s *completionState) completeOutput(value any, output schema.TypeID, nullab
 		}
 		return reflected.String(), nil, true
 	case schema.InterfaceType, schema.UnionType:
-		return nil, issue(path, "output type is not supported by the reference executor"), false
+		return s.completeTagged(value, output, depth, path)
 	case schema.InputObjectType, schema.OneOfType:
 		return nil, issue(path, "type is not valid in output position"), false
 	}
 	return nil, issue(path, "type has an unknown output kind"), false
 }
 
-func completeScalar(value any, kind schema.ScalarKind, nullable bool, path []any) (any, []completionIssue, bool) {
-	reflected := reflect.ValueOf(value)
+func (s *completionState) completeObject(value any, descriptor schema.TypeDescriptor, depth int, path []any) (any, []completionIssue, bool) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, issue(path, "object output must be a string-keyed map"), false
+	}
+	result := make(map[string]any, len(object))
+	issues := s.completeObjectFields(result, object, descriptor, depth, path)
+	issues = append(issues, unknownObjectFieldIssues(object, descriptor.Fields, path)...)
+	return result, issues, true
+}
+
+func (s *completionState) completeObjectFields(result, object map[string]any, descriptor schema.TypeDescriptor, depth int, path []any) []completionIssue {
+	var issues []completionIssue
+	for _, name := range sortedStringKeys(descriptor.Fields) {
+		field := descriptor.Fields[name]
+		fieldValue, exists := object[name]
+		fieldPath := appendPath(path, name)
+		if !exists {
+			if field.Required {
+				issues = append(issues, completionIssue{path: fieldPath, cause: fmt.Errorf("%w: required field is absent", errInvalidOutput)})
+			}
+			continue
+		}
+		fieldOutput, fieldIssues, fieldAvailable := s.completeOutput(fieldValue, field.Type, field.Nullable, depth+1, fieldPath)
+		issues = append(issues, fieldIssues...)
+		if fieldAvailable {
+			result[name] = fieldOutput
+		}
+	}
+	return issues
+}
+
+func unknownObjectFieldIssues(object map[string]any, fields map[string]schema.FieldDescriptor, path []any) []completionIssue {
+	var issues []completionIssue
+	for _, name := range sortedStringKeys(object) {
+		if _, known := fields[name]; known {
+			continue
+		}
+		message := "unknown object field"
+		if !utf8.ValidString(name) {
+			message = "object field name is invalid UTF-8"
+		}
+		issues = append(issues, completionIssue{path: appendPath(path, name), cause: fmt.Errorf("%w: %s", errInvalidOutput, message)})
+	}
+	return issues
+}
+
+func (s *completionState) completeList(value any, descriptor schema.TypeDescriptor, depth int, path []any) (any, []completionIssue, bool) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, issue(path, "list output must be a slice or array"), false
+	}
+	result := make([]any, len(list))
+	var issues []completionIssue
+	for index, item := range list {
+		itemOutput, itemIssues, itemAvailable := s.completeOutput(item, descriptor.Element, descriptor.ElementNullable, depth+1, appendPath(path, index))
+		issues = append(issues, itemIssues...)
+		if itemAvailable {
+			result[index] = itemOutput
+		}
+	}
+	return result, issues, true
+}
+
+func (s *completionState) completeMap(value any, descriptor schema.TypeDescriptor, depth int, path []any) (any, []completionIssue, bool) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, issue(path, "map output must be a string-keyed map"), false
+	}
+	result := make(map[string]any, len(object))
+	var issues []completionIssue
+	for _, key := range sortedStringKeys(object) {
+		if !utf8.ValidString(key) {
+			issues = append(issues, completionIssue{path: appendPath(path, key), cause: fmt.Errorf("%w: map key is invalid UTF-8", errInvalidOutput)})
+			continue
+		}
+		itemOutput, itemIssues, itemAvailable := s.completeOutput(object[key], descriptor.Element, descriptor.ElementNullable, depth+1, appendPath(path, key))
+		issues = append(issues, itemIssues...)
+		if itemAvailable {
+			result[key] = itemOutput
+		}
+	}
+	return result, issues, true
+}
+
+func (s *completionState) completeTagged(value any, output schema.TypeID, depth int, path []any) (any, []completionIssue, bool) {
+	tagged, ok := value.(schema.TaggedValue)
+	if !ok {
+		return nil, issue(path, "union or interface output requires a tagged value"), false
+	}
+	_, known, err := s.types.ResolveVariant(output, tagged.Variant())
+	if err != nil {
+		return nil, issue(appendPath(path, "$type"), err.Error()), false
+	}
+	variantValue, issues, available := s.completeVariantValue(tagged, known, depth, path)
+	if !available {
+		return nil, issues, false
+	}
+	return map[string]any{"$type": string(tagged.Variant()), "$value": variantValue}, issues, true
+}
+
+func (s *completionState) completeVariantValue(tagged schema.TaggedValue, known bool, depth int, path []any) (any, []completionIssue, bool) {
+	valuePath := appendPath(path, "$value")
+	if known {
+		return s.completeOutput(tagged.Value(), tagged.Variant(), false, depth+1, valuePath)
+	}
+	completed, err := completeOpaqueJSON(tagged.Value())
+	if err != nil {
+		return nil, issue(valuePath, "unknown union value is not canonical JSON"), false
+	}
+	return completed, nil, true
+}
+
+func sortedStringKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func completeScalar(value any, typeID schema.TypeID, nullable bool, path []any, types schema.Snapshot) (any, []completionIssue, bool) {
+	kind := schema.ScalarKind(typeID)
 	expected := scalarGoType(schema.TypeID(kind))
-	if expected == nil || !reflected.IsValid() || reflected.Type() != expected {
+	if expected == nil {
+		return completeCustomScalar(value, typeID, path, types)
+	}
+	return completeBuiltInScalar(value, kind, expected, nullable, path)
+}
+
+func completeCustomScalar(value any, typeID schema.TypeID, path []any, types schema.Snapshot) (any, []completionIssue, bool) {
+	raw, ok := value.(json.RawMessage)
+	if !ok {
+		return nil, issue(path, "custom scalar output must be json.RawMessage"), false
+	}
+	parsed, err := schema.CanonicalizeScalar(types, typeID, raw)
+	if err != nil {
+		return nil, issue(path, "custom scalar output is invalid"), false
+	}
+	canonical, err := parsed.MarshalJSON()
+	if err != nil {
+		return nil, issue(path, "custom scalar output cannot be completed"), false
+	}
+	completed, err := decodeCanonicalJSON(canonical)
+	if err != nil {
+		return nil, issue(path, "canonical custom scalar output cannot be decoded"), false
+	}
+	return completed, nil, true
+}
+
+func completeBuiltInScalar(value any, kind schema.ScalarKind, expected reflect.Type, nullable bool, path []any) (any, []completionIssue, bool) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Type() != expected {
 		return nil, issue(path, "scalar output has the wrong Go type"), false
 	}
 	if reflected.Kind() == reflect.String && !utf8.ValidString(reflected.String()) {
@@ -284,13 +397,77 @@ func completeScalar(value any, kind schema.ScalarKind, nullable bool, path []any
 	if err != nil {
 		return nil, issue(path, "scalar output cannot be completed"), false
 	}
+	completed, err := decodeCanonicalJSON(canonical)
+	if err != nil {
+		return nil, issue(path, "canonical scalar output cannot be decoded"), false
+	}
+	return completed, nil, true
+}
+
+func completeOpaqueJSON(value any) (any, error) {
+	if raw, ok := value.(json.RawMessage); ok {
+		canonical, err := protocol.CanonicalizeJSON(raw, protocol.Limits{})
+		if err != nil {
+			return nil, err
+		}
+		return decodeCanonicalJSON(canonical)
+	}
+	if err := validateOpaqueJSONValue(value); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := protocol.CanonicalizeJSON(encoded, protocol.Limits{})
+	if err != nil {
+		return nil, err
+	}
+	return decodeCanonicalJSON(canonical)
+}
+
+func validateOpaqueJSONValue(value any) error {
+	switch typed := value.(type) {
+	case nil, bool, json.Number,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return nil
+	case string:
+		if !utf8.ValidString(typed) {
+			return errors.New("invalid UTF-8 string")
+		}
+		return nil
+	case []any:
+		for _, item := range typed {
+			if err := validateOpaqueJSONValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		for key, item := range typed {
+			if !utf8.ValidString(key) {
+				return errors.New("invalid UTF-8 object key")
+			}
+			if err := validateOpaqueJSONValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported JSON value type %T", value)
+	}
+}
+
+func decodeCanonicalJSON(canonical []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(canonical))
 	decoder.UseNumber()
 	var completed any
 	if err := decoder.Decode(&completed); err != nil {
-		return nil, issue(path, "canonical scalar output cannot be decoded"), false
+		return nil, err
 	}
-	return completed, nil, true
+	return completed, nil
 }
 
 func issue(path []any, message string) []completionIssue {

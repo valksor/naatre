@@ -118,7 +118,7 @@ func TestRegistryValidatesNullableAndCompositeOutputSignatures(t *testing.T) {
 		{ID: "List", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.String)},
 		{ID: "Map", Kind: schema.MapType, Output: true, Element: schema.TypeID(schema.String)},
 		{ID: "Enum", Kind: schema.EnumType, Output: true, EnumValues: []string{"ONE"}},
-		{ID: "Interface", Kind: schema.InterfaceType, Output: true, Fields: map[string]schema.FieldDescriptor{"value": {Type: schema.TypeID(schema.String)}}},
+		{ID: "Interface", Kind: schema.InterfaceType, Output: true, Variants: []schema.TypeID{"Object"}, Fields: map[string]schema.FieldDescriptor{"value": {Type: schema.TypeID(schema.String)}}},
 	} {
 		if err := catalog.Register(descriptor); err != nil {
 			t.Fatal(err)

@@ -53,6 +53,7 @@ var (
 	unsignedPattern    = regexp.MustCompile(`^[0-9]+$`)
 	decimalPattern     = regexp.MustCompile(`^-?[0-9]+(?:\.[0-9]+)?$`)
 	jsonNumberPattern  = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
+	timestampPattern   = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-5][0-9](?:\.[0-9]{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$`)
 	uuidPattern        = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 )
 
@@ -319,11 +320,18 @@ func canonicalTimestamp(raw []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !timestampPattern.MatchString(text) {
+		return "", fmt.Errorf("%w: RFC3339 timestamp grammar", errInvalidScalar)
+	}
 	value, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
 		return "", fmt.Errorf("%w: RFC3339 timestamp", errInvalidScalar)
 	}
-	return quote(value.UTC().Format(time.RFC3339Nano)), nil
+	utc := value.UTC()
+	if utc.Year() < 0 || utc.Year() > 9999 {
+		return "", fmt.Errorf("%w: RFC3339 UTC year range", errInvalidScalar)
+	}
+	return quote(utc.Format(time.RFC3339Nano)), nil
 }
 
 func canonicalDuration(raw []byte) (string, error) {

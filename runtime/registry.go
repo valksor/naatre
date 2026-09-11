@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -322,10 +323,7 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 
 func validateOutputGoType(descriptor Descriptor, output schema.TypeDescriptor, actual reflect.Type) error {
 	if expected := scalarGoType(descriptor.Output); expected != nil {
-		if actual == expected || (descriptor.OutputNullable && actual.Kind() == reflect.Pointer && actual.Elem() == expected) {
-			return nil
-		}
-		return fmt.Errorf("go output %s does not match schema %s", actual, descriptor.Output)
+		return validateExactOutputType(descriptor, actual, expected, "")
 	}
 	switch output.Kind {
 	case schema.ObjectType, schema.MapType:
@@ -344,11 +342,23 @@ func validateOutputGoType(descriptor Descriptor, output schema.TypeDescriptor, a
 		}
 		return nil
 	case schema.UnionType, schema.InterfaceType:
-		return fmt.Errorf("schema output %s is not supported by the reference executor", descriptor.Output)
-	case schema.ScalarType, schema.InputObjectType, schema.OneOfType:
+		return validateExactOutputType(descriptor, actual, reflect.TypeFor[schema.TaggedValue](), "schema.TaggedValue")
+	case schema.ScalarType:
+		return validateExactOutputType(descriptor, actual, reflect.TypeFor[json.RawMessage](), "json.RawMessage")
+	case schema.InputObjectType, schema.OneOfType:
 		return fmt.Errorf("schema output %s is not valid for runtime registration", descriptor.Output)
 	}
 	return fmt.Errorf("schema output %s has an unknown kind", descriptor.Output)
+}
+
+func validateExactOutputType(descriptor Descriptor, actual, expected reflect.Type, expectedName string) error {
+	if actual == expected || (descriptor.OutputNullable && actual.Kind() == reflect.Pointer && actual.Elem() == expected) {
+		return nil
+	}
+	if expectedName != "" {
+		return fmt.Errorf("go output %s must be %s for schema %s", actual, expectedName, descriptor.Output)
+	}
+	return fmt.Errorf("go output %s does not match schema %s", actual, descriptor.Output)
 }
 
 func scalarGoType(id schema.TypeID) reflect.Type {

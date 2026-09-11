@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/valksor/naatre/schema"
@@ -74,19 +75,37 @@ func TestCatalogRejectsDuplicateAndImpossibleDescriptors(t *testing.T) {
 	}
 }
 
-func TestCatalogFreezeRejectsUnresolvedReferences(t *testing.T) {
+func TestCatalogFreezeRejectsInvalidSchemas(t *testing.T) {
 	t.Parallel()
-
-	catalog := schema.NewCatalog()
-	if err := catalog.Register(schema.TypeDescriptor{ID: "Users", Kind: schema.ListType, Output: true, Element: "User"}); err != nil {
-		t.Fatalf("Register(Users): %v", err)
+	tests := []struct {
+		name        string
+		descriptors []schema.TypeDescriptor
+	}{
+		{"unresolved reference", []schema.TypeDescriptor{{ID: "Users", Kind: schema.ListType, Output: true, Element: "User"}}},
+		{"unbounded recursion", []schema.TypeDescriptor{{ID: "Node", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{"next": {Type: "Node", Nullable: true}}}}},
+		{"invalid default", []schema.TypeDescriptor{{ID: "BadDefault", Kind: schema.InputObjectType, Input: true, Fields: map[string]schema.FieldDescriptor{"count": {Type: schema.TypeID(schema.UInt64), Default: json.RawMessage(`-1`)}}}}},
+		{"multiple one-of defaults", []schema.TypeDescriptor{{ID: "Ambiguous", Kind: schema.OneOfType, Input: true, Fields: map[string]schema.FieldDescriptor{
+			"email": {Type: schema.TypeID(schema.String), Default: json.RawMessage(`"a@example.com"`)},
+			"phone": {Type: schema.TypeID(schema.String), Default: json.RawMessage(`"1"`)},
+		}}}},
 	}
-	if _, err := catalog.Freeze(); err == nil {
-		t.Fatal("Freeze succeeded with unresolved User reference")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			catalog := schema.NewCatalog()
+			for _, descriptor := range tt.descriptors {
+				if err := catalog.Register(descriptor); err != nil {
+					t.Fatalf("Register(%s): %v", descriptor.ID, err)
+				}
+			}
+			if _, err := catalog.Freeze(); err == nil {
+				t.Fatal("Freeze accepted invalid schema")
+			}
+		})
 	}
 }
 
-func TestCatalogModelsEnumValuesAndBoundsRecursion(t *testing.T) {
+func TestCatalogModelsEnumValues(t *testing.T) {
 	t.Parallel()
 	catalog := schema.NewCatalog()
 	if err := catalog.Register(schema.TypeDescriptor{ID: "Color", Kind: schema.EnumType, Input: true, Output: true, Open: true, EnumValues: []string{"RED", "BLUE"}}); err != nil {
@@ -95,11 +114,96 @@ func TestCatalogModelsEnumValuesAndBoundsRecursion(t *testing.T) {
 	if _, err := catalog.Freeze(); err != nil {
 		t.Fatalf("Freeze enum: %v", err)
 	}
-	recursive := schema.NewCatalog()
-	if err := recursive.Register(schema.TypeDescriptor{ID: "Node", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{"next": {Type: "Node", Nullable: true}}}); err != nil {
-		t.Fatalf("Register recursive: %v", err)
+}
+
+func TestCatalogFreezesPortableCustomScalarContract(t *testing.T) {
+	t.Parallel()
+	descriptor := customScalarDescriptor("Slug", []schema.JSONShape{schema.JSONString}, []schema.ScalarConformanceVector{
+		{Input: json.RawMessage(`"A"`), Canonical: json.RawMessage(`"a"`)},
+		{Input: json.RawMessage(`"B"`), Canonical: json.RawMessage(`"b"`)},
+	})
+	catalog := schema.NewCatalog()
+	if err := catalog.RegisterScalar(descriptor); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := recursive.Freeze(); err == nil {
-		t.Fatal("unbounded recursive schema froze")
+	snapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, ok := snapshot.Lookup("Slug")
+	if !ok || stored.Scalar == nil || stored.Scalar.Validator != schema.ScalarValidatorShape || len(stored.Scalar.Conformance) != 2 {
+		t.Fatalf("portable scalar descriptor = %#v", stored)
+	}
+	encoded, err := json.Marshal(stored)
+	if err != nil || !json.Valid(encoded) {
+		t.Fatalf("marshal scalar descriptor = %s, %v", encoded, err)
+	}
+	stored.Scalar.AcceptedWireShapes[0] = schema.JSONObject
+	stored.Scalar.Conformance[0].Canonical[1] = 'z'
+	again, _ := snapshot.Lookup("Slug")
+	if again.Scalar.AcceptedWireShapes[0] != schema.JSONString || string(again.Scalar.Conformance[0].Canonical) != `"a"` {
+		t.Fatal("snapshot scalar contract mutated through lookup")
+	}
+}
+
+func TestCatalogRejectsIncompleteCustomScalarContracts(t *testing.T) {
+	t.Parallel()
+	base := customScalarDescriptor("Slug", []schema.JSONShape{schema.JSONString}, []schema.ScalarConformanceVector{
+		{Input: json.RawMessage(`"A"`), Canonical: json.RawMessage(`"a"`)},
+		{Input: json.RawMessage(`"B"`), Canonical: json.RawMessage(`"b"`)},
+	})
+	tests := []struct {
+		name   string
+		mutate func(*schema.TypeDescriptor)
+	}{
+		{name: "wire shape", mutate: func(value *schema.TypeDescriptor) { value.Scalar.AcceptedWireShapes = nil }},
+		{name: "validator", mutate: func(value *schema.TypeDescriptor) { value.Scalar.Validator = "" }},
+		{name: "serializer", mutate: func(value *schema.TypeDescriptor) { value.Scalar.Serializer = "" }},
+		{name: "canonicalizer", mutate: func(value *schema.TypeDescriptor) { value.Scalar.Canonicalizer = "" }},
+		{name: "canonical profile", mutate: func(value *schema.TypeDescriptor) { value.Scalar.CanonicalProfile = "" }},
+		{name: "limits", mutate: func(value *schema.TypeDescriptor) { value.Scalar.Limits.MaxBytes = -1 }},
+		{name: "vectors", mutate: func(value *schema.TypeDescriptor) { value.Scalar.Conformance = value.Scalar.Conformance[:1] }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			descriptor := base
+			contract := *base.Scalar
+			descriptor.Scalar = &contract
+			test.mutate(&descriptor)
+			if err := schema.NewCatalog().RegisterScalar(descriptor); err == nil {
+				t.Fatal("RegisterScalar accepted incomplete portable contract")
+			}
+		})
+	}
+}
+
+func TestSnapshotAppliesOpenAndClosedVariantRules(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	for _, descriptor := range []schema.TypeDescriptor{
+		{ID: "User", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID)}}},
+		{ID: "OpenResult", Kind: schema.UnionType, Output: true, Open: true, Variants: []schema.TypeID{"User"}},
+		{ID: "ClosedResult", Kind: schema.UnionType, Output: true, Variants: []schema.TypeID{"User"}},
+		{ID: "Entity", Kind: schema.InterfaceType, Output: true, Variants: []schema.TypeID{"User"}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID)}}},
+	} {
+		if err := catalog.Register(descriptor); err != nil {
+			t.Fatalf("Register(%s): %v", descriptor.ID, err)
+		}
+	}
+	snapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant, known, err := snapshot.ResolveVariant("OpenResult", "User")
+	if err != nil || !known || variant.ID != "User" {
+		t.Fatalf("known variant = %#v, %t, %v", variant, known, err)
+	}
+	if _, known, err := snapshot.ResolveVariant("OpenResult", "FutureResult"); err != nil || known {
+		t.Fatalf("open unknown variant = %t, %v", known, err)
+	}
+	for _, parent := range []schema.TypeID{"ClosedResult", "Entity"} {
+		if _, _, err := snapshot.ResolveVariant(parent, "FutureResult"); err == nil {
+			t.Fatalf("closed type %s accepted unknown variant", parent)
+		}
 	}
 }

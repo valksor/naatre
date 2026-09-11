@@ -22,7 +22,7 @@ func TestPortableScalarVectors(t *testing.T) {
 			Kind      schema.ScalarKind `json:"kind"`
 			Input     string            `json:"input"`
 			Canonical string            `json:"canonical"`
-			Valid     bool              `json:"valid"`
+			Valid     *bool             `json:"valid"`
 		} `json:"vectors"`
 	}
 	readFixture(t, "scalars.json", &fixture)
@@ -32,11 +32,11 @@ func TestPortableScalarVectors(t *testing.T) {
 	for _, vector := range fixture.Vectors {
 		t.Run(vector.Name, func(t *testing.T) {
 			t.Parallel()
-			if vector.Name == "" || vector.Kind == "" || vector.Input == "" || (vector.Valid && vector.Canonical == "") {
+			if vector.Name == "" || vector.Kind == "" || vector.Input == "" || vector.Valid == nil || (*vector.Valid && vector.Canonical == "") {
 				t.Fatal("scalar vector is incomplete")
 			}
 			value, err := schema.ParseScalar(vector.Kind, json.RawMessage(vector.Input))
-			if !vector.Valid {
+			if !*vector.Valid {
 				if err == nil {
 					t.Fatal("accepted invalid scalar vector")
 				}
@@ -136,5 +136,16 @@ func readFixture(t *testing.T, name string, destination any) {
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		t.Fatalf("decode %s trailing data: %v", path, err)
+	}
+}
+
+func runCases[T any](t *testing.T, prefix string, cases []T, name func(T) string, run func(*testing.T, T)) {
+	t.Helper()
+	for _, current := range cases {
+		current := current
+		t.Run(prefix+name(current), func(t *testing.T) {
+			t.Parallel()
+			run(t, current)
+		})
 	}
 }

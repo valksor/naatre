@@ -18,22 +18,14 @@ func TestPortableProtocolVectors(t *testing.T) {
 	if fixture.Profile != "core.protocol-1" || len(fixture.Requests) == 0 || len(fixture.Responses) == 0 {
 		t.Fatal("protocol fixture requires its exact profile plus request and response vectors")
 	}
-	for _, vector := range fixture.Requests {
-		vector := vector
-		t.Run("request/"+vector.Name, func(t *testing.T) {
-			t.Parallel()
-			_, err := protocol.DecodeRequest([]byte(vector.Input), protocol.DecodeOptions{})
-			assertProtocolVector(t, vector, err)
-		})
-	}
-	for _, vector := range fixture.Responses {
-		vector := vector
-		t.Run("response/"+vector.Name, func(t *testing.T) {
-			t.Parallel()
-			_, err := protocol.DecodeResponse([]byte(vector.Input), protocol.DecodeOptions{})
-			assertProtocolVector(t, vector, err)
-		})
-	}
+	runCases(t, "request/", fixture.Requests, func(vector protocolVector) string { return vector.Name }, func(t *testing.T, vector protocolVector) {
+		_, err := protocol.DecodeRequest([]byte(vector.Input), protocol.DecodeOptions{})
+		assertProtocolVector(t, vector, err)
+	})
+	runCases(t, "response/", fixture.Responses, func(vector protocolVector) string { return vector.Name }, func(t *testing.T, vector protocolVector) {
+		_, err := protocol.DecodeResponse([]byte(vector.Input), protocol.DecodeOptions{})
+		assertProtocolVector(t, vector, err)
+	})
 }
 
 type protocolVector struct {

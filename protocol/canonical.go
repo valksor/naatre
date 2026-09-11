@@ -47,6 +47,15 @@ func CanonicalizeJSON(input []byte, limits Limits) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+// ValidateJSON applies the same strict decoder and resource limits used by
+// CanonicalizeJSON without changing the input representation. In particular,
+// duplicate object members, invalid UTF-8, and unpaired surrogate escapes are
+// rejected before callers hand values to encoding/json.
+func ValidateJSON(input []byte, limits Limits) error {
+	_, err := parseJSON(input, limits)
+	return err
+}
+
 // SemanticHash hashes an already canonical payload in a purpose-specific
 // domain. Callers remain responsible for selecting the purpose payload defined
 // by the corresponding profile.

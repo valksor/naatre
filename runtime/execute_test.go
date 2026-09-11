@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -187,6 +188,140 @@ func TestExecuteCanonicalizesExtendedScalarOutputs(t *testing.T) {
 	}
 }
 
+func TestExecuteCanonicalizesCustomScalarOutput(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	descriptor := schema.TypeDescriptor{
+		ID: "Pair", Kind: schema.ScalarType, Input: true, Output: true,
+		Scalar: &schema.ScalarDescriptor{
+			AcceptedWireShapes: []schema.JSONShape{schema.JSONObject},
+			Validator:          schema.ScalarValidatorShape,
+			Serializer:         schema.ScalarSerializerIdentity,
+			Canonicalizer:      schema.ScalarCanonicalJSON,
+			CanonicalProfile:   "c14n-1",
+			Limits:             schema.ScalarLimits{MaxBytes: 1024, MaxDepth: 4, MaxMembers: 4, MaxArrayItems: 4, MaxStringBytes: 128, MaxNumberBytes: 32, MaxTokens: 16},
+			Conformance: []schema.ScalarConformanceVector{
+				{Input: json.RawMessage(`{"b":1.0,"a":2}`), Canonical: json.RawMessage(`{"a":2,"b":1}`)},
+				{Input: json.RawMessage(`{"b":3.0,"a":4}`), Canonical: json.RawMessage(`{"a":4,"b":3}`)},
+			},
+		},
+	}
+	if err := catalog.RegisterScalar(descriptor); err != nil {
+		t.Fatal(err)
+	}
+	types, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := runtime.BindInvocation(runtime.Descriptor{Name: "pair", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Pair", Metadata: completeMetadata(runtime.ReadEffect)}, func(context.Context, runtime.Invocation) (json.RawMessage, error) {
+		return json.RawMessage(`{"b":5.0,"a":6}`), nil
+	})
+	out := executeDefinitions(t, types, []runtime.Definition{definition}, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"pair"}}]}]}}`)
+	pair, ok := out.Data["pair"].(map[string]any)
+	if len(out.Errors) != 0 || !ok || fmt.Sprint(pair["a"]) != "6" || fmt.Sprint(pair["b"]) != "5" {
+		t.Fatalf("custom scalar outcome = %#v", out)
+	}
+}
+
+func TestExecuteCompletesTaggedUnionAndInterfaceOutputs(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	for _, descriptor := range []schema.TypeDescriptor{
+		{ID: "User", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID), Required: true}}},
+		{ID: "OpenResult", Kind: schema.UnionType, Output: true, Open: true, Variants: []schema.TypeID{"User"}},
+		{ID: "ClosedResult", Kind: schema.UnionType, Output: true, Variants: []schema.TypeID{"User"}},
+		{ID: "Entity", Kind: schema.InterfaceType, Output: true, Variants: []schema.TypeID{"User"}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID), Required: true}}},
+	} {
+		if err := catalog.Register(descriptor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	types, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := completeMetadata(runtime.ReadEffect)
+	definitions := []runtime.Definition{
+		runtime.BindInvocation(runtime.Descriptor{Name: "known", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "OpenResult", Metadata: metadata}, func(context.Context, runtime.Invocation) (schema.TaggedValue, error) {
+			return schema.MustTag("User", map[string]any{"id": "u-1"}), nil
+		}),
+		runtime.BindInvocation(runtime.Descriptor{Name: "interface", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Entity", Metadata: metadata}, func(context.Context, runtime.Invocation) (schema.TaggedValue, error) {
+			return schema.MustTag("User", map[string]any{"id": "u-2"}), nil
+		}),
+		runtime.BindInvocation(runtime.Descriptor{Name: "unknown", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "OpenResult", Metadata: metadata}, func(context.Context, runtime.Invocation) (schema.TaggedValue, error) {
+			return schema.MustTag("Future", json.RawMessage(`{"\ue000":"bmp","😀":"face"}`)), nil
+		}),
+		runtime.BindInvocation(runtime.Descriptor{Name: "closed", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "ClosedResult", Metadata: metadata}, func(context.Context, runtime.Invocation) (schema.TaggedValue, error) {
+			return schema.MustTag("Future", map[string]any{"id": "future"}), nil
+		}),
+	}
+	out := executeDefinitions(t, types, definitions, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"known"}},{"$call":{"name":"interface"}},{"$call":{"name":"unknown"}},{"$call":{"name":"closed"}}]}]}}`)
+	if len(out.Errors) != 1 || fmt.Sprint(out.Errors[0].Path) != "[closed $type]" {
+		t.Fatalf("tagged completion errors = %#v", out.Errors)
+	}
+	for name, wantID := range map[string]string{"known": "u-1", "interface": "u-2"} {
+		tagged := out.Data[name].(map[string]any)
+		if tagged["$type"] != "User" || tagged["$value"].(map[string]any)["id"] != wantID {
+			t.Fatalf("%s tagged output = %#v", name, tagged)
+		}
+	}
+	unknown := out.Data["unknown"].(map[string]any)
+	if unknown["$type"] != "Future" || unknown["$value"].(map[string]any)["😀"] != "face" {
+		t.Fatalf("unknown tagged output = %#v", unknown)
+	}
+	if _, exists := out.Data["closed"]; exists {
+		t.Fatalf("closed union output remained available: %#v", out.Data)
+	}
+}
+
+func TestExecuteDistinguishesNullableRootNullFromUnavailableOutput(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	if err := catalog.Register(schema.TypeDescriptor{ID: "Result", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{"value": {Type: schema.TypeID(schema.String)}}}); err != nil {
+		t.Fatal(err)
+	}
+	types, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := runtime.Descriptor{Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Result", Metadata: completeMetadata(runtime.ReadEffect)}
+	nullable := base
+	nullable.Name = "nullable"
+	nullable.OutputNullable = true
+	nonNull := base
+	nonNull.Name = "required"
+	definitions := []runtime.Definition{
+		runtime.BindInvocation(nullable, func(context.Context, runtime.Invocation) (map[string]any, error) { return nil, nil }),
+		runtime.BindInvocation(nonNull, func(context.Context, runtime.Invocation) (map[string]any, error) { return nil, nil }),
+	}
+	out := executeDefinitions(t, types, definitions, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"nullable"}},{"$call":{"name":"required"}}]}]}}`)
+	if value, exists := out.Data["nullable"]; !exists || value != nil {
+		t.Fatalf("nullable root output = %#v, exists=%t", value, exists)
+	}
+	if _, exists := out.Data["required"]; exists || len(out.Errors) != 1 || fmt.Sprint(out.Errors[0].Path) != "[required]" {
+		t.Fatalf("non-null root outcome = %#v", out)
+	}
+}
+
+func executeDefinitions(t *testing.T, types schema.Snapshot, definitions []runtime.Definition, requestJSON string) runtime.Outcome {
+	t.Helper()
+	registry := runtime.NewRegistry(types)
+	for _, definition := range definitions {
+		if err := registry.Register(definition); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := registry.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := runtime.Prepare(snapshot, decodeRuntimeRequest(t, requestJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan.Execute(context.Background())
+}
+
 func TestExecuteEnforcesElementNullabilityAndSchemaDepth(t *testing.T) {
 	t.Parallel()
 	catalog := schema.NewCatalog()
@@ -260,6 +395,7 @@ func TestExecutePreservesValidObjectFieldsAroundCompletionFailures(t *testing.T)
 		"good": {Type: schema.TypeID(schema.String), Required: true},
 		"bad":  {Type: schema.TypeID(schema.Int32), Required: true},
 		"gone": {Type: schema.TypeID(schema.String), Required: true},
+		"null": {Type: schema.TypeID(schema.String), Nullable: true},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +406,7 @@ func TestExecutePreservesValidObjectFieldsAroundCompletionFailures(t *testing.T)
 	registry := runtime.NewRegistry(types)
 	descriptor := runtime.Descriptor{Name: "result", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Result", Metadata: completeMetadata(runtime.ReadEffect)}
 	if err := registry.Register(runtime.BindInvocation(descriptor, func(context.Context, runtime.Invocation) (map[string]any, error) {
-		return map[string]any{"good": "kept", "bad": "not-an-int", "extra": "removed"}, nil
+		return map[string]any{"good": "kept", "bad": "not-an-int", "extra": "removed", "null": nil}, nil
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +420,7 @@ func TestExecutePreservesValidObjectFieldsAroundCompletionFailures(t *testing.T)
 		t.Fatal(err)
 	}
 	out := plan.Execute(context.Background())
-	if got := out.Data["result"]; fmt.Sprint(got) != "map[good:kept]" {
+	if got := out.Data["result"]; fmt.Sprint(got) != "map[good:kept null:<nil>]" {
 		t.Fatalf("partial object = %#v", got)
 	}
 	wantPaths := [][]any{{"result", "bad"}, {"result", "extra"}, {"result", "gone"}}
