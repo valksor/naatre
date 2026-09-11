@@ -183,7 +183,7 @@ func validationError(code, message string, source protocol.Source) error {
 }
 
 func invokeContained(ctx context.Context, definition Definition, invocation Invocation) (output any, err error) {
-	return definition.call(ctx, invocation)
+	return definition.call(ctx, nil, invocation)
 }
 
 func executionFailure(code, message string, selection plannedSelection, cause error) ExecutionError {

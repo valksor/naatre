@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"sync"
 
 	"github.com/valksor/naatre/protocol"
@@ -19,6 +20,7 @@ var (
 	ErrNotRegistered         = errors.New("operation is not registered")
 	ErrDuplicateRegistration = errors.New("duplicate public registration")
 	ErrInputType             = errors.New("handler input has wrong Go type")
+	ErrSourceType            = errors.New("handler source has wrong Go type")
 	namePattern              = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 )
 
@@ -73,77 +75,166 @@ const (
 
 // Metadata contains independent security, effect, and optimization contracts.
 type Metadata struct {
-	Effect              Effect
-	Deterministic       bool
-	Cacheable           bool
-	RetrySafe           bool
-	ThreadSafety        ThreadSafety
-	Batching            Batching
-	Transaction         TransactionParticipation
-	AuthorizationPolicy string
-	Deprecation         string
-	Idempotency         string
-	Cost                uint64
-	ParallelMutation    bool
+	Effect              Effect                   `json:"effect"`
+	Deterministic       bool                     `json:"deterministic"`
+	Cacheable           bool                     `json:"cacheable"`
+	RetrySafe           bool                     `json:"retrySafe"`
+	ThreadSafety        ThreadSafety             `json:"threadSafety"`
+	Batching            Batching                 `json:"batching"`
+	Transaction         TransactionParticipation `json:"transaction"`
+	AuthorizationPolicy string                   `json:"authorizationPolicy"`
+	Deprecation         string                   `json:"deprecation,omitempty"`
+	Idempotency         string                   `json:"idempotency,omitempty"`
+	Cost                uint64                   `json:"cost"`
+	ParallelMutation    bool                     `json:"parallelMutation"`
 }
 
 // Descriptor is the portable public contract for one registered handler.
 type Descriptor struct {
-	Name           string
-	Scope          Scope
-	Owner          schema.TypeID
-	Kind           protocol.OperationKind
-	Member         MemberKind
-	Input          schema.TypeID
-	Output         schema.TypeID
-	OutputNullable bool
-	Metadata       Metadata
+	Name           string                 `json:"name"`
+	Scope          Scope                  `json:"scope"`
+	Owner          schema.TypeID          `json:"owner,omitempty"`
+	Kind           protocol.OperationKind `json:"kind,omitempty"`
+	Member         MemberKind             `json:"member"`
+	Input          schema.TypeID          `json:"input,omitempty"`
+	InputNullable  bool                   `json:"inputNullable"`
+	Output         schema.TypeID          `json:"output"`
+	OutputNullable bool                   `json:"outputNullable"`
+	Metadata       Metadata               `json:"metadata"`
 }
 
-// Handler is the only supported in-process application signature.
+// Handler is the supported typed root-operation signature.
 type Handler[Input, Output any] func(context.Context, Input) (Output, error)
+
+// FieldHandler projects one explicitly typed source value.
+type FieldHandler[Source, Output any] func(context.Context, Source) (Output, error)
+
+// CallHandler invokes a named method with an explicitly typed source and input.
+type CallHandler[Source, Input, Output any] func(context.Context, Source, Input) (Output, error)
+
+type bindingKind uint8
+
+const (
+	rootBinding bindingKind = iota + 1
+	fieldBinding
+	callBinding
+)
 
 // Definition binds a descriptor to one typed handler. Its invocation adapter
 // is deliberately private so arbitrary functions cannot enter a registry.
 type Definition struct {
 	descriptor Descriptor
-	invoke     func(context.Context, any) (any, error)
+	invoke     func(context.Context, any, any) (any, error)
 	nilHandler bool
 	serial     chan struct{}
+	sourceType reflect.Type
 	inputType  reflect.Type
 	outputType reflect.Type
 	adapter    bool
+	binding    bindingKind
 }
 
 // Bind adapts a typed handler to an explicit registration definition.
 func Bind[Input, Output any](descriptor Descriptor, handler Handler[Input, Output]) Definition {
-	definition := Definition{descriptor: descriptor, nilHandler: handler == nil, inputType: reflect.TypeFor[Input](), outputType: reflect.TypeFor[Output]()}
+	return bindRoot(descriptor, handler)
+}
+
+func bindRoot[Input, Output any](descriptor Descriptor, handler Handler[Input, Output]) Definition {
+	definition := newDefinition(descriptor, rootBinding, nil, reflect.TypeFor[Input](), reflect.TypeFor[Output](), handler == nil)
+	if handler != nil {
+		definition.invoke = rootInvoker(descriptor, handler)
+	}
+	return definition
+}
+
+// BindField adapts an explicitly typed object projection.
+func BindField[Source, Output any](descriptor Descriptor, handler FieldHandler[Source, Output]) Definition {
+	definition := newDefinition(descriptor, fieldBinding, reflect.TypeFor[Source](), nil, reflect.TypeFor[Output](), handler == nil)
+	if handler != nil {
+		definition.invoke = fieldInvoker(descriptor, handler)
+	}
+	return definition
+}
+
+// BindCall adapts an explicitly typed object method.
+func BindCall[Source, Input, Output any](descriptor Descriptor, handler CallHandler[Source, Input, Output]) Definition {
+	definition := newDefinition(descriptor, callBinding, reflect.TypeFor[Source](), reflect.TypeFor[Input](), reflect.TypeFor[Output](), handler == nil)
+	if handler != nil {
+		definition.invoke = callInvoker(descriptor, handler)
+	}
+	return definition
+}
+
+func rootInvoker[Input, Output any](descriptor Descriptor, handler Handler[Input, Output]) func(context.Context, any, any) (any, error) {
+	return func(ctx context.Context, _ any, input any) (any, error) {
+		typed, err := requireInput[Input](descriptor, input)
+		if err != nil {
+			return nil, err
+		}
+		return handler(ctx, typed)
+	}
+}
+
+func fieldInvoker[Source, Output any](descriptor Descriptor, handler FieldHandler[Source, Output]) func(context.Context, any, any) (any, error) {
+	return func(ctx context.Context, source, _ any) (any, error) {
+		typed, err := requireSource[Source](descriptor, source)
+		if err != nil {
+			return nil, err
+		}
+		return handler(ctx, typed)
+	}
+}
+
+func callInvoker[Source, Input, Output any](descriptor Descriptor, handler CallHandler[Source, Input, Output]) func(context.Context, any, any) (any, error) {
+	return func(ctx context.Context, source, input any) (any, error) {
+		typedSource, err := requireSource[Source](descriptor, source)
+		if err != nil {
+			return nil, err
+		}
+		typedInput, err := requireInput[Input](descriptor, input)
+		if err != nil {
+			return nil, err
+		}
+		return handler(ctx, typedSource, typedInput)
+	}
+}
+
+func newDefinition(descriptor Descriptor, binding bindingKind, sourceType, inputType, outputType reflect.Type, nilHandler bool) Definition {
+	definition := Definition{
+		descriptor: descriptor, binding: binding, nilHandler: nilHandler,
+		sourceType: sourceType, inputType: inputType, outputType: outputType,
+	}
 	if descriptor.Metadata.ThreadSafety == SerialOnly {
 		definition.serial = make(chan struct{}, 1)
 		definition.serial <- struct{}{}
 	}
-	if handler == nil {
-		return definition
-	}
-	definition.invoke = func(ctx context.Context, input any) (any, error) {
-		typed, ok := input.(Input)
-		if !ok {
-			return nil, fmt.Errorf("%w for %q", ErrInputType, descriptor.Name)
-		}
-		output, err := handler(ctx, typed)
-		if err != nil {
-			return nil, err
-		}
-		return output, nil
-	}
 	return definition
+}
+
+func requireInput[Input any](descriptor Descriptor, input any) (Input, error) {
+	if input == nil && descriptor.InputNullable {
+		return *new(Input), nil
+	}
+	typed, ok := input.(Input)
+	if !ok {
+		return *new(Input), fmt.Errorf("%w for %q", ErrInputType, descriptor.Name)
+	}
+	return typed, nil
+}
+
+func requireSource[Source any](descriptor Descriptor, source any) (Source, error) {
+	typed, ok := source.(Source)
+	if !ok {
+		return *new(Source), fmt.Errorf("%w for %q", ErrSourceType, descriptor.Name)
+	}
+	return typed, nil
 }
 
 type handlerPanic struct{}
 
 func (e *handlerPanic) Error() string { return "handler panic" }
 
-func (d Definition) call(ctx context.Context, input any) (output any, err error) {
+func (d Definition) call(ctx context.Context, source, input any) (output any, err error) {
 	defer func() {
 		if recover() != nil {
 			output = nil
@@ -164,7 +255,7 @@ func (d Definition) call(ctx context.Context, input any) (output any, err error)
 			return nil, err
 		}
 	}
-	return d.invoke(ctx, input)
+	return d.invoke(ctx, source, input)
 }
 
 // Registry collects definitions during application startup.
@@ -218,6 +309,20 @@ func (r *Registry) Freeze() (Snapshot, error) {
 	return Snapshot{types: r.types, definitions: definitions}, nil
 }
 
+// Descriptors returns every portable registration descriptor in stable order.
+func (s Snapshot) Descriptors() []Descriptor {
+	keys := make([]string, 0, len(s.definitions))
+	for key := range s.definitions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	descriptors := make([]Descriptor, 0, len(keys))
+	for _, key := range keys {
+		descriptors = append(descriptors, s.definitions[key].descriptor)
+	}
+	return descriptors
+}
+
 // Root returns the descriptor for one root operation.
 func (s Snapshot) Root(kind protocol.OperationKind, name string) (Descriptor, bool) {
 	definition, ok := s.definitions["root:"+name]
@@ -239,19 +344,31 @@ func (s Snapshot) Member(owner schema.TypeID, member MemberKind, name string) (D
 // InvokeRoot invokes a registered root operation through its typed adapter.
 func (s Snapshot) InvokeRoot(ctx context.Context, kind protocol.OperationKind, name string, input any) (any, error) {
 	definition, ok := s.definitions["root:"+name]
-	if !ok || definition.descriptor.Kind != kind {
+	switch {
+	case !ok, definition.descriptor.Kind != kind:
 		return nil, fmt.Errorf("%w: %s %q", ErrNotRegistered, kind, name)
+	default:
+		return definition.call(ctx, nil, input)
 	}
-	return definition.call(ctx, input)
 }
 
-// InvokeMember invokes an explicitly registered object field or call.
-func (s Snapshot) InvokeMember(ctx context.Context, owner schema.TypeID, member MemberKind, name string, input any) (any, error) {
-	definition, ok := s.definitions["object:"+string(owner)+":"+string(member)+":"+name]
+// InvokeField projects one explicitly registered object field.
+func (s Snapshot) InvokeField(ctx context.Context, owner schema.TypeID, name string, source any) (any, error) {
+	return s.invokeMember(ctx, owner, FieldMember, name, source, nil)
+}
+
+// InvokeCall invokes one explicitly registered object method.
+func (s Snapshot) InvokeCall(ctx context.Context, owner schema.TypeID, name string, source, input any) (any, error) {
+	return s.invokeMember(ctx, owner, CallMember, name, source, input)
+}
+
+func (s Snapshot) invokeMember(ctx context.Context, owner schema.TypeID, member MemberKind, name string, source, input any) (any, error) {
+	key := "object:" + string(owner) + ":" + string(member) + ":" + name
+	definition, ok := s.definitions[key]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s.%s", ErrNotRegistered, owner, name)
 	}
-	return definition.call(ctx, input)
+	return definition.call(ctx, source, input)
 }
 
 func validateRegistration(types schema.Snapshot, definition Definition) error {
@@ -259,44 +376,127 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 	if !namePattern.MatchString(descriptor.Name) {
 		return fmt.Errorf("invalid public name %q", descriptor.Name)
 	}
-	input, inputOK := types.Lookup(descriptor.Input)
-	if !inputOK || !input.Input {
-		return fmt.Errorf("registration %q has unknown or non-input type %q", descriptor.Name, descriptor.Input)
-	}
 	output, outputOK := types.Lookup(descriptor.Output)
 	if !outputOK || !output.Output {
 		return fmt.Errorf("registration %q has unknown or non-output type %q", descriptor.Name, descriptor.Output)
 	}
-	if !definition.adapter {
-		if expected := scalarGoType(descriptor.Input); expected != nil && definition.inputType != expected {
-			return fmt.Errorf("registration %q Go input %s does not match schema %s", descriptor.Name, definition.inputType, descriptor.Input)
-		}
+	if err := validateBinding(types, definition); err != nil {
+		return err
 	}
-	if err := validateOutputGoType(descriptor, output, definition.outputType); err != nil {
+	if err := validateHandlerTypes(types, definition, output); err != nil {
 		return fmt.Errorf("registration %q: %w", descriptor.Name, err)
 	}
+	return validateMetadata(descriptor)
+}
+
+func validateBinding(types schema.Snapshot, definition Definition) error {
+	descriptor := definition.descriptor
 	if descriptor.Member != FieldMember && descriptor.Member != CallMember {
 		return fmt.Errorf("registration %q has invalid member kind %q", descriptor.Name, descriptor.Member)
 	}
 	switch descriptor.Scope {
 	case RootScope:
-		if descriptor.Owner != "" {
-			return fmt.Errorf("root registration %q cannot have an owner", descriptor.Name)
-		}
-		if descriptor.Kind != protocol.Query && descriptor.Kind != protocol.Mutation && descriptor.Kind != protocol.Subscription {
-			return fmt.Errorf("root registration %q requires an operation kind", descriptor.Name)
-		}
+		return validateRootBinding(definition)
 	case ObjectScope:
-		owner, ok := types.Lookup(descriptor.Owner)
-		if !ok || (owner.Kind != schema.ObjectType && owner.Kind != schema.InterfaceType) {
-			return fmt.Errorf("object registration %q requires a known object owner", descriptor.Name)
-		}
-		if descriptor.Kind != "" {
-			return fmt.Errorf("object registration %q cannot declare a root operation kind", descriptor.Name)
-		}
+		return validateObjectBinding(types, definition)
 	default:
 		return fmt.Errorf("registration %q has invalid scope %q", descriptor.Name, descriptor.Scope)
 	}
+}
+
+func validateRootBinding(definition Definition) error {
+	descriptor := definition.descriptor
+	if definition.binding != rootBinding || descriptor.Member != CallMember {
+		return fmt.Errorf("root registration %q requires Bind and call member kind", descriptor.Name)
+	}
+	if descriptor.Owner != "" {
+		return fmt.Errorf("root registration %q cannot have an owner", descriptor.Name)
+	}
+	if descriptor.Kind != protocol.Query && descriptor.Kind != protocol.Mutation && descriptor.Kind != protocol.Subscription {
+		return fmt.Errorf("root registration %q requires an operation kind", descriptor.Name)
+	}
+	if descriptor.Input == "" {
+		return fmt.Errorf("root registration %q requires an input type", descriptor.Name)
+	}
+	return nil
+}
+
+func validateObjectBinding(types schema.Snapshot, definition Definition) error {
+	descriptor := definition.descriptor
+	owner, ok := types.Lookup(descriptor.Owner)
+	if !ok || (owner.Kind != schema.ObjectType && owner.Kind != schema.InterfaceType) {
+		return fmt.Errorf("object registration %q requires a known object owner", descriptor.Name)
+	}
+	if descriptor.Kind != "" {
+		return fmt.Errorf("object registration %q cannot declare a root operation kind", descriptor.Name)
+	}
+	if descriptor.Member == FieldMember {
+		return validateFieldBinding(definition, owner)
+	}
+	if definition.binding != callBinding || descriptor.Input == "" {
+		return fmt.Errorf("object call %q requires BindCall and an input type", descriptor.Name)
+	}
+	return nil
+}
+
+func validateFieldBinding(definition Definition, owner schema.TypeDescriptor) error {
+	descriptor := definition.descriptor
+	if definition.binding != fieldBinding || descriptor.Input != "" || descriptor.InputNullable {
+		return fmt.Errorf("object field %q requires BindField and cannot declare input", descriptor.Name)
+	}
+	field, ok := owner.Fields[descriptor.Name]
+	if !ok {
+		return fmt.Errorf("object field %q is not declared by schema %q", descriptor.Name, descriptor.Owner)
+	}
+	if descriptor.Output != field.Type || descriptor.OutputNullable != field.Nullable {
+		return fmt.Errorf("object field %q output does not match schema %q", descriptor.Name, descriptor.Owner)
+	}
+	return nil
+}
+
+func validateHandlerTypes(types schema.Snapshot, definition Definition, output schema.TypeDescriptor) error {
+	descriptor := definition.descriptor
+	validator := outputTypeValidator{types: types, active: make(map[outputTypeVisit]bool)}
+	if err := validator.validate(output, descriptor.OutputNullable, definition.outputType, false); err != nil {
+		return err
+	}
+	if definition.binding != rootBinding && definition.sourceType == nil {
+		return errors.New("member handler requires a concrete source type")
+	}
+	if definition.binding == fieldBinding || definition.adapter {
+		return nil
+	}
+	input, ok := types.Lookup(descriptor.Input)
+	if !ok || !input.Input {
+		return fmt.Errorf("unknown or non-input type %q", descriptor.Input)
+	}
+	expected := scalarGoType(descriptor.Input)
+	if expected == nil {
+		expected = reflect.TypeFor[schema.InputValue]()
+	}
+	if descriptor.InputNullable {
+		expected = reflect.PointerTo(expected)
+	}
+	if definition.inputType != expected {
+		return fmt.Errorf("go input %s does not match schema %s", definition.inputType, descriptor.Input)
+	}
+	return nil
+}
+
+func validateMetadata(descriptor Descriptor) error {
+	if err := validateEffectMetadata(descriptor); err != nil {
+		return err
+	}
+	if err := validateSchedulingMetadata(descriptor); err != nil {
+		return err
+	}
+	if descriptor.Metadata.AuthorizationPolicy == "" {
+		return fmt.Errorf("registration %q requires authorization policy metadata", descriptor.Name)
+	}
+	return nil
+}
+
+func validateEffectMetadata(descriptor Descriptor) error {
 	if descriptor.Kind == protocol.Query && descriptor.Metadata.Effect != ReadEffect {
 		return fmt.Errorf("query %q cannot have %s effect", descriptor.Name, descriptor.Metadata.Effect)
 	}
@@ -306,59 +506,132 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 	if descriptor.Metadata.Effect != ReadEffect && descriptor.Metadata.Effect != WriteEffect {
 		return fmt.Errorf("registration %q requires explicit effect metadata", descriptor.Name)
 	}
-	if descriptor.Metadata.ThreadSafety != ThreadSafe && descriptor.Metadata.ThreadSafety != SerialOnly {
-		return fmt.Errorf("registration %q requires thread-safety metadata", descriptor.Name)
-	}
-	if descriptor.Metadata.Batching != BatchEligible && descriptor.Metadata.Batching != BatchIneligible {
-		return fmt.Errorf("registration %q requires batching metadata", descriptor.Name)
-	}
-	if descriptor.Metadata.Transaction != TransactionNone && descriptor.Metadata.Transaction != TransactionOptional && descriptor.Metadata.Transaction != TransactionRequired {
-		return fmt.Errorf("registration %q requires transaction metadata", descriptor.Name)
-	}
-	if descriptor.Metadata.AuthorizationPolicy == "" {
-		return fmt.Errorf("registration %q requires authorization policy metadata", descriptor.Name)
+	if descriptor.Metadata.Cacheable && (descriptor.Metadata.Effect != ReadEffect || !descriptor.Metadata.Deterministic) {
+		return fmt.Errorf("registration %q cannot cache a write or nondeterministic handler", descriptor.Name)
 	}
 	return nil
 }
 
-func validateOutputGoType(descriptor Descriptor, output schema.TypeDescriptor, actual reflect.Type) error {
-	if expected := scalarGoType(descriptor.Output); expected != nil {
-		return validateExactOutputType(descriptor, actual, expected, "")
+func validateSchedulingMetadata(descriptor Descriptor) error {
+	switch descriptor.Metadata.ThreadSafety {
+	case ThreadSafe, SerialOnly:
+	default:
+		return fmt.Errorf("registration %q requires thread-safety metadata", descriptor.Name)
 	}
-	switch output.Kind {
-	case schema.ObjectType, schema.MapType:
-		if actual.Kind() != reflect.Map || actual.Key().Kind() != reflect.String {
-			return fmt.Errorf("go output %s must be a string-keyed map for schema %s", actual, descriptor.Output)
-		}
+	switch descriptor.Metadata.Batching {
+	case BatchEligible, BatchIneligible:
+	default:
+		return fmt.Errorf("registration %q requires batching metadata", descriptor.Name)
+	}
+	switch descriptor.Metadata.Transaction {
+	case TransactionNone, TransactionOptional, TransactionRequired:
+	default:
+		return fmt.Errorf("registration %q requires transaction metadata", descriptor.Name)
+	}
+	if descriptor.Metadata.ParallelMutation && (descriptor.Scope != RootScope || descriptor.Kind != protocol.Mutation || descriptor.Metadata.ThreadSafety != ThreadSafe) {
+		return fmt.Errorf("registration %q has impossible parallel-mutation metadata", descriptor.Name)
+	}
+	return nil
+}
+
+type outputTypeVisit struct {
+	schemaID schema.TypeID
+	goType   reflect.Type
+	nullable bool
+}
+
+type outputTypeValidator struct {
+	types  schema.Snapshot
+	active map[outputTypeVisit]bool
+}
+
+func (v outputTypeValidator) validate(output schema.TypeDescriptor, nullable bool, actual reflect.Type, dynamic bool) error {
+	if dynamic && actual == reflect.TypeFor[any]() {
 		return nil
+	}
+	if actual.Kind() == reflect.Pointer {
+		if !nullable {
+			return fmt.Errorf("go output %s cannot be a pointer for non-null schema %s", actual, output.ID)
+		}
+		actual = actual.Elem()
+	}
+	visit := outputTypeVisit{schemaID: output.ID, goType: actual, nullable: nullable}
+	if v.active[visit] {
+		return nil
+	}
+	v.active[visit] = true
+	defer delete(v.active, visit)
+
+	if expected := scalarGoType(output.ID); expected != nil {
+		return validateExactOutputType(actual, expected, "", output.ID)
+	}
+	return v.validateComposite(output, actual)
+}
+
+func (v outputTypeValidator) validateComposite(output schema.TypeDescriptor, actual reflect.Type) error {
+	switch output.Kind {
+	case schema.ObjectType:
+		return v.validateObject(output, actual)
+	case schema.MapType:
+		if actual.Kind() != reflect.Map || actual.Key().Kind() != reflect.String {
+			return fmt.Errorf("go output %s must be a string-keyed map for schema %s", actual, output.ID)
+		}
+		return v.validateElement(output, actual.Elem())
 	case schema.ListType:
 		if actual.Kind() != reflect.Slice && actual.Kind() != reflect.Array {
-			return fmt.Errorf("go output %s must be a slice or array for schema %s", actual, descriptor.Output)
+			return fmt.Errorf("go output %s must be a slice or array for schema %s", actual, output.ID)
 		}
-		return nil
+		return v.validateElement(output, actual.Elem())
 	case schema.EnumType:
 		if actual.Kind() != reflect.String {
-			return fmt.Errorf("go output %s must be a string for schema %s", actual, descriptor.Output)
+			return fmt.Errorf("go output %s must be a string for schema %s", actual, output.ID)
 		}
 		return nil
 	case schema.UnionType, schema.InterfaceType:
-		return validateExactOutputType(descriptor, actual, reflect.TypeFor[schema.TaggedValue](), "schema.TaggedValue")
+		return validateExactOutputType(actual, reflect.TypeFor[schema.TaggedValue](), "schema.TaggedValue", output.ID)
 	case schema.ScalarType:
-		return validateExactOutputType(descriptor, actual, reflect.TypeFor[json.RawMessage](), "json.RawMessage")
+		return validateExactOutputType(actual, reflect.TypeFor[json.RawMessage](), "json.RawMessage", output.ID)
 	case schema.InputObjectType, schema.OneOfType:
-		return fmt.Errorf("schema output %s is not valid for runtime registration", descriptor.Output)
+		return fmt.Errorf("schema output %s is not valid for runtime registration", output.ID)
 	}
-	return fmt.Errorf("schema output %s has an unknown kind", descriptor.Output)
+	return fmt.Errorf("schema output %s has an unknown kind", output.ID)
 }
 
-func validateExactOutputType(descriptor Descriptor, actual, expected reflect.Type, expectedName string) error {
-	if actual == expected || (descriptor.OutputNullable && actual.Kind() == reflect.Pointer && actual.Elem() == expected) {
+func (v outputTypeValidator) validateObject(output schema.TypeDescriptor, actual reflect.Type) error {
+	if actual.Kind() != reflect.Map || actual.Key().Kind() != reflect.String {
+		return fmt.Errorf("go output %s must be a string-keyed map for schema %s", actual, output.ID)
+	}
+	for _, field := range output.Fields {
+		fieldOutput, ok := v.types.Lookup(field.Type)
+		if !ok {
+			return fmt.Errorf("schema output %s references unknown field type %s", output.ID, field.Type)
+		}
+		if err := v.validate(fieldOutput, field.Nullable, actual.Elem(), true); err != nil {
+			return fmt.Errorf("go output %s cannot represent every field of schema %s: %w", actual, output.ID, err)
+		}
+	}
+	return nil
+}
+
+func (v outputTypeValidator) validateElement(container schema.TypeDescriptor, actual reflect.Type) error {
+	element, ok := v.types.Lookup(container.Element)
+	if !ok {
+		return fmt.Errorf("schema output %s references unknown element type %s", container.ID, container.Element)
+	}
+	if err := v.validate(element, container.ElementNullable, actual, true); err != nil {
+		return fmt.Errorf("go output %s element does not match schema %s: %w", actual, container.ID, err)
+	}
+	return nil
+}
+
+func validateExactOutputType(actual, expected reflect.Type, expectedName string, output schema.TypeID) error {
+	if actual == expected {
 		return nil
 	}
 	if expectedName != "" {
-		return fmt.Errorf("go output %s must be %s for schema %s", actual, expectedName, descriptor.Output)
+		return fmt.Errorf("go output %s must be %s for schema %s", actual, expectedName, output)
 	}
-	return fmt.Errorf("go output %s does not match schema %s", actual, descriptor.Output)
+	return fmt.Errorf("go output %s does not match schema %s", actual, output)
 }
 
 func scalarGoType(id schema.TypeID) reflect.Type {

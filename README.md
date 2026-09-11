@@ -22,7 +22,8 @@ evidence must be described as planned.
 - `conformance`: portable fixtures and profile manifests.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `schema`: portable types, values, and scalar codecs.
-- `runtime`: explicit registration, basic planning, and sequential execution.
+- `runtime`: explicit registration, basic planning, and sequential execution;
+  see the [Go registry contract](docs/registry.md).
 - `transport/http`: the planned Naatre HTTP binding.
 - `internal/conformance`: Go-only conformance harness internals.
 - `sdk` (planned): official and compatibility-certified client implementations.
