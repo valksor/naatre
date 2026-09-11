@@ -1,0 +1,21 @@
+# Naatre v1 specification
+
+This directory is the normative source for Naatre v1. The key words MUST,
+MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, NOT
+RECOMMENDED, MAY, and OPTIONAL are interpreted as described by RFC 2119 and
+RFC 8174 when, and only when, they appear in all capitals.
+
+Clauses have stable identifiers. Documents may be amended before v1 only with
+a decision record and migration note. Examples marked valid or invalid are
+normative fixtures once represented under `conformance/`.
+
+Documents:
+
+1. [Core execution model](core.md)
+2. [Request and response protocol](protocol.md)
+3. [Type system and value model](schema.md)
+4. [Composition language](language.md)
+5. [Canonicalization and semantic hashing](canonicalization.md)
+
+The specification is language-neutral. Go is a reference implementation and
+does not override these documents or their portable fixtures.

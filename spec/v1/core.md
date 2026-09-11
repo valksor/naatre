@@ -1,0 +1,132 @@
+# Core execution model
+
+## Vocabulary
+
+- **CORE-001 Request:** one transport-independent request envelope.
+- **CORE-002 Document:** an immutable description containing one or more named
+  operations and reusable fragments.
+- **CORE-003 Operation:** a declared query, mutation, or subscription and its
+  ordered selection array.
+- **CORE-004 Selection:** one field, call, pipeline, collection operation,
+  parallel group, fragment spread, directive application, or current-value
+  projection.
+- **CORE-005 Field:** a registered, typed projection from a current value.
+- **CORE-006 Call:** a registered, typed handler invocation with arguments.
+- **CORE-007 Collection:** a list value whose list-level operations are
+  distinct from explicit per-item mapping.
+- **CORE-008 Alias:** a validated response name replacing a selection's public
+  name. It is not an application identifier.
+- **CORE-009 Variable:** request-bound input referenced by a document.
+- **CORE-010 Fragment:** a statically validated reusable selection array.
+- **CORE-011 Directive:** a registered, bounded language extension that cannot
+  override core sequencing, effects, authorization, or limits.
+- **CORE-012 Capability:** a versioned feature negotiated by client and server.
+- **CORE-013 Profile:** a versioned collection of mandatory clauses and
+  fixtures used to make a conformance claim.
+- **CORE-014 Missing:** absence of a value. Missing is not JSON null.
+- **CORE-015 Error path:** an array of aliased response names and list indexes
+  identifying one result location.
+
+## Phases
+
+- **CORE-100:** Processing MUST proceed through decode, validate, plan,
+  authorize, execute, complete, and serialize phases. A later phase MUST NOT
+  repair a failure from an earlier phase.
+- **CORE-101:** Decode constructs syntax only. It MUST NOT resolve application
+  handlers, run custom coercers, or perform I/O.
+- **CORE-102:** Validate and plan MUST examine the entire selected operation,
+  including statically skipped branches. They MUST NOT invoke business
+  handlers. Pure, trusted schema validators and planning hooks MAY run.
+- **CORE-103:** Static planning authorization MUST finish before execution.
+  Object-dependent authorization occurs immediately before consuming the
+  protected object and MUST NOT be bypassed by aliases, fragments, references,
+  collections, directives, extensions, batches, or streams.
+- **CORE-104:** Execution invokes only explicitly registered handlers from the
+  immutable registry snapshot bound to the plan.
+- **CORE-105:** Completion validates and copies runtime values into the partial
+  result representation before a later sibling or concurrent observer sees
+  them.
+- **CORE-106:** Serialization MUST reveal only safe public errors.
+
+Valid: a document is fully validated before its first handler is called.
+
+Invalid: a planner calls a handler to discover its return type and later
+rejects an unrelated alias collision.
+
+## Kinds, effects, and ordering
+
+- **CORE-200:** Operation kind, handler effect, ordering, and transport method
+  are independent properties. Clients MUST NOT assert or override server
+  effect metadata.
+- **CORE-201:** Queries MUST be transitively read-only. A query is invalid if a
+  selected call, nested call, fragment, directive, projection, or pipeline can
+  reach a registered write effect.
+- **CORE-202:** Mutations execute top-level selections serially in declaration
+  order unless an atomicity profile imposes stricter behavior.
+- **CORE-203:** Subscriptions establish a read-like source and deliver ordered
+  events under the streaming profile; establishment MUST NOT conceal a write.
+- **CORE-204:** Arrays are the only implicit ordered language construct. JSON
+  object member order MUST NOT affect validation, execution, or identity.
+- **CORE-205:** A sequential selection completes handler execution and output
+  completion before its next sibling begins.
+- **CORE-206:** Explicit parallel groups MAY run independent, thread-safe read
+  work within negotiated bounds. Mutations require explicit server metadata and
+  profile permission. Result and error assembly remains declaration ordered.
+- **CORE-207:** Optimizers, loaders, and caches MUST NOT cross an effect,
+  dependency, authorization, transaction, or completion barrier.
+
+Valid: a mutation writes a value and its next selection reads the completed
+state.
+
+Invalid: a query fragment hides a registered mutation behind a Boolean
+directive, even when the request variable currently skips the fragment.
+
+## Determinism, failure, and cancellation
+
+- **CORE-300:** Scheduling, diagnostics, paths, and response assembly MUST be
+  deterministic for the same validated inputs. Application data observed from
+  external systems is not thereby deterministic.
+- **CORE-301:** Independent query-field failure records a path-specific error,
+  omits the failed object member, and permits later independent siblings.
+- **CORE-302:** A failed list element occupies a null placeholder so later
+  indexes do not shift. Legitimate null has no associated error.
+- **CORE-303:** A failed required field makes the partial result incomplete; a
+  client MUST NOT construct a successful non-null domain model without an
+  explicit completeness check.
+- **CORE-304:** Parallel errors sort by response path and then source location.
+  Fail-fast groups report the actually completed subset in that stable order;
+  they do not promise the same winners across schedules.
+- **CORE-305:** Cancellation is cooperative. It stops new admissions, reaches
+  active handlers through the host cancellation primitive, and waits according
+  to the runtime ownership policy. It is not proof that a write rolled back.
+- **CORE-306:** Handler panics or equivalent host failures MUST be contained at
+  the handler boundary and exposed only as redacted internal errors.
+- **CORE-307:** A context-dependent read can return different data across two
+  executions without violating deterministic assembly.
+
+Valid: two parallel reads finish in either order but data and errors are placed
+in declaration/path order.
+
+Invalid: fail-fast conformance requires one timing-dependent branch to win, or
+a cancelled mutation is automatically reported as rolled back.
+
+## Capabilities and compatibility
+
+- **CORE-400:** Core clauses apply to every profile. A capability may add
+  declared syntax or behavior but MUST NOT weaken scalar, sequencing,
+  authorization, resource, or redaction guarantees.
+- **CORE-401:** Unknown required capabilities cause validation failure before
+  execution. Unknown optional extension data remains inert only when its
+  namespace is explicitly permitted by the envelope contract.
+- **CORE-402:** Specification, canonicalization, profile, SDK, and remote-worker
+  versions are separate and MUST be pinned by a release manifest.
+
+Valid: a server rejects a requested required capability it does not advertise.
+
+Invalid: an extension enables parallel mutations despite the core registry
+marking the handler serial-only.
+
+## Acknowledgement
+
+Naatre is inspired by ideas from Deepr, GraphQL, JSON Schema, Smithy, Connect,
+and RPC systems. It defines its own v1 and makes no compatibility claim.

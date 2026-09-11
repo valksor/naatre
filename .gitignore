@@ -1,1 +1,9 @@
 .claude/logs/
+.bb/
+.codex/
+.idea/
+.vscode/
+bin/
+coverage.out
+dist/
+*.test
