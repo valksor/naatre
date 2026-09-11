@@ -197,14 +197,24 @@ currently false:
 
 ```json
 {
-  "name": "UnsafeRead",
-  "kind": "query",
-  "select": [
-    { "$fragment": { "name": "Writes", "if": { "$var": "enabled" } } }
-  ],
-  "fragments": {
-    "Writes": [{ "$call": { "name": "deleteAccount" } }]
-  }
+  "operations": [{
+    "name": "UnsafeRead",
+    "kind": "query",
+    "variables": [{ "name": "enabled", "type": "Boolean" }],
+    "select": [{
+      "$fragment": {
+        "name": "Writes",
+        "directives": [{
+          "name": "include",
+          "arguments": { "if": { "$var": "enabled" } }
+        }]
+      }
+    }]
+  }],
+  "fragments": [{
+    "name": "Writes",
+    "select": [{ "$call": { "name": "deleteAccount" } }]
+  }]
 }
 ```
 

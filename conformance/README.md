@@ -18,3 +18,9 @@ node conformance/independent/scalars.mjs
 
 The `core.value-1` vectors cover schema-directed maps, lists, input objects,
 one-of activation, enum compatibility, and recursive value limits.
+
+The `core.language-1` vectors cover every core composition tag and expression,
+response shaping, collection edge states, result-reference scopes, and the
+zero-handler boundary for invalid operations. Their document grammar is the
+strict JSON Schema in `spec/v1/language.schema.json`; semantic execution of the
+vectors is implemented by the validation and runtime conformance issues.

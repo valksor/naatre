@@ -1,0 +1,362 @@
+{
+  "profile": "core.language-1",
+  "schema": "spec/v1/language.schema.json",
+  "constructs": [
+    "$field",
+    "$call",
+    "$pipeline",
+    "$map",
+    "$index",
+    "$slice",
+    "$page",
+    "$meta",
+    "$parallel",
+    "$fragment",
+    "$current",
+    "$nest",
+    "$unnest"
+  ],
+  "expressions": ["$literal", "$var", "$parent", "$current", "$result"],
+  "vectors": [
+    {
+      "name": "nested-explicit-map-and-list-metadata",
+      "document": {
+        "operations": [{
+          "name": "Users",
+          "kind": "query",
+          "select": [{
+            "$call": {
+              "name": "users",
+              "select": [
+                {"$meta": {"name": "count", "as": "total"}},
+                {"$map": {"as": "items", "select": [
+                  {"$field": {"name": "id"}},
+                  {"$nest": {"as": "profile", "select": [
+                    {"$field": {"name": "displayName", "as": "display"}}
+                  ]}}
+                ]}}
+              ]
+            }
+          }]
+        }]
+      },
+      "valid": true,
+      "expectedData": {"users": {"total": 2, "items": [{"id": "u-1", "profile": {"display": "Ada"}}, {"id": "u-2", "profile": {"display": "Lin"}}]}}
+    },
+    {
+      "name": "pipeline-prior-result-and-current",
+      "document": {
+        "operations": [{
+          "name": "Profile",
+          "kind": "query",
+          "variables": [{"name": "id", "type": "ID"}],
+          "select": [
+            {"$call": {"name": "user", "args": {"id": {"$var": "id"}}, "bind": "user"}},
+            {"$pipeline": {"as": "display", "stages": [
+              {"$call": {"name": "useUser", "args": {"user": {"$result": "user"}}}},
+              {"$field": {"name": "profile"}},
+              {"$field": {"name": "displayName"}},
+              {"$current": {}}
+            ]}}
+          ]
+        }]
+      },
+      "valid": true,
+      "expectedData": {"user": {"id": "u-1"}, "display": "Ada"}
+    },
+    {
+      "name": "collection-index-slice-page-and-current",
+      "document": {
+        "operations": [{
+          "name": "Collections",
+          "kind": "query",
+          "select": [{
+            "$call": {"name": "users", "select": [
+              {"$index": {"as": "first", "at": 0, "select": [{"$field": {"name": "id"}}]}},
+              {"$slice": {"as": "tail", "start": 1, "end": 99, "select": [{"$field": {"name": "id"}}]}},
+              {"$page": {"as": "page", "first": 2, "after": {"$literal": "cursor-1"}, "select": [{"$field": {"name": "id"}}]}},
+              {"$current": {"as": "raw"}}
+            ]}
+          }]
+        }]
+      },
+      "valid": true,
+      "capabilities": ["collection.page-1"],
+      "expectedData": {"users": {"first": {"id": "u-1"}, "tail": [{"id": "u-2"}], "page": [{"id": "u-1"}, {"id": "u-2"}], "raw": ["u-1", "u-2"]}}
+    },
+    {
+      "name": "fragment-parallel-unnest-and-expression-contexts",
+      "document": {
+        "operations": [{
+          "name": "Composed",
+          "kind": "query",
+          "select": [{"$call": {"name": "users", "select": [
+            {"$map": {"as": "items", "select": [{"$parallel": {
+              "policy": "collect",
+              "select": [
+                {"$fragment": {"name": "Identity"}},
+                {"$call": {"name": "compare", "args": {"item": {"$current": true}, "owner": {"$parent": true}}}},
+                {"$unnest": {"select": [{"$field": {"name": "summary"}}]}}
+              ]
+            }}]}}
+          ]}}]
+        }],
+        "fragments": [{
+          "name": "Identity",
+          "on": "User",
+          "select": [{"$field": {"name": "id", "directives": [{"name": "include", "arguments": {"if": {"$literal": true}}}]}}]
+        }]
+      },
+      "valid": true,
+      "expectedData": {"users": {"items": [{"id": "u-1", "compare": true, "summary": "active"}]}}
+    },
+    {
+      "name": "literal-var-shaped-map-is-inert",
+      "document": {
+        "operations": [{
+          "name": "Literal",
+          "kind": "query",
+          "select": [{"$call": {"name": "echo", "args": {"value": {"$literal": {"$var": "notExecutable"}}}}}]
+        }]
+      },
+      "valid": true,
+      "expectedData": {"echo": {"$var": "notExecutable"}}
+    },
+    {
+      "name": "object-member-order-is-non-semantic",
+      "document": {"operations": [{"name": "Order", "kind": "query", "select": [{"$call": {"name": "echo", "args": {"value": {"$literal": {"a": 1, "b": 2}}}}}]}]},
+      "equivalentDocument": {"operations": [{"select": [{"$call": {"args": {"value": {"$literal": {"b": 2, "a": 1}}}, "name": "echo"}}], "kind": "query", "name": "Order"}]},
+      "valid": true,
+      "expectedData": {"echo": {"a": 1, "b": 2}}
+    },
+    {
+      "name": "alias-and-binding-are-independent",
+      "document": {"operations": [{"name": "Alias", "kind": "query", "select": [
+        {"$call": {"name": "user", "as": "author", "bind": "loadedUser"}},
+        {"$call": {"name": "consume", "args": {"user": {"$result": "loadedUser"}}}}
+      ]}]},
+      "valid": true,
+      "expectedData": {"author": {"id": "u-1"}, "consume": true}
+    },
+    {
+      "name": "empty-list-map",
+      "document": {"operations": [{"name": "Empty", "kind": "query", "select": [{"$pipeline": {"as": "items", "stages": [
+        {"$call": {"name": "emptyUsers"}},
+        {"$map": {"select": [{"$field": {"name": "id"}}]}}
+      ]}}]}]},
+      "valid": true,
+      "expectedData": {"items": []}
+    },
+    {
+      "name": "slice-bounds-clamp-to-length",
+      "document": {"operations": [{"name": "Slice", "kind": "query", "select": [{"$pipeline": {"as": "items", "stages": [
+        {"$call": {"name": "users"}},
+        {"$slice": {"start": 1, "end": 999}},
+        {"$current": {}}
+      ]}}]}]},
+      "valid": true,
+      "expectedData": {"items": ["u-2"]}
+    },
+    {
+      "name": "out-of-range-index-is-path-error",
+      "document": {"operations": [{"name": "Index", "kind": "query", "select": [{"$pipeline": {"as": "chosen", "stages": [
+        {"$call": {"name": "users"}},
+        {"$index": {"at": 7}}
+      ]}}]}]},
+      "valid": true,
+      "handlerStarts": 1,
+      "expectedErrors": [{"code": "INDEX_OUT_OF_RANGE", "path": ["chosen", 7]}]
+    },
+    {
+      "name": "null-result-rejects-non-null-consumer",
+      "document": {"operations": [{"name": "Null", "kind": "query", "select": [
+        {"$call": {"name": "nullableUser", "bind": "user"}},
+        {"$call": {"name": "consumeRequired", "args": {"user": {"$result": "user"}}}}
+      ]}]},
+      "valid": true,
+      "handlerStarts": 1,
+      "expectedErrors": [{"code": "RESULT_NULL", "path": ["consumeRequired"]}]
+    },
+    {
+      "name": "failed-result-is-unavailable",
+      "document": {"operations": [{"name": "Failed", "kind": "mutation", "select": [
+        {"$call": {"name": "create", "bind": "created"}},
+        {"$call": {"name": "consume", "args": {"value": {"$result": "created"}}}}
+      ]}]},
+      "valid": true,
+      "handlerStarts": 1,
+      "expectedErrors": [{"code": "RESULT_UNAVAILABLE", "path": ["consume"]}]
+    },
+    {
+      "name": "skipped-result-is-unavailable",
+      "document": {"operations": [{"name": "Skipped", "kind": "query", "select": [
+        {"$call": {"name": "load", "bind": "loaded", "directives": [{"name": "skip", "arguments": {"if": {"$literal": true}}}]}},
+        {"$call": {"name": "consume", "args": {"value": {"$result": "loaded"}}}}
+      ]}]},
+      "valid": true,
+      "handlerStarts": 0,
+      "expectedErrors": [{"code": "RESULT_SKIPPED", "path": ["consume"]}]
+    },
+    {
+      "name": "missing-variable-rejects-required-consumer",
+      "document": {"operations": [{"name": "Missing", "kind": "query", "variables": [
+        {"name": "value", "type": "String", "required": false}
+      ], "select": [
+        {"$call": {"name": "consumeRequired", "args": {"value": {"$var": "value"}}}}
+      ]}]},
+      "requestVariables": {},
+      "valid": true,
+      "handlerStarts": 0,
+      "expectedErrors": [{"code": "RESULT_MISSING", "path": ["consumeRequired"]}]
+    },
+    {
+      "name": "missing-variable-omits-optional-argument",
+      "document": {"operations": [{"name": "Optional", "kind": "query", "variables": [
+        {"name": "value", "type": "String", "required": false}
+      ], "select": [
+        {"$call": {"name": "consumeOptional", "args": {"value": {"$var": "value"}}}}
+      ]}]},
+      "requestVariables": {},
+      "valid": true,
+      "handlerStarts": 1,
+      "expectedData": {"consumeOptional": "default"}
+    },
+    {
+      "name": "implicit-list-item-mapping",
+      "document": {"operations": [{"name": "Implicit", "kind": "query", "select": [{"$pipeline": {"as": "names", "stages": [
+        {"$call": {"name": "users"}},
+        {"$field": {"name": "displayName"}}
+      ]}}]}]},
+      "valid": false,
+      "code": "INVALID_COLLECTION_SCOPE",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$pipeline/stages/1",
+      "handlerStarts": 0
+    },
+    {
+      "name": "negative-index",
+      "document": {"operations": [{"name": "Negative", "kind": "query", "select": [{"$index": {"as": "item", "at": -1}}]}]},
+      "valid": false,
+      "code": "INVALID_INDEX",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$index/at",
+      "handlerStarts": 0
+    },
+    {
+      "name": "slice-start-after-end",
+      "document": {"operations": [{"name": "Slice", "kind": "query", "select": [{"$slice": {"as": "items", "start": 3, "end": 2}}]}]},
+      "valid": false,
+      "code": "INVALID_SLICE",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$slice",
+      "handlerStarts": 0
+    },
+    {
+      "name": "mixed-page-directions",
+      "document": {"operations": [{"name": "Page", "kind": "query", "select": [{"$page": {"as": "items", "first": 2, "before": {"$literal": "cursor"}}}]}]},
+      "valid": false,
+      "code": "INVALID_PAGE",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$page",
+      "handlerStarts": 0
+    },
+    {
+      "name": "unnest-scalar",
+      "document": {"operations": [{"name": "Unnest", "kind": "query", "select": [{"$unnest": {"select": [{"$field": {"name": "displayName"}}]}}]}]},
+      "valid": false,
+      "code": "INVALID_UNNEST",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$unnest",
+      "handlerStarts": 0
+    },
+    {
+      "name": "alias-collision",
+      "document": {"operations": [{"name": "Collision", "kind": "query", "select": [
+        {"$field": {"name": "firstName", "as": "name"}},
+        {"$field": {"name": "lastName", "as": "name"}}
+      ]}]},
+      "valid": false,
+      "code": "DUPLICATE_RESPONSE_NAME",
+      "phase": "validate",
+      "pointer": "/operations/0/select/1/$field/as",
+      "handlerStarts": 0
+    },
+    {
+      "name": "forward-result-reference",
+      "document": {"operations": [{"name": "Forward", "kind": "query", "select": [
+        {"$call": {"name": "consume", "args": {"value": {"$result": "later"}}}},
+        {"$call": {"name": "load", "bind": "later"}}
+      ]}]},
+      "valid": false,
+      "code": "RESULT_FORWARD_REFERENCE",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$call/args/value/$result",
+      "handlerStarts": 0
+    },
+    {
+      "name": "self-result-reference",
+      "document": {"operations": [{"name": "Cycle", "kind": "query", "select": [
+        {"$call": {"name": "load", "bind": "self", "args": {"value": {"$result": "self"}}}}
+      ]}]},
+      "valid": false,
+      "code": "RESULT_FORWARD_REFERENCE",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$call/args/value/$result",
+      "handlerStarts": 0
+    },
+    {
+      "name": "cross-parallel-result-reference",
+      "document": {"operations": [{"name": "Parallel", "kind": "query", "select": [{"$parallel": {"select": [
+        {"$call": {"name": "load", "bind": "branchValue"}},
+        {"$call": {"name": "consume", "args": {"value": {"$result": "branchValue"}}}}
+      ]}}]}]},
+      "valid": false,
+      "code": "RESULT_SCOPE",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$parallel/select/1/$call/args/value/$result",
+      "handlerStarts": 0
+    },
+    {
+      "name": "invalid-downstream-argument-after-write",
+      "document": {"operations": [{"name": "WriteThenInvalid", "kind": "mutation", "select": [
+        {"$call": {"name": "createUser", "bind": "created"}},
+        {"$call": {"name": "requiresInt", "args": {"value": {"$result": "created"}}}}
+      ]}]},
+      "valid": false,
+      "code": "TYPE_MISMATCH",
+      "phase": "validate",
+      "pointer": "/operations/0/select/1/$call/args/value",
+      "handlerStarts": 0
+    },
+    {
+      "name": "skipped-write-inside-query",
+      "document": {
+        "operations": [{"name": "Unsafe", "kind": "query", "variables": [
+          {"name": "enabled", "type": "Boolean"}
+        ], "select": [
+          {"$fragment": {"name": "Writes", "directives": [{"name": "include", "arguments": {"if": {"$var": "enabled"}}}]}}
+        ]}],
+        "fragments": [{"name": "Writes", "select": [
+          {"$call": {"name": "deleteUser"}}
+        ]}]
+      },
+      "valid": false,
+      "code": "EFFECT_NOT_ALLOWED",
+      "phase": "validate",
+      "pointer": "/fragments/0/select/0/$call/name",
+      "handlerStarts": 0
+    },
+    {
+      "name": "unnest-parent-collision",
+      "document": {"operations": [{"name": "Merge", "kind": "query", "select": [
+        {"$field": {"name": "id"}},
+        {"$unnest": {"select": [{"$field": {"name": "externalID", "as": "id"}}]}}
+      ]}]},
+      "valid": false,
+      "code": "DUPLICATE_RESPONSE_NAME",
+      "phase": "validate",
+      "pointer": "/operations/0/select/1/$unnest/select/0/$field/as",
+      "handlerStarts": 0
+    }
+  ]
+}

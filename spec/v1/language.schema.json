@@ -1,0 +1,555 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naatre.dev/spec/v1/language.schema.json",
+  "title": "Naatre v1 operation document",
+  "$ref": "#/$defs/document",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+    },
+    "typeIdentifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+    },
+    "document": {
+      "type": "object",
+      "required": ["operations"],
+      "additionalProperties": false,
+      "properties": {
+        "operations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/operation" }
+        },
+        "fragments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fragment" }
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "required": ["name", "kind", "select"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "kind": { "enum": ["query", "mutation", "subscription"] },
+        "variables": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/variable" }
+        },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "fragment": {
+      "type": "object",
+      "required": ["name", "select"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "on": { "$ref": "#/$defs/typeIdentifier" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "variable": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "type": { "$ref": "#/$defs/typeIdentifier" },
+        "required": { "type": "boolean" },
+        "nullable": { "type": "boolean" },
+        "default": true
+      }
+    },
+    "expression": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["$literal"],
+          "additionalProperties": false,
+          "properties": { "$literal": true }
+        },
+        {
+          "type": "object",
+          "required": ["$var"],
+          "additionalProperties": false,
+          "properties": { "$var": { "$ref": "#/$defs/identifier" } }
+        },
+        {
+          "type": "object",
+          "required": ["$parent"],
+          "additionalProperties": false,
+          "properties": { "$parent": { "const": true } }
+        },
+        {
+          "type": "object",
+          "required": ["$current"],
+          "additionalProperties": false,
+          "properties": { "$current": { "const": true } }
+        },
+        {
+          "type": "object",
+          "required": ["$result"],
+          "additionalProperties": false,
+          "properties": { "$result": { "$ref": "#/$defs/identifier" } }
+        }
+      ]
+    },
+    "arguments": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/expression" }
+    },
+    "directive": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "arguments": { "$ref": "#/$defs/arguments" }
+      }
+    },
+    "directives": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/directive" }
+    },
+    "selections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/selection" }
+    },
+    "selection": {
+      "oneOf": [
+        { "$ref": "#/$defs/fieldSelection" },
+        { "$ref": "#/$defs/callSelection" },
+        { "$ref": "#/$defs/pipelineSelection" },
+        { "$ref": "#/$defs/mapSelection" },
+        { "$ref": "#/$defs/indexSelection" },
+        { "$ref": "#/$defs/sliceSelection" },
+        { "$ref": "#/$defs/pageSelection" },
+        { "$ref": "#/$defs/metaSelection" },
+        { "$ref": "#/$defs/parallelSelection" },
+        { "$ref": "#/$defs/fragmentSelection" },
+        { "$ref": "#/$defs/currentSelection" },
+        { "$ref": "#/$defs/nestSelection" },
+        { "$ref": "#/$defs/unnestSelection" }
+      ]
+    },
+    "fieldSelection": {
+      "type": "object",
+      "required": ["$field"],
+      "additionalProperties": false,
+      "properties": { "$field": { "$ref": "#/$defs/fieldPayload" } }
+    },
+    "callSelection": {
+      "type": "object",
+      "required": ["$call"],
+      "additionalProperties": false,
+      "properties": { "$call": { "$ref": "#/$defs/callPayload" } }
+    },
+    "pipelineSelection": {
+      "type": "object",
+      "required": ["$pipeline"],
+      "additionalProperties": false,
+      "properties": { "$pipeline": { "$ref": "#/$defs/pipelinePayload" } }
+    },
+    "mapSelection": {
+      "type": "object",
+      "required": ["$map"],
+      "additionalProperties": false,
+      "properties": { "$map": { "$ref": "#/$defs/mapPayload" } }
+    },
+    "indexSelection": {
+      "type": "object",
+      "required": ["$index"],
+      "additionalProperties": false,
+      "properties": { "$index": { "$ref": "#/$defs/indexPayload" } }
+    },
+    "sliceSelection": {
+      "type": "object",
+      "required": ["$slice"],
+      "additionalProperties": false,
+      "properties": { "$slice": { "$ref": "#/$defs/slicePayload" } }
+    },
+    "pageSelection": {
+      "type": "object",
+      "required": ["$page"],
+      "additionalProperties": false,
+      "properties": { "$page": { "$ref": "#/$defs/pagePayload" } }
+    },
+    "metaSelection": {
+      "type": "object",
+      "required": ["$meta"],
+      "additionalProperties": false,
+      "properties": { "$meta": { "$ref": "#/$defs/metaPayload" } }
+    },
+    "parallelSelection": {
+      "type": "object",
+      "required": ["$parallel"],
+      "additionalProperties": false,
+      "properties": { "$parallel": { "$ref": "#/$defs/parallelPayload" } }
+    },
+    "fragmentSelection": {
+      "type": "object",
+      "required": ["$fragment"],
+      "additionalProperties": false,
+      "properties": { "$fragment": { "$ref": "#/$defs/fragmentPayload" } }
+    },
+    "currentSelection": {
+      "type": "object",
+      "required": ["$current"],
+      "additionalProperties": false,
+      "properties": { "$current": { "$ref": "#/$defs/currentPayload" } }
+    },
+    "nestSelection": {
+      "type": "object",
+      "required": ["$nest"],
+      "additionalProperties": false,
+      "properties": { "$nest": { "$ref": "#/$defs/nestPayload" } }
+    },
+    "unnestSelection": {
+      "type": "object",
+      "required": ["$unnest"],
+      "additionalProperties": false,
+      "properties": { "$unnest": { "$ref": "#/$defs/unnestPayload" } }
+    },
+    "fieldPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "callPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "args": { "$ref": "#/$defs/arguments" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "pipelinePayload": {
+      "type": "object",
+      "required": ["as", "stages"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "stages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/pipelineStep" }
+        }
+      }
+    },
+    "mapPayload": {
+      "type": "object",
+      "required": ["as", "select"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "indexPayload": {
+      "type": "object",
+      "required": ["as", "at"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "at": { "type": "integer", "minimum": 0 },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "slicePayload": {
+      "type": "object",
+      "required": ["as"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "pagePayload": {
+      "type": "object",
+      "required": ["as"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "first": { "type": "integer", "minimum": 1 },
+        "after": { "$ref": "#/$defs/expression" },
+        "last": { "type": "integer", "minimum": 1 },
+        "before": { "$ref": "#/$defs/expression" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      },
+      "oneOf": [
+        {
+          "required": ["first"],
+          "properties": {
+            "first": true,
+            "after": true,
+            "last": false,
+            "before": false
+          }
+        },
+        {
+          "required": ["last"],
+          "properties": {
+            "first": false,
+            "after": false,
+            "last": true,
+            "before": true
+          }
+        }
+      ]
+    },
+    "metaPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" }
+      }
+    },
+    "parallelPayload": {
+      "type": "object",
+      "required": ["select"],
+      "additionalProperties": false,
+      "properties": {
+        "policy": { "enum": ["collect", "fail-fast"] },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "fragmentPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" }
+      }
+    },
+    "currentPayload": {
+      "type": "object",
+      "required": ["as"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" }
+      }
+    },
+    "nestPayload": {
+      "type": "object",
+      "required": ["as", "select"],
+      "additionalProperties": false,
+      "properties": {
+        "as": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "unnestPayload": {
+      "type": "object",
+      "required": ["select"],
+      "additionalProperties": false,
+      "properties": {
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "pipelineStep": {
+      "oneOf": [
+        { "$ref": "#/$defs/fieldStep" },
+        { "$ref": "#/$defs/callStep" },
+        { "$ref": "#/$defs/mapStep" },
+        { "$ref": "#/$defs/indexStep" },
+        { "$ref": "#/$defs/sliceStep" },
+        { "$ref": "#/$defs/pageStep" },
+        { "$ref": "#/$defs/metaStep" },
+        { "$ref": "#/$defs/currentStep" }
+      ]
+    },
+    "fieldStep": {
+      "type": "object",
+      "required": ["$field"],
+      "additionalProperties": false,
+      "properties": { "$field": { "$ref": "#/$defs/fieldStepPayload" } }
+    },
+    "callStep": {
+      "type": "object",
+      "required": ["$call"],
+      "additionalProperties": false,
+      "properties": { "$call": { "$ref": "#/$defs/callStepPayload" } }
+    },
+    "mapStep": {
+      "type": "object",
+      "required": ["$map"],
+      "additionalProperties": false,
+      "properties": { "$map": { "$ref": "#/$defs/mapStepPayload" } }
+    },
+    "indexStep": {
+      "type": "object",
+      "required": ["$index"],
+      "additionalProperties": false,
+      "properties": { "$index": { "$ref": "#/$defs/indexStepPayload" } }
+    },
+    "sliceStep": {
+      "type": "object",
+      "required": ["$slice"],
+      "additionalProperties": false,
+      "properties": { "$slice": { "$ref": "#/$defs/sliceStepPayload" } }
+    },
+    "pageStep": {
+      "type": "object",
+      "required": ["$page"],
+      "additionalProperties": false,
+      "properties": { "$page": { "$ref": "#/$defs/pageStepPayload" } }
+    },
+    "metaStep": {
+      "type": "object",
+      "required": ["$meta"],
+      "additionalProperties": false,
+      "properties": { "$meta": { "$ref": "#/$defs/metaStepPayload" } }
+    },
+    "currentStep": {
+      "type": "object",
+      "required": ["$current"],
+      "additionalProperties": false,
+      "properties": { "$current": { "$ref": "#/$defs/currentStepPayload" } }
+    },
+    "fieldStepPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "callStepPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "args": { "$ref": "#/$defs/arguments" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "mapStepPayload": {
+      "type": "object",
+      "required": ["select"],
+      "additionalProperties": false,
+      "properties": {
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "indexStepPayload": {
+      "type": "object",
+      "required": ["at"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "type": "integer", "minimum": 0 },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "sliceStepPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      }
+    },
+    "pageStepPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "first": { "type": "integer", "minimum": 1 },
+        "after": { "$ref": "#/$defs/expression" },
+        "last": { "type": "integer", "minimum": 1 },
+        "before": { "$ref": "#/$defs/expression" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      },
+      "oneOf": [
+        {
+          "required": ["first"],
+          "properties": {
+            "first": true,
+            "after": true,
+            "last": false,
+            "before": false
+          }
+        },
+        {
+          "required": ["last"],
+          "properties": {
+            "first": false,
+            "after": false,
+            "last": true,
+            "before": true
+          }
+        }
+      ]
+    },
+    "metaStepPayload": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" }
+      }
+    },
+    "currentStepPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bind": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" }
+      }
+    }
+  }
+}
