@@ -3,6 +3,7 @@ package schema
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sync"
@@ -137,7 +138,7 @@ func (c *Catalog) Freeze() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	c.frozen = true
-	return Snapshot{types: cloneTypes(c.types)}, nil
+	return Snapshot{types: cloneTypeMap(c.types)}, nil
 }
 
 // Lookup returns an isolated descriptor copy.
@@ -228,14 +229,6 @@ func validateDescriptor(descriptor TypeDescriptor) error {
 	return nil
 }
 
-func cloneTypes(input map[TypeID]TypeDescriptor) map[TypeID]TypeDescriptor {
-	result := make(map[TypeID]TypeDescriptor, len(input))
-	for identifier, descriptor := range input {
-		result[identifier] = cloneDescriptor(descriptor)
-	}
-	return result
-}
-
 func cloneDescriptor(descriptor TypeDescriptor) TypeDescriptor {
 	result := descriptor
 	result.Fields = make(map[string]FieldDescriptor, len(descriptor.Fields))
@@ -244,6 +237,14 @@ func cloneDescriptor(descriptor TypeDescriptor) TypeDescriptor {
 	}
 	result.Variants = append([]TypeID(nil), descriptor.Variants...)
 	result.EnumValues = append([]string(nil), descriptor.EnumValues...)
+	return result
+}
+
+func cloneTypeMap(input map[TypeID]TypeDescriptor) map[TypeID]TypeDescriptor {
+	result := maps.Clone(input)
+	for identifier := range result {
+		result[identifier] = cloneDescriptor(result[identifier])
+	}
 	return result
 }
 

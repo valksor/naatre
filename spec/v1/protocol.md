@@ -53,6 +53,10 @@ Invalid (conflicting sources):
 - **PROTO-104:** Internal causes and stack traces MUST NOT appear by default.
 - **PROTO-105:** `capabilities` contains only server-negotiated capabilities;
   it MUST NOT echo unsupported client assertions.
+- **PROTO-106:** The `core.protocol-1` conformance profile MUST publish
+  language-neutral request and response vectors covering success, simultaneous
+  data and errors, validation failure, unsupported version, malformed input,
+  unknown capability, and malformed response envelopes.
 
 Valid partial response:
 

@@ -1,0 +1,91 @@
+{
+  "profile": "core.protocol-1",
+  "requests": [
+    {
+      "name": "success",
+      "input": "{\"version\":\"1\",\"id\":\"c-7\",\"document\":{\"operations\":[{\"name\":\"Get\",\"kind\":\"query\",\"select\":[]}]},\"variables\":{},\"capabilities\":[],\"extensions\":{}}",
+      "valid": true,
+      "code": "",
+      "phase": ""
+    },
+    {
+      "name": "unsupported-version",
+      "input": "{\"version\":\"2\",\"document\":{\"operations\":[]}}",
+      "valid": false,
+      "code": "UNSUPPORTED_VERSION",
+      "phase": "decode"
+    },
+    {
+      "name": "malformed-input",
+      "input": "{\"version\":",
+      "valid": false,
+      "code": "MALFORMED_JSON",
+      "phase": "decode"
+    },
+    {
+      "name": "unknown-capability",
+      "input": "{\"version\":\"1\",\"document\":{\"operations\":[]},\"capabilities\":[\"unknown.required\"]}",
+      "valid": false,
+      "code": "UNSUPPORTED_CAPABILITY",
+      "phase": "validate"
+    },
+    {
+      "name": "invalid-operation-name",
+      "input": "{\"version\":\"1\",\"document\":{\"operations\":[{\"name\":\"not portable\",\"kind\":\"query\",\"select\":[]}]}}",
+      "valid": false,
+      "code": "INVALID_IDENTIFIER",
+      "phase": "validate"
+    },
+    {
+      "name": "invalid-operation-kind",
+      "input": "{\"version\":\"1\",\"document\":{\"operations\":[{\"name\":\"Get\",\"kind\":\"read\",\"select\":[]}]}}",
+      "valid": false,
+      "code": "INVALID_OPERATION_KIND",
+      "phase": "validate"
+    },
+    {
+      "name": "invalid-selection-shape",
+      "input": "{\"version\":\"1\",\"document\":{\"operations\":[{\"name\":\"Get\",\"kind\":\"query\",\"select\":[\"name\"]}]}}",
+      "valid": false,
+      "code": "INVALID_SELECTION",
+      "phase": "validate"
+    }
+  ],
+  "responses": [
+    {
+      "name": "success",
+      "input": "{\"id\":\"c-7\",\"requestId\":\"s-9\",\"data\":{\"name\":\"Ada\"},\"capabilities\":[],\"extensions\":{}}",
+      "valid": true,
+      "code": "",
+      "phase": ""
+    },
+    {
+      "name": "partial-data-and-errors",
+      "input": "{\"requestId\":\"s-10\",\"data\":{\"users\":[{\"name\":\"Ada\"},null]},\"errors\":[{\"code\":\"FIELD_FAILED\",\"message\":\"field unavailable\",\"path\":[\"users\",1],\"retryable\":false}],\"capabilities\":[],\"extensions\":{}}",
+      "valid": true,
+      "code": "",
+      "phase": ""
+    },
+    {
+      "name": "validation-failure",
+      "input": "{\"requestId\":\"s-11\",\"errors\":[{\"code\":\"VALIDATION_FAILED\",\"message\":\"operation is invalid\",\"path\":[],\"source\":{\"pointer\":\"/document/operations/0\",\"line\":1,\"column\":28},\"retryable\":false}],\"capabilities\":[],\"extensions\":{}}",
+      "valid": true,
+      "code": "",
+      "phase": ""
+    },
+    {
+      "name": "missing-request-id",
+      "input": "{\"data\":{},\"capabilities\":[],\"extensions\":{}}",
+      "valid": false,
+      "code": "MISSING_FIELD",
+      "phase": "decode"
+    },
+    {
+      "name": "malformed-capabilities",
+      "input": "{\"requestId\":\"s-12\",\"data\":{},\"capabilities\":{},\"extensions\":{}}",
+      "valid": false,
+      "code": "TYPE_MISMATCH",
+      "phase": "decode"
+    }
+  ]
+}

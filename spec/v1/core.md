@@ -26,6 +26,19 @@
 - **CORE-014 Missing:** absence of a value. Missing is not JSON null.
 - **CORE-015 Error path:** an array of aliased response names and list indexes
   identifying one result location.
+- **CORE-016 Query:** an operation whose complete transitive selection graph is
+  registered read-only. Query is an effect constraint, not an HTTP method.
+- **CORE-017 Mutation:** an operation whose top-level selections execute in
+  declared order and may reach registered write effects.
+- **CORE-018 Subscription:** an operation that establishes a read-like source
+  and delivers an ordered event sequence under a streaming profile.
+- **CORE-019 Effect:** trusted server registration metadata classifying a
+  handler as read or write independently of operation kind and scheduling.
+- **CORE-020 Transport method:** the carrier-specific method used to exchange a
+  request. It does not determine operation kind, effect, or execution order.
+- **CORE-021 Partial data:** response data that preserves every successfully
+  completed location while representing other locations as unavailable under
+  the error and completion rules.
 
 ## Phases
 
@@ -47,11 +60,33 @@
   result representation before a later sibling or concurrent observer sees
   them.
 - **CORE-106:** Serialization MUST reveal only safe public errors.
+- **CORE-107:** Decode, validate, plan, complete, and serialize MUST NOT perform
+  application side effects. Authorization MAY read policy and identity state
+  but MUST NOT invoke business writes. Only execute may invoke registered
+  application handlers.
+- **CORE-108:** Every failure MUST be assigned to its originating phase. Decode
+  owns malformed syntax and envelopes; validate owns invalid operations and
+  types; plan owns resolution and optimizer failures; authorize owns denied or
+  indeterminate access; execute owns handler and cancellation failures;
+  complete owns invalid outputs; serialize owns response encoding failures;
+  transport owns carrier establishment, framing, and delivery failures.
 
 Valid: a document is fully validated before its first handler is called.
 
 Invalid: a planner calls a handler to discover its return type and later
 rejects an unrelated alias collision.
+
+| Clause | Valid example | Invalid example |
+| --- | --- | --- |
+| CORE-100 | A decoded request is validated and planned before authorization and execution. | Completion repairs an input that validation rejected. |
+| CORE-101 | Decode records a typed call node without looking it up. | Decode queries a registry or database. |
+| CORE-102 | Validation checks every fragment branch before the first handler starts. | A statically skipped invalid branch is ignored. |
+| CORE-103 | Static policy denial prevents all handlers from starting. | An alias bypasses the authorization attached to its registered field. |
+| CORE-104 | Execution calls the definition captured by the immutable plan. | Execution reflects over an unregistered Go method. |
+| CORE-105 | A handler-owned map is copied and completed before the next sibling starts. | A later sibling observes a map that the prior handler can still mutate. |
+| CORE-106 | A panic becomes a stable public internal-error code. | A stack trace or database error text reaches the response. |
+| CORE-107 | Authorization reads tenant policy; execution later invokes the write. | Planning performs the write to predict its output. |
+| CORE-108 | Invalid handler output is classified as completion failure. | The same output is reported as malformed request syntax. |
 
 ## Kinds, effects, and ordering
 
@@ -80,6 +115,17 @@ state.
 
 Invalid: a query fragment hides a registered mutation behind a Boolean
 directive, even when the request variable currently skips the fragment.
+
+| Clause | Valid example | Invalid example |
+| --- | --- | --- |
+| CORE-200 | A POST-carried query remains read-only and sequential unless it contains an explicit parallel group. | POST is treated as proof that the operation is a mutation. |
+| CORE-201 | A query reaches only registered read effects through every fragment and pipeline. | A query spreads a fragment containing a registered write, even behind a false directive. |
+| CORE-202 | Mutation selections `create` then `read` execute and complete in that order. | `read` starts before `create` completes. |
+| CORE-203 | Subscription establishment reads authorization state and emits ordered events. | Establishment conceals an unregistered write. |
+| CORE-204 | Reordering object members leaves semantics unchanged while selection-array order is preserved. | Runtime order follows a JSON object's parser iteration order. |
+| CORE-205 | A selected list is fully completed before its next sibling starts. | The next sibling starts while list elements are still being completed. |
+| CORE-206 | Independent thread-safe reads run within a negotiated bound and assemble by declaration. | An unmarked mutation is admitted to a parallel group. |
+| CORE-207 | A loader dispatches before a following serial write barrier. | A cache or loader reorders work across authorization or transaction boundaries. |
 
 ## Determinism, failure, and cancellation
 
@@ -110,6 +156,17 @@ in declaration/path order.
 Invalid: fail-fast conformance requires one timing-dependent branch to win, or
 a cancelled mutation is automatically reported as rolled back.
 
+| Clause | Valid example | Invalid example |
+| --- | --- | --- |
+| CORE-300 | Two identical validated inputs produce the same paths and assembly order. | Map iteration order changes error ordering. |
+| CORE-301 | A failed query field is absent while its successful sibling remains. | One failed field deletes unrelated sibling data. |
+| CORE-302 | Failed list index 1 is `null` and the former index 2 remains index 2. | The failed item is removed and later indexes shift. |
+| CORE-303 | A client checks completeness before constructing a required-field domain model. | An unavailable required field is silently treated as a successful null. |
+| CORE-304 | Parallel failures sort by response path then source location. | Completion timing determines response error order. |
+| CORE-305 | Cancellation stops queued admission and reaches every active handler. | A cancellation response claims an already-running write rolled back. |
+| CORE-306 | A host panic is contained and redacted at the handler boundary. | Panic text escapes through direct invocation. |
+| CORE-307 | A context-dependent read returns different application values while response structure remains stable. | Different external data is called a scheduler determinism violation. |
+
 ## Capabilities and compatibility
 
 - **CORE-400:** Core clauses apply to every profile. A capability may add
@@ -125,6 +182,44 @@ Valid: a server rejects a requested required capability it does not advertise.
 
 Invalid: an extension enables parallel mutations despite the core registry
 marking the handler serial-only.
+
+| Clause | Valid example | Invalid example |
+| --- | --- | --- |
+| CORE-400 | A streaming profile adds framing while retaining core authorization and limits. | An extension disables scalar validation. |
+| CORE-401 | An unknown required capability fails validation before execution. | Unknown extension data silently enables execution behavior. |
+| CORE-402 | A release manifest pins distinct spec, canonicalization, fixture, SDK, and worker versions. | A runtime version is presented as the wire-protocol version. |
+
+## Worked boundary examples
+
+The following query is invalid before execution because the referenced fragment
+transitively reaches the registered write `deleteAccount`, even if `if` is
+currently false:
+
+```json
+{
+  "name": "UnsafeRead",
+  "kind": "query",
+  "select": [
+    { "$fragment": { "name": "Writes", "if": { "$var": "enabled" } } }
+  ],
+  "fragments": {
+    "Writes": [{ "$call": { "name": "deleteAccount" } }]
+  }
+}
+```
+
+A context-dependent read may observe tenant, clock, or database state and return
+different values in two executions. This is valid when the selected paths,
+completion rules, and error ordering remain deterministic; Naatre does not
+claim replay-equivalent external state.
+
+For a fail-fast group containing independent branches `a` and `b`, scheduling
+may yield any actually completed subset permitted by the group policy. The
+portable assertions are invariant-based: returned entries are a subset of the
+declared branches, no queued branch is admitted after the terminal signal,
+runtime-owned work is joined under its ownership policy, and all returned
+errors are sorted by response path and source. A conformance test that requires
+one timing-dependent branch to be the winner is invalid.
 
 ## Acknowledgement
 

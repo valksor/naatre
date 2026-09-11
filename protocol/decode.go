@@ -16,14 +16,14 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := expectKind(input, root, nodeObject, "", "request object"); err != nil {
+	if err := expectKindPhase(input, root, nodeObject, "", "request object", "PROTO-001", "decode"); err != nil {
 		return nil, err
 	}
 	allowed := map[string]bool{
 		"version": true, "id": true, "operation": true, "document": true,
 		"persisted": true, "variables": true, "capabilities": true, "extensions": true,
 	}
-	if err := rejectUnknown(input, root, allowed, "PROTO-001", ""); err != nil {
+	if err := rejectUnknown(input, root, allowed, "PROTO-001", "decode", ""); err != nil {
 		return nil, err
 	}
 
@@ -39,7 +39,7 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 	request.version = version.text
 
 	if id, exists := root.member("id"); exists {
-		if err := expectKind(input, id, nodeString, "/id", "string id"); err != nil {
+		if err := expectKindPhase(input, id, nodeString, "/id", "string id", "PROTO-003", "decode"); err != nil {
 			return nil, err
 		}
 		if id.text == "" || utf8.RuneCountInString(id.text) > 128 {
@@ -48,11 +48,11 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 		request.id, request.hasID = id.text, true
 	}
 	if operation, exists := root.member("operation"); exists {
-		if err := expectKind(input, operation, nodeString, "/operation", "operation name"); err != nil {
+		if err := expectKindPhase(input, operation, nodeString, "/operation", "operation name", "PROTO-005", "decode"); err != nil {
 			return nil, err
 		}
 		if !identifierPattern.MatchString(operation.text) {
-			return nil, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "decode", "invalid operation identifier", "/operation", operation.start)
+			return nil, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "invalid operation identifier", "/operation", operation.start)
 		}
 		request.operation = operation.text
 	}
@@ -81,7 +81,7 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 	}
 
 	if variables, exists := root.member("variables"); exists {
-		if err := expectKind(input, variables, nodeObject, "/variables", "variables object"); err != nil {
+		if err := expectKindPhase(input, variables, nodeObject, "/variables", "variables object", "PROTO-006", "decode"); err != nil {
 			return nil, err
 		}
 		for _, variable := range variables.object {
@@ -89,7 +89,7 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 		}
 	}
 	if capabilities, exists := root.member("capabilities"); exists {
-		if err := expectKind(input, capabilities, nodeArray, "/capabilities", "capability array"); err != nil {
+		if err := expectKindPhase(input, capabilities, nodeArray, "/capabilities", "capability array", "PROTO-007", "decode"); err != nil {
 			return nil, err
 		}
 		seen := make(map[string]bool, len(capabilities.array))
@@ -106,7 +106,7 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 		}
 	}
 	if extensions, exists := root.member("extensions"); exists {
-		if err := expectKind(input, extensions, nodeObject, "/extensions", "extensions object"); err != nil {
+		if err := expectKindPhase(input, extensions, nodeObject, "/extensions", "extensions object", "PROTO-008", "decode"); err != nil {
 			return nil, err
 		}
 		for _, extension := range extensions.object {
@@ -121,17 +121,17 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 }
 
 func decodeDocument(input []byte, value node) (Document, error) {
-	if err := expectKind(input, value, nodeObject, "/document", "document object"); err != nil {
+	if err := expectKindPhase(input, value, nodeObject, "/document", "document object", "LANG-001", "validate"); err != nil {
 		return Document{}, err
 	}
-	if err := rejectUnknown(input, value, map[string]bool{"operations": true}, "LANG-001", "/document"); err != nil {
+	if err := rejectUnknown(input, value, map[string]bool{"operations": true}, "LANG-001", "validate", "/document"); err != nil {
 		return Document{}, err
 	}
 	operationsNode, exists := value.member("operations")
 	if !exists {
-		return Document{}, newDiagnostic(input, "MISSING_FIELD", "LANG-001", "decode", "document requires operations", "/document/operations", value.start)
+		return Document{}, newDiagnostic(input, "MISSING_FIELD", "LANG-001", "validate", "document requires operations", "/document/operations", value.start)
 	}
-	if err := expectKind(input, operationsNode, nodeArray, "/document/operations", "operations array"); err != nil {
+	if err := expectKindPhase(input, operationsNode, nodeArray, "/document/operations", "operations array", "LANG-001", "validate"); err != nil {
 		return Document{}, err
 	}
 	document := Document{operations: make([]Operation, 0, len(operationsNode.array))}
@@ -146,24 +146,24 @@ func decodeDocument(input []byte, value node) (Document, error) {
 }
 
 func decodeOperation(input []byte, value node, pointer string) (Operation, error) {
-	if err := expectKind(input, value, nodeObject, pointer, "operation object"); err != nil {
+	if err := expectKindPhase(input, value, nodeObject, pointer, "operation object", "LANG-002", "validate"); err != nil {
 		return Operation{}, err
 	}
 	allowed := map[string]bool{"name": true, "kind": true, "select": true}
-	if err := rejectUnknown(input, value, allowed, "LANG-002", pointer); err != nil {
+	if err := rejectUnknown(input, value, allowed, "LANG-002", "validate", pointer); err != nil {
 		return Operation{}, err
 	}
 	name, hasName := value.member("name")
 	kind, hasKind := value.member("kind")
 	selectNode, hasSelect := value.member("select")
 	if !hasName || name.kind != nodeString || !identifierPattern.MatchString(name.text) {
-		return Operation{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "decode", "operation requires a portable name", joinPointer(pointer, "name"), value.start)
+		return Operation{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "operation requires a portable name", joinPointer(pointer, "name"), value.start)
 	}
 	if !hasKind || kind.kind != nodeString || (kind.text != string(Query) && kind.text != string(Mutation) && kind.text != string(Subscription)) {
-		return Operation{}, newDiagnostic(input, "INVALID_OPERATION_KIND", "CORE-003", "decode", "operation kind must be query, mutation, or subscription", joinPointer(pointer, "kind"), value.start)
+		return Operation{}, newDiagnostic(input, "INVALID_OPERATION_KIND", "CORE-003", "validate", "operation kind must be query, mutation, or subscription", joinPointer(pointer, "kind"), value.start)
 	}
 	if !hasSelect || selectNode.kind != nodeArray {
-		return Operation{}, newDiagnostic(input, "INVALID_SELECTIONS", "LANG-002", "decode", "operation requires a selection array", joinPointer(pointer, "select"), value.start)
+		return Operation{}, newDiagnostic(input, "INVALID_SELECTIONS", "LANG-002", "validate", "operation requires a selection array", joinPointer(pointer, "select"), value.start)
 	}
 	selections, err := decodeSelections(input, selectNode, joinPointer(pointer, "select"))
 	if err != nil {
@@ -186,7 +186,7 @@ func decodeSelections(input []byte, value node, pointer string) ([]Selection, er
 
 func decodeSelection(input []byte, value node, pointer string) (Selection, error) {
 	if value.kind != nodeObject || len(value.object) != 1 {
-		return Selection{}, newDiagnostic(input, "INVALID_SELECTION", "LANG-003", "decode", "selection must be a one-key tagged object", pointer, value.start)
+		return Selection{}, newDiagnostic(input, "INVALID_SELECTION", "LANG-003", "validate", "selection must be a one-key tagged object", pointer, value.start)
 	}
 	tag := value.object[0].name
 	payload := value.object[0].value
@@ -199,39 +199,39 @@ func decodeSelection(input []byte, value node, pointer string) (Selection, error
 	}
 	kind, ok := kinds[tag]
 	if !ok {
-		return Selection{}, newDiagnostic(input, "UNKNOWN_SELECTION", "LANG-003", "decode", "unknown selection tag", joinPointer(pointer, tag), value.object[0].start)
+		return Selection{}, newDiagnostic(input, "UNKNOWN_SELECTION", "LANG-003", "validate", "unknown selection tag", joinPointer(pointer, tag), value.object[0].start)
 	}
 	payloadPointer := joinPointer(pointer, tag)
 	if kind != FieldSelection && kind != CallSelection {
-		return Selection{}, newDiagnostic(input, "UNSUPPORTED_SELECTION", "LANG-003", "decode", "selection tag is specified but not implemented by this decoder", payloadPointer, payload.start)
+		return Selection{}, newDiagnostic(input, "UNSUPPORTED_SELECTION", "LANG-003", "validate", "selection tag is specified but not implemented by this decoder", payloadPointer, payload.start)
 	}
-	if err := expectKind(input, payload, nodeObject, payloadPointer, "selection payload object"); err != nil {
+	if err := expectKindPhase(input, payload, nodeObject, payloadPointer, "selection payload object", "LANG-003", "validate"); err != nil {
 		return Selection{}, err
 	}
 	allowed := map[string]bool{"name": true, "as": true}
 	if kind == FieldSelection {
 		allowed["select"] = true
 	}
-	if err := rejectUnknown(input, payload, allowed, "LANG-004", payloadPointer); err != nil {
+	if err := rejectUnknown(input, payload, allowed, "LANG-004", "validate", payloadPointer); err != nil {
 		return Selection{}, err
 	}
 	selection := Selection{kind: kind, source: sourceAt(input, pointer, value)}
 	name, exists := payload.member("name")
 	if !exists {
-		return Selection{}, newDiagnostic(input, "MISSING_FIELD", "LANG-100", "decode", "selection requires name", joinPointer(payloadPointer, "name"), payload.start)
+		return Selection{}, newDiagnostic(input, "MISSING_FIELD", "LANG-100", "validate", "selection requires name", joinPointer(payloadPointer, "name"), payload.start)
 	}
-	if err := expectKind(input, name, nodeString, joinPointer(payloadPointer, "name"), "selection name string"); err != nil {
+	if err := expectKindPhase(input, name, nodeString, joinPointer(payloadPointer, "name"), "selection name string", "LANG-100", "validate"); err != nil {
 		return Selection{}, err
 	}
 	selection.name = name.text
 	if alias, aliasExists := payload.member("as"); aliasExists {
-		if err := expectKind(input, alias, nodeString, joinPointer(payloadPointer, "as"), "response alias string"); err != nil {
+		if err := expectKindPhase(input, alias, nodeString, joinPointer(payloadPointer, "as"), "response alias string", "LANG-002", "validate"); err != nil {
 			return Selection{}, err
 		}
 		selection.alias = alias.text
 	}
 	if children, childExists := payload.member("select"); childExists {
-		if err := expectKind(input, children, nodeArray, joinPointer(payloadPointer, "select"), "child selection array"); err != nil {
+		if err := expectKindPhase(input, children, nodeArray, joinPointer(payloadPointer, "select"), "child selection array", "LANG-002", "validate"); err != nil {
 			return Selection{}, err
 		}
 		decoded, err := decodeSelections(input, children, joinPointer(payloadPointer, "select"))
@@ -241,19 +241,19 @@ func decodeSelection(input []byte, value node, pointer string) (Selection, error
 		selection.children = decoded
 	}
 	if !identifierPattern.MatchString(selection.name) {
-		return Selection{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "decode", "selection requires a portable name", joinPointer(payloadPointer, "name"), name.start)
+		return Selection{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "selection requires a portable name", joinPointer(payloadPointer, "name"), name.start)
 	}
 	if selection.alias != "" && !identifierPattern.MatchString(selection.alias) {
-		return Selection{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "decode", "invalid response alias", joinPointer(joinPointer(pointer, tag), "as"), payload.start)
+		return Selection{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "invalid response alias", joinPointer(joinPointer(pointer, tag), "as"), payload.start)
 	}
 	return selection, nil
 }
 
 func decodePersisted(input []byte, value node) (PersistedReference, error) {
-	if err := expectKind(input, value, nodeObject, "/persisted", "persisted reference"); err != nil {
+	if err := expectKindPhase(input, value, nodeObject, "/persisted", "persisted reference", "PROTO-004", "decode"); err != nil {
 		return PersistedReference{}, err
 	}
-	if err := rejectUnknown(input, value, map[string]bool{"algorithm": true, "digest": true}, "PROTO-004", "/persisted"); err != nil {
+	if err := rejectUnknown(input, value, map[string]bool{"algorithm": true, "digest": true}, "PROTO-004", "decode", "/persisted"); err != nil {
 		return PersistedReference{}, err
 	}
 	algorithm, hasAlgorithm := value.member("algorithm")
@@ -269,10 +269,10 @@ func decodePersisted(input []byte, value node) (PersistedReference, error) {
 	return PersistedReference{Algorithm: algorithm.text, Digest: digest.text}, nil
 }
 
-func rejectUnknown(input []byte, value node, allowed map[string]bool, clause, pointer string) error {
+func rejectUnknown(input []byte, value node, allowed map[string]bool, clause, phase, pointer string) error {
 	for _, current := range value.object {
 		if !allowed[current.name] {
-			return newDiagnostic(input, "UNKNOWN_FIELD", clause, "decode", "unknown normative field", joinPointer(pointer, current.name), current.start)
+			return newDiagnostic(input, "UNKNOWN_FIELD", clause, phase, "unknown normative field", joinPointer(pointer, current.name), current.start)
 		}
 	}
 	return nil

@@ -5,8 +5,8 @@ MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, NOT
 RECOMMENDED, MAY, and OPTIONAL are interpreted as described by RFC 2119 and
 RFC 8174 when, and only when, they appear in all capitals.
 
-Clauses have stable identifiers. Documents may be amended before v1 only with
-a decision record and migration note. Examples marked valid or invalid are
+Clauses have stable identifiers. Changes to the v1 documents require a
+decision record and migration note. Examples marked valid or invalid are
 normative fixtures once represented under `conformance/`.
 
 Documents:

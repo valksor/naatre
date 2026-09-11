@@ -3,7 +3,7 @@
 Use Go 1.27, keep package dependencies in the direction documented in the
 README, and accompany behavior changes with tests and conformance fixtures.
 Normative changes need stable clause identifiers, a decision record, and a
-migration note when they break a pre-v1 contract.
+migration note when they change the v1 contract.
 
 Before opening a change, run:
 

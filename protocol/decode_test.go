@@ -196,6 +196,37 @@ func TestDecodeRequestRejectsSelectionFieldsItCannotPreserve(t *testing.T) {
 	}
 }
 
+func TestDecodeRequestAssignsDocumentFailuresToValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		code   string
+		clause string
+	}{
+		{"document type", `{"version":"1","document":[]}`, "TYPE_MISMATCH", "LANG-001"},
+		{"document member", `{"version":"1","document":{"operations":[],"extra":true}}`, "UNKNOWN_FIELD", "LANG-001"},
+		{"operation shape", `{"version":"1","document":{"operations":[null]}}`, "TYPE_MISMATCH", "LANG-002"},
+		{"operation name", `{"version":"1","document":{"operations":[{"name":"bad name","kind":"query","select":[]}]}}`, "INVALID_IDENTIFIER", "LANG-002"},
+		{"operation kind", `{"version":"1","document":{"operations":[{"name":"Get","kind":"read","select":[]}]}}`, "INVALID_OPERATION_KIND", "CORE-003"},
+		{"selection shape", `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[null]}]}}`, "INVALID_SELECTION", "LANG-003"},
+		{"selection payload", `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[{"$field":null}]}]}}`, "TYPE_MISMATCH", "LANG-003"},
+		{"selection name", `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[{"$field":{"name":"bad name"}}]}]}}`, "INVALID_IDENTIFIER", "LANG-002"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := protocol.DecodeRequest([]byte(tt.input), protocol.DecodeOptions{})
+			var diagnostic *protocol.Diagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != tt.code || diagnostic.Clause != tt.clause || diagnostic.Phase != "validate" {
+				t.Fatalf("DecodeRequest error = %v, want %s/%s in validate phase", err, tt.code, tt.clause)
+			}
+		})
+	}
+}
+
 func assertDiagnostic(t *testing.T, err error, code, pointer string) {
 	t.Helper()
 	if err == nil {

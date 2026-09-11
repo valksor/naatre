@@ -11,10 +11,10 @@ its version history.
 
 ## Status
 
-Naatre is pre-v1. The target first implementation baseline is v0.1.0 and covers
-core specification/runtime, HTTP, required SSE, persisted operations, and the
-first-party Go and JavaScript/TypeScript clients. Capabilities not backed by
-machine-readable conformance evidence must be described as planned.
+Naatre targets a single v1 implementation milestone covering the complete
+specification, runtime, transport, ecosystem, interoperability, operations, and
+conformance roadmap. Capabilities not backed by machine-readable conformance
+evidence must be described as planned.
 
 ## Repository map
 
@@ -33,8 +33,7 @@ packages never depend on a transport or application runtime.
 
 ## Development
 
-Go 1.27 is both the minimum supported version and release toolchain for the
-v0.1.0 baseline.
+Go 1.27 is both the minimum supported version and release toolchain for v1.
 
 ```sh
 go fmt ./...

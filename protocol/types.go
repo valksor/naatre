@@ -156,12 +156,10 @@ type Document struct {
 
 // Operations returns isolated operation values and selection slices.
 func (d Document) Operations() []Operation {
-	operations := make([]Operation, len(d.operations))
-	for index, operation := range d.operations {
-		operations[index] = operation
-		operations[index].selections = cloneSelections(operation.selections)
-	}
-	return operations
+	return cloneSliceWith(d.operations, func(operation Operation) Operation {
+		operation.selections = cloneSelections(operation.selections)
+		return operation
+	})
 }
 
 // PersistedReference identifies a canonical persisted document.
@@ -200,32 +198,50 @@ func (r *Request) Document() *Document {
 }
 
 func (r *Request) Persisted() (PersistedReference, bool) {
-	if r.persisted == nil {
-		return PersistedReference{}, false
-	}
-	return *r.persisted, true
+	return pointedValue(r.persisted)
 }
 
 func (r *Request) Variable(name string) (json.RawMessage, bool) {
-	raw, ok := r.variables[name]
-	return append(json.RawMessage(nil), raw...), ok
+	return cloneRawLookup(r.variables, name)
 }
 
 // Extension returns an isolated negotiated extension value.
 func (r *Request) Extension(namespace string) (json.RawMessage, bool) {
-	raw, ok := r.extensions[namespace]
-	return append(json.RawMessage(nil), raw...), ok
+	return cloneRawLookup(r.extensions, namespace)
 }
 
 func (r *Request) Capabilities() []string {
-	return append([]string(nil), r.capabilities...)
+	return cloneSlice(r.capabilities)
 }
 
 func cloneSelections(input []Selection) []Selection {
-	result := make([]Selection, len(input))
-	for index, selection := range input {
-		result[index] = selection
-		result[index].children = cloneSelections(selection.children)
+	return cloneSliceWith(input, func(selection Selection) Selection {
+		selection.children = cloneSelections(selection.children)
+		return selection
+	})
+}
+
+func cloneRawLookup(input map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	raw, ok := input[key]
+	return append(json.RawMessage(nil), raw...), ok
+}
+
+func cloneSlice[T any](input []T) []T {
+	return append([]T(nil), input...)
+}
+
+func cloneSliceWith[T any](input []T, clone func(T) T) []T {
+	result := make([]T, len(input))
+	for index, value := range input {
+		result[index] = clone(value)
 	}
 	return result
+}
+
+func pointedValue[T any](input *T) (T, bool) {
+	if input == nil {
+		var zero T
+		return zero, false
+	}
+	return *input, true
 }

@@ -20,6 +20,7 @@ func FuzzStrictDecoder(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input []byte) {
 		options := protocol.DecodeOptions{Limits: protocol.Limits{MaxBytes: 4096, MaxTokens: 512, MaxDepth: 16, MaxStringBytes: 1024, MaxMembers: 128, MaxArrayItems: 128, MaxNumberBytes: 64}}
 		_, _ = protocol.DecodeRequest(input, options)
+		_, _ = protocol.DecodeResponse(input, options)
 		_, _ = protocol.CanonicalizeJSON(input, options.Limits)
 	})
 }

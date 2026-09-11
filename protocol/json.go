@@ -333,9 +333,9 @@ func joinPointer(base, component string) string {
 	return base + "/" + component
 }
 
-func expectKind(input []byte, value node, kind nodeKind, pointer, description string) error {
+func expectKindPhase(input []byte, value node, kind nodeKind, pointer, description, clause, phase string) error {
 	if value.kind != kind {
-		return newDiagnostic(input, "TYPE_MISMATCH", "PROTO-001", "decode", fmt.Sprintf("expected %s", description), pointer, value.start)
+		return newDiagnostic(input, "TYPE_MISMATCH", clause, phase, fmt.Sprintf("expected %s", description), pointer, value.start)
 	}
 	return nil
 }
