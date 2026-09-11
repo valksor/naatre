@@ -1,0 +1,24 @@
+{
+  "profile": "core.document.c14n-1",
+  "vectors": [
+    {
+      "name": "utf16-key-order",
+      "input": "{\"\\ue000\":2,\"😀\":1,\"object\":{},\"a\":\"e\\u0301\",\"empty\":[]}",
+      "canonical": "{\"a\":\"é\",\"empty\":[],\"object\":{},\"😀\":1,\"\":2}"
+    },
+    {
+      "name": "document-domain",
+      "input": "{\"a\":1}",
+      "canonical": "{\"a\":1}",
+      "purpose": "document",
+      "algorithm": "sha-256",
+      "canonicalVersion": "c14n-1",
+      "digest": "b809e62e9151db9918fb436114be52cefba449c768fd9ee800b22b9eba490428"
+    }
+  ],
+  "malformed": [
+    {"name":"escaped-duplicate","input":"{\"a\":1,\"\\u0061\":2}","code":"DUPLICATE_KEY"},
+    {"name":"unpaired-surrogate","input":"{\"a\":\"\\ud800\"}","code":"INVALID_UNICODE"},
+    {"name":"trailing-data","input":"{\"a\":1} false","code":"TRAILING_DATA"}
+  ]
+}
