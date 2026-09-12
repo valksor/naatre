@@ -187,6 +187,9 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 			Effects:     scope.effects.state(p.kind, true),
 			Annotations: scope.annotations.annotations(),
 		}
+		if errors.Is(context.Cause(executionCtx), errExecutionResourceDeadline) {
+			replaceDeadlineFailures(&outcome)
+		}
 		return enforceOutcomeLimits(outcome, p.resourceLimits)
 	}
 	result := p.executeSequence(executionCtx, p.nodes, scope, nil)

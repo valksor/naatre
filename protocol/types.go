@@ -68,7 +68,17 @@ type DecodeOptions struct {
 	Limits              Limits
 	Capabilities        map[string]bool
 	ExtensionNamespaces map[string]bool
+	SourcePolicy        DocumentSourcePolicy
 }
+
+// DocumentSourcePolicy controls which operation source is accepted before the
+// typed document decoder runs. Its zero value accepts either protocol source.
+type DocumentSourcePolicy string
+
+const (
+	AnyDocumentSource DocumentSourcePolicy = ""
+	PersistedOnly     DocumentSourcePolicy = "persisted-only"
+)
 
 // Diagnostic is a stable, source-located protocol error.
 type Diagnostic struct {
@@ -350,6 +360,27 @@ func (r *Request) Document() *Document {
 		canonical:  r.document.CanonicalJSON(),
 		source:     r.document.Source(),
 	}
+}
+
+// WithResolvedDocument returns an isolated request with a trusted persisted
+// document bound to its original envelope metadata. The decoded request must
+// have contained a persisted reference, never an inline document.
+func (r *Request) WithResolvedDocument(document Document, operation string) (*Request, error) {
+	if r == nil || r.persisted == nil || r.document != nil {
+		return nil, fmt.Errorf("request does not contain an unresolved persisted reference")
+	}
+	if len(document.canonical) == 0 {
+		return nil, fmt.Errorf("resolved persisted document is empty")
+	}
+	if r.operation != "" && r.operation != operation {
+		return nil, fmt.Errorf("request operation conflicts with persisted operation")
+	}
+	resolved := *r
+	resolved.operation = operation
+	resolved.document = &document
+	reference := *r.persisted
+	resolved.persisted = &reference
+	return &resolved, nil
 }
 
 func (r *Request) Persisted() (PersistedReference, bool) {

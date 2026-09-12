@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -15,6 +16,9 @@ var (
 // DecodeRequest strictly decodes one Naatre request without resolving schema
 // or invoking application behavior.
 func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
+	if err := validateDocumentSourcePolicy(options.SourcePolicy); err != nil {
+		return nil, err
+	}
 	root, err := parseJSON(input, options.Limits)
 	if err != nil {
 		return nil, err
@@ -60,27 +64,8 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 		request.operation = operation.text
 	}
 
-	documentNode, hasDocument := root.member("document")
-	persistedNode, hasPersisted := root.member("persisted")
-	if hasDocument == hasPersisted {
-		code, message := "MISSING_SOURCE", "exactly one operation source is required"
-		if hasDocument {
-			code, message = "CONFLICTING_SOURCE", "document and persisted source are mutually exclusive"
-		}
-		return nil, newDiagnostic(input, code, "PROTO-004", "decode", message, "", root.start)
-	}
-	if hasDocument {
-		document, decodeErr := decodeDocument(input, documentNode, options.Limits.withDefaults())
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		request.document = &document
-	} else {
-		persisted, decodeErr := decodePersisted(input, persistedNode)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		request.persisted = &persisted
+	if err := decodeRequestSource(input, root, options, request); err != nil {
+		return nil, err
 	}
 
 	if variables, exists := root.member("variables"); exists {
@@ -121,6 +106,36 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 		}
 	}
 	return request, nil
+}
+
+func validateDocumentSourcePolicy(policy DocumentSourcePolicy) error {
+	if policy != AnyDocumentSource && policy != PersistedOnly {
+		return errors.New("unsupported document source policy")
+	}
+	return nil
+}
+
+func decodeRequestSource(input []byte, root node, options DecodeOptions, request *Request) error {
+	documentNode, hasDocument := root.member("document")
+	persistedNode, hasPersisted := root.member("persisted")
+	if hasDocument == hasPersisted {
+		code, message := "MISSING_SOURCE", "exactly one operation source is required"
+		if hasDocument {
+			code, message = "CONFLICTING_SOURCE", "document and persisted source are mutually exclusive"
+		}
+		return newDiagnostic(input, code, "PROTO-004", "decode", message, "", root.start)
+	}
+	if !hasDocument {
+		persisted, err := decodePersisted(input, persistedNode)
+		request.persisted = &persisted
+		return err
+	}
+	if options.SourcePolicy == PersistedOnly {
+		return newDiagnostic(input, "INLINE_DOCUMENT_FORBIDDEN", "PERSIST-110", "admit", "inline documents are disabled", "/document", documentNode.start)
+	}
+	document, err := decodeDocument(input, documentNode, options.Limits.withDefaults())
+	request.document = &document
+	return err
 }
 
 func decodeDocument(input []byte, value node, limits Limits) (Document, error) {

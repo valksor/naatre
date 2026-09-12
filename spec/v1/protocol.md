@@ -15,7 +15,8 @@
   `document` is the typed document object. `persisted` is an object containing
   exactly `algorithm`, `canonicalVersion`, and lowercase `digest`, using the
   `sha-256` / `c14n-1` document digest record from CANON-201. Unknown algorithms
-  or canonicalization versions fail closed.
+  or canonicalization versions fail closed. Resolution, approval, and
+  allowlist-only admission follow PERSIST-001 through PERSIST-114.
 - **PROTO-005:** `operation` is required only when a document contains more
   than one operation. It cannot change the operation's declared kind.
 - **PROTO-006:** `variables` is an unordered object of application literals.

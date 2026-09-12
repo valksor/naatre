@@ -80,3 +80,9 @@ media negotiation, singleton-header, status/body, encoding, deadline, cache,
 browser, bounded-response, and HTTP-version cases. It is the portable contract
 fixture; #73 owns the concrete Go `net/http` adapter, slow-client,
 cancellation, graceful-shutdown, and version-specific integration harness.
+
+`v1/persisted.json` fixes the `core.persisted-1` document hashes and identity
+equivalence boundaries plus lookup-only, deploy-registration, controlled
+automatic-registration, approval/cache, tenant, revocation, expiry, migration,
+collision, and safe storage-failure semantics. The Go runtime consumes those
+vectors and supplies a race-safe in-memory reference store.

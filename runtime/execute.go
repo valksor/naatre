@@ -136,7 +136,12 @@ type Plan struct {
 	authorization  AuthorizationConfig
 	interceptors   []registeredInterceptor
 	resourceLimits ResourceLimits
+	staticCost     uint64
 }
+
+// StaticCost is the complete request-independent planned cost admitted before
+// authorization or execution.
+func (p *Plan) StaticCost() uint64 { return p.staticCost }
 
 // Prepare resolves and validates the complete selected operation without
 // invoking application handlers.
@@ -178,7 +183,7 @@ func PrepareWithOptions(registry Snapshot, request *protocol.Request, options Pr
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
 		variableValues: captureVariableValues(request, operation.Variables()),
 		authorization:  registry.authorization, interceptors: slices.Clone(registry.interceptors),
-		resourceLimits: limits,
+		resourceLimits: limits, staticCost: planner.staticCost,
 	}, nil
 }
 

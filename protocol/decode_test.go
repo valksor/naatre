@@ -80,6 +80,20 @@ func TestDecodeRequestBindsPersistedReferenceCanonicalVersion(t *testing.T) {
 	}
 }
 
+func TestDecodeRequestRejectsInlineDocumentBeforeLanguageDecodingInPersistedOnlyMode(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"version":"1","document":{"not":"an executable document"}}`)
+	_, err := protocol.DecodeRequest(input, protocol.DecodeOptions{SourcePolicy: protocol.PersistedOnly})
+	var diagnostic *protocol.Diagnostic
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("DecodeRequest error = %v, want protocol diagnostic", err)
+	}
+	if diagnostic.Code != "INLINE_DOCUMENT_FORBIDDEN" || diagnostic.Clause != "PERSIST-110" || diagnostic.Pointer != "/document" {
+		t.Fatalf("diagnostic = %#v", diagnostic)
+	}
+}
+
 func TestDecodedRequestAccessorsCannotMutateAST(t *testing.T) {
 	t.Parallel()
 

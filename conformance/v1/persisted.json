@@ -1,0 +1,80 @@
+{
+  "profile": "core.persisted-1",
+  "algorithm": "sha-256",
+  "canonicalVersion": "c14n-1",
+  "identityVectors": [
+    {
+      "name": "base",
+      "document": {"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"text"}},{"$call":{"name":"consume","args":{"value":{"$literal":"x"}}}}]}]},
+      "digest": "d3206910805b1cb754729a826da042613dbdaac696402470d0bdd73ac066813c",
+      "equalTo": "",
+      "differentFrom": ""
+    },
+    {
+      "name": "object-order-equivalent",
+      "document": {"operations":[{"select":[{"$call":{"name":"text"}},{"$call":{"args":{"value":{"$literal":"x"}},"name":"consume"}}],"kind":"query","name":"Q"}]},
+      "digest": "d3206910805b1cb754729a826da042613dbdaac696402470d0bdd73ac066813c",
+      "equalTo": "base",
+      "differentFrom": ""
+    },
+    {
+      "name": "selection-order-distinct",
+      "document": {"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"consume","args":{"value":{"$literal":"x"}}}},{"$call":{"name":"text"}}]}]},
+      "digest": "e542e6882484e5dd8ab9663491a407999612342406bc43a7c754ddd675f02b7c",
+      "equalTo": "",
+      "differentFrom": "base"
+    },
+    {
+      "name": "operation-kind-distinct",
+      "document": {"operations":[{"name":"Q","kind":"mutation","select":[{"$call":{"name":"text"}},{"$call":{"name":"consume","args":{"value":{"$literal":"x"}}}}]}]},
+      "digest": "3bd8129403cb4780af9aa2ce5592308c56b79bc24976717dca38e6324119a647",
+      "equalTo": "",
+      "differentFrom": "base"
+    },
+    {
+      "name": "variable-default-one",
+      "document": {"operations":[{"name":"Q","kind":"query","variables":[{"name":"page","type":"Int32","default":1}],"select":[]}]},
+      "digest": "6e0e48665a127db0c75e5a90b97bb2d83e2681dc3696ab13606d1b0a93aa0721",
+      "equalTo": "",
+      "differentFrom": "base"
+    },
+    {
+      "name": "variable-default-two",
+      "document": {"operations":[{"name":"Q","kind":"query","variables":[{"name":"page","type":"Int32","default":2}],"select":[]}]},
+      "digest": "8484fbacef0ece4e47c4a7b2afb3bfbf160301a56421e07fde443d32b79b567f",
+      "equalTo": "",
+      "differentFrom": "variable-default-one"
+    },
+    {
+      "name": "required-capability-distinct",
+      "document": {"requires":["vendor.persist-1"],"operations":[{"name":"Q","kind":"query","select":[]}]},
+      "digest": "d24402efa36f634a5c17d915c370dad9f9d9c45439c88599927190ce0a8ec57f",
+      "equalTo": "",
+      "differentFrom": "base"
+    }
+  ],
+  "excludedIdentity": ["requestId", "correlationId", "runtimeVariables", "principal", "authToken"],
+  "modeCases": [
+    {"name":"lookup-only","inlineAccepted":false,"registersOnLookup":false,"authenticated":false,"quota":false,"costApproval":false},
+    {"name":"register-at-deploy","inlineAccepted":false,"registersOnLookup":false,"authenticated":false,"quota":false,"costApproval":true},
+    {"name":"automatic","inlineAccepted":true,"registersOnLookup":false,"authenticated":true,"quota":true,"costApproval":true}
+  ],
+  "approvalCases": [
+    {"name":"query-private","query":true,"get":false,"publicOutput":false,"authorizationInvariant":false,"shared":false},
+    {"name":"get-private","query":true,"get":true,"publicOutput":false,"authorizationInvariant":false,"shared":false},
+    {"name":"shared-public-invariant","query":true,"get":true,"publicOutput":true,"authorizationInvariant":true,"shared":true},
+    {"name":"shared-missing-public","query":true,"get":true,"publicOutput":false,"authorizationInvariant":true,"shared":false},
+    {"name":"shared-auth-variant","query":true,"get":true,"publicOutput":true,"authorizationInvariant":false,"shared":false}
+  ],
+  "lifecycleCases": [
+    {"name":"not-found","code":"PERSISTED_NOT_FOUND"},
+    {"name":"tampered","code":"PERSISTED_DOCUMENT_MISMATCH"},
+    {"name":"collision","code":"PERSISTED_HASH_COLLISION"},
+    {"name":"stale-schema","code":"PERSISTED_SCHEMA_STALE"},
+    {"name":"stale-policy","code":"PERSISTED_POLICY_STALE"},
+    {"name":"revoked","code":"PERSISTED_REVOKED"},
+    {"name":"expired","code":"PERSISTED_EXPIRED"},
+    {"name":"tenant-isolated","code":"PERSISTED_NOT_FOUND"},
+    {"name":"storage-failure","code":"PERSISTED_STORAGE"}
+  ]
+}
