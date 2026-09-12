@@ -308,3 +308,39 @@ func TestExecuteReportsEffectStateSeparatelyFromErrors(t *testing.T) {
 		})
 	}
 }
+
+// A persisted operation is identified by its document, not by the values bound
+// to its variables, so the same document hashes identically however it is
+// invoked. Otherwise every distinct argument would defeat the persisted-
+// operation cache and force a re-registration.
+func TestDocumentHashIsIndependentOfBoundVariableValues(t *testing.T) {
+	t.Parallel()
+	document := `{"operations":[{"name":"Q","kind":"query","variables":[{"name":"id","type":"String","required":true}],"select":[{"$call":{"name":"load","args":{"value":{"$var":"id"}}}}]}]}`
+	var digests []protocol.Digest
+	for _, bound := range []string{`{"id":"u-1"}`, `{"id":"u-2"}`, `{"id":"a much longer value that changes the request size"}`} {
+		envelope := []byte(`{"version":"1","document":` + document + `,"variables":` + bound + `}`)
+		request, err := protocol.DecodeRequest(envelope, protocol.DecodeOptions{})
+		if err != nil {
+			t.Fatalf("DecodeRequest(%s): %v", bound, err)
+		}
+		// The hash covers the document alone, which is what a persisted
+		// operation registers.
+		canonical, err := protocol.CanonicalizeHashPayload(protocol.DocumentHash, []byte(document), protocol.Limits{})
+		if err != nil {
+			t.Fatalf("CanonicalizeHashPayload: %v", err)
+		}
+		digest, err := protocol.SemanticHash(protocol.DocumentHash, canonical)
+		if err != nil {
+			t.Fatalf("SemanticHash: %v", err)
+		}
+		if value, present := request.Variable("id"); !present || len(value) == 0 {
+			t.Fatalf("variable binding %s did not reach the request", bound)
+		}
+		digests = append(digests, digest)
+	}
+	for index := 1; index < len(digests); index++ {
+		if digests[index] != digests[0] {
+			t.Fatalf("binding %d changed the document hash: %v vs %v", index, digests[index], digests[0])
+		}
+	}
+}

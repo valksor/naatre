@@ -287,6 +287,32 @@
       "handlerStarts": 0
     },
     {
+      "name": "skipped-alias-collision-still-fails",
+      "note": "A false runtime condition must not hide an invalid duplicate. Validation examines statically skipped selections, so skip(if: true) cannot launder an alias collision.",
+      "document": {"operations": [{"name": "Collision", "kind": "query", "select": [
+        {"$field": {"name": "firstName", "as": "name"}},
+        {"$field": {"name": "lastName", "as": "name", "directives": [{"name": "skip", "arguments": {"if": {"$literal": true}}}]}}
+      ]}]},
+      "valid": false,
+      "code": "DUPLICATE_RESPONSE_NAME",
+      "phase": "validate",
+      "pointer": "/operations/0/select/1/$field/as",
+      "handlerStarts": 0
+    },
+    {
+      "name": "excluded-alias-collision-still-fails",
+      "note": "include(if: false) is the same laundering attempt as skip(if: true) and is rejected identically.",
+      "document": {"operations": [{"name": "Collision", "kind": "query", "select": [
+        {"$field": {"name": "firstName", "as": "name"}},
+        {"$field": {"name": "lastName", "as": "name", "directives": [{"name": "include", "arguments": {"if": {"$literal": false}}}]}}
+      ]}]},
+      "valid": false,
+      "code": "DUPLICATE_RESPONSE_NAME",
+      "phase": "validate",
+      "pointer": "/operations/0/select/1/$field/as",
+      "handlerStarts": 0
+    },
+    {
       "name": "forward-result-reference",
       "document": {"operations": [{"name": "Forward", "kind": "query", "select": [
         {"$call": {"name": "consume", "args": {"value": {"$result": "later"}}}},

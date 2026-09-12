@@ -35,6 +35,9 @@ type languageVector struct {
 	Phase              string                  `json:"phase"`
 	Pointer            string                  `json:"pointer"`
 	HandlerStarts      *int                    `json:"handlerStarts"`
+	// Note explains, for implementers of other SDKs, why a vector exists. It
+	// carries no assertion.
+	Note string `json:"note"`
 }
 
 type languageExpectedError struct {
