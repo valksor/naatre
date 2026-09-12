@@ -149,20 +149,6 @@ func TestFragmentExpansionDiagnosticsCarryDefinitionAndUseSources(t *testing.T) 
 	}
 }
 
-func TestExecuteDoesNotPartiallyRunStructuredPlan(t *testing.T) {
-	t.Parallel()
-	snapshot, calls := validationRegistry(t)
-	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"lookup","args":{"id":{"$literal":"u-1"}},"select":[{"$field":{"name":"name"}}]}}]}]}}`)
-	plan, err := runtime.Prepare(snapshot, request)
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	outcome := plan.Execute(context.Background())
-	if calls.Load() != 0 || len(outcome.Data) != 0 || len(outcome.Errors) != 1 || outcome.Errors[0].Code != "UNSUPPORTED_EXECUTION_PLAN" {
-		t.Fatalf("structured plan outcome = %#v, handler starts = %d", outcome, calls.Load())
-	}
-}
-
 func TestPrepareRejectsScalarUnnestAndDeduplicatesNestedParallelAdmission(t *testing.T) {
 	t.Parallel()
 	snapshot, _ := validationRegistry(t)

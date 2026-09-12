@@ -36,6 +36,9 @@ retaining any of that per-request state.
 The core planner resolves the built-in `include` and `skip` directives and
 rejects unregistered directives; #19 owns custom directive declarations and
 hooks. It validates `collection.page-1` admission and collection item scopes;
-#16 owns advertised pagination metadata and cursor execution. Until #8 lands,
-the reference executor runs only flat argument-free call plans and returns
-`UNSUPPORTED_EXECUTION_PLAN` before invoking a handler for structured plans.
+#16 owns advertised pagination metadata and opaque cursor execution. The
+reference executor consumes all 15 positive semantic language vectors directly,
+including ordered pipelines, explicit collection operations, fragments,
+parallel branches, bindings, directives, and edge-state propagation. The core
+page vector exercises bounded cursor-free paging; portable cursor behavior and
+security remain in #16.

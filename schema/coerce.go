@@ -88,18 +88,31 @@ func (v InputValue) MarshalJSON() ([]byte, error) {
 // CoerceInput validates and canonicalizes one input value. A nil raw message
 // represents missing; explicit JSON null is accepted only when nullable.
 func CoerceInput(types Snapshot, typeID TypeID, raw json.RawMessage, nullable bool) (InputValue, error) {
-	state := coercionState{types: types, active: make(map[TypeID]int)}
+	return coerceInput(types, typeID, raw, nullable, false)
+}
+
+// CoerceRuntimeInput validates a completed server value used by a typed
+// $current, $parent, or $result expression. Unlike client input coercion, it
+// may traverse output-only object and collection types; callers must establish
+// server-value provenance before using it.
+func CoerceRuntimeInput(types Snapshot, typeID TypeID, raw json.RawMessage, nullable bool) (InputValue, error) {
+	return coerceInput(types, typeID, raw, nullable, true)
+}
+
+func coerceInput(types Snapshot, typeID TypeID, raw json.RawMessage, nullable, allowOutput bool) (InputValue, error) {
+	state := coercionState{types: types, active: make(map[TypeID]int), allowOutput: allowOutput}
 	return state.coerce(typeID, raw, nullable)
 }
 
 type coercionState struct {
-	types  Snapshot
-	active map[TypeID]int
+	types       Snapshot
+	active      map[TypeID]int
+	allowOutput bool
 }
 
 func (s *coercionState) coerce(typeID TypeID, raw json.RawMessage, nullable bool) (InputValue, error) {
 	descriptor, ok := s.types.types[typeID]
-	if !ok || !descriptor.Input {
+	if !ok || (!descriptor.Input && (!s.allowOutput || !descriptor.Output)) {
 		return InputValue{}, fmt.Errorf("type %q is not available in input position", typeID)
 	}
 	if raw == nil {
@@ -130,9 +143,14 @@ func (s *coercionState) coerce(typeID TypeID, raw json.RawMessage, nullable bool
 		return s.coerceMap(descriptor, raw)
 	case InputObjectType, OneOfType:
 		return s.coerceObject(descriptor, raw)
+	case ObjectType:
+		if s.allowOutput {
+			return s.coerceObject(descriptor, raw)
+		}
+		return InputValue{}, fmt.Errorf("type %q is output-only", typeID)
 	case EnumType:
 		return coerceEnum(descriptor, raw)
-	case ObjectType, InterfaceType, UnionType:
+	case InterfaceType, UnionType:
 		return InputValue{}, fmt.Errorf("type %q is output-only", typeID)
 	default:
 		return InputValue{}, fmt.Errorf("type %q has unknown input kind", typeID)

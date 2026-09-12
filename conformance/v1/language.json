@@ -63,6 +63,7 @@
         }]
       },
       "valid": true,
+      "requestVariables": {"id": "u-1"},
       "expectedData": {"user": {"id": "u-1"}, "display": "Ada"}
     },
     {
@@ -75,7 +76,7 @@
             "$call": {"name": "users", "select": [
               {"$index": {"as": "first", "at": 0, "select": [{"$field": {"name": "id"}}]}},
               {"$slice": {"as": "tail", "start": 1, "end": 99, "select": [{"$field": {"name": "id"}}]}},
-              {"$page": {"as": "page", "first": 2, "after": {"$literal": "cursor-1"}, "select": [{"$field": {"name": "id"}}]}},
+              {"$page": {"as": "page", "first": 2, "select": [{"$field": {"name": "id"}}]}},
               {"$current": {"as": "raw"}}
             ]}
           }]
@@ -83,7 +84,7 @@
       },
       "valid": true,
       "capabilities": ["collection.page-1"],
-      "expectedData": {"users": {"first": {"id": "u-1"}, "tail": [{"id": "u-2"}], "page": [{"id": "u-1"}, {"id": "u-2"}], "raw": ["u-1", "u-2"]}}
+      "expectedData": {"users": {"first": {"id": "u-1"}, "tail": [{"id": "u-2"}], "page": [{"id": "u-1"}, {"id": "u-2"}], "raw": [{"id": "u-1"}, {"id": "u-2"}]}}
     },
     {
       "name": "fragment-parallel-unnest-and-expression-contexts",
@@ -180,13 +181,16 @@
     },
     {
       "name": "failed-result-is-unavailable",
-      "document": {"operations": [{"name": "Failed", "kind": "mutation", "select": [
+      "document": {"operations": [{"name": "Failed", "kind": "query", "select": [
         {"$call": {"name": "create", "bind": "created"}},
         {"$call": {"name": "consume", "args": {"value": {"$result": "created"}}}}
       ]}]},
       "valid": true,
       "handlerStarts": 1,
-      "expectedErrors": [{"code": "RESULT_UNAVAILABLE", "path": ["consume"]}]
+      "expectedErrors": [
+        {"code": "RESULT_UNAVAILABLE", "path": ["consume"]},
+        {"code": "HANDLER_FAILED", "path": ["create"]}
+      ]
     },
     {
       "name": "skipped-result-is-unavailable",

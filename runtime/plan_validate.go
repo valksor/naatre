@@ -364,6 +364,7 @@ func (v *planValidator) validateMeta(selection protocol.Selection, scope *valida
 func (v *planValidator) validateParallel(selection protocol.Selection, scope *validationScope, root bool, node *planNode) {
 	for _, branch := range selection.Selections() {
 		branchScope := scope.child(scope.current, false)
+		branchScope.parent = scope.parent
 		branchScope.responseNames = scope.responseNames
 		branchNode := v.validateSelection(branch, &branchScope, root, true)
 		v.validateParallelBranch(branchNode)

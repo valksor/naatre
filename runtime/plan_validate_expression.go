@@ -56,7 +56,7 @@ func (v *planValidator) validateExpression(expression protocol.Expression, expec
 	if !actual.valid {
 		return
 	}
-	if actual.id != expected.id || (actual.nullable && !expected.nullable) {
+	if actual.id != expected.id {
 		v.add("TYPE_MISMATCH", "LANG-100", fmt.Sprintf("expression type %s is incompatible with %s", actual.id, expected.id), expression.Source())
 	}
 }

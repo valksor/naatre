@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -62,7 +63,7 @@ type Plan struct {
 	selections     []plannedSelection
 	nodes          []planNode
 	types          schema.Snapshot
-	flatExecutable bool
+	variableValues map[string]json.RawMessage
 }
 
 // Prepare resolves and validates the complete selected operation without
@@ -84,17 +85,28 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 	return &Plan{
 		operationName: operation.Name(), kind: operation.Kind(), requirements: request.Document().Requires(),
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
-		flatExecutable: supportsFlatExecution(nodes),
+		variableValues: captureVariableValues(request, operation.Variables()),
 	}, nil
 }
 
 // Execute runs a prepared operation in selection order. Query failures preserve
 // independent sibling data; mutation failures stop later mutation scheduling.
 func (p *Plan) Execute(ctx context.Context) Outcome {
-	if !p.flatExecutable {
-		return p.unsupportedExecutionOutcome()
+	return p.executeComposed(ctx)
+}
+
+func captureVariableValues(request *protocol.Request, definitions []protocol.VariableDefinition) map[string]json.RawMessage {
+	values := make(map[string]json.RawMessage, len(definitions))
+	for _, definition := range definitions {
+		value, ok := request.Variable(definition.Name())
+		if !ok {
+			value, ok = definition.Default()
+		}
+		if ok {
+			values[definition.Name()] = append(json.RawMessage(nil), value...)
+		}
 	}
-	return p.executeFlat(ctx)
+	return values
 }
 
 func (p *Plan) executeFlat(ctx context.Context) Outcome {
@@ -151,31 +163,6 @@ func (p *Plan) executeFlat(ctx context.Context) Outcome {
 	return outcome
 }
 
-func (p *Plan) unsupportedExecutionOutcome() Outcome {
-	source := protocol.Source{}
-	path := []any(nil)
-	if len(p.nodes) != 0 {
-		source = p.nodes[0].source
-		if p.nodes[0].outputName != "" {
-			path = []any{p.nodes[0].outputName}
-		}
-	}
-	return Outcome{Data: make(map[string]any), Errors: []ExecutionError{{
-		Code: "UNSUPPORTED_EXECUTION_PLAN", Message: "structured plan execution is not available in the flat reference executor",
-		Path: path, Source: source, internal: errors.New("ordered composition execution is owned by runtime issue #8"),
-	}}}
-}
-
-func supportsFlatExecution(nodes []planNode) bool {
-	for _, node := range nodes {
-		if node.kind != protocol.CallSelection || !node.hasDefinition || len(node.children) != 0 ||
-			len(node.selection.Arguments()) != 0 || len(node.selection.Directives()) != 0 || node.binding != "" {
-			return false
-		}
-	}
-	return true
-}
-
 func selectOperation(operations []protocol.Operation, requested string, source protocol.Source) (protocol.Operation, error) {
 	if requested == "" {
 		if len(operations) != 1 {
@@ -196,7 +183,11 @@ func invokeContained(ctx context.Context, definition Definition, invocation Invo
 }
 
 func executionFailure(code, message string, selection plannedSelection, cause error) ExecutionError {
-	return ExecutionError{Code: code, Message: message, Path: []any{selection.outputName}, Source: selection.source, Retryable: false, internal: cause}
+	return makeExecutionError(code, message, []any{selection.outputName}, selection.source, cause)
+}
+
+func makeExecutionError(code, message string, path []any, source protocol.Source, cause error) ExecutionError {
+	return ExecutionError{Code: code, Message: message, Path: append([]any(nil), path...), Source: source, Retryable: false, internal: cause}
 }
 
 func comparePaths(left, right []any) int {

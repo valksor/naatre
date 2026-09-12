@@ -1,0 +1,19 @@
+{
+  "users": {
+    "firstTwo": [
+      {"name": "Ada"},
+      {"name": "Grace"}
+    ],
+    "items": [
+      {"label": "Ada"},
+      {"label": "Grace"},
+      {"label": "Lin"}
+    ],
+    "last": {"name": "Lin"},
+    "tail": [
+      {"name": "Grace"},
+      {"name": "Lin"}
+    ],
+    "total": 3
+  }
+}

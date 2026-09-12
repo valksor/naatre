@@ -8,7 +8,7 @@ import (
 )
 
 // ExecuteDefinitionsForTest exercises invocation containment and output
-// completion independently of the composition executor owned by issue #8.
+// completion independently of document composition.
 func ExecuteDefinitionsForTest(ctx context.Context, types schema.Snapshot, definitions []Definition) Outcome {
 	selections := make([]plannedSelection, len(definitions))
 	for index, definition := range definitions {
@@ -18,5 +18,5 @@ func ExecuteDefinitionsForTest(ctx context.Context, types schema.Snapshot, defin
 			source:     protocol.Source{},
 		}
 	}
-	return (&Plan{operationName: "test", kind: protocol.Query, selections: selections, types: types, flatExecutable: true}).Execute(ctx)
+	return (&Plan{operationName: "test", kind: protocol.Query, selections: selections, types: types}).executeFlat(ctx)
 }

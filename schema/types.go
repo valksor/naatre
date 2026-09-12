@@ -386,8 +386,8 @@ func validateFieldReferences(types map[TypeID]TypeDescriptor, descriptor TypeDes
 			return fmt.Errorf("schema type %q field %q references unknown type %q", descriptor.ID, name, field.Type)
 		}
 		inputField := descriptor.Kind == InputObjectType || descriptor.Kind == OneOfType
-		if inputField && !reference.Input {
-			return fmt.Errorf("input type %q field %q references non-input type %q", descriptor.ID, name, field.Type)
+		if inputField && !reference.Input && !reference.Output {
+			return fmt.Errorf("input type %q field %q references unavailable type %q", descriptor.ID, name, field.Type)
 		}
 		if !inputField && !reference.Output {
 			return fmt.Errorf("output type %q field %q references non-output type %q", descriptor.ID, name, field.Type)

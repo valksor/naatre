@@ -246,6 +246,39 @@ func TestCustomScalarRejectsNullAsNumber(t *testing.T) {
 	}
 }
 
+func TestCoerceRuntimeInputAcceptsCompletedOutputValuesButClientInputDoesNot(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	for _, descriptor := range []schema.TypeDescriptor{
+		{ID: "User", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{
+			"id": {Type: schema.TypeID(schema.ID), Required: true},
+		}},
+		{ID: "ConsumeInput", Kind: schema.InputObjectType, Input: true, Fields: map[string]schema.FieldDescriptor{
+			"user": {Type: "User", Required: true},
+		}},
+	} {
+		if err := catalog.Register(descriptor); err != nil {
+			t.Fatalf("Register(%s): %v", descriptor.ID, err)
+		}
+	}
+	types, err := catalog.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	raw := json.RawMessage(`{"user":{"id":"u-1"}}`)
+	if _, err := schema.CoerceInput(types, "ConsumeInput", raw, false); err == nil {
+		t.Fatal("client input introduced an output-only object")
+	}
+	value, err := schema.CoerceRuntimeInput(types, "ConsumeInput", raw, false)
+	if err != nil {
+		t.Fatalf("CoerceRuntimeInput: %v", err)
+	}
+	members, ok := value.Object()
+	if !ok || members["user"].Type() != "User" {
+		t.Fatalf("runtime input = %#v", value)
+	}
+}
+
 func inputTypes(t *testing.T) schema.Snapshot {
 	t.Helper()
 	catalog := schema.NewCatalog()

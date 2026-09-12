@@ -3,7 +3,11 @@
 ## Type forms
 
 - **TYPE-001:** Input and output positions are distinct. Output-only object,
-  interface, and stream types MUST NOT be accepted as input literals.
+  interface, collection, and stream types MUST NOT be accepted as client input
+  literals or variables. A completed server value may enter a typed call through
+  `$current`, `$parent`, or `$result` only when its retained schema type exactly
+  matches that argument; this runtime-only coercion does not make the type
+  client-input-capable.
 - **TYPE-002:** Core scalars are `Boolean`, `String`, `ID`, `Int32`, and
   `Float64`. Extended scalars are `Int64`, `UInt64`, `BigInt`, `Decimal`,
   `Timestamp`, `Duration`, `UUID`, and `Bytes`.
