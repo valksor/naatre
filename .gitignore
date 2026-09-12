@@ -1,5 +1,6 @@
 .claude/backups/
 .claude/logs/
+.claude/memory/
 .bb/
 .codex/
 .idea/
