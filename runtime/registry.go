@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/valksor/naatre/protocol"
 	"github.com/valksor/naatre/schema"
@@ -23,6 +24,7 @@ var (
 	ErrInputType             = errors.New("handler input has wrong Go type")
 	ErrSourceType            = errors.New("handler source has wrong Go type")
 	namePattern              = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	schemaIdentityPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,127}$`)
 )
 
 // Scope identifies root operations and members of registered object types.
@@ -92,16 +94,22 @@ type Metadata struct {
 
 // Descriptor is the portable public contract for one registered handler.
 type Descriptor struct {
-	Name           string                 `json:"name"`
-	Scope          Scope                  `json:"scope"`
-	Owner          schema.TypeID          `json:"owner,omitempty"`
-	Kind           protocol.OperationKind `json:"kind,omitempty"`
-	Member         MemberKind             `json:"member"`
-	Input          schema.TypeID          `json:"input,omitempty"`
-	InputNullable  bool                   `json:"inputNullable"`
-	Output         schema.TypeID          `json:"output"`
-	OutputNullable bool                   `json:"outputNullable"`
-	Metadata       Metadata               `json:"metadata"`
+	ID             string                   `json:"id,omitempty"`
+	Name           string                   `json:"name"`
+	Scope          Scope                    `json:"scope"`
+	Owner          schema.TypeID            `json:"owner,omitempty"`
+	Kind           protocol.OperationKind   `json:"kind,omitempty"`
+	Member         MemberKind               `json:"member"`
+	Input          schema.TypeID            `json:"input,omitempty"`
+	InputNullable  bool                     `json:"inputNullable"`
+	Output         schema.TypeID            `json:"output"`
+	OutputNullable bool                     `json:"outputNullable"`
+	Description    string                   `json:"description,omitempty"`
+	Deprecation    *schema.Deprecation      `json:"deprecation,omitempty"`
+	Capabilities   []string                 `json:"capabilities,omitempty"`
+	Traits         []schema.TraitDescriptor `json:"traits,omitempty"`
+	Source         *schema.SourceMetadata   `json:"source,omitempty"`
+	Metadata       Metadata                 `json:"metadata"`
 }
 
 // Handler is the supported typed root-operation signature.
@@ -202,7 +210,7 @@ func callInvoker[Source, Input, Output any](descriptor Descriptor, handler CallH
 
 func newDefinition(descriptor Descriptor, binding bindingKind, sourceType, inputType, outputType reflect.Type, nilHandler bool) Definition {
 	definition := Definition{
-		descriptor: descriptor, binding: binding, nilHandler: nilHandler,
+		descriptor: cloneRuntimeDescriptor(descriptor), binding: binding, nilHandler: nilHandler,
 		sourceType: sourceType, inputType: inputType, outputType: outputType,
 	}
 	if descriptor.Metadata.ThreadSafety == SerialOnly {
@@ -313,6 +321,7 @@ func (r *Registry) Freeze() (Snapshot, error) {
 	}
 	definitions := make(map[string]Definition, len(r.definitions))
 	for key, definition := range r.definitions {
+		definition.descriptor = cloneRuntimeDescriptor(definition.descriptor)
 		definitions[key] = definition
 	}
 	r.frozen = true
@@ -331,7 +340,7 @@ func (s Snapshot) Descriptors() []Descriptor {
 	sort.Strings(keys)
 	descriptors := make([]Descriptor, 0, len(keys))
 	for _, key := range keys {
-		descriptors = append(descriptors, s.definitions[key].descriptor)
+		descriptors = append(descriptors, cloneRuntimeDescriptor(s.definitions[key].descriptor))
 	}
 	return descriptors
 }
@@ -342,7 +351,7 @@ func (s Snapshot) Root(kind protocol.OperationKind, name string) (Descriptor, bo
 	if !ok || definition.descriptor.Kind != kind {
 		return Descriptor{}, false
 	}
-	return definition.descriptor, true
+	return cloneRuntimeDescriptor(definition.descriptor), true
 }
 
 // Member returns a field or call explicitly registered on an object.
@@ -351,7 +360,7 @@ func (s Snapshot) Member(owner schema.TypeID, member MemberKind, name string) (D
 	if !ok {
 		return Descriptor{}, false
 	}
-	return definition.descriptor, true
+	return cloneRuntimeDescriptor(definition.descriptor), true
 }
 
 // InvokeRoot invokes a registered root operation through its typed adapter.
@@ -388,6 +397,9 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 	descriptor := definition.descriptor
 	if !namePattern.MatchString(descriptor.Name) {
 		return fmt.Errorf("invalid public name %q", descriptor.Name)
+	}
+	if descriptor.ID != "" && !schemaIdentityPattern.MatchString(descriptor.ID) {
+		return fmt.Errorf("invalid portable identity %q", descriptor.ID)
 	}
 	output, outputOK := types.Lookup(descriptor.Output)
 	if !outputOK || !output.Output {
@@ -505,6 +517,68 @@ func validateMetadata(descriptor Descriptor) error {
 	}
 	if descriptor.Metadata.AuthorizationPolicy == "" {
 		return fmt.Errorf("registration %q requires authorization policy metadata", descriptor.Name)
+	}
+	return validatePortableDescriptorMetadata(descriptor)
+}
+
+func validatePortableDescriptorMetadata(descriptor Descriptor) error {
+	if err := validatePortableDeprecation(descriptor); err != nil {
+		return err
+	}
+	if err := validatePortableCapabilities(descriptor); err != nil {
+		return err
+	}
+	if err := validatePortableTraits(descriptor); err != nil {
+		return err
+	}
+	if descriptor.Source != nil && (descriptor.Source.URI == "" || descriptor.Source.Line < 0 || descriptor.Source.Column < 0) {
+		return fmt.Errorf("registration %q has invalid source metadata", descriptor.Name)
+	}
+	return nil
+}
+
+func validatePortableDeprecation(descriptor Descriptor) error {
+	if descriptor.Deprecation == nil {
+		return nil
+	}
+	if descriptor.Metadata.Deprecation != "" {
+		return fmt.Errorf("registration %q declares both legacy and structured deprecation", descriptor.Name)
+	}
+	if descriptor.Deprecation.Reason == "" {
+		return fmt.Errorf("registration %q deprecation requires a reason", descriptor.Name)
+	}
+	if descriptor.Deprecation.Sunset != "" {
+		if _, err := time.Parse(time.RFC3339, descriptor.Deprecation.Sunset); err != nil {
+			return fmt.Errorf("registration %q has invalid deprecation sunset: %w", descriptor.Name, err)
+		}
+	}
+	return nil
+}
+
+func validatePortableCapabilities(descriptor Descriptor) error {
+	capabilities := slices.Clone(descriptor.Capabilities)
+	slices.Sort(capabilities)
+	for index, capability := range capabilities {
+		duplicate := index > 0 && capabilities[index-1] == capability
+		if !schemaIdentityPattern.MatchString(capability) || duplicate {
+			return fmt.Errorf("registration %q has invalid or duplicate capability %q", descriptor.Name, capability)
+		}
+	}
+	return nil
+}
+
+func validatePortableTraits(descriptor Descriptor) error {
+	seenTraits := make(map[string]bool, len(descriptor.Traits))
+	for _, trait := range descriptor.Traits {
+		if !schemaIdentityPattern.MatchString(trait.ID) || seenTraits[trait.ID] || !json.Valid(trait.Value) {
+			return fmt.Errorf("registration %q has invalid or duplicate trait %q", descriptor.Name, trait.ID)
+		}
+		switch trait.Semantics {
+		case schema.TraitDocumentation, schema.TraitValidation, schema.TraitExecution, schema.TraitAuthorization, schema.TraitIdentity:
+		default:
+			return fmt.Errorf("registration %q has unknown trait semantics %q", descriptor.Name, trait.Semantics)
+		}
+		seenTraits[trait.ID] = true
 	}
 	return nil
 }

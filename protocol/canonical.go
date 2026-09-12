@@ -184,12 +184,27 @@ func normalizeSchema(input []byte, root *node) error {
 	if !hasRevision || revision.kind != nodeString || !capabilityPattern(revision.text) {
 		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "schema requires a portable revision", "/revision", revision.start)
 	}
-	typesIndex, hasTypes := root.memberByID["types"]
-	if !hasTypes || root.object[typesIndex].value.kind != nodeArray {
-		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "schema requires a types array", "/types", root.start)
-	}
 	if err := normalizeStringSetMember(input, root, "capabilities", "/capabilities", true); err != nil {
 		return err
+	}
+	if err := normalizeSchemaTypes(input, root); err != nil {
+		return err
+	}
+	if err := normalizeSchemaCallables(input, root); err != nil {
+		return err
+	}
+	for _, member := range []string{"retired", "traits"} {
+		if _, err := normalizeSchemaIDArrayMember(input, root, member, "/"+member); err != nil {
+			return err
+		}
+	}
+	return normalizeSchemaReferences(input, root)
+}
+
+func normalizeSchemaTypes(input []byte, root *node) error {
+	typesIndex, exists := root.memberByID["types"]
+	if !exists || root.object[typesIndex].value.kind != nodeArray {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "schema requires a types array", "/types", root.start)
 	}
 	types := &root.object[typesIndex].value
 	identifiers := make(map[string]bool, len(types.array))
@@ -201,25 +216,163 @@ func normalizeSchema(input []byte, root *node) error {
 			return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "types require unique portable identifiers", pointer+"/id", current.start)
 		}
 		identifiers[identifier] = true
-		for _, member := range []string{"variants", "enumValues"} {
-			if err := normalizeStringSetMember(input, current, member, pointer+"/"+member, true); err != nil {
-				return err
-			}
-		}
-		if scalarIndex, exists := current.memberByID["scalar"]; exists {
-			scalar := &current.object[scalarIndex].value
-			if scalar.kind != nodeObject {
-				return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "scalar descriptor must be an object", pointer+"/scalar", scalar.start)
-			}
-			if err := normalizeStringSetMember(input, scalar, "acceptedWireShapes", pointer+"/scalar/acceptedWireShapes", true); err != nil {
-				return err
-			}
+		if err := normalizeSchemaType(input, current, pointer); err != nil {
+			return err
 		}
 	}
 	sort.Slice(types.array, func(left, right int) bool {
 		leftID, _ := schemaTypeIdentifier(&types.array[left])
 		rightID, _ := schemaTypeIdentifier(&types.array[right])
 		return leftID < rightID
+	})
+	return nil
+}
+
+func normalizeSchemaCallables(input []byte, root *node) error {
+	for _, member := range []string{"operations", "members"} {
+		values, err := normalizeSchemaIDArrayMember(input, root, member, "/"+member)
+		if err != nil {
+			return err
+		}
+		if values == nil {
+			continue
+		}
+		for index := range values.array {
+			if err := normalizeSchemaCallable(input, &values.array[index], fmt.Sprintf("/%s/%d", member, index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeSchemaType(input []byte, current *node, pointer string) error {
+	if err := normalizeSchemaTypeCollections(input, current, pointer); err != nil {
+		return err
+	}
+	if err := normalizeSchemaObjectDescriptor(input, current, pointer, "entity", func(value *node) error {
+		return normalizeStringSetMember(input, value, "keys", pointer+"/entity/keys", false)
+	}); err != nil {
+		return err
+	}
+	return normalizeSchemaObjectDescriptor(input, current, pointer, "scalar", func(value *node) error {
+		return normalizeStringSetMember(input, value, "acceptedWireShapes", pointer+"/scalar/acceptedWireShapes", true)
+	})
+}
+
+func normalizeSchemaTypeCollections(input []byte, current *node, pointer string) error {
+	for _, member := range []string{"variants", "enumValues", "capabilities"} {
+		if err := normalizeStringSetMember(input, current, member, pointer+"/"+member, true); err != nil {
+			return err
+		}
+	}
+	for _, member := range []string{"fields", "enumMembers", "variantMembers"} {
+		values, err := normalizeSchemaIDArrayMember(input, current, member, pointer+"/"+member)
+		if err != nil {
+			return err
+		}
+		if values == nil {
+			continue
+		}
+		for index := range values.array {
+			itemPointer := fmt.Sprintf("%s/%s/%d", pointer, member, index)
+			if _, err := normalizeSchemaIDArrayMember(input, &values.array[index], "traits", itemPointer+"/traits"); err != nil {
+				return err
+			}
+		}
+	}
+	for _, member := range []string{"retired", "traits"} {
+		if _, err := normalizeSchemaIDArrayMember(input, current, member, pointer+"/"+member); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeSchemaObjectDescriptor(input []byte, parent *node, pointer, name string, normalize func(*node) error) error {
+	index, exists := parent.memberByID[name]
+	if !exists {
+		return nil
+	}
+	value := &parent.object[index].value
+	if value.kind != nodeObject {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" descriptor must be an object", pointer+"/"+name, value.start)
+	}
+	return normalize(value)
+}
+
+func normalizeSchemaCallable(input []byte, current *node, pointer string) error {
+	if err := normalizeStringSetMember(input, current, "capabilities", pointer+"/capabilities", true); err != nil {
+		return err
+	}
+	_, err := normalizeSchemaIDArrayMember(input, current, "traits", pointer+"/traits")
+	return err
+}
+
+func normalizeSchemaIDArrayMember(input []byte, parent *node, name, pointer string) (*node, error) {
+	return normalizeSchemaArrayMember(input, parent, name, pointer, "/id", func(item *node) (string, bool) {
+		return schemaTypeIdentifier(item)
+	})
+}
+
+func normalizeSchemaArrayMember(input []byte, parent *node, name, pointer, itemSuffix string, key func(*node) (string, bool)) (*node, error) {
+	index, exists := parent.memberByID[name]
+	if !exists {
+		return nil, nil
+	}
+	values := &parent.object[index].value
+	if values.kind != nodeArray {
+		return nil, newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" must be an array", pointer, values.start)
+	}
+	seen := make(map[string]bool, len(values.array))
+	for itemIndex := range values.array {
+		item := &values.array[itemIndex]
+		identifier, ok := key(item)
+		if !ok || seen[identifier] {
+			return nil, newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" entries require unique portable identifiers", fmt.Sprintf("%s/%d%s", pointer, itemIndex, itemSuffix), item.start)
+		}
+		seen[identifier] = true
+	}
+	sort.Slice(values.array, func(left, right int) bool {
+		leftID, _ := key(&values.array[left])
+		rightID, _ := key(&values.array[right])
+		return leftID < rightID
+	})
+	return values, nil
+}
+
+func normalizeSchemaReferences(input []byte, root *node) error {
+	index, exists := root.memberByID["references"]
+	if !exists {
+		return nil
+	}
+	values := &root.object[index].value
+	if values.kind != nodeArray {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "references must be an array", "/references", values.start)
+	}
+	seen := make(map[string]bool, len(values.array))
+	for itemIndex := range values.array {
+		item := &values.array[itemIndex]
+		uri, hasURI := item.member("uri")
+		revision, hasRevision := item.member("revision")
+		if item.kind != nodeObject || !hasURI || uri.kind != nodeString || !hasRevision || revision.kind != nodeString {
+			return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "references require uri and revision strings", fmt.Sprintf("/references/%d", itemIndex), item.start)
+		}
+		key := uri.text + "\x00" + revision.text
+		if seen[key] {
+			return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "references must be unique", fmt.Sprintf("/references/%d", itemIndex), item.start)
+		}
+		seen[key] = true
+	}
+	sort.Slice(values.array, func(left, right int) bool {
+		leftURI, _ := values.array[left].member("uri")
+		leftRevision, _ := values.array[left].member("revision")
+		rightURI, _ := values.array[right].member("uri")
+		rightRevision, _ := values.array[right].member("revision")
+		if leftURI.text == rightURI.text {
+			return leftRevision.text < rightRevision.text
+		}
+		return leftURI.text < rightURI.text
 	})
 	return nil
 }
@@ -233,26 +386,10 @@ func schemaTypeIdentifier(value *node) (string, bool) {
 }
 
 func normalizeStringSetMember(input []byte, parent *node, name, pointer string, identifiers bool) error {
-	index, exists := parent.memberByID[name]
-	if !exists {
-		return nil
-	}
-	values := &parent.object[index].value
-	if values.kind != nodeArray {
-		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" must be an array", pointer, values.start)
-	}
-	seen := make(map[string]bool, len(values.array))
-	for itemIndex, item := range values.array {
-		itemPointer := fmt.Sprintf("%s/%d", pointer, itemIndex)
-		if item.kind != nodeString || (identifiers && !capabilityPattern(item.text)) || seen[item.text] {
-			return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" entries must be unique portable identifiers", itemPointer, item.start)
-		}
-		seen[item.text] = true
-	}
-	sort.Slice(values.array, func(left, right int) bool {
-		return values.array[left].text < values.array[right].text
+	_, err := normalizeSchemaArrayMember(input, parent, name, pointer, "", func(item *node) (string, bool) {
+		return item.text, item.kind == nodeString && (!identifiers || capabilityPattern(item.text))
 	})
-	return nil
+	return err
 }
 
 // ValidateJSON applies the same strict decoder and resource limits used by

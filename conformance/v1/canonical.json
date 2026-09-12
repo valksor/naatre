@@ -244,6 +244,13 @@
       "equal": true
     },
     {
+      "name": "schema-portable-declaration-order-is-equivalent",
+      "purpose": "schema",
+      "left": "{\"revision\":\"schema-r1\",\"types\":[{\"id\":\"User\",\"fields\":[{\"id\":\"User.z\"},{\"id\":\"User.a\"}],\"entity\":{\"keys\":[\"z\",\"a\"]},\"traits\":[{\"id\":\"z.trait\"},{\"id\":\"a.trait\"}]}],\"operations\":[{\"id\":\"query.z\"},{\"id\":\"query.a\"}],\"members\":[{\"id\":\"User.z\"},{\"id\":\"User.a\"}],\"retired\":[{\"id\":\"old.z\"},{\"id\":\"old.a\"}],\"references\":[{\"uri\":\"urn:z\",\"revision\":\"r2\"},{\"uri\":\"urn:a\",\"revision\":\"r1\"}]}",
+      "right": "{\"references\":[{\"revision\":\"r1\",\"uri\":\"urn:a\"},{\"revision\":\"r2\",\"uri\":\"urn:z\"}],\"retired\":[{\"id\":\"old.a\"},{\"id\":\"old.z\"}],\"members\":[{\"id\":\"User.a\"},{\"id\":\"User.z\"}],\"operations\":[{\"id\":\"query.a\"},{\"id\":\"query.z\"}],\"types\":[{\"traits\":[{\"id\":\"a.trait\"},{\"id\":\"z.trait\"}],\"entity\":{\"keys\":[\"a\",\"z\"]},\"fields\":[{\"id\":\"User.a\"},{\"id\":\"User.z\"}],\"id\":\"User\"}],\"revision\":\"schema-r1\"}",
+      "equal": true
+    },
+    {
       "name": "empty-object-and-list-are-distinct",
       "purpose": "document",
       "left": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[{\"$call\":{\"args\":{\"value\":{\"$literal\":{}}},\"name\":\"echo\"}}]}]}",

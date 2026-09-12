@@ -140,3 +140,111 @@ Valid: a custom slug scalar selects the advertised ASCII-lowercase profile and
 normalizes `"Mixed-Case"` to `"mixed-case"` without application code.
 
 Invalid: canonicalization uses the machine locale or current timezone.
+
+## Portable schema documents
+
+- **TYPE-400:** The normative schema authority is a UTF-8 JSON document with
+  `version`, `canonicalVersion`, `revision`, `types`, `operations`, and
+  `members`. Version 1 uses document version `1` and canonical version
+  `c14n-1`. The revision is an immutable application-assigned portable
+  identifier. A process MUST publish a new immutable document rather than
+  mutate declarations associated with an existing revision.
+- **TYPE-401:** Types, fields, enum members, union/interface variants, root
+  operations, and object members each carry a stable `id` independent of their
+  display `name`. These declarations are arrays sorted by `id` for canonical
+  identity; host maps, reflection names, source order, and Go package layout are
+  not part of the portable contract. Renaming a declaration retains its ID and
+  is therefore detectable rather than appearing as unrelated removal/addition.
+- **TYPE-402:** A type declaration carries its input/output positions, kind,
+  list or map element contract, object/input fields, enum or variant members,
+  openness, recursion bound, custom-scalar contract, description, deprecation,
+  entity keys, required capabilities, traits, source provenance, and retired
+  identities as applicable. Built-in scalar references need not be repeated in
+  `types`.
+- **TYPE-403:** Root operation and object-member manifests carry stable IDs,
+  public names, operation/member kinds, owner, input/output identifiers,
+  independent input/output nullability, effect, determinism, cacheability,
+  retry safety, thread safety, batching, transaction participation,
+  authorization policy, idempotency policy, cost, parallel-mutation
+  eligibility, capabilities, traits, description, deprecation, and source
+  provenance as applicable. An implementation MUST NOT infer these contracts
+  from a transport method or host function signature.
+- **TYPE-404:** `ExportDocument`-equivalent APIs MUST export only portable data
+  and MUST retain supported metadata through document -> host registry ->
+  document round trips. A host registry MAY derive an omitted legacy handler ID
+  deterministically (`kind.name` for roots and `Owner.name.resolver` for object
+  members), but new registrations SHOULD supply an explicit stable ID. A
+  derived collision is an error, never insertion-order resolution.
+- **TYPE-405:** A schema reference contains a URI, a revision, and a lowercase
+  `sha256:` digest with exactly 64 hexadecimal digits. Import does not fetch the
+  URI. Fetching, trust roots, signature verification, and local cache policy
+  require separate explicit configuration; an implementation MUST NOT retrieve
+  arbitrary schema URLs while parsing a bundle.
+
+### Traits and extensions
+
+- **TYPE-410:** A trait contains a stable ID, one of `documentation`,
+  `validation`, `execution`, `authorization`, or `identity` semantics, and one
+  strict JSON value. Documentation traits may be preserved by an implementation
+  that does not understand them. Unknown validation, execution, authorization,
+  and identity traits are critical and MUST make import fail unless their exact
+  ID is explicitly supported.
+- **TYPE-411:** Trait and capability arrays are sets for canonical identity:
+  they reject duplicate IDs and sort by ID. Trait values remain ordinary
+  canonical JSON. Implementing one trait ID does not imply support for another
+  version or vendor prefix.
+
+### Lifecycle and compatibility
+
+- **TYPE-420:** Deprecation contains a required human-readable `reason` and may
+  contain `replacement`, RFC 3339 `sunset`, and `removalRevision`. Deprecation is
+  advisory until an authorization or validation trait explicitly gives it
+  execution semantics. Generators and documentation tools MUST preserve all
+  supplied lifecycle fields.
+- **TYPE-421:** Removed identities and, when supplied, names remain reserved in
+  `retired` with a reason. An active declaration MUST NOT reuse a retired ID or
+  a retired name in its owning namespace. Omitting the retirement record in a
+  later revision does not make reuse compatible; comparison with the prior
+  accepted revision still classifies reuse as breaking.
+- **TYPE-422:** Compatibility comparison is by stable ID and emits a
+  deterministic path and one of `breaking`, `dangerous`, `additive`, or
+  `behavior-only`. Removal, rename, identity reuse, type changes, nullability or
+  required-input tightening, and closing an enum or union are breaking.
+  Changing effects, authorization, constraints, cost, scalar behavior,
+  concurrency, transaction, caching, or retry contracts is dangerous. New
+  declarations and variants of an open union are additive. Description,
+  deprecation, and defaults are behavior-only unless another change independently
+  receives a stronger classification.
+- **TYPE-423:** Adding a required input field without a default is breaking.
+  Adding an optional field or one with a canonical default is additive. Adding
+  a member to an open enum or union is additive; adding one to a closed output
+  set is dangerous because generated consumers may be exhaustive. Removing or
+  renaming any member is breaking.
+- **TYPE-424:** Deployment tooling MUST compare the registered operation/member
+  manifest with the proposed document and bind an accepted revision into the
+  deployment artifact. Matching only type names or accepting a diff report
+  without validating the frozen registry is insufficient.
+
+### Filtered and authenticated discovery
+
+- **TYPE-430:** In-process discovery is disabled unless explicitly configured
+  by the application. A network binding is not created by importing or freezing
+  a schema. When enabled, every discovery request requires an authenticated
+  principal and an explicit authorization decision before any unfiltered
+  metadata is returned. #106 owns the HTTP adapter, stable failure codes,
+  migration reports, and rolling-revision integration for this contract.
+- **TYPE-431:** Visibility is a deny-by-default allow-list of stable type,
+  field, enum-member, variant, operation, object-member, and retired IDs. A
+  filtered document MUST contain no hidden declaration or retired name and MUST
+  pass the same import and reference validation as a complete document.
+- **TYPE-432:** Filtering may prune output fields and open enum/union members.
+  It MUST remove a selected declaration whose referenced type is hidden and
+  repeat pruning until no dangling reference remains. An input object is
+  all-or-nothing: hiding any input member removes the input object and every
+  operation/member that depends on it, because silently narrowing accepted
+  input would change execution semantics.
+- **TYPE-433:** One discovery response is derived from exactly one immutable
+  revision and one authorization decision. Types, operations, members, hash,
+  ETag, or diff metadata from different revisions MUST NOT be combined. Cache
+  identity includes the schema revision and every principal/tenant/policy
+  dimension used by visibility.

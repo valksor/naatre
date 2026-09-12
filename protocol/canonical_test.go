@@ -86,6 +86,21 @@ func TestCanonicalizeSchemaNormalizesRegistrationAndSetOrder(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeSchemaNormalizesPortableDeclarationArrays(t *testing.T) {
+	t.Parallel()
+
+	left := []byte(`{"revision":"schema-r1","types":[{"id":"User","fields":[{"id":"User.z","traits":[{"id":"z.trait"},{"id":"a.trait"}]},{"id":"User.a"}],"enumMembers":[{"id":"User.Z"},{"id":"User.A"}],"variantMembers":[{"id":"User.Z"},{"id":"User.A"}],"retired":[{"id":"User.old-z"},{"id":"User.old-a"}],"entity":{"keys":["z","a"]},"capabilities":["z.cap","a.cap"],"traits":[{"id":"z.trait"},{"id":"a.trait"}]}],"operations":[{"id":"query.z"},{"id":"query.a","capabilities":["z.cap","a.cap"],"traits":[{"id":"z.trait"},{"id":"a.trait"}]}],"members":[{"id":"User.z"},{"id":"User.a"}],"retired":[{"id":"old.z"},{"id":"old.a"}],"references":[{"uri":"urn:z","revision":"r2"},{"uri":"urn:a","revision":"r1"}],"traits":[{"id":"z.trait"},{"id":"a.trait"}]}`)
+	right := []byte(`{"traits":[{"id":"a.trait"},{"id":"z.trait"}],"references":[{"revision":"r1","uri":"urn:a"},{"revision":"r2","uri":"urn:z"}],"retired":[{"id":"old.a"},{"id":"old.z"}],"members":[{"id":"User.a"},{"id":"User.z"}],"operations":[{"traits":[{"id":"a.trait"},{"id":"z.trait"}],"capabilities":["a.cap","z.cap"],"id":"query.a"},{"id":"query.z"}],"types":[{"traits":[{"id":"a.trait"},{"id":"z.trait"}],"capabilities":["a.cap","z.cap"],"entity":{"keys":["a","z"]},"retired":[{"id":"User.old-a"},{"id":"User.old-z"}],"variantMembers":[{"id":"User.A"},{"id":"User.Z"}],"enumMembers":[{"id":"User.A"},{"id":"User.Z"}],"fields":[{"id":"User.a"},{"traits":[{"id":"a.trait"},{"id":"z.trait"}],"id":"User.z"}],"id":"User"}],"revision":"schema-r1"}`)
+	leftCanonical, leftErr := protocol.CanonicalizeSchema(left, protocol.Limits{})
+	rightCanonical, rightErr := protocol.CanonicalizeSchema(right, protocol.Limits{})
+	if leftErr != nil || rightErr != nil {
+		t.Fatalf("CanonicalizeSchema errors = %v, %v", leftErr, rightErr)
+	}
+	if string(leftCanonical) != string(rightCanonical) {
+		t.Fatalf("portable declaration order changed identity:\n%s\n%s", leftCanonical, rightCanonical)
+	}
+}
+
 func TestCanonicalizeSchemaRejectsInvalidAndDuplicateIdentifiers(t *testing.T) {
 	t.Parallel()
 

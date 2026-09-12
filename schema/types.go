@@ -32,11 +32,17 @@ var typeIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,127}$`)
 
 // FieldDescriptor defines one object or one-of member.
 type FieldDescriptor struct {
-	Type       TypeID          `json:"type"`
-	Required   bool            `json:"required,omitempty"`
-	Nullable   bool            `json:"nullable,omitempty"`
-	Default    json.RawMessage `json:"default,omitempty"`
-	Deprecated string          `json:"deprecated,omitempty"`
+	ID          string            `json:"id,omitempty"`
+	Type        TypeID            `json:"type"`
+	Required    bool              `json:"required,omitempty"`
+	Nullable    bool              `json:"nullable,omitempty"`
+	Default     json.RawMessage   `json:"default,omitempty"`
+	Deprecated  string            `json:"deprecated,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Deprecation *Deprecation      `json:"deprecation,omitempty"`
+	Cost        uint64            `json:"cost,omitempty"`
+	Traits      []TraitDescriptor `json:"traits,omitempty"`
+	Source      *SourceMetadata   `json:"source,omitempty"`
 }
 
 // JSONShape names a language-neutral JSON wire shape accepted by a custom
@@ -85,6 +91,7 @@ type ScalarDescriptor struct {
 // TypeDescriptor is the language-neutral description of one named type.
 type TypeDescriptor struct {
 	ID      TypeID   `json:"id"`
+	Name    string   `json:"name,omitempty"`
 	Kind    TypeKind `json:"kind"`
 	Input   bool     `json:"input,omitempty"`
 	Output  bool     `json:"output,omitempty"`
@@ -96,9 +103,18 @@ type TypeDescriptor struct {
 	ElementNullable bool                       `json:"elementNullable,omitempty"`
 	Fields          map[string]FieldDescriptor `json:"fields,omitempty"`
 	Variants        []TypeID                   `json:"variants,omitempty"`
+	VariantMembers  []VariantMemberDescriptor  `json:"variantMembers,omitempty"`
 	EnumValues      []string                   `json:"enumValues,omitempty"`
+	EnumMembers     []EnumMemberDescriptor     `json:"enumMembers,omitempty"`
 	MaxDepth        int                        `json:"maxDepth,omitempty"`
 	Scalar          *ScalarDescriptor          `json:"scalar,omitempty"`
+	Description     string                     `json:"description,omitempty"`
+	Deprecation     *Deprecation               `json:"deprecation,omitempty"`
+	Entity          *EntityDescriptor          `json:"entity,omitempty"`
+	Capabilities    []string                   `json:"capabilities,omitempty"`
+	Traits          []TraitDescriptor          `json:"traits,omitempty"`
+	Source          *SourceMetadata            `json:"source,omitempty"`
+	Retired         []RetiredIdentity          `json:"retired,omitempty"`
 }
 
 // Catalog collects type declarations during startup.
@@ -439,10 +455,25 @@ func cloneDescriptor(descriptor TypeDescriptor) TypeDescriptor {
 	result.Fields = make(map[string]FieldDescriptor, len(descriptor.Fields))
 	for name, field := range descriptor.Fields {
 		field.Default = append(json.RawMessage(nil), field.Default...)
+		field.Deprecation = cloneDeprecation(field.Deprecation)
+		field.Traits = cloneTraits(field.Traits)
+		field.Source = cloneSource(field.Source)
 		result.Fields[name] = field
 	}
 	result.Variants = append([]TypeID(nil), descriptor.Variants...)
+	result.VariantMembers = cloneVariantMembers(descriptor.VariantMembers)
 	result.EnumValues = append([]string(nil), descriptor.EnumValues...)
+	result.EnumMembers = cloneEnumMembers(descriptor.EnumMembers)
+	result.Deprecation = cloneDeprecation(descriptor.Deprecation)
+	if descriptor.Entity != nil {
+		entity := *descriptor.Entity
+		entity.Keys = append([]string(nil), descriptor.Entity.Keys...)
+		result.Entity = &entity
+	}
+	result.Capabilities = append([]string(nil), descriptor.Capabilities...)
+	result.Traits = cloneTraits(descriptor.Traits)
+	result.Source = cloneSource(descriptor.Source)
+	result.Retired = append([]RetiredIdentity(nil), descriptor.Retired...)
 	if descriptor.Scalar != nil {
 		scalar := *descriptor.Scalar
 		scalar.AcceptedWireShapes = append([]JSONShape(nil), descriptor.Scalar.AcceptedWireShapes...)

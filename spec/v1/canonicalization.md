@@ -86,15 +86,17 @@ Invalid: accept `user name`, normalize `É` into an identifier, or resolve
   correlation IDs, transport metadata, approval metadata, and server schema
   revisions do not.
 - **CANON-104:** Schema identity is formed from its portable public descriptor,
-  never host reflection or registration order. Type declarations sort by type
-  identifier; field maps sort by response name; set-like type-reference,
-  enum-value, accepted-wire-shape, and capability lists sort by their canonical
-  identifier and reject duplicates. Ordered custom-scalar conformance vectors
-  retain order. Absent optional descriptor fields are omitted; explicit
-  defaults are canonical scalar JSON. A schema construction API MUST coerce and
-  store defaults in that canonical form before exposing the public descriptor;
-  a serialized descriptor containing a non-canonical default is invalid input,
-  not a second spelling with a different schema identity.
+  never host reflection or registration order. Type, field, enum-member,
+  variant-member, operation, object-member, retired-identity, and trait arrays
+  sort by stable `id`; pinned references sort by URI then revision. Entity keys,
+  legacy type-reference/enum-value lists, accepted-wire-shape lists, and
+  capability lists sort by their canonical spelling and reject duplicates.
+  Ordered custom-scalar conformance vectors retain order. Absent optional
+  descriptor fields are omitted; explicit defaults are canonical scalar JSON.
+  A schema construction API MUST coerce and store defaults in that canonical
+  form before exposing the public descriptor; a serialized descriptor containing
+  a non-canonical default is invalid input, not a second spelling with a
+  different schema identity.
 - **CANON-105:** Schema-free document producers can compute document identity
   without a live server. A schema-dependent producer MUST pin the schema bundle
   used to coerce variables and carry its schema digest into the relevant

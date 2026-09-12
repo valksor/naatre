@@ -1,0 +1,457 @@
+{
+  "profile": "core.schema-1",
+  "documentVersion": "1",
+  "snapshots": [
+    {
+      "name": "complete",
+      "document": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "schema-r1",
+        "capabilities": ["vendor.audit-1", "core.language-1"],
+        "types": [
+          {
+            "id": "LookupInput",
+            "name": "LookupInput",
+            "kind": "input-object",
+            "input": true,
+            "description": "Lookup arguments",
+            "fields": [
+              {"id": "LookupInput.id", "name": "id", "type": "ID", "required": true}
+            ]
+          },
+          {
+            "id": "Role",
+            "name": "Role",
+            "kind": "enum",
+            "output": true,
+            "open": true,
+            "enumMembers": [
+              {
+                "id": "Role.ADMIN",
+                "name": "ADMIN",
+                "deprecation": {
+                  "reason": "use USER",
+                  "replacement": "Role.USER",
+                  "sunset": "2027-01-01T00:00:00Z",
+                  "removalRevision": "schema-r3"
+                }
+              },
+              {"id": "Role.USER", "name": "USER"}
+            ]
+          },
+          {
+            "id": "User",
+            "name": "User",
+            "kind": "object",
+            "output": true,
+            "maxDepth": 2,
+            "description": "Account profile",
+            "entity": {"keys": ["id"]},
+            "source": {"uri": "urn:source:user", "line": 10, "column": 3},
+            "fields": [
+              {"id": "User.id", "name": "id", "type": "ID", "description": "Stable account ID"},
+              {
+                "id": "User.name",
+                "name": "name",
+                "type": "String",
+                "description": "Display name",
+                "deprecation": {"reason": "use displayName", "replacement": "displayName"}
+              },
+              {"id": "User.role", "name": "role", "type": "Role"},
+              {"id": "User.friend", "name": "friend", "type": "User", "nullable": true}
+            ]
+          },
+          {
+            "id": "Admin",
+            "name": "Admin",
+            "kind": "object",
+            "output": true,
+            "fields": [
+              {"id": "Admin.id", "name": "id", "type": "ID"},
+              {"id": "Admin.adminSecret", "name": "adminSecret", "type": "String"}
+            ]
+          },
+          {
+            "id": "SearchResult",
+            "name": "SearchResult",
+            "kind": "union",
+            "output": true,
+            "open": true,
+            "variantMembers": [
+              {"id": "SearchResult.Admin", "type": "Admin"},
+              {"id": "SearchResult.User", "type": "User"}
+            ]
+          },
+          {
+            "id": "StringMap",
+            "name": "StringMap",
+            "kind": "map",
+            "input": true,
+            "output": true,
+            "element": "String",
+            "elementNullable": true
+          },
+          {
+            "id": "Slug",
+            "name": "Slug",
+            "kind": "scalar",
+            "input": true,
+            "output": true,
+            "description": "Portable lowercase slug",
+            "scalar": {
+              "acceptedWireShapes": ["string"],
+              "validator": "naatre.shape-1",
+              "serializer": "naatre.identity-json-1",
+              "canonicalizer": "naatre.ascii-lowercase-string.c14n-1",
+              "canonicalProfile": "c14n-1",
+              "limits": {
+                "maxBytes": 1024,
+                "maxDepth": 8,
+                "maxMembers": 8,
+                "maxArrayItems": 8,
+                "maxStringBytes": 512,
+                "maxNumberBytes": 64,
+                "maxTokens": 32
+              },
+              "conformance": [
+                {"input": "Alpha", "canonical": "alpha"},
+                {"input": "Beta", "canonical": "beta"}
+              ]
+            }
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.search",
+            "name": "search",
+            "kind": "query",
+            "input": "LookupInput",
+            "output": "SearchResult",
+            "effect": "read",
+            "authorizationPolicy": "search.read",
+            "cost": 5
+          },
+          {
+            "id": "query.user",
+            "name": "user",
+            "kind": "query",
+            "input": "LookupInput",
+            "output": "User",
+            "effect": "read",
+            "authorizationPolicy": "user.read",
+            "cost": 2
+          }
+        ],
+        "members": [
+          {"id": "User.id.resolver", "name": "id", "owner": "User", "kind": "field", "output": "ID", "effect": "read"},
+          {
+            "id": "User.name.resolver",
+            "name": "name",
+            "owner": "User",
+            "kind": "field",
+            "output": "String",
+            "effect": "read",
+            "deprecation": {"reason": "use displayName", "replacement": "User.displayName"}
+          }
+        ],
+        "retired": [
+          {"id": "LegacyUser", "name": "LegacyUser", "reason": "replaced by User"}
+        ],
+        "references": [
+          {"uri": "urn:example:base", "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "revision": "base-r1"}
+        ]
+      }
+    },
+    {
+      "name": "filtered",
+      "document": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "schema-r1",
+        "capabilities": ["core.language-1", "vendor.audit-1"],
+        "types": [
+          {
+            "id": "LookupInput",
+            "name": "LookupInput",
+            "kind": "input-object",
+            "input": true,
+            "description": "Lookup arguments",
+            "fields": [
+              {"id": "LookupInput.id", "name": "id", "type": "ID", "required": true}
+            ]
+          },
+          {
+            "id": "Role",
+            "name": "Role",
+            "kind": "enum",
+            "output": true,
+            "open": true,
+            "enumMembers": [{"id": "Role.USER", "name": "USER"}]
+          },
+          {
+            "id": "User",
+            "name": "User",
+            "kind": "object",
+            "output": true,
+            "maxDepth": 2,
+            "description": "Account profile",
+            "entity": {"keys": ["id"]},
+            "source": {"uri": "urn:source:user", "line": 10, "column": 3},
+            "fields": [
+              {"id": "User.id", "name": "id", "type": "ID", "description": "Stable account ID"},
+              {
+                "id": "User.name",
+                "name": "name",
+                "type": "String",
+                "description": "Display name",
+                "deprecation": {"reason": "use displayName", "replacement": "displayName"}
+              }
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.user",
+            "name": "user",
+            "kind": "query",
+            "input": "LookupInput",
+            "output": "User",
+            "effect": "read",
+            "authorizationPolicy": "user.read",
+            "cost": 2
+          }
+        ],
+        "members": [
+          {"id": "User.id.resolver", "name": "id", "owner": "User", "kind": "field", "output": "ID", "effect": "read"},
+          {
+            "id": "User.name.resolver",
+            "name": "name",
+            "owner": "User",
+            "kind": "field",
+            "output": "String",
+            "effect": "read",
+            "deprecation": {"reason": "use displayName", "replacement": "User.displayName"}
+          }
+        ],
+        "references": [
+          {"uri": "urn:example:base", "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "revision": "base-r1"}
+        ]
+      }
+    },
+    {
+      "name": "recursive",
+      "document": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "recursive-r1",
+        "types": [
+          {
+            "id": "Node",
+            "name": "Node",
+            "kind": "object",
+            "output": true,
+            "maxDepth": 3,
+            "fields": [
+              {"id": "Node.id", "name": "id", "type": "ID"},
+              {"id": "Node.parent", "name": "parent", "type": "Node", "nullable": true}
+            ]
+          }
+        ],
+        "operations": [],
+        "members": []
+      }
+    },
+    {
+      "name": "extended",
+      "supportedTraits": ["vendor.validation-1"],
+      "document": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "extended-r1",
+        "types": [
+          {
+            "id": "EmailInput",
+            "name": "EmailInput",
+            "kind": "input-object",
+            "input": true,
+            "fields": [
+              {
+                "id": "EmailInput.email",
+                "name": "email",
+                "type": "String",
+                "traits": [
+                  {"id": "vendor.validation-1", "semantics": "validation", "value": {"format": "email"}}
+                ]
+              }
+            ]
+          }
+        ],
+        "operations": [],
+        "members": [],
+        "traits": [
+          {"id": "vendor.docs-1", "semantics": "documentation", "value": {"owner": "interop"}}
+        ]
+      }
+    },
+    {
+      "name": "deprecation",
+      "document": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "deprecation-r1",
+        "types": [
+          {
+            "id": "Legacy",
+            "name": "Legacy",
+            "kind": "object",
+            "output": true,
+            "deprecation": {
+              "reason": "use Current",
+              "replacement": "Current",
+              "sunset": "2027-06-01T00:00:00Z",
+              "removalRevision": "deprecation-r3"
+            },
+            "fields": [
+              {
+                "id": "Legacy.id",
+                "name": "id",
+                "type": "ID",
+                "deprecation": {"reason": "legacy shape", "replacement": "Current.id"}
+              }
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.legacy",
+            "name": "legacy",
+            "kind": "query",
+            "input": "String",
+            "output": "Legacy",
+            "effect": "read",
+            "deprecation": {"reason": "use current", "replacement": "query.current"}
+          }
+        ],
+        "members": []
+      }
+    }
+  ],
+  "filters": [
+    {
+      "name": "complete-to-filtered",
+      "source": "complete",
+      "result": "filtered",
+      "visibility": {
+        "types": {"LookupInput": true, "Role": true, "User": true},
+        "fields": {"LookupInput.id": true, "User.id": true, "User.name": true},
+        "enumValues": {"Role.USER": true},
+        "operations": {"query.user": true},
+        "members": {"User.id.resolver": true, "User.name.resolver": true}
+      },
+      "excluded": ["Admin", "adminSecret", "SearchResult", "query.search", "Role.ADMIN", "LegacyUser", "Slug", "StringMap"]
+    }
+  ],
+  "diffs": [
+    {
+      "name": "evolving",
+      "before": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "evolving-r1",
+        "types": [
+          {"id": "Input", "name": "Input", "kind": "input-object", "input": true, "fields": [{"id": "Input.id", "name": "id", "type": "ID"}]},
+          {"id": "Role", "name": "Role", "kind": "enum", "output": true, "open": true, "enumMembers": [{"id": "Role.USER", "name": "USER"}]},
+          {"id": "Result", "name": "Result", "kind": "union", "output": true, "open": true, "variantMembers": [{"id": "Result.User", "type": "User"}]},
+          {"id": "Removed", "name": "Removed", "kind": "object", "output": true, "fields": [{"id": "Removed.id", "name": "id", "type": "ID"}]},
+          {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.name", "name": "name", "type": "String", "nullable": true}]}
+        ],
+        "operations": [{"id": "query.user", "name": "user", "kind": "query", "input": "Input", "output": "User", "effect": "read"}],
+        "members": []
+      },
+      "after": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "evolving-r2",
+        "types": [
+          {"id": "Admin", "name": "Admin", "kind": "object", "output": true, "fields": [{"id": "Admin.id", "name": "id", "type": "ID"}]},
+          {"id": "Input", "name": "Input", "kind": "input-object", "input": true, "fields": [{"id": "Input.id", "name": "id", "type": "ID", "default": "anonymous"}, {"id": "Input.scope", "name": "scope", "type": "String", "required": true}]},
+          {"id": "Role", "name": "AccessRole", "kind": "enum", "output": true, "open": false, "enumMembers": [{"id": "Role.USER", "name": "USER"}]},
+          {"id": "Result", "name": "Result", "kind": "union", "output": true, "open": true, "variantMembers": [{"id": "Result.User", "type": "User"}, {"id": "Result.Admin", "type": "Admin"}]},
+          {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.name", "name": "name", "type": "String", "deprecation": {"reason": "use displayName", "replacement": "displayName"}}]}
+        ],
+        "operations": [{"id": "query.user", "name": "user", "kind": "query", "input": "Input", "output": "User", "effect": "write"}],
+        "members": []
+      },
+      "changes": [
+        {"path": "type:Removed", "classification": "breaking"},
+        {"path": "type:Role/name", "classification": "breaking"},
+        {"path": "type:Role/open", "classification": "breaking"},
+        {"path": "field:Input.scope", "classification": "breaking"},
+        {"path": "field:Input.id/default", "classification": "behavior-only"},
+        {"path": "field:User.name/nullable", "classification": "breaking"},
+        {"path": "field:User.name/deprecation", "classification": "behavior-only"},
+        {"path": "variant:Result.Admin", "classification": "additive"},
+        {"path": "operation:query.user/effect", "classification": "dangerous"}
+      ]
+    },
+    {
+      "name": "open-union-variant",
+      "before": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "union-r1",
+        "types": [
+          {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.id", "name": "id", "type": "ID"}]},
+          {"id": "Result", "name": "Result", "kind": "union", "output": true, "open": true, "variantMembers": [{"id": "Result.User", "type": "User"}]}
+        ],
+        "operations": [],
+        "members": []
+      },
+      "after": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "union-r2",
+        "types": [
+          {"id": "Admin", "name": "Admin", "kind": "object", "output": true, "fields": [{"id": "Admin.id", "name": "id", "type": "ID"}]},
+          {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.id", "name": "id", "type": "ID"}]},
+          {"id": "Result", "name": "Result", "kind": "union", "output": true, "open": true, "variantMembers": [{"id": "Result.Admin", "type": "Admin"}, {"id": "Result.User", "type": "User"}]}
+        ],
+        "operations": [],
+        "members": []
+      },
+      "changes": [
+        {"path": "type:Admin", "classification": "additive"},
+        {"path": "variant:Result.Admin", "classification": "additive"}
+      ]
+    },
+    {
+      "name": "union-openness",
+      "before": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "openness-r1",
+        "types": [
+          {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.id", "name": "id", "type": "ID"}]},
+          {"id": "Result", "name": "Result", "kind": "union", "output": true, "open": true, "variantMembers": [{"id": "Result.User", "type": "User"}]}
+        ],
+        "operations": [],
+        "members": []
+      },
+      "after": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "openness-r2",
+        "types": [
+          {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.id", "name": "id", "type": "ID"}]},
+          {"id": "Result", "name": "Result", "kind": "union", "output": true, "open": false, "variantMembers": [{"id": "Result.User", "type": "User"}]}
+        ],
+        "operations": [],
+        "members": []
+      },
+      "changes": [
+        {"path": "type:Result/open", "classification": "breaking"}
+      ]
+    }
+  ]
+}

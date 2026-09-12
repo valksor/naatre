@@ -29,6 +29,16 @@ marked `thread-safe` may be called concurrently on the same captured handler
 instance. A handler marked `serial-only` is serialized across requests, and
 queued calls honor context cancellation before entering application code.
 
+`Snapshot.ExportSchema` combines the frozen type catalog with root and object
+handler manifests to produce the canonical language-neutral schema document.
+Registrations may supply explicit stable IDs; legacy registrations derive
+`kind.name` root IDs and `Owner.name.resolver` member IDs deterministically.
+Descriptions, structured deprecation, capabilities, traits, and source
+provenance are cloned into the immutable snapshot. `Snapshot.ValidateSchema`
+compares the complete frozen manifest—including effect, authorization, cost,
+cache, retry, batching, transaction, and concurrency metadata—with a proposed
+document and rejects any mismatch before deployment artifacts bind its revision.
+
 Registered handlers and in-process extensions are trusted application code.
 Explicit registration limits which names a Naatre request can reach; it is not a
 sandbox and cannot stop a registered handler from accessing the network,

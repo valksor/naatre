@@ -165,32 +165,99 @@ function normalizeSchema(value) {
   require(isPortableIdentifier(value.revision), "schema requires a portable revision");
   require(Array.isArray(value.types), "schema requires a types array");
   normalizeStringSet(value, "capabilities");
+  normalizeSchemaTypes(value.types);
+  normalizeSchemaCallables(value);
+  normalizeIDArray(value, "retired");
+  normalizeIDArray(value, "traits");
+  normalizeReferences(value);
+}
+
+function normalizeSchemaTypes(types) {
   const identifiers = new Set();
-  for (const descriptor of value.types) {
+  for (const descriptor of types) {
     require(jsonType(descriptor) === "object" &&
       isPortableIdentifier(descriptor.id) &&
       !identifiers.has(descriptor.id), "types require unique portable identifiers");
     identifiers.add(descriptor.id);
-    normalizeStringSet(descriptor, "variants");
-    normalizeStringSet(descriptor, "enumValues");
-    if (Object.hasOwn(descriptor, "scalar")) {
-      require(jsonType(descriptor.scalar) === "object", "scalar descriptor must be an object");
-      normalizeStringSet(descriptor.scalar, "acceptedWireShapes");
-    }
+    normalizeSchemaType(descriptor);
   }
-  value.types.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  types.sort(compareIdentifiers);
 }
 
-function normalizeStringSet(value, member) {
-  if (!Object.hasOwn(value, member)) return;
-  require(Array.isArray(value[member]), `${member} must be an array`);
+function normalizeSchemaType(descriptor) {
+  for (const member of ["variants", "enumValues", "capabilities"]) {
+    normalizeStringSet(descriptor, member);
+  }
+  for (const member of ["fields", "enumMembers", "variantMembers"]) {
+    for (const declaration of normalizeIDArray(descriptor, member)) {
+      normalizeIDArray(declaration, "traits");
+    }
+  }
+  normalizeIDArray(descriptor, "retired");
+  normalizeIDArray(descriptor, "traits");
+  normalizeNestedStringSet(descriptor, "entity", "keys", false);
+  normalizeNestedStringSet(descriptor, "scalar", "acceptedWireShapes");
+}
+
+function normalizeNestedStringSet(descriptor, objectMember, arrayMember, identifiers = true) {
+  if (!Object.hasOwn(descriptor, objectMember)) return;
+  require(jsonType(descriptor[objectMember]) === "object", `${objectMember} descriptor must be an object`);
+  normalizeStringSet(descriptor[objectMember], arrayMember, identifiers);
+}
+
+function normalizeSchemaCallables(value) {
+  for (const member of ["operations", "members"]) {
+    const declarations = normalizeIDArray(value, member);
+    for (const declaration of declarations) {
+      normalizeStringSet(declaration, "capabilities");
+      normalizeIDArray(declaration, "traits");
+    }
+  }
+}
+
+function normalizeIDArray(value, member) {
+  return normalizeArrayMember(value, member, (declaration) =>
+    jsonType(declaration) === "object" && isPortableIdentifier(declaration.id) ? declaration.id : null,
+  `${member} entries require unique portable identifiers`, compareIdentifiers);
+}
+
+function normalizeReferences(value) {
+  if (!Object.hasOwn(value, "references")) return;
+  require(Array.isArray(value.references), "references must be an array");
   const seen = new Set();
-  for (const identifier of value[member]) {
-    require(isPortableIdentifier(identifier) &&
-      !seen.has(identifier), `${member} entries must be unique portable identifiers`);
+  for (const reference of value.references) {
+    require(jsonType(reference) === "object" && typeof reference.uri === "string" &&
+      typeof reference.revision === "string", "references require uri and revision strings");
+    const identifier = `${reference.uri}\u0000${reference.revision}`;
+    require(!seen.has(identifier), "references must be unique");
     seen.add(identifier);
   }
-  value[member].sort();
+  value.references.sort((left, right) => left.uri === right.uri
+    ? left.revision < right.revision ? -1 : left.revision > right.revision ? 1 : 0
+    : left.uri < right.uri ? -1 : 1);
+}
+
+function normalizeStringSet(value, member, identifiers = true) {
+  normalizeArrayMember(value, member, (identifier) =>
+    typeof identifier === "string" && (!identifiers || isPortableIdentifier(identifier)) ? identifier : null,
+  `${member} entries must be unique portable identifiers`, (left, right) => left.localeCompare(right));
+}
+
+function normalizeArrayMember(value, member, identity, message, compare) {
+  if (!Object.hasOwn(value, member)) return [];
+  require(Array.isArray(value[member]), `${member} must be an array`);
+  const seen = new Set();
+  for (const item of value[member]) {
+    const identifier = identity(item);
+    require(identifier !== null && !seen.has(identifier), message);
+    seen.add(identifier);
+  }
+  value[member].sort(compare);
+  return value[member];
+}
+
+function compareIdentifiers(left, right) {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
 
 function isPortableIdentifier(value) {

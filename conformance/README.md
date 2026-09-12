@@ -42,6 +42,15 @@ binding across principal, tenant, schema, and authorization revisions. The Go
 reference runtime executes the core handler and lifecycle vectors directly;
 #70 owns downstream cache, batch, stream, replay, and remote adapters.
 
+`v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
+complete, filtered, recursive, extended-trait, evolving, open-union, and
+deprecation snapshots. The Go consumer strict-parses each document, imports it
+into an immutable type snapshot, re-exports byte-identical canonical JSON and
+hashes, proves deny-by-default filtering against an expected document without
+hidden-name leaks, and checks stable-ID compatibility classifications. The core
+fixture and pure in-process APIs do not enable an HTTP discovery route; #106
+owns authenticated transport integration and migration reporting.
+
 The core planner resolves the built-in `include` and `skip` directives and
 rejects unregistered directives; #19 owns custom directive declarations and
 hooks. It validates `collection.page-1` admission and collection item scopes;
