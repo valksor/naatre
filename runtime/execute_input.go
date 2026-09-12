@@ -153,29 +153,87 @@ func inputForHandler(value schema.InputValue, descriptor schema.TypeDescriptor, 
 	return pointer.Interface(), nil
 }
 
-func (p *Plan) evaluateDirectives(node planNode, scope executionScope, path []any) (bool, []ExecutionError) {
+func (p *Plan) evaluateDirectives(node planNode, scope executionScope, path []any) (bool, []evaluatedDirective, []ExecutionError) {
 	run := true
-	for _, directive := range node.selection.Directives() {
-		condition := directive.Arguments()["if"]
-		raw, status, err := p.evaluateExpression(condition, scope)
+	evaluated := make([]evaluatedDirective, 0, len(node.directives))
+	for _, directive := range node.directives {
+		arguments, status, err := p.coerceDirectiveExecutionArguments(directive, scope)
 		if err != nil {
-			code := executionStatusCode(status)
-			return false, []ExecutionError{nodeExecutionError(code, "directive condition is unavailable", node, path, err)}
+			return false, nil, directiveArgumentErrors(node, path, status, err)
 		}
-		coerced, err := schema.CoerceInput(p.types, schema.TypeID(schema.Boolean), raw, false)
+		evaluated = append(evaluated, evaluatedDirective{planned: directive, arguments: arguments})
+		if directive.decision.Skip {
+			run = false
+		}
+		standardRun, err := standardDirectiveRuns(directive, arguments)
 		if err != nil {
-			return false, []ExecutionError{nodeExecutionError("INPUT_COERCION", "directive condition is invalid", node, path, err)}
+			return false, nil, []ExecutionError{nodeExecutionError("INPUT_COERCION", "directive condition is missing", node, path, err)}
 		}
-		value, err := inputForHandler(coerced, schema.TypeDescriptor{ID: schema.TypeID(schema.Boolean), Kind: schema.ScalarType}, false)
-		if err != nil {
-			return false, []ExecutionError{nodeExecutionError("INPUT_COERCION", "directive condition is invalid", node, path, err)}
-		}
-		conditionValue := value.(bool)
-		if (directive.Name() == "include" && !conditionValue) || (directive.Name() == "skip" && conditionValue) {
+		if !standardRun {
 			run = false
 		}
 	}
-	return run, nil
+	return run, evaluated, nil
+}
+
+func directiveArgumentErrors(node planNode, path []any, status executionStatus, err error) []ExecutionError {
+	code := executionStatusCode(status)
+	if status == valueAvailable {
+		code = "INPUT_COERCION"
+	}
+	return []ExecutionError{nodeExecutionError(code, "directive argument is invalid", node, path, err)}
+}
+
+func standardDirectiveRuns(directive plannedDirective, arguments DirectiveArguments) (bool, error) {
+	if !directive.definition.standard {
+		return true, nil
+	}
+	condition, ok := arguments.Value("if")
+	if !ok {
+		return false, errors.New("prepared directive argument is missing")
+	}
+	conditionValue := condition.(bool)
+	return (directive.invocation.Name() != "include" || conditionValue) && (directive.invocation.Name() != "skip" || !conditionValue), nil
+}
+
+func (p *Plan) coerceDirectiveExecutionArguments(directive plannedDirective, scope executionScope) (DirectiveArguments, executionStatus, error) {
+	descriptor := directive.definition.Descriptor
+	invocationArguments := directive.invocation.Arguments()
+	values := make(map[string]any, len(descriptor.Arguments))
+	for _, argument := range descriptor.Arguments {
+		expression, present := invocationArguments[argument.Name]
+		var raw json.RawMessage
+		var status executionStatus
+		var err error
+		runtimeValue := false
+		switch {
+		case present:
+			raw, status, err = p.evaluateExpression(expression, scope)
+			runtimeValue = expression.Kind() == protocol.CurrentExpression || expression.Kind() == protocol.ParentExpression || expression.Kind() == protocol.ResultExpression
+		case len(argument.Default) != 0:
+			raw = append(json.RawMessage(nil), argument.Default...)
+			status = statusFromRaw(raw)
+		case argument.Required:
+			return DirectiveArguments{}, valueMissing, fmt.Errorf("required directive argument %q is missing", argument.Name)
+		default:
+			continue
+		}
+		if err != nil {
+			return DirectiveArguments{}, status, err
+		}
+		if status == valueMissing {
+			if argument.Required {
+				return DirectiveArguments{}, status, fmt.Errorf("required directive argument %q is missing", argument.Name)
+			}
+			continue
+		}
+		value, err := coerceDirectiveValue(p.types, argument, raw, runtimeValue)
+		if err != nil {
+			return DirectiveArguments{}, status, fmt.Errorf("directive argument %q: %w", argument.Name, err)
+		}
+		values[argument.Name] = value
+	}
+	return DirectiveArguments{values: values}, valueAvailable, nil
 }
 
 func (p *Plan) evaluateExpression(expression protocol.Expression, scope executionScope) (json.RawMessage, executionStatus, error) {

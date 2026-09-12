@@ -272,6 +272,7 @@ type Registry struct {
 	mu            sync.Mutex
 	types         schema.Snapshot
 	definitions   map[string]Definition
+	directives    map[string]registeredDirective
 	authorization AuthorizationConfig
 	interceptors  []registeredInterceptor
 	frozen        bool
@@ -281,12 +282,13 @@ type Registry struct {
 type Snapshot struct {
 	types         schema.Snapshot
 	definitions   map[string]Definition
+	directives    map[string]registeredDirective
 	authorization AuthorizationConfig
 	interceptors  []registeredInterceptor
 }
 
 func NewRegistry(types schema.Snapshot) *Registry {
-	return &Registry{types: types, definitions: make(map[string]Definition)}
+	return &Registry{types: types, definitions: make(map[string]Definition), directives: builtInDirectives()}
 }
 
 // Register validates and records one explicit public definition.
@@ -310,6 +312,31 @@ func (r *Registry) Register(definition Definition) error {
 	return nil
 }
 
+// RegisterDirective validates and records one custom, version-pinned language
+// extension. Standard directive names and namespaces are reserved.
+func (r *Registry) RegisterDirective(definition DirectiveDefinition) error {
+	prepared, err := prepareDirectiveDefinition(r.types, definition)
+	if err != nil {
+		return err
+	}
+	definition = prepared
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return errors.New("runtime registry is frozen")
+	}
+	if _, exists := r.directives[definition.Descriptor.Name]; exists {
+		return fmt.Errorf("%w: directive %q", ErrDuplicateRegistration, definition.Descriptor.Name)
+	}
+	for _, existing := range r.directives {
+		if existing.Descriptor.ID == definition.Descriptor.ID {
+			return fmt.Errorf("%w: directive identity %q", ErrDuplicateRegistration, definition.Descriptor.ID)
+		}
+	}
+	r.directives[definition.Descriptor.Name] = registeredDirective{DirectiveDefinition: definition}
+	return nil
+}
+
 // Freeze returns an immutable snapshot safe for concurrent planning and calls.
 func (r *Registry) Freeze() (Snapshot, error) {
 	r.mu.Lock()
@@ -326,9 +353,20 @@ func (r *Registry) Freeze() (Snapshot, error) {
 	}
 	r.frozen = true
 	return Snapshot{
-		types: r.types, definitions: definitions, authorization: r.authorization,
+		types: r.types, definitions: definitions, directives: cloneRegisteredDirectives(r.directives), authorization: r.authorization,
 		interceptors: slices.Clone(r.interceptors),
 	}, nil
+}
+
+// DirectiveDescriptors returns every supported directive contract in stable
+// identity order.
+func (s Snapshot) DirectiveDescriptors() []schema.DirectiveDescriptor {
+	descriptors := make([]schema.DirectiveDescriptor, 0, len(s.directives))
+	for _, definition := range s.directives {
+		descriptors = append(descriptors, cloneDirectiveDescriptor(definition.Descriptor))
+	}
+	sort.Slice(descriptors, func(left, right int) bool { return descriptors[left].ID < descriptors[right].ID })
+	return descriptors
 }
 
 // Descriptors returns every portable registration descriptor in stable order.

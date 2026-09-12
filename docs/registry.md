@@ -45,6 +45,25 @@ sandbox and cannot stop a registered handler from accessing the network,
 database, filesystem, or other process capabilities. Applications remain
 responsible for those effects and for the truth of their registration metadata.
 
+## Directives
+
+`Registry.RegisterDirective` binds a `schema.DirectiveDescriptor` to optional
+planning, execution-wrapper, and response-annotation callbacks. The registry
+preinstalls the standard `include` and `skip` descriptors and rejects custom
+uses of their names or the reserved `naatre.*` and `core.*` namespaces. Frozen
+snapshots clone and export every descriptor through `DirectiveDescriptors` and
+`ExportSchema`; callbacks stay process-local and never enter schema identity.
+
+Custom documents must require and negotiate the descriptor's exact capability.
+Directive arguments use normal schema coercion. Planning callbacks receive a
+closed `DirectiveSelection` view and may only skip the already validated node or
+add bounded cost. Execution wrappers apply only to calls and fields, after
+authorization, cancellation checks, input validation, and execution admission;
+their continuation has no context parameter, is one-shot, closes with the
+wrapper, and keeps in-flight work accounted. Response annotators receive no
+mutable output and return canonical JSON metadata ordered by response path and
+directive source position; they remain cancellation- and admission-bounded.
+
 ## Authorization and interceptors
 
 `Registry.ConfigureAuthorization` selects allow-by-default compatibility mode

@@ -12,6 +12,7 @@ import (
 // ExportSchema converts the frozen type and handler registries into the
 // canonical, language-neutral schema authority.
 func (s Snapshot) ExportSchema(options schema.ExportOptions) (schema.Document, error) {
+	options.Directives = s.DirectiveDescriptors()
 	descriptors := s.Descriptors()
 	operations := make([]schema.OperationDescriptor, 0, len(descriptors))
 	members := make([]schema.MemberDescriptor, 0, len(descriptors))

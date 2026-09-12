@@ -302,8 +302,19 @@ func TestDecodeDocumentRejectsDuplicateLanguageNames(t *testing.T) {
 	assertDocumentDiagnostic(t, `{"operations":[{"name":"Same","kind":"query","select":[]},{"name":"Same","kind":"query","select":[]}]}`, "DUPLICATE_NAME", "/operations/1")
 	assertDocumentDiagnostic(t, `{"operations":[],"fragments":[{"name":"Same","select":[]},{"name":"Same","select":[]}]}`, "DUPLICATE_NAME", "/fragments/1")
 	assertDocumentDiagnostic(t, `{"operations":[{"name":"Q","kind":"query","variables":[{"name":"same","type":"String"},{"name":"same","type":"String"}],"select":[]}]}`, "DUPLICATE_NAME", "/operations/0/variables/1")
-	assertDocumentDiagnostic(t, `{"operations":[{"name":"Q","kind":"query","select":[{"$field":{"name":"id","directives":[{"name":"skip"},{"name":"skip"}]}}]}]}`, "DUPLICATE_NAME", "/operations/0/select/0/$field/directives/1")
 	assertDocumentDiagnostic(t, `{"operations":[],"\u006fperations":[]}`, "DUPLICATE_KEY", "/operations")
+}
+
+func TestDecodeDocumentPreservesRepeatedDirectiveInvocations(t *testing.T) {
+	t.Parallel()
+	document, err := protocol.DecodeDocument([]byte(`{"operations":[{"name":"Q","kind":"query","select":[{"$field":{"name":"id","directives":[{"name":"audit"},{"name":"audit"}]}}]}]}`), protocol.Limits{})
+	if err != nil {
+		t.Fatalf("DecodeDocument: %v", err)
+	}
+	directives := document.Operations()[0].Selections()[0].Directives()
+	if len(directives) != 2 || directives[0].Name() != "audit" || directives[1].Name() != "audit" {
+		t.Fatalf("directives = %#v", directives)
+	}
 }
 
 func TestDecodeDocumentRejectsInvalidLanguageShapes(t *testing.T) {

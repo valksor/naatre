@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"sort"
+
+	"github.com/valksor/naatre/protocol"
 )
 
 // ChangeClassification describes the strongest compatibility effect of a
@@ -42,12 +44,76 @@ func DiffDocuments(before, after Document) SchemaDiff {
 	diffTypes(&diff, before.wire.Types, after.wire.Types)
 	diffOperations(&diff, before.wire.Operations, after.wire.Operations)
 	diffMembers(&diff, before.wire.Members, after.wire.Members)
+	diffDirectives(&diff, before.wire.Directives, after.wire.Directives)
 	diffRetiredReuse(&diff, before.wire.Retired, after.wire)
 	for _, declaration := range before.wire.Types {
 		diffRetiredReuse(&diff, declaration.Retired, after.wire)
 	}
 	sort.Slice(diff.Changes, func(i, j int) bool { return diff.Changes[i].Path < diff.Changes[j].Path })
 	return diff
+}
+
+func diffDirectives(diff *SchemaDiff, before, after []DirectiveDescriptor) {
+	diffDescriptors(diff, "directive:", before, after,
+		func(value DirectiveDescriptor) string { return value.ID },
+		func(DirectiveDescriptor) ChangeClassification { return ChangeAdditive }, diffDirective)
+}
+
+func diffDirective(diff *SchemaDiff, before, after DirectiveDescriptor) {
+	prefix := "directive:" + before.ID
+	diff.scalar(prefix+"/name", ChangeBreaking, before.Name, after.Name)
+	diff.scalar(prefix+"/version", ChangeBreaking, before.Version, after.Version)
+	diff.scalar(prefix+"/capability", ChangeBreaking, before.Capability, after.Capability)
+	diff.directionalBool(prefix+"/repeatable", before.Repeatable, after.Repeatable)
+	diffDirectiveLocations(diff, prefix+"/locations", before.Locations, after.Locations)
+	diffDirectiveArguments(diff, before.Arguments, after.Arguments)
+	diff.scalar(prefix+"/phases", ChangeDangerous, before.Phases, after.Phases)
+	diff.scalar(prefix+"/effect", ChangeDangerous, before.Effect, after.Effect)
+	diff.scalar(prefix+"/cost", ChangeDangerous, before.Cost, after.Cost)
+	diff.scalar(prefix+"/deterministic", ChangeDangerous, before.Deterministic, after.Deterministic)
+	diff.scalar(prefix+"/compatibility", ChangeDangerous, before.Compatibility, after.Compatibility)
+	diff.scalar(prefix+"/description", ChangeBehaviorOnly, before.Description, after.Description)
+	diff.scalar(prefix+"/deprecation", ChangeBehaviorOnly, before.Deprecation, after.Deprecation)
+	diff.scalar(prefix+"/capabilities", ChangeDangerous, before.Capabilities, after.Capabilities)
+	diff.scalar(prefix+"/traits", ChangeDangerous, before.Traits, after.Traits)
+	diff.scalar(prefix+"/source", ChangeBehaviorOnly, before.Source, after.Source)
+}
+
+func diffDirectiveLocations(diff *SchemaDiff, path string, before, after []protocol.SelectionKind) {
+	if reflect.DeepEqual(before, after) {
+		return
+	}
+	afterSet := make(map[protocol.SelectionKind]bool, len(after))
+	for _, location := range after {
+		afterSet[location] = true
+	}
+	classification := ChangeAdditive
+	for _, location := range before {
+		if !afterSet[location] {
+			classification = ChangeBreaking
+			break
+		}
+	}
+	diff.add(path, classification, before, after)
+}
+
+func diffDirectiveArguments(diff *SchemaDiff, before, after []DirectiveArgumentDescriptor) {
+	diffDescriptors(diff, "directive-argument:", before, after,
+		func(value DirectiveArgumentDescriptor) string { return value.ID },
+		func(value DirectiveArgumentDescriptor) ChangeClassification {
+			if value.Required && len(value.Default) == 0 {
+				return ChangeBreaking
+			}
+			return ChangeAdditive
+		}, func(diff *SchemaDiff, left, right DirectiveArgumentDescriptor) {
+			prefix := "directive-argument:" + left.ID
+			diff.scalar(prefix+"/name", ChangeBreaking, left.Name, right.Name)
+			diff.scalar(prefix+"/type", ChangeBreaking, left.Type, right.Type)
+			diff.directionalBool(prefix+"/required", left.Required, right.Required)
+			diff.directionalBool(prefix+"/nullable", left.Nullable, right.Nullable)
+			diff.scalar(prefix+"/default", ChangeBehaviorOnly, left.Default, right.Default)
+			diff.scalar(prefix+"/description", ChangeBehaviorOnly, left.Description, right.Description)
+		})
 }
 
 func diffTypes(diff *SchemaDiff, before, after []TypeDeclaration) {

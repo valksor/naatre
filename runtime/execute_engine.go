@@ -106,14 +106,15 @@ func (t *unavailableTree) merge(other *unavailableTree) {
 }
 
 type executionScope struct {
-	current   executionValue
-	parent    executionValue
-	bindings  map[string]executionValue
-	variables map[string]scopedVariable
-	limiter   chan struct{}
-	parallel  bool
-	grace     time.Duration
-	effects   *effectRecorder
+	current     executionValue
+	parent      executionValue
+	bindings    map[string]executionValue
+	variables   map[string]scopedVariable
+	limiter     chan struct{}
+	parallel    bool
+	grace       time.Duration
+	effects     *effectRecorder
+	annotations *directiveAnnotationRecorder
 }
 
 type scopedVariable struct {
@@ -166,10 +167,11 @@ type sequenceResult struct {
 
 func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outcome {
 	scope := executionScope{
-		bindings: make(map[string]executionValue),
-		limiter:  make(chan struct{}, maxParallelExecutions),
-		grace:    options.abandonGrace(),
-		effects:  &effectRecorder{},
+		bindings:    make(map[string]executionValue),
+		limiter:     make(chan struct{}, maxParallelExecutions),
+		grace:       options.abandonGrace(),
+		effects:     &effectRecorder{},
+		annotations: &directiveAnnotationRecorder{},
 	}
 	// Cancellation observed before any selection runs is operation-level: no
 	// field is responsible, so it carries the empty root path.
@@ -180,15 +182,17 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 				Code: CodeCancelled, Message: "request cancelled",
 				Path: []any{}, Retryable: true, internal: err,
 			}},
-			Effects: scope.effects.state(p.kind, true),
+			Effects:     scope.effects.state(p.kind, true),
+			Annotations: scope.annotations.annotations(),
 		}
 	}
 	result := p.executeSequence(ctx, p.nodes, scope, nil)
 	sortExecutionErrors(result.errors)
 	return Outcome{
-		Data:    result.data,
-		Errors:  result.errors,
-		Effects: scope.effects.state(p.kind, result.failed),
+		Data:        result.data,
+		Errors:      result.errors,
+		Effects:     scope.effects.state(p.kind, result.failed),
+		Annotations: scope.annotations.annotations(),
 	}
 }
 
@@ -248,7 +252,7 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 	if !p.matchesTypeConditions(node, scope.current) {
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueSkipped}}
 	}
-	run, directiveErrors := p.evaluateDirectives(node, scope, nodePath)
+	run, directives, directiveErrors := p.evaluateDirectives(node, scope, nodePath)
 	if len(directiveErrors) != 0 {
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: directiveErrors}
 	}
@@ -258,7 +262,7 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 
 	switch node.kind {
 	case protocol.CallSelection, protocol.FieldSelection:
-		return p.executeHandlerNode(ctx, node, scope, nodePath)
+		return p.executeHandlerNode(ctx, node, directives, scope, nodePath)
 	case protocol.PipelineSelection:
 		return p.executePipeline(ctx, node, scope, nodePath)
 	case protocol.MapSelection:
@@ -294,7 +298,7 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 	}
 }
 
-func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
+func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, directives []evaluatedDirective, scope executionScope, path []any) nodeResult {
 	// A member whose completion failed stays unavailable however deep the
 	// selection reaches it; its surviving nested marks descend with it.
 	var inherited *unavailableTree
@@ -330,7 +334,7 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 	// never reported as though it never happened.
 	scope.recordEffect(node, &scope.effects.started)
 	output, err := callWithinGrace(ctx, release, scope.grace, func() (any, error) {
-		return p.invokeHandler(ctx, node, source, input, path)
+		return p.invokeDirectiveWrappers(ctx, directives, directiveHandlerCall{node: node, source: source, input: input, path: path})
 	})
 	if err != nil {
 		failure := handlerFailure(node, path, err)
@@ -358,6 +362,11 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 
 	if available {
 		scope.recordEffect(node, &scope.effects.completed)
+		if annotationErr := p.recordDirectiveAnnotations(ctx, scope, node, directives, path); annotationErr != nil {
+			failures = append(failures, directiveAnnotationFailure(node, path, annotationErr))
+			available = false
+			result.status = valueUnavailable
+		}
 	}
 	presentation := completed
 	if available && len(node.children) != 0 {
@@ -367,6 +376,15 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 		presentation = children.data
 	}
 	return nodeResult{value: result, data: presentation, emit: node.outputName != "" && available, failed: len(failures) != 0, errors: failures}
+}
+
+func directiveAnnotationFailure(node planNode, path []any, err error) ExecutionError {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		failure := nodeExecutionError(CodeCancelled, "request cancelled", node, path, err)
+		failure.Retryable = true
+		return failure
+	}
+	return nodeExecutionError(CodeInternal, "directive response annotation failed", node, path, err)
 }
 
 // unavailableMembers records every member this completion could not produce,
@@ -762,7 +780,7 @@ func handlerFailure(node planNode, path []any, err error) ExecutionError {
 	if errors.As(err, &panicFailure) {
 		return nodeExecutionError(CodeInternal, "internal execution error", node, path, err)
 	}
-	if errors.Is(err, ErrInterceptorNextCalled) {
+	if errors.Is(err, ErrInterceptorNextCalled) || errors.Is(err, ErrDirectiveNextCalled) {
 		return nodeExecutionError(CodeInternal, "internal execution error", node, path, err)
 	}
 	return applyDomainError(nodeExecutionError(CodeHandlerFailed, "field unavailable", node, path, err), err)

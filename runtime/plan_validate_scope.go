@@ -206,6 +206,9 @@ func (s validationScope) child(current staticType, freshResponses bool) validati
 
 func selectionIsOptional(selection protocol.Selection) bool {
 	for _, directive := range selection.Directives() {
+		if directive.Name() != "include" && directive.Name() != "skip" {
+			continue
+		}
 		condition, exists := directive.Arguments()["if"]
 		if !exists {
 			return true

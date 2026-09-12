@@ -33,7 +33,9 @@ closed grammar and rejects malformed or unrecognized forms before validation.
   `required` defaults to false; `nullable` defaults to false. A missing
   non-required variable remains missing unless a default exists. Variable defaults cannot
   contain executable expressions. Duplicate operation, fragment, variable,
-  argument, directive, or response names are rejected after JSON unescaping.
+  argument, or response names are rejected after JSON unescaping. Directive
+  invocation names may repeat only when their registered descriptor is
+  repeatable.
 - **LANG-006:** A directive is `{ "name": Identifier, "arguments":
   Arguments? }`. The built-in `include` and `skip` directives each require one
   Boolean `if` argument. Other directives require a negotiated capability and
@@ -293,6 +295,46 @@ is `["users", 2, "display"]`.
   authorization, raise a resource limit, mutate aliases/bindings, change array
   order, or make an invalid branch valid. Directive evaluation order follows
   the directive array, never object member order.
+- **LANG-245:** Every non-standard directive resolves by its exact registered
+  name to one immutable descriptor containing a stable ID, implementation
+  version, required capability, repeatability, allowed selection locations,
+  typed arguments, lifecycle phases, effect, declared cost, determinism, and
+  compatibility behavior. Unknown directives, duplicate invocations of a
+  non-repeatable directive, invalid locations, and missing or unknown arguments
+  fail validation. Directive arguments use the same missing/null/default and
+  schema-coercion rules as call arguments.
+- **LANG-246:** A document using a non-standard directive MUST list the
+  descriptor's exact capability and every additional required capability in
+  `requires`; the request MUST negotiate each one. The descriptor version and
+  capability are part of schema identity, so changing either requires a new
+  schema approval and invalidates an older semantic pin. `naatre.*`, `core.*`,
+  `include`, and `skip` are reserved for standard definitions.
+- **LANG-247:** Validation metadata is applied before planning. A planning
+  callback receives only an immutable public node view and request-stable,
+  coerced arguments, MUST declare deterministic behavior, and can return only
+  `skip` plus a non-negative bounded cost contribution. Runtime-dependent planning arguments, callback failure or
+  panic, integer overflow, any one directive above 1,048,576 cost units, or an
+  operation whose directive total exceeds that bound fail validation. The
+  closed decision shape cannot add a node, field, mutation, alias, binding,
+  authorization rule, or resource permission.
+- **LANG-248:** An execution wrapper runs only for a call or field after dynamic
+  authorization, argument validation, cancellation checks, and execution-slot
+  admission. Its continuation closes over the original context, accepts no
+  replacement context, is one-shot, and closes when the wrapper returns.
+  In-flight continuation work is accounted until it exits. Calling the
+  continuation twice fails as an internal extension error even when the
+  wrapper suppresses the second call's error, and MUST NOT execute business
+  work twice. Cancellation and authorization outcomes remain runtime-owned
+  even when a wrapper returns a value or suppresses its own error.
+- **LANG-249:** A response annotator receives no mutable response value. It may
+  return one strict JSON annotation identified by the directive's stable ID,
+  name, version, and response path. Annotation JSON is canonicalized, callback
+  failures fail the selected value safely, and annotations sort by response
+  path then directive source position so parallel completion timing cannot
+  change their order. Annotators remain subject to execution admission,
+  cancellation, and abandonment accounting. In-process callbacks are trusted
+  application code; code hostile beyond these API invariants requires an
+  external isolation boundary.
 
 ## Sequential and parallel effects
 

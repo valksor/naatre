@@ -155,6 +155,34 @@
             "deprecation": {"reason": "use displayName", "replacement": "User.displayName"}
           }
         ],
+        "directives": [
+          {
+            "id": "vendor.audit",
+            "name": "audit",
+            "version": "1",
+            "capability": "vendor.audit-1",
+            "repeatable": true,
+            "locations": ["field", "call"],
+            "arguments": [{"id": "vendor.audit.level", "name": "level", "type": "String", "required": true}],
+            "phases": ["validation", "execution", "response"],
+            "effect": "read",
+            "cost": 3,
+            "deterministic": true,
+            "compatibility": "dangerous"
+          },
+          {
+            "id": "vendor.secret",
+            "name": "secret",
+            "version": "1",
+            "capability": "vendor.audit-1",
+            "locations": ["call"],
+            "phases": ["validation"],
+            "effect": "read",
+            "cost": 1,
+            "deterministic": true,
+            "compatibility": "dangerous"
+          }
+        ],
         "retired": [
           {"id": "LegacyUser", "name": "LegacyUser", "reason": "replaced by User"}
         ],
@@ -232,6 +260,22 @@
             "output": "String",
             "effect": "read",
             "deprecation": {"reason": "use displayName", "replacement": "User.displayName"}
+          }
+        ],
+        "directives": [
+          {
+            "id": "vendor.audit",
+            "name": "audit",
+            "version": "1",
+            "capability": "vendor.audit-1",
+            "repeatable": true,
+            "locations": ["field", "call"],
+            "arguments": [{"id": "vendor.audit.level", "name": "level", "type": "String", "required": true}],
+            "phases": ["validation", "execution", "response"],
+            "effect": "read",
+            "cost": 3,
+            "deterministic": true,
+            "compatibility": "dangerous"
           }
         ],
         "references": [
@@ -347,9 +391,10 @@
         "fields": {"LookupInput.id": true, "User.id": true, "User.name": true},
         "enumValues": {"Role.USER": true},
         "operations": {"query.user": true},
-        "members": {"User.id.resolver": true, "User.name.resolver": true}
+        "members": {"User.id.resolver": true, "User.name.resolver": true},
+        "directives": {"vendor.audit": true}
       },
-      "excluded": ["Admin", "adminSecret", "SearchResult", "query.search", "Role.ADMIN", "LegacyUser", "Slug", "StringMap"]
+      "excluded": ["Admin", "adminSecret", "SearchResult", "query.search", "Role.ADMIN", "LegacyUser", "Slug", "StringMap", "vendor.secret"]
     }
   ],
   "diffs": [
@@ -451,6 +496,31 @@
       },
       "changes": [
         {"path": "type:Result/open", "classification": "breaking"}
+      ]
+    },
+    {
+      "name": "directive-version",
+      "before": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "directive-r1",
+        "types": [],
+        "operations": [],
+        "members": [],
+        "directives": [{"id":"vendor.audit","name":"audit","version":"1","capability":"vendor.audit-1","locations":["call"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"}]
+      },
+      "after": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "directive-r2",
+        "types": [],
+        "operations": [],
+        "members": [],
+        "directives": [{"id":"vendor.audit","name":"audit","version":"2","capability":"vendor.audit-2","locations":["call"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"}]
+      },
+      "changes": [
+        {"path": "directive:vendor.audit/version", "classification": "breaking"},
+        {"path": "directive:vendor.audit/capability", "classification": "breaking"}
       ]
     }
   ]

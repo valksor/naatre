@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,6 +75,120 @@ func TestSchemaDocumentCanonicalRoundTripHashAndSnapshot(t *testing.T) {
 	stable, _ := parsed.CanonicalJSON()
 	if !bytes.Equal(stable, canonical) {
 		t.Fatal("schema document mutated through accessors")
+	}
+}
+
+func TestSchemaDocumentRoundTripsEmptyAndNonIdentifierEnumSpellings(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	if err := catalog.Register(schema.TypeDescriptor{
+		ID: "Status", Name: "Status", Kind: schema.EnumType, Input: true,
+		EnumValues: []string{"", "needs review", "READY"},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	snapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	document, err := schema.ExportDocument(snapshot, nil, nil, schema.ExportOptions{Revision: "enum-spellings-r1"})
+	if err != nil {
+		t.Fatalf("ExportDocument: %v", err)
+	}
+	canonical, err := document.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	parsed, err := schema.ParseDocument(canonical, schema.ImportOptions{})
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+	imported, err := parsed.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	for _, spelling := range []string{"", "needs review", "READY"} {
+		value, coerceErr := schema.CoerceInput(imported, "Status", json.RawMessage(strconv.Quote(spelling)), false)
+		if coerceErr != nil {
+			t.Fatalf("CoerceInput(%q): %v", spelling, coerceErr)
+		}
+		actual, known, ok := value.Enum()
+		if !ok || !known || actual != spelling {
+			t.Fatalf("enum %q state = %q, %t, %t", spelling, actual, known, ok)
+		}
+	}
+}
+
+func TestSchemaExportCanonicalizesDirectiveDefaultsBeforeExposure(t *testing.T) {
+	t.Parallel()
+	catalog := schema.NewCatalog()
+	snapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	directive := schema.DirectiveDescriptor{
+		ID: "vendor.defaulted", Name: "defaulted", Version: "1", Capability: "vendor.defaulted-1",
+		Locations: []protocol.SelectionKind{protocol.CallSelection}, Phases: []schema.DirectivePhase{schema.DirectiveValidation},
+		Effect: "read", Deterministic: true, Compatibility: schema.ChangeDangerous,
+		Arguments: []schema.DirectiveArgumentDescriptor{{
+			ID: "vendor.defaulted.value", Name: "value", Type: schema.TypeID(schema.Float64), Default: json.RawMessage(`1.0`),
+		}},
+	}
+	document, err := schema.ExportDocument(snapshot, nil, nil, schema.ExportOptions{Revision: "directive-default-r1", Directives: []schema.DirectiveDescriptor{directive}})
+	if err != nil {
+		t.Fatalf("ExportDocument: %v", err)
+	}
+	actual := document.Directives()[0].Arguments[0].Default
+	if string(actual) != "1" {
+		t.Fatalf("canonical default = %s", actual)
+	}
+}
+
+func TestSchemaDocumentRejectsInvalidDirectiveContracts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		document string
+		want     string
+	}{
+		{
+			name:     "output-only argument type",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"directive-output-r1","types":[{"id":"User","name":"User","kind":"object","output":true,"fields":[{"id":"User.name","name":"name","type":"String"}]}],"operations":[],"members":[],"directives":[{"id":"vendor.bad","name":"bad","version":"1","capability":"vendor.bad-1","locations":["call"],"arguments":[{"id":"vendor.bad.user","name":"user","type":"User"}],"phases":["validation"],"effect":"read","cost":0,"deterministic":true,"compatibility":"dangerous"}]}`,
+			want:     "non-input",
+		},
+		{
+			name:     "uninvocable names",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"directive-name-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.bad","name":"vendor.bad","version":"1","capability":"vendor.bad-1","locations":["call"],"arguments":[{"id":"vendor.bad.value","name":"bad.value","type":"String"}],"phases":["validation"],"effect":"read","cost":0,"deterministic":true,"compatibility":"dangerous"}]}`,
+			want:     "invalid directive descriptor",
+		},
+		{
+			name:     "unknown effect",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"directive-effect-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.bad","name":"bad","version":"1","capability":"vendor.bad-1","locations":["call"],"phases":["validation"],"effect":"concealed-write","cost":0,"deterministic":true,"compatibility":"dangerous"}]}`,
+			want:     "invalid effect",
+		},
+		{
+			name:     "nondeterministic planning",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"directive-planning-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.bad","name":"bad","version":"1","capability":"vendor.bad-1","locations":["call"],"phases":["validation","planning"],"effect":"read","cost":0,"deterministic":false,"compatibility":"dangerous"}]}`,
+			want:     "planning phase requires deterministic behavior",
+		},
+		{
+			name:     "write without execution",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"directive-write-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.bad","name":"bad","version":"1","capability":"vendor.bad-1","locations":["call"],"phases":["validation"],"effect":"write","cost":0,"deterministic":true,"compatibility":"dangerous"}]}`,
+			want:     "write effect requires the execution phase",
+		},
+		{
+			name:     "cost above portable maximum",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"directive-cost-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.bad","name":"bad","version":"1","capability":"vendor.bad-1","locations":["call"],"phases":["validation"],"effect":"read","cost":1048577,"deterministic":true,"compatibility":"dangerous"}]}`,
+			want:     "cost exceeds the portable maximum",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := schema.ParseDocument([]byte(test.document), schema.ImportOptions{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("directive contract error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -149,6 +264,33 @@ func TestSchemaDocumentFilteringDropsPartialInputsAndPrunesDanglingOutputs(t *te
 	}
 	if len(filtered.Types()) != 1 || filtered.Types()[0].ID != "Public" || len(filtered.Types()[0].Fields) != 1 || len(filtered.Operations()) != 0 {
 		t.Fatalf("filtered declarations = %#v %#v", filtered.Types(), filtered.Operations())
+	}
+}
+
+func TestSchemaDocumentFilteringRequiresExplicitDirectiveVisibility(t *testing.T) {
+	t.Parallel()
+	document := parseSchemaDocument(t, `{
+		"version":"1","canonicalVersion":"c14n-1","revision":"directive-filter-r1",
+		"types":[],"operations":[],"members":[],
+		"directives":[
+			{"id":"vendor.audit","name":"audit","version":"1","capability":"vendor.audit-1","locations":["call"],"arguments":[{"id":"vendor.audit.level","name":"level","type":"String"}],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"},
+			{"id":"vendor.secret","name":"secret","version":"1","capability":"vendor.secret-1","locations":["call"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"}
+		]
+	}`)
+	filtered, err := document.Filter(schema.Visibility{Directives: map[string]bool{"vendor.audit": true}})
+	if err != nil {
+		t.Fatalf("Filter: %v", err)
+	}
+	directives := filtered.Directives()
+	if len(directives) != 1 || directives[0].ID != "vendor.audit" {
+		t.Fatalf("directives = %#v", directives)
+	}
+	canonical, err := filtered.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(canonical, []byte("vendor.secret")) {
+		t.Fatalf("filtered discovery leaked hidden directive: %s", canonical)
 	}
 }
 
@@ -263,6 +405,42 @@ func TestSchemaDiffClassifiesScalarCanonicalizationAsDangerous(t *testing.T) {
 		return change.Path == "type:Slug/scalar" && change.Classification == schema.ChangeDangerous
 	}) {
 		t.Fatalf("scalar canonicalization change = %#v", diff.Changes)
+	}
+}
+
+func TestPortableSchemaIncludesDirectiveSemanticsInIdentityAndDiff(t *testing.T) {
+	t.Parallel()
+	before := parseSchemaDocument(t, `{"version":"1","canonicalVersion":"c14n-1","revision":"directives-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.audit","name":"audit","version":"1","capability":"vendor.audit-1","repeatable":true,"locations":["call","field"],"arguments":[{"id":"vendor.audit.level","name":"level","type":"String","required":true}],"phases":["validation","execution","response"],"effect":"read","cost":3,"deterministic":true,"compatibility":"dangerous"}]}`)
+	after := parseSchemaDocument(t, `{"version":"1","canonicalVersion":"c14n-1","revision":"directives-r2","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.audit","name":"audit","version":"2","capability":"vendor.audit-2","repeatable":true,"locations":["call","field"],"arguments":[{"id":"vendor.audit.level","name":"level","type":"String","required":true}],"phases":["validation","execution","response"],"effect":"read","cost":3,"deterministic":true,"compatibility":"dangerous"}]}`)
+
+	beforeHash, err := before.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterHash, err := after.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeHash == afterHash {
+		t.Fatal("directive version and capability did not change schema identity")
+	}
+	diff := schema.DiffDocuments(before, after)
+	if !slices.ContainsFunc(diff.Changes, func(change schema.SchemaChange) bool {
+		return change.Path == "directive:vendor.audit/version" && change.Classification == schema.ChangeBreaking
+	}) {
+		t.Fatalf("directive diff = %#v", diff.Changes)
+	}
+}
+
+func TestSchemaDiffClassifiesDirectiveLocationExpansionAsAdditive(t *testing.T) {
+	t.Parallel()
+	before := parseSchemaDocument(t, `{"version":"1","canonicalVersion":"c14n-1","revision":"directives-r1","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.audit","name":"audit","version":"1","capability":"vendor.audit-1","locations":["call"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"}]}`)
+	after := parseSchemaDocument(t, `{"version":"1","canonicalVersion":"c14n-1","revision":"directives-r2","types":[],"operations":[],"members":[],"directives":[{"id":"vendor.audit","name":"audit","version":"1","capability":"vendor.audit-1","locations":["call","field"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"}]}`)
+	diff := schema.DiffDocuments(before, after)
+	if !slices.ContainsFunc(diff.Changes, func(change schema.SchemaChange) bool {
+		return change.Path == "directive:vendor.audit/locations" && change.Classification == schema.ChangeAdditive
+	}) {
+		t.Fatalf("directive location diff = %#v", diff.Changes)
 	}
 }
 

@@ -87,10 +87,12 @@ Invalid: accept `user name`, normalize `É` into an identifier, or resolve
   revisions do not.
 - **CANON-104:** Schema identity is formed from its portable public descriptor,
   never host reflection or registration order. Type, field, enum-member,
-  variant-member, operation, object-member, retired-identity, and trait arrays
+  variant-member, operation, object-member, directive, directive-argument,
+  retired-identity, and trait arrays
   sort by stable `id`; pinned references sort by URI then revision. Entity keys,
   legacy type-reference/enum-value lists, accepted-wire-shape lists, and
-  capability lists sort by their canonical spelling and reject duplicates.
+  capability, directive-location, and directive-phase lists sort by their
+  canonical spelling and reject duplicates.
   Ordered custom-scalar conformance vectors retain order. Absent optional
   descriptor fields are omitted; explicit defaults are canonical scalar JSON.
   A schema construction API MUST coerce and store defaults in that canonical
@@ -105,8 +107,8 @@ Invalid: accept `user name`, normalize `É` into an identifier, or resolve
 
 Valid: reordering document object members or schema registration calls retains
 identity, while changing operation kind, a variable default, required
-capabilities, ordered selections, or a schema revision changes the identity it
-owns.
+capabilities, ordered selections, a directive version/capability, or a schema
+revision changes the identity it owns.
 
 Invalid: hash a request envelope as the document, sort selections, or mix a new
 schema revision into an old approval without producing a new approval digest.

@@ -21,6 +21,7 @@ type InputValue struct {
 	list         []InputValue
 	object       map[string]InputValue
 	enum         string
+	enumPresent  bool
 	enumKnown    bool
 	activeMember string
 }
@@ -55,7 +56,7 @@ func (v InputValue) Object() (map[string]InputValue, bool) {
 // Enum returns the enum spelling, whether the value is declared by the
 // schema, and whether this InputValue is an enum.
 func (v InputValue) Enum() (value string, known bool, ok bool) {
-	if v.presence != PresenceValue || v.enum == "" {
+	if v.presence != PresenceValue || !v.enumPresent {
 		return "", false, false
 	}
 	return v.enum, v.enumKnown, true
@@ -73,7 +74,7 @@ func (v InputValue) MarshalJSON() ([]byte, error) {
 	if v.scalar != nil {
 		return v.scalar.MarshalJSON()
 	}
-	if v.enum != "" {
+	if v.enumPresent {
 		return json.Marshal(v.enum)
 	}
 	if v.list != nil {
@@ -292,7 +293,7 @@ func coerceEnum(descriptor TypeDescriptor, raw json.RawMessage) (InputValue, err
 	if !known && !descriptor.Open {
 		return InputValue{}, fmt.Errorf("closed enum input %q rejects value %q", descriptor.ID, value)
 	}
-	return InputValue{typeID: descriptor.ID, presence: PresenceValue, enum: value, enumKnown: known}, nil
+	return InputValue{typeID: descriptor.ID, presence: PresenceValue, enum: value, enumPresent: true, enumKnown: known}, nil
 }
 
 func canonicalizeInputDefaults(snapshot Snapshot) error {

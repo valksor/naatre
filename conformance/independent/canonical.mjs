@@ -167,9 +167,20 @@ function normalizeSchema(value) {
   normalizeStringSet(value, "capabilities");
   normalizeSchemaTypes(value.types);
   normalizeSchemaCallables(value);
+  normalizeSchemaDirectives(value);
   normalizeIDArray(value, "retired");
   normalizeIDArray(value, "traits");
   normalizeReferences(value);
+}
+
+function normalizeSchemaDirectives(value) {
+  for (const directive of normalizeIDArray(value, "directives")) {
+    for (const member of ["locations", "phases", "capabilities"]) {
+      normalizeStringSet(directive, member);
+    }
+    normalizeIDArray(directive, "arguments");
+    normalizeIDArray(directive, "traits");
+  }
 }
 
 function normalizeSchemaTypes(types) {

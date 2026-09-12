@@ -10,6 +10,7 @@ type Visibility struct {
 	Variants   map[string]bool `json:"variants,omitempty"`
 	Operations map[string]bool `json:"operations,omitempty"`
 	Members    map[string]bool `json:"members,omitempty"`
+	Directives map[string]bool `json:"directives,omitempty"`
 	Retired    map[string]bool `json:"retired,omitempty"`
 }
 
@@ -29,10 +30,31 @@ func (d Document) Filter(visibility Visibility) (Document, error) {
 	available, fields := filteredTypeIndex(wire.Types)
 	wire.Operations = filterOperations(wire.Operations, visibility.Operations, available)
 	wire.Members = filterMembers(wire.Members, visibility.Members, available, fields)
+	wire.Directives = filterDirectives(wire.Directives, visibility.Directives, available)
 
 	return buildDocument(wire, ImportOptions{
-		SupportedTraits: collectTraitIDs(wire.Types, wire.Operations, wire.Members, wire.Traits),
+		SupportedTraits: collectTraitIDs(wire.Types, wire.Operations, wire.Members, wire.Directives, wire.Traits),
 	})
+}
+
+func filterDirectives(input []DirectiveDescriptor, visibility map[string]bool, available map[TypeID]bool) []DirectiveDescriptor {
+	result := make([]DirectiveDescriptor, 0, len(input))
+	for _, directive := range input {
+		if !visibility[directive.ID] {
+			continue
+		}
+		valid := true
+		for _, argument := range directive.Arguments {
+			if !typeReferenceAvailable(argument.Type, available) {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			result = append(result, directive)
+		}
+	}
+	return result
 }
 
 func filterTypes(input []TypeDeclaration, visibility Visibility) []TypeDeclaration {

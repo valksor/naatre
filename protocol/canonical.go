@@ -193,6 +193,9 @@ func normalizeSchema(input []byte, root *node) error {
 	if err := normalizeSchemaCallables(input, root); err != nil {
 		return err
 	}
+	if err := normalizeSchemaDirectives(input, root); err != nil {
+		return err
+	}
 	for _, member := range []string{"retired", "traits"} {
 		if _, err := normalizeSchemaIDArrayMember(input, root, member, "/"+member); err != nil {
 			return err
@@ -244,6 +247,33 @@ func normalizeSchemaCallables(input []byte, root *node) error {
 		}
 	}
 	return nil
+}
+
+func normalizeSchemaDirectives(input []byte, root *node) error {
+	values, err := normalizeSchemaIDArrayMember(input, root, "directives", "/directives")
+	if err != nil || values == nil {
+		return err
+	}
+	for index := range values.array {
+		if err := normalizeSchemaDirective(input, &values.array[index], index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeSchemaDirective(input []byte, directive *node, index int) error {
+	pointer := fmt.Sprintf("/directives/%d", index)
+	for _, member := range []string{"locations", "phases", "capabilities"} {
+		if err := normalizeStringSetMember(input, directive, member, pointer+"/"+member, true); err != nil {
+			return err
+		}
+	}
+	if _, err := normalizeSchemaIDArrayMember(input, directive, "arguments", pointer+"/arguments"); err != nil {
+		return err
+	}
+	_, err := normalizeSchemaIDArrayMember(input, directive, "traits", pointer+"/traits")
+	return err
 }
 
 func normalizeSchemaType(input []byte, current *node, pointer string) error {

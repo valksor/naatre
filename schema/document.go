@@ -2,6 +2,7 @@ package schema
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"time"
+	"unicode/utf8"
 
 	"github.com/valksor/naatre/protocol"
 )
@@ -16,9 +18,15 @@ import (
 const (
 	SchemaDocumentVersion  = "1"
 	SchemaCanonicalVersion = "c14n-1"
+	// MaxDirectiveCost is the portable per-directive and per-operation cost ceiling.
+	MaxDirectiveCost uint64 = 1 << 20
 )
 
-var schemaDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var (
+	schemaDigestPattern     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	directiveVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z_.-]{0,127}$`)
+	directiveNamePattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+)
 
 type Deprecation struct {
 	Reason          string `json:"reason"`
@@ -95,6 +103,47 @@ type FieldDeclaration struct {
 	Cost        uint64            `json:"cost,omitempty"`
 	Traits      []TraitDescriptor `json:"traits,omitempty"`
 	Source      *SourceMetadata   `json:"source,omitempty"`
+}
+
+type DirectivePhase string
+
+const (
+	DirectiveValidation DirectivePhase = "validation"
+	DirectivePlanning   DirectivePhase = "planning"
+	DirectiveExecution  DirectivePhase = "execution"
+	DirectiveResponse   DirectivePhase = "response"
+)
+
+type DirectiveArgumentDescriptor struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Type        TypeID          `json:"type"`
+	Required    bool            `json:"required,omitempty"`
+	Nullable    bool            `json:"nullable,omitempty"`
+	Default     json.RawMessage `json:"default,omitempty"`
+	Description string          `json:"description,omitempty"`
+}
+
+// DirectiveDescriptor is the portable, version-pinned contract for one
+// language extension. Runtime callbacks never participate in schema identity.
+type DirectiveDescriptor struct {
+	ID            string                        `json:"id"`
+	Name          string                        `json:"name"`
+	Version       string                        `json:"version"`
+	Capability    string                        `json:"capability"`
+	Repeatable    bool                          `json:"repeatable,omitempty"`
+	Locations     []protocol.SelectionKind      `json:"locations"`
+	Arguments     []DirectiveArgumentDescriptor `json:"arguments,omitempty"`
+	Phases        []DirectivePhase              `json:"phases"`
+	Effect        string                        `json:"effect"`
+	Cost          uint64                        `json:"cost"`
+	Deterministic bool                          `json:"deterministic"`
+	Compatibility ChangeClassification          `json:"compatibility"`
+	Description   string                        `json:"description,omitempty"`
+	Deprecation   *Deprecation                  `json:"deprecation,omitempty"`
+	Capabilities  []string                      `json:"capabilities,omitempty"`
+	Traits        []TraitDescriptor             `json:"traits,omitempty"`
+	Source        *SourceMetadata               `json:"source,omitempty"`
 }
 
 type TypeDeclaration struct {
@@ -176,6 +225,7 @@ type MemberDescriptor struct {
 type ExportOptions struct {
 	Revision     string
 	Capabilities []string
+	Directives   []DirectiveDescriptor
 	Retired      []RetiredIdentity
 	References   []SchemaReference
 	Traits       []TraitDescriptor
@@ -193,6 +243,7 @@ type documentWire struct {
 	Types            []TypeDeclaration     `json:"types"`
 	Operations       []OperationDescriptor `json:"operations"`
 	Members          []MemberDescriptor    `json:"members"`
+	Directives       []DirectiveDescriptor `json:"directives,omitempty"`
 	Retired          []RetiredIdentity     `json:"retired,omitempty"`
 	References       []SchemaReference     `json:"references,omitempty"`
 	Traits           []TraitDescriptor     `json:"traits,omitempty"`
@@ -211,12 +262,38 @@ func ExportDocument(snapshot Snapshot, operations []OperationDescriptor, members
 		}
 		types = append(types, declarationFromDescriptor(descriptor))
 	}
+	directives, err := canonicalizeDirectiveDefaults(snapshot, options.Directives)
+	if err != nil {
+		return Document{}, err
+	}
 	return buildDocument(documentWire{
 		Version: SchemaDocumentVersion, CanonicalVersion: SchemaCanonicalVersion,
 		Revision: options.Revision, Capabilities: slices.Clone(options.Capabilities), Types: types,
-		Operations: cloneOperations(operations), Members: cloneMembers(members), Retired: slices.Clone(options.Retired),
+		Operations: cloneOperations(operations), Members: cloneMembers(members), Directives: directives, Retired: slices.Clone(options.Retired),
 		References: slices.Clone(options.References), Traits: cloneTraits(options.Traits),
-	}, ImportOptions{SupportedTraits: collectTraitIDs(types, operations, members, options.Traits)})
+	}, ImportOptions{SupportedTraits: collectTraitIDs(types, operations, members, directives, options.Traits)})
+}
+
+func canonicalizeDirectiveDefaults(snapshot Snapshot, input []DirectiveDescriptor) ([]DirectiveDescriptor, error) {
+	result := cloneDirectives(input)
+	for directiveIndex := range result {
+		for argumentIndex := range result[directiveIndex].Arguments {
+			argument := &result[directiveIndex].Arguments[argumentIndex]
+			if len(argument.Default) == 0 {
+				continue
+			}
+			value, err := CoerceInput(snapshot, argument.Type, argument.Default, argument.Nullable)
+			if err != nil {
+				return nil, fmt.Errorf("directive %q argument %q has invalid default: %w", result[directiveIndex].ID, argument.ID, err)
+			}
+			canonical, err := value.MarshalJSON()
+			if err != nil {
+				return nil, fmt.Errorf("canonicalize directive %q argument %q default: %w", result[directiveIndex].ID, argument.ID, err)
+			}
+			argument.Default = canonical
+		}
+	}
+	return result, nil
 }
 
 func ParseDocument(input []byte, options ImportOptions) (Document, error) {
@@ -239,12 +316,14 @@ func (d Document) Revision() string { return d.wire.Revision }
 func (d Document) Types() []TypeDeclaration          { return cloneTypeDeclarations(d.wire.Types) }
 func (d Document) Operations() []OperationDescriptor { return cloneOperations(d.wire.Operations) }
 func (d Document) Members() []MemberDescriptor       { return cloneMembers(d.wire.Members) }
+func (d Document) Directives() []DirectiveDescriptor { return cloneDirectives(d.wire.Directives) }
 
 // ExportOptions returns a detached copy of the document-level lifecycle and
 // extension metadata needed to reproduce this document from a registry.
 func (d Document) ExportOptions() ExportOptions {
 	options := ExportOptions{Revision: d.wire.Revision}
 	options.Capabilities = slices.Clone(d.wire.Capabilities)
+	options.Directives = cloneDirectives(d.wire.Directives)
 	options.Retired = slices.Clone(d.wire.Retired)
 	options.References = slices.Clone(d.wire.References)
 	options.Traits = cloneTraits(d.wire.Traits)
@@ -326,9 +405,13 @@ func normalizeDocument(wire *documentWire) {
 	for index := range wire.Members {
 		normalizeMember(&wire.Members[index])
 	}
+	for index := range wire.Directives {
+		normalizeDirective(&wire.Directives[index])
+	}
 	sort.Slice(wire.Types, func(i, j int) bool { return wire.Types[i].ID < wire.Types[j].ID })
 	sort.Slice(wire.Operations, func(i, j int) bool { return wire.Operations[i].ID < wire.Operations[j].ID })
 	sort.Slice(wire.Members, func(i, j int) bool { return wire.Members[i].ID < wire.Members[j].ID })
+	sort.Slice(wire.Directives, func(i, j int) bool { return wire.Directives[i].ID < wire.Directives[j].ID })
 	sort.Slice(wire.Retired, func(i, j int) bool { return wire.Retired[i].ID < wire.Retired[j].ID })
 	sort.Slice(wire.References, func(i, j int) bool {
 		if wire.References[i].URI == wire.References[j].URI {
@@ -419,6 +502,17 @@ func normalizedCallableCollections(capabilities []string, traits []TraitDescript
 	return sortedUnique(capabilities), normalizedTraits(traits)
 }
 
+func normalizeDirective(directive *DirectiveDescriptor) {
+	sort.Slice(directive.Arguments, func(i, j int) bool { return directive.Arguments[i].ID < directive.Arguments[j].ID })
+	slices.Sort(directive.Locations)
+	slices.Sort(directive.Phases)
+	directive.Capabilities = sortedUnique(directive.Capabilities)
+	directive.Traits = normalizedTraits(directive.Traits)
+	if len(directive.Arguments) == 0 {
+		directive.Arguments = nil
+	}
+}
+
 func validateDocument(wire documentWire, options ImportOptions) error {
 	if err := validateDocumentHeader(wire); err != nil {
 		return err
@@ -470,7 +564,105 @@ func validateActiveDeclarations(wire documentWire, options ImportOptions) (map[s
 			return nil, nil, err
 		}
 	}
+	for _, directive := range wire.Directives {
+		if err := validateDirectiveDescriptor(directive, activeIDs, activeNames, options); err != nil {
+			return nil, nil, err
+		}
+	}
 	return activeIDs, activeNames, nil
+}
+
+func validateDirectiveDescriptor(directive DirectiveDescriptor, activeIDs, activeNames map[string]bool, options ImportOptions) error {
+	if !typeIDPattern.MatchString(directive.ID) || !directiveNamePattern.MatchString(directive.Name) ||
+		!directiveVersionPattern.MatchString(directive.Version) || !typeIDPattern.MatchString(directive.Capability) {
+		return fmt.Errorf("invalid directive descriptor %q", directive.ID)
+	}
+	if knownScalar(ScalarKind(directive.ID)) || knownScalar(ScalarKind(directive.Name)) {
+		return fmt.Errorf("directive %q collides with a built-in scalar", directive.ID)
+	}
+	if err := reserveActiveIdentity(directive.ID, directive.Name, activeIDs, activeNames); err != nil {
+		return err
+	}
+	if err := validateDirectiveContract(directive); err != nil {
+		return fmt.Errorf("directive %q: %w", directive.ID, err)
+	}
+	if err := validateElementMetadata(fmt.Sprintf("directive %q", directive.ID), directive.Deprecation, directive.Traits, directive.Source, options); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDirectiveContract(directive DirectiveDescriptor) error {
+	if len(directive.Locations) == 0 || len(directive.Phases) == 0 || directive.Effect == "" {
+		return errors.New("locations, phases, and effect are required")
+	}
+	if directive.Effect != "read" && directive.Effect != "write" {
+		return fmt.Errorf("invalid effect %q", directive.Effect)
+	}
+	if directive.Cost > MaxDirectiveCost {
+		return errors.New("directive cost exceeds the portable maximum")
+	}
+	if directive.Compatibility != ChangeBreaking && directive.Compatibility != ChangeDangerous &&
+		directive.Compatibility != ChangeAdditive && directive.Compatibility != ChangeBehaviorOnly {
+		return fmt.Errorf("invalid compatibility %q", directive.Compatibility)
+	}
+	if err := validateDirectiveLocations(directive.Locations); err != nil {
+		return err
+	}
+	if err := validateDirectivePhases(directive.Phases); err != nil {
+		return err
+	}
+	if slices.Contains(directive.Phases, DirectivePlanning) && !directive.Deterministic {
+		return errors.New("planning phase requires deterministic behavior")
+	}
+	if directive.Effect == "write" && !slices.Contains(directive.Phases, DirectiveExecution) {
+		return errors.New("write effect requires the execution phase")
+	}
+	return validateDirectiveArguments(directive.Arguments)
+}
+
+func validateDirectiveLocations(locations []protocol.SelectionKind) error {
+	seen := make(map[protocol.SelectionKind]bool, len(locations))
+	for _, location := range locations {
+		if seen[location] || !slices.Contains([]protocol.SelectionKind{
+			protocol.FieldSelection, protocol.CallSelection, protocol.PipelineSelection, protocol.MapSelection,
+			protocol.IndexSelection, protocol.SliceSelection, protocol.PageSelection, protocol.MetaSelection,
+			protocol.ParallelSelection, protocol.FragmentSelection, protocol.CurrentSelection,
+			protocol.NestSelection, protocol.UnnestSelection,
+		}, location) {
+			return fmt.Errorf("invalid or duplicate location %q", location)
+		}
+		seen[location] = true
+	}
+	return nil
+}
+
+func validateDirectivePhases(phases []DirectivePhase) error {
+	seen := make(map[DirectivePhase]bool, len(phases))
+	for _, phase := range phases {
+		if seen[phase] || (phase != DirectiveValidation && phase != DirectivePlanning && phase != DirectiveExecution && phase != DirectiveResponse) {
+			return fmt.Errorf("invalid or duplicate phase %q", phase)
+		}
+		seen[phase] = true
+	}
+	if !seen[DirectiveValidation] {
+		return errors.New("validation phase is required")
+	}
+	return nil
+}
+
+func validateDirectiveArguments(arguments []DirectiveArgumentDescriptor) error {
+	ids := make(map[string]bool, len(arguments))
+	names := make(map[string]bool, len(arguments))
+	for _, argument := range arguments {
+		if !typeIDPattern.MatchString(argument.ID) || !directiveNamePattern.MatchString(argument.Name) || argument.Type == "" ||
+			ids[argument.ID] || names[argument.Name] || (argument.Required && len(argument.Default) != 0) {
+			return fmt.Errorf("invalid or duplicate argument %q", argument.ID)
+		}
+		ids[argument.ID] = true
+		names[argument.Name] = true
+	}
+	return nil
 }
 
 func validateRetiredIdentities(retiredIdentities []RetiredIdentity, activeIDs, activeNames map[string]bool) error {
@@ -543,7 +735,7 @@ func validateFieldDeclarations(declaration TypeDeclaration, activeIDs, memberNam
 
 func validateEnumDeclarations(declaration TypeDeclaration, activeIDs, memberNames map[string]bool, options ImportOptions) error {
 	for _, member := range declaration.EnumMembers {
-		if member.ID == "" || !typeIDPattern.MatchString(member.Name) {
+		if member.ID == "" || !utf8.ValidString(member.Name) {
 			return fmt.Errorf("enum %q has invalid member %q", declaration.ID, member.ID)
 		}
 		if err := reserveActiveIdentity(member.ID, member.Name, activeIDs, memberNames); err != nil {
@@ -707,30 +899,49 @@ func validateDocumentReferences(wire documentWire) error {
 		}
 	}
 	for _, member := range wire.Members {
-		if !types[member.Owner] {
+		if _, exists := types[member.Owner]; !exists {
 			return fmt.Errorf("member %q references unknown owner %q", member.ID, member.Owner)
 		}
 		if err := validateCallableTypeReferences("member "+member.ID, member.Input, member.Output, types); err != nil {
 			return err
 		}
 	}
+	return validateDirectiveTypeReferences(wire.Directives, types)
+}
+
+type schemaTypeReference struct {
+	input bool
+}
+
+func validateDirectiveTypeReferences(directives []DirectiveDescriptor, types map[TypeID]schemaTypeReference) error {
+	for _, directive := range directives {
+		for _, argument := range directive.Arguments {
+			reference, exists := types[argument.Type]
+			if !exists {
+				return fmt.Errorf("directive %q argument %q references unknown type %q", directive.ID, argument.ID, argument.Type)
+			}
+			if !reference.input {
+				return fmt.Errorf("directive %q argument %q references non-input type %q", directive.ID, argument.ID, argument.Type)
+			}
+		}
+	}
 	return nil
 }
 
-func schemaTypeIndex(declarations []TypeDeclaration) map[TypeID]bool {
-	types := make(map[TypeID]bool, len(declarations)+13)
+func schemaTypeIndex(declarations []TypeDeclaration) map[TypeID]schemaTypeReference {
+	types := make(map[TypeID]schemaTypeReference, len(declarations)+13)
 	for _, scalar := range []ScalarKind{Boolean, String, ID, Int32, Float64, Int64, UInt64, BigInt, Decimal, Timestamp, Duration, UUID, Bytes} {
-		types[TypeID(scalar)] = true
+		types[TypeID(scalar)] = schemaTypeReference{input: true}
 	}
 	for _, declaration := range declarations {
-		types[declaration.ID] = true
+		types[declaration.ID] = schemaTypeReference{input: declaration.Input}
 	}
 	return types
 }
 
-func validateCallableTypeReferences(owner string, input, output TypeID, types map[TypeID]bool) error {
+func validateCallableTypeReferences(owner string, input, output TypeID, types map[TypeID]schemaTypeReference) error {
 	for _, reference := range []TypeID{input, output} {
-		if reference != "" && !types[reference] {
+		if _, exists := types[reference]; reference != "" && !exists {
 			return fmt.Errorf("%s references unknown type %q", owner, reference)
 		}
 	}
@@ -757,7 +968,7 @@ func declarationFromDescriptor(descriptor TypeDescriptor) TypeDeclaration {
 	declaration.EnumMembers = cloneEnumMembers(descriptor.EnumMembers)
 	if len(declaration.EnumMembers) == 0 {
 		for _, name := range descriptor.EnumValues {
-			declaration.EnumMembers = append(declaration.EnumMembers, EnumMemberDescriptor{ID: string(descriptor.ID) + "." + name, Name: name})
+			declaration.EnumMembers = append(declaration.EnumMembers, EnumMemberDescriptor{ID: enumMemberID(descriptor.ID, name), Name: name})
 		}
 	}
 	declaration.VariantMembers = cloneVariantMembers(descriptor.VariantMembers)
@@ -767,6 +978,14 @@ func declarationFromDescriptor(descriptor TypeDescriptor) TypeDeclaration {
 		}
 	}
 	return declaration
+}
+
+func enumMemberID(typeID TypeID, spelling string) string {
+	if typeIDPattern.MatchString(spelling) {
+		return string(typeID) + "." + spelling
+	}
+	digest := sha256.Sum256([]byte(string(typeID) + "\x00" + spelling))
+	return fmt.Sprintf("enum.%x", digest)
 }
 
 func descriptorFromDeclaration(declaration TypeDeclaration) TypeDescriptor {
@@ -801,7 +1020,7 @@ func cloneDocumentWire(input documentWire) documentWire {
 		Version: input.Version, CanonicalVersion: input.CanonicalVersion, Revision: input.Revision,
 		Capabilities: slices.Clone(input.Capabilities), Types: cloneTypeDeclarations(input.Types),
 		Operations: cloneOperations(input.Operations), Members: cloneMembers(input.Members), Retired: slices.Clone(input.Retired),
-		References: slices.Clone(input.References), Traits: cloneTraits(input.Traits),
+		Directives: cloneDirectives(input.Directives), References: slices.Clone(input.References), Traits: cloneTraits(input.Traits),
 	}
 }
 
@@ -828,6 +1047,23 @@ func cloneOperations(input []OperationDescriptor) []OperationDescriptor {
 func cloneMembers(input []MemberDescriptor) []MemberDescriptor {
 	result := slices.Clone(input)
 	for index := range result {
+		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
+		result[index].Capabilities = slices.Clone(result[index].Capabilities)
+		result[index].Traits = cloneTraits(result[index].Traits)
+		result[index].Source = cloneSource(result[index].Source)
+	}
+	return result
+}
+
+func cloneDirectives(input []DirectiveDescriptor) []DirectiveDescriptor {
+	result := slices.Clone(input)
+	for index := range result {
+		result[index].Locations = slices.Clone(result[index].Locations)
+		result[index].Arguments = slices.Clone(result[index].Arguments)
+		for argumentIndex := range result[index].Arguments {
+			result[index].Arguments[argumentIndex].Default = bytes.Clone(result[index].Arguments[argumentIndex].Default)
+		}
+		result[index].Phases = slices.Clone(result[index].Phases)
 		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
 		result[index].Capabilities = slices.Clone(result[index].Capabilities)
 		result[index].Traits = cloneTraits(result[index].Traits)
@@ -913,7 +1149,7 @@ func sortedUnique(input []string) []string {
 	return slices.Compact(result)
 }
 
-func collectTraitIDs(types []TypeDeclaration, operations []OperationDescriptor, members []MemberDescriptor, documentTraits []TraitDescriptor) map[string]bool {
+func collectTraitIDs(types []TypeDeclaration, operations []OperationDescriptor, members []MemberDescriptor, directives []DirectiveDescriptor, documentTraits []TraitDescriptor) map[string]bool {
 	result := make(map[string]bool)
 	add := func(traits []TraitDescriptor) {
 		for _, trait := range traits {
@@ -932,6 +1168,9 @@ func collectTraitIDs(types []TypeDeclaration, operations []OperationDescriptor, 
 	}
 	for _, member := range members {
 		add(member.Traits)
+	}
+	for _, directive := range directives {
+		add(directive.Traits)
 	}
 	return result
 }

@@ -74,8 +74,9 @@ const (
 
 // Outcome contains deterministic partial data and ordered public errors.
 type Outcome struct {
-	Data   map[string]any
-	Errors []ExecutionError
+	Data        map[string]any
+	Errors      []ExecutionError
+	Annotations []DirectiveAnnotation
 	// Effects describes the operation's effect state. It is safe outcome
 	// metadata, not an error, and never implies permission to replay a write.
 	Effects EffectState
@@ -149,6 +150,9 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 	}
 	planner := newPlanValidator(registry, request, operation)
 	nodes, executable := planner.validate()
+	if len(planner.issues) == 0 {
+		planner.planDirectives(nodes)
+	}
 	if len(planner.issues) == 0 {
 		planner.issues = append(planner.issues, authorizePlannedNodes(registry.authorization, operation.Kind(), nodes)...)
 	}

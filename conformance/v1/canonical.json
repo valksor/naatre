@@ -230,6 +230,13 @@
       "equal": true
     },
     {
+      "name": "document-directive-order-is-distinct",
+      "purpose": "document",
+      "left": "{\"requires\":[\"vendor.audit-1\"],\"operations\":[{\"name\":\"Q\",\"kind\":\"query\",\"select\":[{\"$call\":{\"name\":\"value\",\"directives\":[{\"name\":\"audit\",\"arguments\":{\"level\":{\"$literal\":1}}},{\"name\":\"audit\",\"arguments\":{\"level\":{\"$literal\":2}}}]}}]}]}",
+      "right": "{\"requires\":[\"vendor.audit-1\"],\"operations\":[{\"name\":\"Q\",\"kind\":\"query\",\"select\":[{\"$call\":{\"name\":\"value\",\"directives\":[{\"name\":\"audit\",\"arguments\":{\"level\":{\"$literal\":2}}},{\"name\":\"audit\",\"arguments\":{\"level\":{\"$literal\":1}}}]}}]}]}",
+      "equal": false
+    },
+    {
       "name": "schema-revision-is-distinct",
       "purpose": "schema",
       "left": "{\"revision\":\"schema-7\",\"types\":[]}",
@@ -249,6 +256,20 @@
       "left": "{\"revision\":\"schema-r1\",\"types\":[{\"id\":\"User\",\"fields\":[{\"id\":\"User.z\"},{\"id\":\"User.a\"}],\"entity\":{\"keys\":[\"z\",\"a\"]},\"traits\":[{\"id\":\"z.trait\"},{\"id\":\"a.trait\"}]}],\"operations\":[{\"id\":\"query.z\"},{\"id\":\"query.a\"}],\"members\":[{\"id\":\"User.z\"},{\"id\":\"User.a\"}],\"retired\":[{\"id\":\"old.z\"},{\"id\":\"old.a\"}],\"references\":[{\"uri\":\"urn:z\",\"revision\":\"r2\"},{\"uri\":\"urn:a\",\"revision\":\"r1\"}]}",
       "right": "{\"references\":[{\"revision\":\"r1\",\"uri\":\"urn:a\"},{\"revision\":\"r2\",\"uri\":\"urn:z\"}],\"retired\":[{\"id\":\"old.a\"},{\"id\":\"old.z\"}],\"members\":[{\"id\":\"User.a\"},{\"id\":\"User.z\"}],\"operations\":[{\"id\":\"query.a\"},{\"id\":\"query.z\"}],\"types\":[{\"traits\":[{\"id\":\"a.trait\"},{\"id\":\"z.trait\"}],\"entity\":{\"keys\":[\"a\",\"z\"]},\"fields\":[{\"id\":\"User.a\"},{\"id\":\"User.z\"}],\"id\":\"User\"}],\"revision\":\"schema-r1\"}",
       "equal": true
+    },
+    {
+      "name": "schema-directive-declaration-order-is-equivalent",
+      "purpose": "schema",
+      "left": "{\"revision\":\"schema-r1\",\"types\":[],\"directives\":[{\"id\":\"vendor.z\",\"locations\":[\"field\",\"call\"],\"phases\":[\"response\",\"validation\"],\"capabilities\":[\"vendor.z-extra-1\",\"vendor.z-base-1\"],\"arguments\":[{\"id\":\"vendor.z.z\"},{\"id\":\"vendor.z.a\"}],\"traits\":[{\"id\":\"vendor.z.docs\"}]},{\"id\":\"vendor.a\"}]}",
+      "right": "{\"directives\":[{\"id\":\"vendor.a\"},{\"traits\":[{\"id\":\"vendor.z.docs\"}],\"arguments\":[{\"id\":\"vendor.z.a\"},{\"id\":\"vendor.z.z\"}],\"capabilities\":[\"vendor.z-base-1\",\"vendor.z-extra-1\"],\"phases\":[\"validation\",\"response\"],\"locations\":[\"call\",\"field\"],\"id\":\"vendor.z\"}],\"types\":[],\"revision\":\"schema-r1\"}",
+      "equal": true
+    },
+    {
+      "name": "schema-directive-version-is-distinct",
+      "purpose": "schema",
+      "left": "{\"revision\":\"schema-r1\",\"types\":[],\"directives\":[{\"id\":\"vendor.audit\",\"version\":\"1\"}]}",
+      "right": "{\"revision\":\"schema-r1\",\"types\":[],\"directives\":[{\"id\":\"vendor.audit\",\"version\":\"2\"}]}",
+      "equal": false
     },
     {
       "name": "empty-object-and-list-are-distinct",

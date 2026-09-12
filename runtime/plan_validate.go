@@ -36,6 +36,7 @@ type planNode struct {
 	optional       bool
 	typeConditions []schema.TypeID
 	fragmentParams map[string]fragmentParameterBinding
+	directives     []plannedDirective
 }
 
 type fragmentParameterBinding struct {
@@ -93,6 +94,7 @@ type planValidator struct {
 	issues                    []ValidationIssue
 	fragmentSelections        int
 	fragmentExpansionExceeded bool
+	directiveCost             uint64
 }
 
 const (
@@ -217,7 +219,6 @@ func (v *planValidator) validateSelection(selection protocol.Selection, scope *v
 			defer func() { v.context = v.context[:contextLength] }()
 		}
 	}
-	v.validateDirectives(selection.Directives(), scope)
 	node := planNode{
 		selection: selection, kind: selection.Kind(), name: selection.Name(), binding: selection.Bind(), input: scope.current,
 		source: selection.Source(), parallelPolicy: selection.Policy(), optional: selectionIsOptional(selection),
@@ -267,6 +268,7 @@ func (v *planValidator) validateSelection(selection protocol.Selection, scope *v
 	default:
 		v.add("UNKNOWN_SELECTION", "LANG-003", "selection kind is not supported", selection.Source())
 	}
+	node.directives = v.validateDirectives(selection.Directives(), scope, &node)
 	return node
 }
 

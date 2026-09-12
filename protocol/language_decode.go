@@ -651,7 +651,6 @@ func (d languageDecoder) directives(value node, pointer string) ([]Directive, er
 		return nil, newDiagnostic(d.input, "TYPE_MISMATCH", "LANG-006", "validate", "directives must be an array", pointer, value.start)
 	}
 	directives := make([]Directive, 0, len(value.array))
-	seen := make(map[string]bool, len(value.array))
 	for index, directiveNode := range value.array {
 		directivePointer := joinPointer(pointer, intString(index))
 		if directiveNode.kind != nodeObject {
@@ -664,10 +663,6 @@ func (d languageDecoder) directives(value node, pointer string) ([]Directive, er
 		if err != nil {
 			return nil, err
 		}
-		if seen[name] {
-			return nil, newDiagnostic(d.input, "DUPLICATE_NAME", "LANG-005", "validate", "duplicate directive name", directivePointer, directiveNode.start)
-		}
-		seen[name] = true
 		directive := Directive{name: name, source: sourceAt(d.input, directivePointer, directiveNode)}
 		if argumentsNode, ok := directiveNode.member("arguments"); ok {
 			directive.arguments, err = d.arguments(argumentsNode, joinPointer(directivePointer, "arguments"))

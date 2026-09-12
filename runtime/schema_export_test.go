@@ -19,7 +19,11 @@ func TestRuntimeSnapshotExportsIndependentPortableSchemaByteIdentically(t *testi
 		"capabilities":["core.language-1"],
 		"types":[{"id":"User","name":"User","kind":"object","output":true,"description":"Account profile","fields":[{"id":"User.name","name":"name","type":"String","description":"Display name"}]}],
 		"operations":[{"id":"query.user","name":"user","kind":"query","input":"String","output":"User","description":"Look up a user","deprecation":{"reason":"use account","replacement":"query.account"},"effect":"read","deterministic":true,"cacheable":true,"retrySafe":true,"threadSafety":"thread-safe","batching":"eligible","transaction":"none","authorizationPolicy":"user.read","cost":2,"capabilities":["core.language-1"],"traits":[{"id":"vendor.docs-1","semantics":"documentation","value":{"owner":"runtime"}}],"source":{"uri":"urn:source:query.user","line":7}}],
-		"members":[{"id":"User.name.resolver","name":"name","owner":"User","kind":"field","output":"String","description":"Resolve display name","effect":"read","deterministic":true,"threadSafety":"thread-safe","batching":"ineligible","transaction":"none","authorizationPolicy":"user.read"}]
+		"members":[{"id":"User.name.resolver","name":"name","owner":"User","kind":"field","output":"String","description":"Resolve display name","effect":"read","deterministic":true,"threadSafety":"thread-safe","batching":"ineligible","transaction":"none","authorizationPolicy":"user.read"}],
+		"directives":[
+			{"id":"naatre.include","name":"include","version":"1","capability":"core.language-1","locations":["field","call","pipeline","map","index","slice","page","meta","parallel","fragment","current","nest","unnest"],"arguments":[{"id":"naatre.include.if","name":"if","type":"Boolean","required":true}],"phases":["validation","execution"],"effect":"read","cost":0,"deterministic":true,"compatibility":"breaking"},
+			{"id":"naatre.skip","name":"skip","version":"1","capability":"core.language-1","locations":["field","call","pipeline","map","index","slice","page","meta","parallel","fragment","current","nest","unnest"],"arguments":[{"id":"naatre.skip.if","name":"if","type":"Boolean","required":true}],"phases":["validation","execution"],"effect":"read","cost":0,"deterministic":true,"compatibility":"breaking"}
+		]
 	}`), schema.ImportOptions{})
 	if err != nil {
 		t.Fatalf("ParseDocument: %v", err)
@@ -94,5 +98,35 @@ func TestRuntimeSnapshotExportsIndependentPortableSchemaByteIdentically(t *testi
 	}
 	if err := snapshot.ValidateSchema(changedDocument); err == nil || !strings.Contains(err.Error(), "manifest does not match") {
 		t.Fatalf("ValidateSchema changed cost error = %v", err)
+	}
+}
+
+func TestRuntimeSchemaExportsBuiltInAndCustomDirectiveDescriptors(t *testing.T) {
+	t.Parallel()
+	registry := runtime.NewRegistry(coreTypes(t))
+	descriptor := testDirectiveDescriptor("audit", "vendor.audit-1")
+	descriptor.Repeatable = true
+	if err := registry.RegisterDirective(runtime.DirectiveDefinition{Descriptor: descriptor}); err != nil {
+		t.Fatalf("RegisterDirective: %v", err)
+	}
+	snapshot := frozenRegistry(t, registry)
+	document, err := snapshot.ExportSchema(schema.ExportOptions{Revision: "directives-r1"})
+	if err != nil {
+		t.Fatalf("ExportSchema: %v", err)
+	}
+	directives := document.Directives()
+	if len(directives) != 3 || directives[0].ID != "naatre.include" || directives[1].ID != "naatre.skip" || directives[2].ID != "vendor.audit" {
+		t.Fatalf("directives = %#v", directives)
+	}
+	if directives[2].Version != "1" || directives[2].Capability != "vendor.audit-1" || !directives[2].Repeatable {
+		t.Fatalf("custom descriptor = %#v", directives[2])
+	}
+	directives[2].Arguments[0].Name = "mutated"
+	again, err := snapshot.ExportSchema(schema.ExportOptions{Revision: "directives-r1"})
+	if err != nil {
+		t.Fatalf("ExportSchema again: %v", err)
+	}
+	if again.Directives()[2].Arguments[0].Name != "level" {
+		t.Fatal("directive descriptor mutated through schema discovery")
 	}
 }

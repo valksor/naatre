@@ -51,9 +51,12 @@ hidden-name leaks, and checks stable-ID compatibility classifications. The core
 fixture and pure in-process APIs do not enable an HTTP discovery route; #106
 owns authenticated transport integration and migration reporting.
 
-The core planner resolves the built-in `include` and `skip` directives and
-rejects unregistered directives; #19 owns custom directive declarations and
-hooks. It validates `collection.page-1` admission and collection item scopes;
+The core planner resolves the built-in `include` and `skip` directives, rejects
+unregistered directives, and supports registered version-pinned custom
+directives through bounded planning, one-shot execution wrappers, and ordered
+response annotations. Portable schema and canonical fixtures cover directive
+identity, filtering, diffing, and cross-language normalization. It validates
+`collection.page-1` admission and collection item scopes;
 #16 owns advertised pagination metadata and opaque cursor execution. The
 reference executor consumes all 15 positive semantic language vectors directly,
 including ordered pipelines, explicit collection operations, fragments,

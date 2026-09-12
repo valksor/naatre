@@ -97,6 +97,7 @@ Invalid: `9007199254740993` as an Int64 or a Decimal canonicalized as `"1.00"`.
   a host JSON decoder MUST NOT collapse or repair them.
 - **TYPE-209:** Enum values are JSON strings. Closed enums reject an undeclared
   spelling; open enums preserve the exact spelling plus a known/unknown state.
+  The empty string and valid non-identifier Unicode spellings are representable.
   Closed unions reject an undeclared `$type`; open unions preserve the exact
   tag and canonical `$value` as an unknown-variant representation.
 - **TYPE-210:** List elements cannot be missing. Null elements require nullable
@@ -193,6 +194,17 @@ Invalid: canonicalization uses the machine locale or current timezone.
   they reject duplicate IDs and sort by ID. Trait values remain ordinary
   canonical JSON. Implementing one trait ID does not imply support for another
   version or vendor prefix.
+- **TYPE-412:** A directive descriptor carries a stable ID, language name,
+  implementation version, exact capability pin, repeatability, allowed
+  selection locations, typed argument descriptors, lifecycle phases, effect,
+  cost, determinism, compatibility classification, and applicable lifecycle,
+  capability, trait, and source metadata. Directive and argument arrays sort by
+  stable ID; locations, phases, and capabilities are duplicate-free sets.
+  The validation phase is mandatory because every directive contributes static
+  location, argument, effect, and capability metadata. Directive and argument
+  language names use the same invocable identifier grammar as document syntax.
+  Runtime callbacks are host behavior bound to the descriptor and are never
+  serialized or hashed as code.
 
 ### Lifecycle and compatibility
 
@@ -224,6 +236,12 @@ Invalid: canonicalization uses the machine locale or current timezone.
   manifest with the proposed document and bind an accepted revision into the
   deployment artifact. Matching only type names or accepting a diff report
   without validating the frozen registry is insufficient.
+- **TYPE-425:** Directive comparison is by stable ID. Removal, rename, version
+  or capability changes, argument removal/type changes/tightening, and location
+  removal are breaking. Phase, effect, cost, determinism, declared
+  compatibility, critical capability, or trait changes are dangerous. A new
+  directive or optional argument is additive; documentation, deprecation, and
+  default-only changes are behavior-only unless a stronger rule applies.
 
 ### Filtered and authenticated discovery
 
@@ -234,7 +252,7 @@ Invalid: canonicalization uses the machine locale or current timezone.
   metadata is returned. #106 owns the HTTP adapter, stable failure codes,
   migration reports, and rolling-revision integration for this contract.
 - **TYPE-431:** Visibility is a deny-by-default allow-list of stable type,
-  field, enum-member, variant, operation, object-member, and retired IDs. A
+  field, enum-member, variant, operation, object-member, directive, and retired IDs. A
   filtered document MUST contain no hidden declaration or retired name and MUST
   pass the same import and reference validation as a complete document.
 - **TYPE-432:** Filtering may prune output fields and open enum/union members.
@@ -243,6 +261,10 @@ Invalid: canonicalization uses the machine locale or current timezone.
   all-or-nothing: hiding any input member removes the input object and every
   operation/member that depends on it, because silently narrowing accepted
   input would change execution semantics.
+- **TYPE-434:** A visible directive is retained only when every argument type
+  remains visible or is a built-in scalar. Hiding a directive never removes its
+  capability from an already approved revision implicitly; capability policy is
+  evaluated independently by the discovery consumer.
 - **TYPE-433:** One discovery response is derived from exactly one immutable
   revision and one authorization decision. Types, operations, members, hash,
   ETag, or diff metadata from different revisions MUST NOT be combined. Cache

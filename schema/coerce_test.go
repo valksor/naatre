@@ -143,6 +143,30 @@ func TestCoerceInputModelsOpenEnumsAndBoundsRecursiveValues(t *testing.T) {
 	if _, err := schema.CoerceInput(types, "ClosedColor", json.RawMessage(`"GREEN"`), false); err == nil {
 		t.Fatal("closed enum accepted unknown value")
 	}
+	closedEmpty, err := schema.CoerceInput(types, "ClosedEmpty", json.RawMessage(`""`), false)
+	if err != nil {
+		t.Fatalf("closed empty enum: %v", err)
+	}
+	spelling, known, ok = closedEmpty.Enum()
+	if !ok || !known || spelling != "" {
+		t.Fatalf("closed empty enum state = %q, %t, %t", spelling, known, ok)
+	}
+	encoded, err := closedEmpty.MarshalJSON()
+	if err != nil || string(encoded) != `""` {
+		t.Fatalf("closed empty enum JSON = %s, %v", encoded, err)
+	}
+	openEmpty, err := schema.CoerceInput(types, "OpenColor", json.RawMessage(`""`), false)
+	if err != nil {
+		t.Fatalf("open empty enum: %v", err)
+	}
+	spelling, known, ok = openEmpty.Enum()
+	if !ok || known || spelling != "" {
+		t.Fatalf("open empty enum state = %q, %t, %t", spelling, known, ok)
+	}
+	encoded, err = openEmpty.MarshalJSON()
+	if err != nil || string(encoded) != `""` {
+		t.Fatalf("open empty enum JSON = %s, %v", encoded, err)
+	}
 	if _, err := schema.CoerceInput(types, "InputNode", json.RawMessage(`{"next":{"next":{"next":null}}}`), false); err == nil {
 		t.Fatal("recursive input exceeded declared maximum depth")
 	}
@@ -300,6 +324,7 @@ func inputTypes(t *testing.T) schema.Snapshot {
 		}},
 		{ID: "OpenColor", Kind: schema.EnumType, Input: true, Open: true, EnumValues: []string{"RED", "BLUE"}},
 		{ID: "ClosedColor", Kind: schema.EnumType, Input: true, EnumValues: []string{"RED", "BLUE"}},
+		{ID: "ClosedEmpty", Kind: schema.EnumType, Input: true, EnumValues: []string{""}},
 		{ID: "InputNode", Kind: schema.InputObjectType, Input: true, MaxDepth: 1, Fields: map[string]schema.FieldDescriptor{
 			"next": {Type: "InputNode", Nullable: true},
 		}},

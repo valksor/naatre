@@ -102,8 +102,16 @@ type PlanInputDescription struct {
 
 // PlanDirectiveDescription records compile-time directive semantics.
 type PlanDirectiveDescription struct {
-	Name   string                 `json:"name"`
-	Inputs []PlanInputDescription `json:"inputs,omitempty"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Version        string                 `json:"version"`
+	Capability     string                 `json:"capability"`
+	Effect         Effect                 `json:"effect"`
+	DeclaredCost   uint64                 `json:"declaredCost"`
+	AdditionalCost uint64                 `json:"additionalCost,omitempty"`
+	Deterministic  bool                   `json:"deterministic"`
+	Skip           bool                   `json:"skip,omitempty"`
+	Inputs         []PlanInputDescription `json:"inputs,omitempty"`
 }
 
 // PlanExpressionDescription retains expression identity and static literal
@@ -178,7 +186,7 @@ func describePlanNodes(nodes []planNode) []PlanNodeDescription {
 			SourcePointer: node.source.Pointer, ResponsePath: append([]string(nil), node.responsePath...),
 			Scheduling: node.scheduling, Ordinal: node.ordinal, ParallelPolicy: node.parallelPolicy,
 			Barriers: barriers, Inputs: describeInputs(node.selection.Arguments()),
-			Directives: describeDirectives(node.selection.Directives()), Children: describePlanNodes(node.children),
+			Directives: describeDirectives(node.directives), Children: describePlanNodes(node.children),
 		}
 		describeBounds(node.selection, &descriptions[index])
 	}
@@ -310,13 +318,19 @@ func describeInputs(arguments map[string]protocol.Expression) []PlanInputDescrip
 	return inputs
 }
 
-func describeDirectives(directives []protocol.Directive) []PlanDirectiveDescription {
+func describeDirectives(directives []plannedDirective) []PlanDirectiveDescription {
 	if len(directives) == 0 {
 		return nil
 	}
 	descriptions := make([]PlanDirectiveDescription, len(directives))
 	for index, directive := range directives {
-		descriptions[index] = PlanDirectiveDescription{Name: directive.Name(), Inputs: describeInputs(directive.Arguments())}
+		descriptor := directive.definition.Descriptor
+		descriptions[index] = PlanDirectiveDescription{
+			ID: descriptor.ID, Name: descriptor.Name, Version: descriptor.Version, Capability: descriptor.Capability,
+			Effect: Effect(descriptor.Effect), DeclaredCost: descriptor.Cost, AdditionalCost: directive.decision.AdditionalCost,
+			Deterministic: descriptor.Deterministic, Skip: directive.decision.Skip,
+			Inputs: describeInputs(directive.invocation.Arguments()),
+		}
 	}
 	return descriptions
 }

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"sync"
+	"unicode/utf8"
 )
 
 // TypeID is a portable schema type identifier.
@@ -348,7 +349,7 @@ func validateVariantIDs(descriptor TypeDescriptor) error {
 func validateEnumValues(descriptor TypeDescriptor) error {
 	seen := make(map[string]bool, len(descriptor.EnumValues))
 	for _, value := range descriptor.EnumValues {
-		if !typeIDPattern.MatchString(value) || seen[value] {
+		if !utf8.ValidString(value) || seen[value] {
 			return fmt.Errorf("enum type %q has invalid or duplicate value %q", descriptor.ID, value)
 		}
 		seen[value] = true

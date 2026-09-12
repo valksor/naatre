@@ -1,3 +1,14 @@
 # ripwire quality acks v1 — written by --quality-ack; a finding stays suppressed until it worsens past its acked magnitude
 # format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)
+ack dead-code:preexisting 7a16856d104c1242 0 cid=929c4cf68c910d24 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication 32777e3f3ae72c9d 181 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication 505efd35a31adbcc 181 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication 6f36fc22bfd5ab4c 40 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication b50560cc45b91ff2 358 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication c2e350c7e8c30ae4 153 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication dd1b308c35815b66 46 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack new-clone-of-reused-helper dd1b308c35815b66 4 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack verbosity 1caa3996f8c9ac25 380 cid=4c0163ba7d34ded3 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack verbosity 6aa361097e6f3edd 450 cid=e0a046791c5113c8 conformance fixture vectors are authored contract data; adding required vectors is the deliverable, not code debt
+ack verbosity 867c6b27a47254b5 93 cid=0653002fdcdd1913 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack verbosity e27fe82c785c3bfc 127 cid=d4a29ccbceb9120a issue 19 required declarative fixtures and reviewed false-positive structural matches
