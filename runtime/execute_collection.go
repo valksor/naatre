@@ -20,8 +20,10 @@ func (p *Plan) executeMap(ctx context.Context, node planNode, scope executionSco
 	var failures []ExecutionError
 	failed := false
 	for index, item := range items {
-		itemValue := collectionItemValue(item, descriptor, index)
-		if itemValue.status == valueNull {
+		itemValue := collectionItemValue(scope.current, item, descriptor, index)
+		// A failed element is a null placeholder, so later indexes do not shift
+		// and no member handler runs for it: one indexed error, never two.
+		if itemValue.status == valueNull || itemValue.status == valueUnavailable {
 			output[index] = nil
 			continue
 		}
@@ -58,7 +60,7 @@ func (p *Plan) executeIndex(ctx context.Context, node planNode, scope executionS
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 	}
 	descriptor, _ := p.types.Lookup(node.input.id)
-	value := collectionItemValue(items[index], descriptor, index)
+	value := collectionItemValue(scope.current, items[index], descriptor, index)
 	presentation := value.value
 	var failures []ExecutionError
 	failed := false
@@ -106,8 +108,8 @@ func (p *Plan) executeCollectionWindow(ctx context.Context, node planNode, scope
 	var failures []ExecutionError
 	failed := false
 	for offset, item := range window {
-		itemValue := collectionItemValue(item, descriptor, start+offset)
-		if itemValue.status == valueNull {
+		itemValue := collectionItemValue(scope.current, item, descriptor, start+offset)
+		if itemValue.status == valueNull || itemValue.status == valueUnavailable {
 			output[offset] = nil
 			continue
 		}

@@ -43,17 +43,19 @@ type executionValue struct {
 // children so the mark survives the descent into a nested object, while an
 // ancestor stays available with its remaining valid data (TYPE-206).
 type unavailableTree struct {
-	self     bool
-	children map[string]*unavailableTree
+	self bool
+	// children is keyed by a response path segment: an object member name or a
+	// list index, so a failed member is tracked at either position.
+	children map[any]*unavailableTree
 }
 
-// member reports the subtree recorded for name and whether name itself is
-// unavailable.
-func (t *unavailableTree) member(name string) (*unavailableTree, bool) {
+// member reports the subtree recorded for a path segment and whether that
+// segment itself is unavailable. A segment is a member name or a list index.
+func (t *unavailableTree) member(segment any) (*unavailableTree, bool) {
 	if t == nil {
 		return nil, false
 	}
-	child := t.children[name]
+	child := t.children[segment]
 	if child == nil {
 		return nil, false
 	}
@@ -63,19 +65,20 @@ func (t *unavailableTree) member(name string) (*unavailableTree, bool) {
 func (t *unavailableTree) insert(path []any) {
 	node := t
 	for _, segment := range path {
-		name, ok := segment.(string)
-		if !ok {
-			// A list index is represented by the TYPE-200 null placeholder for
-			// that element, never by marking an ancestor unavailable.
+		switch segment.(type) {
+		case string, int:
+		default:
+			// An unrepresentable segment cannot be addressed by a selection, so
+			// marking an ancestor for it would delete unrelated valid data.
 			return
 		}
 		if node.children == nil {
-			node.children = make(map[string]*unavailableTree)
+			node.children = make(map[any]*unavailableTree)
 		}
-		child := node.children[name]
+		child := node.children[segment]
 		if child == nil {
 			child = &unavailableTree{}
-			node.children[name] = child
+			node.children[segment] = child
 		}
 		node = child
 	}
@@ -91,7 +94,7 @@ func (t *unavailableTree) merge(other *unavailableTree) {
 	t.self = t.self || other.self
 	for name, child := range other.children {
 		if t.children == nil {
-			t.children = make(map[string]*unavailableTree)
+			t.children = make(map[any]*unavailableTree)
 		}
 		existing := t.children[name]
 		if existing == nil {
@@ -495,12 +498,26 @@ func collectionItems(value executionValue) ([]any, bool) {
 	return items, ok
 }
 
-func collectionItemValue(item any, descriptor schema.TypeDescriptor, _ int) executionValue {
+// collectionItemValue projects one element of a completed collection. The
+// element inherits the unavailable marks recorded for its index, so a member
+// whose completion failed stays unavailable instead of being re-resolved by a
+// mapped selection.
+func collectionItemValue(parent executionValue, item any, descriptor schema.TypeDescriptor, index int) executionValue {
 	status := valueAvailable
 	if item == nil {
 		status = valueNull
 	}
-	return executionValue{value: item, typeInfo: staticType{id: descriptor.Element, nullable: descriptor.ElementNullable, valid: true}, status: status, actualType: runtimeActualType(descriptor.Element, item)}
+	nested, unavailable := parent.unavailable.member(index)
+	if unavailable {
+		status = valueUnavailable
+	}
+	return executionValue{
+		value:       item,
+		typeInfo:    staticType{id: descriptor.Element, nullable: descriptor.ElementNullable, valid: true},
+		status:      status,
+		actualType:  runtimeActualType(descriptor.Element, item),
+		unavailable: nested,
+	}
 }
 
 func runtimeActualType(typeID schema.TypeID, value any) schema.TypeID {

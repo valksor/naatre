@@ -1,0 +1,753 @@
+{
+  "profile": "core.protocol-1",
+  "clauses": [
+    "CORE-500",
+    "CORE-502",
+    "CORE-503",
+    "CORE-504",
+    "CORE-505",
+    "CORE-506",
+    "CORE-507",
+    "CORE-509",
+    "CORE-510"
+  ],
+  "description": "Language-neutral partial-result states. Each vector fixes what a client observes in data and errors simultaneously, so an SDK can verify that it decodes partial data and unresolved required fields without reproducing Go behaviour. An absent key is omitted; an explicit null is a present key whose value is null.",
+  "schema": {
+    "Profile": {
+      "kind": "object",
+      "fields": {
+        "bio": {
+          "type": "String"
+        },
+        "nickname": {
+          "type": "String"
+        }
+      }
+    },
+    "Person": {
+      "kind": "object",
+      "fields": {
+        "name": {
+          "type": "String",
+          "required": true
+        },
+        "nickname": {
+          "type": "String",
+          "nullable": true
+        },
+        "profile": {
+          "type": "Profile"
+        }
+      }
+    },
+    "People": {
+      "kind": "list",
+      "element": "Person"
+    }
+  },
+  "roots": {
+    "person": {
+      "output": "Person"
+    },
+    "people": {
+      "output": "People"
+    },
+    "other": {
+      "output": "String"
+    }
+  },
+  "vectors": [
+    {
+      "name": "successful-value-carries-no-error",
+      "outcome": "successful value",
+      "position": "object member",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": "Ada"
+          }
+        }
+      },
+      "expectedData": {
+        "person": {
+          "name": "Ada"
+        }
+      },
+      "expectedErrors": [],
+      "complete": true
+    },
+    {
+      "name": "explicit-nullable-null-is-a-present-key",
+      "outcome": "explicit nullable null",
+      "position": "object member",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    },
+                    {
+                      "$field": {
+                        "name": "nickname"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": "Ada",
+            "nickname": null
+          }
+        }
+      },
+      "expectedData": {
+        "person": {
+          "name": "Ada",
+          "nickname": null
+        }
+      },
+      "expectedErrors": [],
+      "complete": true,
+      "note": "A legitimate null is a present key with a null value and carries no error. A client must not decode it as a failure or as absence."
+    },
+    {
+      "name": "skipped-selection-is-absent-without-error",
+      "outcome": "skipped selection",
+      "position": "object member",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    },
+                    {
+                      "$field": {
+                        "name": "nickname",
+                        "directives": [
+                          {
+                            "name": "skip",
+                            "arguments": {
+                              "if": {
+                                "$literal": true
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": "Ada",
+            "nickname": "ada"
+          }
+        }
+      },
+      "expectedData": {
+        "person": {
+          "name": "Ada"
+        }
+      },
+      "expectedErrors": [],
+      "complete": true,
+      "note": "A skipped member is omitted entirely, which is distinct from an explicit null."
+    },
+    {
+      "name": "failed-object-member-is-absent-with-a-path-specific-error",
+      "outcome": "output type failure",
+      "position": "object member",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    },
+                    {
+                      "$field": {
+                        "name": "profile",
+                        "select": [
+                          {
+                            "$field": {
+                              "name": "nickname"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": "Ada",
+            "profile": {
+              "bio": 7,
+              "nickname": "ada"
+            }
+          }
+        }
+      },
+      "expectedData": {
+        "person": {
+          "name": "Ada",
+          "profile": {
+            "nickname": "ada"
+          }
+        }
+      },
+      "expectedErrors": [
+        {
+          "code": "OUTPUT_COMPLETION",
+          "path": [
+            "person",
+            "profile",
+            "bio"
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "note": "The failed member is absent and its valid siblings survive. A failed leaf never deletes unrelated parent data."
+    },
+    {
+      "name": "failed-element-member-is-absent-and-later-indexes-do-not-shift",
+      "outcome": "output type failure",
+      "position": "list element",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "people",
+                  "select": [
+                    {
+                      "$map": {
+                        "as": "items",
+                        "select": [
+                          {
+                            "$field": {
+                              "name": "name"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "people": {
+          "output": [
+            {
+              "name": "Ada"
+            },
+            {
+              "name": 7
+            },
+            {
+              "name": "Grace"
+            }
+          ]
+        }
+      },
+      "expectedData": {
+        "people": {
+          "items": [
+            {
+              "name": "Ada"
+            },
+            {},
+            {
+              "name": "Grace"
+            }
+          ]
+        }
+      },
+      "expectedErrors": [
+        {
+          "code": "OUTPUT_COMPLETION",
+          "path": [
+            "people",
+            1,
+            "name"
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "note": "Only the element's member failed, not the element, so the element survives with its remaining valid data and the error is indexed at the member. Index 2 stays index 2. A list index in an error path is a JSON number, never the string \"1\"."
+    },
+    {
+      "name": "handler-failure-publishes-an-application-code",
+      "outcome": "handler failure",
+      "position": "root",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "error": {
+            "code": "ORDER_LOCKED",
+            "message": "order is locked",
+            "retryable": true,
+            "details": {
+              "shop.retryAfter": "30s"
+            }
+          }
+        }
+      },
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "ORDER_LOCKED",
+          "path": [
+            "person"
+          ],
+          "retryable": true,
+          "details": {
+            "shop.retryAfter": "30s"
+          }
+        }
+      ],
+      "complete": false,
+      "note": "An application code selects fields of the core shape. It matches [A-Z][A-Z0-9_]{2,63} and is not a reserved code."
+    },
+    {
+      "name": "reserved-code-cannot-be-impersonated",
+      "outcome": "handler failure",
+      "position": "root",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "error": {
+            "code": "INTERNAL",
+            "message": "not really internal"
+          }
+        }
+      },
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "HANDLER_FAILED",
+          "path": [
+            "person"
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "note": "A handler claiming a reserved code is downgraded to the generic failure."
+    },
+    {
+      "name": "handler-failure-without-a-domain-code-is-generic",
+      "outcome": "handler failure",
+      "position": "root",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "error": {
+            "opaque": true
+          }
+        }
+      },
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "HANDLER_FAILED",
+          "path": [
+            "person"
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "note": "No internal cause, message, or stack trace may appear anywhere in the response."
+    },
+    {
+      "name": "simultaneous-data-and-errors",
+      "outcome": "handler failure",
+      "position": "object member",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "$call": {
+                  "name": "other"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": "Ada"
+          }
+        },
+        "other": {
+          "error": {
+            "opaque": true
+          }
+        }
+      },
+      "expectedData": {
+        "person": {
+          "name": "Ada"
+        }
+      },
+      "expectedErrors": [
+        {
+          "code": "HANDLER_FAILED",
+          "path": [
+            "other"
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "note": "Data and errors are populated in the same response. A non-empty errors array does not mean data is absent."
+    },
+    {
+      "name": "incomplete-required-field-is-not-a-successful-model",
+      "outcome": "output type failure",
+      "position": "object member",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": 7
+          }
+        }
+      },
+      "expectedData": {
+        "person": {}
+      },
+      "expectedErrors": [
+        {
+          "code": "OUTPUT_COMPLETION",
+          "path": [
+            "person",
+            "name"
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "requiredUnresolved": [
+        "person.name"
+      ],
+      "note": "name is a required non-null field with no value. A completeness conversion must fail rather than yield a zero value."
+    },
+    {
+      "name": "operation-level-cancellation-uses-the-root-path",
+      "outcome": "cancellation",
+      "position": "root",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "person",
+                  "select": [
+                    {
+                      "$field": {
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "person": {
+          "output": {
+            "name": "Ada"
+          }
+        }
+      },
+      "cancelBeforeExecution": true,
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "CANCELLED",
+          "path": [],
+          "retryable": true
+        }
+      ],
+      "complete": false,
+      "note": "No field is responsible, so the path is the empty root array. Retryable is advice about the failure class, never permission to replay a write."
+    },
+    {
+      "name": "failed-list-element-is-a-null-placeholder",
+      "outcome": "output type failure",
+      "position": "list element",
+      "document": {
+        "operations": [
+          {
+            "name": "Q",
+            "kind": "query",
+            "select": [
+              {
+                "$call": {
+                  "name": "people",
+                  "select": [
+                    {
+                      "$map": {
+                        "as": "items",
+                        "select": [
+                          {
+                            "$field": {
+                              "name": "name"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "handlers": {
+        "people": {
+          "output": [
+            {
+              "name": "Ada"
+            },
+            "not-an-object",
+            {
+              "name": "Grace"
+            }
+          ]
+        }
+      },
+      "expectedData": {
+        "people": {
+          "items": [
+            {
+              "name": "Ada"
+            },
+            null,
+            {
+              "name": "Grace"
+            }
+          ]
+        }
+      },
+      "expectedErrors": [
+        {
+          "code": "OUTPUT_COMPLETION",
+          "path": [
+            "people",
+            1
+          ],
+          "retryable": false
+        }
+      ],
+      "complete": false,
+      "note": "The element itself failed completion, so it is a null placeholder with an error indexed at the element. Later indexes do not shift, and no member handler runs for it."
+    }
+  ],
+  "effectStates": [
+    {
+      "state": "not-applicable",
+      "when": "the operation declares no effect"
+    },
+    {
+      "state": "none",
+      "when": "no effectful handler started"
+    },
+    {
+      "state": "applied",
+      "when": "every effectful handler completed and the response was assembled from them"
+    },
+    {
+      "state": "indeterminate",
+      "when": "an effectful handler started and the operation then failed, including a write whose response failed to project"
+    },
+    {
+      "state": "rolled-back",
+      "when": "an undo was confirmed; a runtime that cannot observe one reports indeterminate instead"
+    }
+  ]
+}

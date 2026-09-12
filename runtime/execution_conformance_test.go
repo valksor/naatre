@@ -67,12 +67,7 @@ func TestExecutorConsumesPortablePositiveLanguageVectors(t *testing.T) {
 				assertJSONEqual(t, outcome.Errors[index].Path, expected.Path)
 			}
 			if len(vector.ExpectedData) != 0 && !bytes.Equal(vector.ExpectedData, []byte("null")) {
-				actual, marshalErr := json.Marshal(outcome.Data)
-				actualCanonical, actualErr := protocol.CanonicalizeJSON(actual, protocol.Limits{})
-				expectedCanonical, expectedErr := protocol.CanonicalizeJSON(vector.ExpectedData, protocol.Limits{})
-				if marshalErr != nil || actualErr != nil || expectedErr != nil || !bytes.Equal(actualCanonical, expectedCanonical) {
-					t.Fatalf("data = %s, want %s (%v, %v, %v)", actual, vector.ExpectedData, marshalErr, actualErr, expectedErr)
-				}
+				assertCanonicalJSONEqual(t, outcome.Data, vector.ExpectedData)
 			}
 		})
 	}
