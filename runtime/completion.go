@@ -13,11 +13,6 @@ import (
 	"github.com/valksor/naatre/schema"
 )
 
-const (
-	maxOutputDepth = 64
-	maxOutputNodes = 100_000
-)
-
 var errInvalidOutput = errors.New("invalid handler output")
 
 type completionIssue struct {
@@ -27,7 +22,8 @@ type completionIssue struct {
 
 type copyState struct {
 	active map[copyReference]bool
-	nodes  int
+	nodes  uint64
+	limits ResourceLimits
 }
 
 type copyReference struct {
@@ -38,26 +34,32 @@ type copyReference struct {
 type completionState struct {
 	types  schema.Snapshot
 	active map[schema.TypeID]int
+	limits ResourceLimits
 }
 
 func completeContained(value any, output schema.TypeID, nullable bool, types schema.Snapshot) (completed any, issues []completionIssue, available bool, fatal error) {
-	copied, err := copyOutput(reflect.ValueOf(value), 0, &copyState{active: make(map[copyReference]bool)})
+	return completeContainedWithLimits(value, output, nullable, types, DefaultResourceLimits())
+}
+
+func completeContainedWithLimits(value any, output schema.TypeID, nullable bool, types schema.Snapshot, limits ResourceLimits) (completed any, issues []completionIssue, available bool, fatal error) {
+	copied, err := copyOutput(reflect.ValueOf(value), 0, &copyState{active: make(map[copyReference]bool), limits: limits})
 	if err != nil {
 		return nil, nil, false, err
 	}
-	state := &completionState{types: types, active: make(map[schema.TypeID]int)}
+	state := &completionState{types: types, active: make(map[schema.TypeID]int), limits: limits}
 	completed, issues, available = state.completeOutput(copied, output, nullable, 0, nil)
 	return completed, issues, available, nil
 }
 
 func copyOutput(value reflect.Value, depth int, state *copyState) (any, error) {
-	if depth > maxOutputDepth {
-		return nil, fmt.Errorf("%w: output exceeds maximum depth", errInvalidOutput)
+	if uint64(depth) > state.limits.MaxOutputDepth {
+		return nil, fmt.Errorf("%w: output exceeds maximum depth", errResourceBudget)
 	}
-	state.nodes++
-	if state.nodes > maxOutputNodes {
-		return nil, fmt.Errorf("%w: output exceeds maximum node count", errInvalidOutput)
+	next, ok := checkedResourceAdd(state.nodes, 1)
+	if !ok || next > state.limits.MaxOutputNodes {
+		return nil, fmt.Errorf("%w: output exceeds maximum node count", errResourceBudget)
 	}
+	state.nodes = next
 	if !value.IsValid() {
 		return nil, nil
 	}
@@ -181,8 +183,8 @@ func (s *copyState) leave(reference copyReference) {
 }
 
 func (s *completionState) completeOutput(value any, output schema.TypeID, nullable bool, depth int, path []any) (completed any, issues []completionIssue, available bool) {
-	if depth > maxOutputDepth {
-		return nil, issue(path, "schema completion exceeds maximum depth"), false
+	if uint64(depth) > s.limits.MaxOutputDepth {
+		return nil, []completionIssue{{path: append([]any(nil), path...), cause: fmt.Errorf("%w: schema completion exceeds maximum depth", errResourceBudget)}}, false
 	}
 	if value == nil {
 		if nullable {

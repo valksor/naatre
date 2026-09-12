@@ -1,0 +1,113 @@
+{
+  "profile": "core.resources-1",
+  "limitVectors": [
+    {"name":"request-bytes","code":"LIMIT_BYTES","phase":"decode","location":"byte-offset"},
+    {"name":"decoder-tokens","code":"LIMIT_TOKENS","phase":"decode","location":"pointer"},
+    {"name":"ast-depth","code":"LIMIT_DEPTH","phase":"decode","location":"pointer"},
+    {"name":"decoded-string-bytes","code":"LIMIT_STRING","phase":"decode","location":"pointer"},
+    {"name":"object-members","code":"LIMIT_MEMBERS","phase":"decode","location":"pointer"},
+    {"name":"array-items","code":"LIMIT_ARRAY","phase":"decode","location":"pointer"},
+    {"name":"number-bytes","code":"LIMIT_NUMBER","phase":"decode","location":"pointer"},
+    {"name":"literal-bytes","code":"LIMIT_LITERAL","phase":"decode","location":"pointer"},
+    {"name":"plan-depth","code":"LIMIT_PLAN_DEPTH","phase":"validate","location":"pointer"},
+    {"name":"plan-nodes","code":"LIMIT_PLAN_NODES","phase":"validate","location":"pointer"},
+    {"name":"planned-calls","code":"LIMIT_PLANNED_CALLS","phase":"validate","location":"pointer"},
+    {"name":"selected-fields","code":"LIMIT_SELECTED_FIELDS","phase":"validate","location":"pointer"},
+    {"name":"fragment-expansion","code":"FRAGMENT_EXPANSION_LIMIT","phase":"validate","location":"pointer"},
+    {"name":"parallel-width","code":"LIMIT_PARALLEL_WIDTH","phase":"validate","location":"pointer"},
+    {"name":"queued-work","code":"LIMIT_QUEUED_WORK","phase":"validate","location":"pointer"},
+    {"name":"static-cost","code":"LIMIT_STATIC_COST","phase":"validate","location":"pointer"},
+    {"name":"validation-errors","code":"LIMIT_VALIDATION_ERRORS","phase":"validate","location":"pointer"},
+    {"name":"runtime-work","code":"RESOURCE_EXHAUSTED","phase":"execute","location":"path"},
+    {"name":"collection-items","code":"RESOURCE_EXHAUSTED","phase":"execute","location":"path"},
+    {"name":"execution-duration","code":"RESOURCE_EXHAUSTED","phase":"execute","location":"path"},
+    {"name":"output-bytes","code":"RESOURCE_EXHAUSTED","phase":"serialize","location":"path"},
+    {"name":"error-count","code":"RESOURCE_EXHAUSTED","phase":"serialize","location":"path"},
+    {"name":"output-depth","code":"RESOURCE_EXHAUSTED","phase":"complete","location":"path"},
+    {"name":"output-nodes","code":"RESOURCE_EXHAUSTED","phase":"complete","location":"path"}
+  ],
+  "lateExhaustionVectors": [
+    {
+      "name": "output-exhaustion-after-modeled-commit",
+      "operation": "mutation",
+      "modeledCommit": true,
+      "exhaustion": "output-bytes",
+      "code": "RESOURCE_EXHAUSTED",
+      "path": ["$output"],
+      "effectState": "applied",
+      "errorEnvelopeBytes": 320,
+      "auditOrIdempotencyRequired": true
+    },
+    {
+      "name": "error-exhaustion-after-modeled-commit",
+      "operation": "mutation",
+      "modeledCommit": true,
+      "exhaustion": "error-count",
+      "code": "RESOURCE_EXHAUSTED",
+      "path": ["$errors"],
+      "effectState": "applied",
+      "errorEnvelopeBytes": 320,
+      "auditOrIdempotencyRequired": true
+    }
+  ],
+  "replayBudgetVectors": [
+    {
+      "name": "ancient-cursor-stops-at-scan-budget",
+      "cursorClass": "ancient",
+      "earliestHistoryAuthorized": false,
+      "limits": {"maxCursorScan":32,"maxStorageReads":33,"maxEvents":64,"maxBytes":65536,"maxFilterEvaluations":32,"maxAuthorizationEvaluations":32,"maxCatchUpQueue":16,"maxMemoryBytes":131072,"maxDurationMilliseconds":250},
+      "attempted": {"cursorScan":33,"storageReads":33,"events":0,"bytes":0,"filterEvaluations":32,"authorizationEvaluations":32,"catchUpQueue":0,"memoryBytes":4096,"durationMilliseconds":20},
+      "code": "RESOURCE_EXHAUSTED",
+      "maxObservedStorageReads": 33,
+      "admitMoreWork": false
+    },
+    {
+      "name": "random-cursor-stops-at-scan-budget",
+      "cursorClass": "random",
+      "earliestHistoryAuthorized": false,
+      "limits": {"maxCursorScan":16,"maxStorageReads":17,"maxEvents":64,"maxBytes":65536,"maxFilterEvaluations":16,"maxAuthorizationEvaluations":16,"maxCatchUpQueue":16,"maxMemoryBytes":131072,"maxDurationMilliseconds":250},
+      "attempted": {"cursorScan":17,"storageReads":17,"events":0,"bytes":0,"filterEvaluations":16,"authorizationEvaluations":16,"catchUpQueue":0,"memoryBytes":4096,"durationMilliseconds":15},
+      "code": "RESOURCE_EXHAUSTED",
+      "maxObservedStorageReads": 17,
+      "admitMoreWork": false
+    },
+    {
+      "name": "missing-cursor-stops-at-scan-budget",
+      "cursorClass": "missing",
+      "earliestHistoryAuthorized": false,
+      "limits": {"maxCursorScan":8,"maxStorageReads":9,"maxEvents":64,"maxBytes":65536,"maxFilterEvaluations":8,"maxAuthorizationEvaluations":8,"maxCatchUpQueue":16,"maxMemoryBytes":131072,"maxDurationMilliseconds":250},
+      "attempted": {"cursorScan":9,"storageReads":9,"events":0,"bytes":0,"filterEvaluations":8,"authorizationEvaluations":8,"catchUpQueue":0,"memoryBytes":4096,"durationMilliseconds":10},
+      "code": "RESOURCE_EXHAUSTED",
+      "maxObservedStorageReads": 9,
+      "admitMoreWork": false
+    },
+    {
+      "name": "earliest-retained-history-requires-capability",
+      "cursorClass": "earliest-retained",
+      "earliestHistoryAuthorized": false,
+      "limits": {"maxCursorScan":64,"maxStorageReads":65,"maxEvents":64,"maxBytes":65536,"maxFilterEvaluations":64,"maxAuthorizationEvaluations":64,"maxCatchUpQueue":16,"maxMemoryBytes":131072,"maxDurationMilliseconds":250},
+      "attempted": {"cursorScan":65,"storageReads":65,"events":0,"bytes":0,"filterEvaluations":64,"authorizationEvaluations":64,"catchUpQueue":0,"memoryBytes":8192,"durationMilliseconds":30},
+      "code": "RESOURCE_EXHAUSTED",
+      "maxObservedStorageReads": 65,
+      "admitMoreWork": false
+    }
+  ],
+  "aggregateBudgetVectors": [
+    {
+      "name": "replay-aggregate-byte-event-memory-duration-budget",
+      "mode": "replay",
+      "limits": {"maxCursorScan":32,"maxStorageReads":33,"maxEvents":100,"maxBytes":1048576,"maxFilterEvaluations":100,"maxAuthorizationEvaluations":100,"maxCatchUpQueue":32,"maxMemoryBytes":262144,"maxDurationMilliseconds":500},
+      "attempted": {"cursorScan":4,"storageReads":5,"events":101,"bytes":1048577,"filterEvaluations":101,"authorizationEvaluations":101,"catchUpQueue":0,"memoryBytes":262145,"durationMilliseconds":501},
+      "code": "RESOURCE_EXHAUSTED",
+      "disconnect": true
+    },
+    {
+      "name": "live-aggregate-byte-event-memory-duration-budget",
+      "mode": "live",
+      "limits": {"maxCursorScan":1,"maxStorageReads":1,"maxEvents":1000,"maxBytes":4194304,"maxFilterEvaluations":1000,"maxAuthorizationEvaluations":1000,"maxCatchUpQueue":64,"maxMemoryBytes":524288,"maxDurationMilliseconds":60000},
+      "attempted": {"cursorScan":0,"storageReads":0,"events":1001,"bytes":4194305,"filterEvaluations":1001,"authorizationEvaluations":1001,"catchUpQueue":65,"memoryBytes":524289,"durationMilliseconds":60001},
+      "code": "RESOURCE_EXHAUSTED",
+      "disconnect": true
+    }
+  ]
+}

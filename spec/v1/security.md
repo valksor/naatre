@@ -65,6 +65,49 @@
   is the client-supplied selection location and does not disclose a hidden
   declaration or policy reason.
 
+## Request resource budgets
+
+- **SEC-130 Aggregate resource model:** Every admitted request MUST have
+  independently configurable limits for transport and decompression bytes,
+  decoder tokens and structure, canonicalization, validation diagnostics,
+  constraints and regular expressions, schema recursion, plan depth and
+  nodes, planned calls and fields, fragment expansion, queued and parallel
+  work, static cost, runtime collection expansion, execution duration, output
+  completion, serialized bytes, and public errors. Cached plans, retries,
+  batches, remote fan-out, replay, and stream lifetime remain charged to the
+  request and principal or tenant that caused the work. Process-wide admission
+  and fairness compose with these limits; they do not replace them.
+- **SEC-131 Preflight and arithmetic:** Validation MUST conservatively sum
+  registered handler cost, directive-declared cost, and bounded planner-added
+  cost using checked arithmetic before authorization or execution. Overflow
+  fails with `LIMIT_COST_OVERFLOW`; a configured static excess uses its
+  stable `LIMIT_*` diagnostic and client source pointer. Validation diagnostics
+  are capped and reserve their last slot for `LIMIT_VALIDATION_ERRORS` at the
+  source that exhausted the budget. A rejected plan starts no business handler.
+- **SEC-132 Runtime multiplication:** Collection cardinality and every
+  runtime-expanded plan node consume one shared request meter before allocation
+  or handler admission. Each handler occurrence charges its registered cost,
+  with a minimum of one work unit, so collection expansion multiplies cost
+  rather than treating a planned handler as a one-time charge. Exhaustion uses
+  `RESOURCE_EXHAUSTED` at the affected response path and stops further
+  collection items, sequential siblings, and parallel admission.
+- **SEC-133 Concurrency and deadline:** Nested parallel groups share one
+  request-wide execution-slot budget and queue bound. A request-owned execution
+  deadline uses `RESOURCE_EXHAUSTED`; caller cancellation remains
+  `CANCELLED`. An uncooperative in-process handler may outlive the response,
+  but cannot extend that response beyond the request resource deadline and
+  retains its accounting slot until it exits.
+- **SEC-134 Completion and error envelope:** Output copy/completion depth and
+  node count, error count, and serialized bytes are bounded before unbounded
+  allocation. Exhaustion MUST still produce valid JSON with a stable code and
+  relevant path. Implementations MUST reserve a small fixed error envelope;
+  reporting exhaustion cannot recursively exhaust the same response budget.
+- **SEC-135 Late mutation exhaustion:** Resource exhaustion after a modeled
+  mutation commit is not rollback. The response MUST retain truthful
+  `applied` or `indeterminate` effect metadata. If the response transport is
+  already unusable, the same terminal fact MUST be recorded through the
+  operation's audit or idempotency record rather than inventing success.
+
 Valid: an aliased field is denied at path `account/private` with the generic
 public denial while its resolver start count remains zero.
 
@@ -139,6 +182,17 @@ handler, or returns protected data after cancellation.
   generic unavailable outcome. They MUST NOT reveal protected topic names,
   event identifiers, skipped counts, earliest positions, or whether the cursor
   was structurally valid before authorization.
+- **SEC-404 Replay work budgets:** Cursor lookup scans, storage reads, replayed
+  event count and bytes, matcher and filter work, authorization evaluations,
+  catch-up queues, memory, and total replay duration MUST have independent
+  aggregate limits. Ancient, random, missing, and malformed cursors consume the
+  same bounded lookup budget before more work is admitted; failure MUST NOT
+  trigger an unbounded history walk.
+- **SEC-405 Earliest retained history:** Requesting the earliest retained
+  position is a separately authorized capability with policy-defined limits.
+  A host MAY reject it. Replay and live delivery share aggregate event, byte,
+  memory, authorization, and connection-duration accounting, and exhaustion
+  terminates admission with `RESOURCE_EXHAUSTED`.
 
 Valid: a matching cursor replays only currently authorized candidates and
 returns an opaque next cursor bound to the current revisions.

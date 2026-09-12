@@ -283,9 +283,13 @@ func (p *Plan) authorizeNode(ctx context.Context, node planNode, object any, pat
 	}
 	allowed := p.authorization.Mode != AuthorizationDenyByDefault
 	if p.authorization.Authorizer != nil {
-		policyObject, copyErr := isolateAuthorizationObject(object)
+		policyObject, copyErr := isolateAuthorizationObject(object, p.resourceLimits)
 		if copyErr != nil {
-			failure := nodeExecutionError(CodeInternal, "internal execution error", node, path, copyErr)
+			code, message := CodeInternal, "internal execution error"
+			if errors.Is(copyErr, errResourceBudget) {
+				code, message = CodeResourceExhausted, "authorization object budget exhausted"
+			}
+			failure := nodeExecutionError(code, message, node, path, copyErr)
 			return &failure
 		}
 		principal, _ := PrincipalFromContext(ctx)
@@ -380,11 +384,11 @@ func authorizationDecisionAllows(decision AuthorizationDecision, principal Princ
 	}
 }
 
-func isolateAuthorizationObject(object any) (any, error) {
+func isolateAuthorizationObject(object any, limits ResourceLimits) (any, error) {
 	if object == nil {
 		return nil, nil
 	}
-	return copyOutput(reflect.ValueOf(object), 0, &copyState{active: make(map[copyReference]bool)})
+	return copyOutput(reflect.ValueOf(object), 0, &copyState{active: make(map[copyReference]bool), limits: limits})
 }
 
 func (p *Plan) invokeHandler(ctx context.Context, node planNode, source, input any, path []any) (any, error) {

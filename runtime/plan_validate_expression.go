@@ -139,7 +139,8 @@ func (v *planValidator) planDirectives(nodes []planNode) {
 		for directiveIndex := range node.directives {
 			directive := &node.directives[directiveIndex]
 			decision, ok := v.planDirective(directive.definition, directive.invocation, node)
-			if !ok || !v.addDirectiveCost(0, decision.AdditionalCost, directive.invocation.Source()) {
+			if !ok || !v.addDirectiveCost(0, decision.AdditionalCost, directive.invocation.Source()) ||
+				!v.addPlannedResourceCost(decision.AdditionalCost, directive.invocation.Source()) {
 				continue
 			}
 			directive.decision = decision

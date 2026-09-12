@@ -166,6 +166,15 @@ func (v *planValidator) add(code, clause, message string, source protocol.Source
 }
 
 func (v *planValidator) addRelated(code, clause, message string, source protocol.Source, related ...protocol.Source) {
+	if uint64(len(v.issues)) >= v.resourceLimits.MaxValidationErrors {
+		return
+	}
+	if uint64(len(v.issues))+1 == v.resourceLimits.MaxValidationErrors {
+		v.issues = append(v.issues, newValidationIssue(
+			"LIMIT_VALIDATION_ERRORS", "SEC-131", "validation diagnostic budget exhausted", source,
+		))
+		return
+	}
 	allRelated := append([]protocol.Source(nil), related...)
 	for _, candidate := range v.context {
 		if candidate.Pointer == source.Pointer || containsSource(allRelated, candidate) {

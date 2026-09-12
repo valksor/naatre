@@ -95,19 +95,17 @@ type planValidator struct {
 	fragmentSelections        int
 	fragmentExpansionExceeded bool
 	directiveCost             uint64
+	staticCost                uint64
+	resourceLimits            ResourceLimits
 }
 
-const (
-	maxFragmentExpansionDepth     = 128
-	maxExpandedFragmentSelections = 16384
-)
-
-func newPlanValidator(registry Snapshot, request *protocol.Request, operation protocol.Operation) *planValidator {
+func newPlanValidator(registry Snapshot, request *protocol.Request, operation protocol.Operation, limits ResourceLimits) *planValidator {
 	validator := &planValidator{
 		registry: registry, request: request, operation: operation,
 		fragments: make(map[string]protocol.Fragment), usedFragments: make(map[string]bool),
-		variables:   make(map[string]*plannedVariable),
-		allBindings: make(map[string]bindingDeclaration),
+		variables:      make(map[string]*plannedVariable),
+		allBindings:    make(map[string]bindingDeclaration),
+		resourceLimits: limits,
 	}
 	for _, fragment := range request.Document().Fragments() {
 		validator.fragments[fragment.Name()] = fragment
@@ -455,7 +453,8 @@ func (v *planValidator) validateFragment(selection protocol.Selection, scope *va
 		condition = fragment.TypeCondition()
 		declarationSource = fragment.Source()
 	}
-	if len(scope.fragmentStack) >= maxFragmentExpansionDepth || v.fragmentSelections+len(fragmentSelections) > maxExpandedFragmentSelections {
+	if uint64(len(scope.fragmentStack)) >= v.resourceLimits.MaxFragmentExpansionDepth ||
+		uint64(v.fragmentSelections+len(fragmentSelections)) > v.resourceLimits.MaxFragmentSelections {
 		v.fragmentExpansionExceeded = true
 		v.addRelated("FRAGMENT_EXPANSION_LIMIT", "LANG-240", "fragment expansion exceeds the portable planning budget", selection.Source(), declarationSource)
 		return

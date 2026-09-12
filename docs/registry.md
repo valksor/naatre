@@ -87,3 +87,30 @@ request execution and do not run a plan's authorization or interceptor chain.
 Untrusted requests must enter through `Prepare` and `Plan.Execute`; a trusted
 callback that captures and uses a raw snapshot remains inside the in-process
 trust boundary described by SEC-303.
+
+## Request resource limits
+
+`runtime.PrepareWithOptions` accepts a `runtime.ResourceLimits` value and
+stores the resolved, immutable limits on the plan. Zero fields select finite
+reference defaults exposed by `runtime.DefaultResourceLimits`. Preparation
+bounds expanded plan depth and nodes, calls, fields,
+fragment depth and selections, parallel width, queued work, checked static
+cost, and validation diagnostics before planning callbacks, authorization
+callbacks, or handlers can run.
+`Prepare` applies the same defaults.
+
+Execution uses one shared atomic work/cardinality meter, concurrency limiter,
+and deadline across nested scopes and parallel groups. Collection cardinality
+is checked before result allocation; every executable node is charged before
+directive or handler work, and registered handler cost is multiplied by each
+runtime occurrence. Output copying/completion, public errors, and the
+serialized outcome are capped while preserving mutation effect state. A
+request-owned deadline and all runtime/output exhaustion use
+`RESOURCE_EXHAUSTED` at a response path; cancellation inherited from the
+caller remains `CANCELLED`.
+
+Transport code must apply `protocol.Limits` while decoding before calling the
+runtime. Provider and streaming adapters additionally enforce the independent
+replay and live budgets in SEC-404 and SEC-405; the core fixture defines those
+portable accounting expectations without pretending the in-process core owns a
+broker implementation.

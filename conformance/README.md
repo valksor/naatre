@@ -63,3 +63,14 @@ including ordered pipelines, explicit collection operations, fragments,
 parallel branches, bindings, directives, and edge-state propagation. The core
 page vector exercises bounded cursor-free paging; portable cursor behavior and
 security remain in #16.
+
+`v1/resources.json` fixes the `core.resources-1` stable codes and location
+classes for decoder, planning, runtime, completion, and serialization limits.
+Its late-exhaustion vectors model output and error budget exhaustion after a
+mutation commit and require truthful `applied` effect metadata plus a bounded
+audit/idempotency fallback. Its adversarial cursor vectors bound scans and
+storage reads for ancient, random, missing, and unauthorized earliest-history
+positions; aggregate replay/live vectors separately cap event count, bytes,
+filter and authorization work, queues, memory, and duration. The Go reference
+runtime executes core request budgets; #70 owns broker-backed replay/live
+execution evidence.

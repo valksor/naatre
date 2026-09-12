@@ -135,21 +135,35 @@ type Plan struct {
 	variableValues map[string]json.RawMessage
 	authorization  AuthorizationConfig
 	interceptors   []registeredInterceptor
+	resourceLimits ResourceLimits
 }
 
 // Prepare resolves and validates the complete selected operation without
 // invoking application handlers.
 func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
+	return PrepareWithOptions(registry, request, PrepareOptions{})
+}
+
+// PrepareWithOptions resolves and validates the complete selected operation
+// under explicit request-wide resource limits without invoking handlers.
+func PrepareWithOptions(registry Snapshot, request *protocol.Request, options PrepareOptions) (*Plan, error) {
 	if request == nil || request.Document() == nil {
 		return nil, errors.New("runtime preparation requires an inline document")
+	}
+	limits, err := resolveResourceLimits(options.Limits)
+	if err != nil {
+		return nil, fmt.Errorf("invalid resource limits: %w", err)
 	}
 	operations := request.Document().Operations()
 	operation, err := selectOperation(operations, request.OperationName(), request.Source())
 	if err != nil {
 		return nil, err
 	}
-	planner := newPlanValidator(registry, request, operation)
+	planner := newPlanValidator(registry, request, operation, limits)
 	nodes, executable := planner.validate()
+	if len(planner.issues) == 0 {
+		planner.validatePlanResources(nodes)
+	}
 	if len(planner.issues) == 0 {
 		planner.planDirectives(nodes)
 	}
@@ -164,6 +178,7 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
 		variableValues: captureVariableValues(request, operation.Variables()),
 		authorization:  registry.authorization, interceptors: slices.Clone(registry.interceptors),
+		resourceLimits: limits,
 	}, nil
 }
 

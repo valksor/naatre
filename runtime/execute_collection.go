@@ -8,46 +8,26 @@ import (
 	"strconv"
 
 	"github.com/valksor/naatre/protocol"
+	"github.com/valksor/naatre/schema"
 )
 
 func (p *Plan) executeMap(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
-	items, ok := collectionItems(scope.current)
-	if !ok {
-		return invalidCollectionResult(node, path)
+	items, admissionFailure := admittedCollection(scope, node, path)
+	if admissionFailure != nil {
+		return *admissionFailure
 	}
 	descriptor, _ := p.types.Lookup(node.input.id)
-	output := make([]any, len(items))
-	var failures []ExecutionError
-	failed := false
-	for index, item := range items {
-		itemValue := collectionItemValue(scope.current, item, descriptor, index)
-		// A failed element is a null placeholder, so later indexes do not shift
-		// and no member handler runs for it: one indexed error, never two.
-		if itemValue.status == valueNull || itemValue.status == valueUnavailable {
-			output[index] = nil
-			continue
-		}
-		itemScope := childExecutionScope(scope, itemValue, scope.current)
-		children := p.executeSequence(ctx, node.children, itemScope, appendPathSegments(path, index))
-		failures = append(failures, children.errors...)
-		if children.failed && len(children.data) == 0 {
-			output[index] = nil
-		} else {
-			output[index] = children.data
-		}
-		failed = failed || children.failed
-		if containsExecutionCode(children.errors, "CANCELLED") {
-			break
-		}
-	}
+	output, failures, failed := p.executeCollectionItems(ctx, node, scope, collectionExecution{
+		items: items, descriptor: descriptor, path: path,
+	})
 	value := executionValue{value: output, typeInfo: node.output, status: valueAvailable}
 	return nodeResult{value: value, data: output, emit: node.outputName != "", failed: failed, errors: failures}
 }
 
 func (p *Plan) executeIndex(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
-	items, ok := collectionItems(scope.current)
-	if !ok {
-		return invalidCollectionResult(node, path)
+	items, admissionFailure := admittedCollection(scope, node, path)
+	if admissionFailure != nil {
+		return *admissionFailure
 	}
 	position, _ := node.selection.At()
 	index, ok := exactIndex(position)
@@ -73,9 +53,9 @@ func (p *Plan) executeIndex(ctx context.Context, node planNode, scope executionS
 }
 
 func (p *Plan) executeCollectionWindow(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
-	items, ok := collectionItems(scope.current)
-	if !ok {
-		return invalidCollectionResult(node, path)
+	items, admissionFailure := admittedCollection(scope, node, path)
+	if admissionFailure != nil {
+		return *admissionFailure
 	}
 	start, end := 0, len(items)
 	if node.kind == protocol.SliceSelection {
@@ -98,36 +78,74 @@ func (p *Plan) executeCollectionWindow(ctx context.Context, node planNode, scope
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 	}
 	window := items[start:end]
+	if !scope.resources.chargeCollection(uint64(len(window))) {
+		return resourceExhaustedResult(node, path, "collection item budget exhausted")
+	}
 	if len(node.children) == 0 {
 		copied := append([]any(nil), window...)
 		value := executionValue{value: copied, typeInfo: node.output, status: valueAvailable}
 		return nodeResult{value: value, data: copied, emit: node.outputName != ""}
 	}
 	descriptor, _ := p.types.Lookup(node.input.id)
-	output := make([]any, len(window))
+	output, failures, failed := p.executeCollectionItems(ctx, node, scope, collectionExecution{
+		items: window, descriptor: descriptor, sourceIndexBase: start, path: path,
+	})
+	value := executionValue{value: output, typeInfo: node.output, status: valueAvailable}
+	return nodeResult{value: value, data: output, emit: node.outputName != "", failed: failed, errors: failures}
+}
+
+func admittedCollection(scope executionScope, node planNode, path []any) ([]any, *nodeResult) {
+	items, ok := collectionItems(scope.current)
+	if !ok {
+		failure := invalidCollectionResult(node, path)
+		return nil, &failure
+	}
+	if !scope.resources.chargeCollection(uint64(len(items))) {
+		failure := resourceExhaustedResult(node, path, "collection item budget exhausted")
+		return nil, &failure
+	}
+	return items, nil
+}
+
+type collectionExecution struct {
+	items           []any
+	descriptor      schema.TypeDescriptor
+	sourceIndexBase int
+	path            []any
+}
+
+func (p *Plan) executeCollectionItems(ctx context.Context, node planNode, scope executionScope, execution collectionExecution) ([]any, []ExecutionError, bool) {
+	output := make([]any, len(execution.items))
 	var failures []ExecutionError
 	failed := false
-	for offset, item := range window {
-		itemValue := collectionItemValue(scope.current, item, descriptor, start+offset)
+	for offset, item := range execution.items {
+		itemValue := collectionItemValue(scope.current, item, execution.descriptor, execution.sourceIndexBase+offset)
+		// A failed element is a null placeholder, so later indexes do not shift
+		// and no member handler runs for it: one indexed error, never two.
 		if itemValue.status == valueNull || itemValue.status == valueUnavailable {
-			output[offset] = nil
 			continue
 		}
-		childScope := childExecutionScope(scope, itemValue, scope.current)
-		children := p.executeSequence(ctx, node.children, childScope, appendPathSegments(path, offset))
-		failures = append(failures, children.errors...)
+		itemScope := childExecutionScope(scope, itemValue, scope.current)
+		itemPath := appendPathSegments(execution.path, offset)
+		children := p.executeSequence(ctx, node.children, itemScope, itemPath)
+		var errorBudgetExhausted bool
+		failures, errorBudgetExhausted = appendCollectionErrors(
+			failures, children.errors, p.resourceLimits.MaxErrors, node, offset+1 < len(execution.items),
+		)
+		if errorBudgetExhausted {
+			return output, failures, true
+		}
 		if children.failed && len(children.data) == 0 {
 			output[offset] = nil
 		} else {
 			output[offset] = children.data
 		}
 		failed = failed || children.failed
-		if containsExecutionCode(children.errors, "CANCELLED") {
+		if executionShouldStop(children.errors) {
 			break
 		}
 	}
-	value := executionValue{value: output, typeInfo: node.output, status: valueAvailable}
-	return nodeResult{value: value, data: output, emit: node.outputName != "", failed: failed, errors: failures}
+	return output, failures, failed
 }
 
 func (p *Plan) executeMetadata(node planNode, scope executionScope, path []any) nodeResult {

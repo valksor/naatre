@@ -138,6 +138,38 @@ func TestDirectiveResponseAnnotationsAreOrderedAndVersioned(t *testing.T) {
 	}
 }
 
+func TestParallelDirectiveAnnotationsShareRootRecorder(t *testing.T) {
+	t.Parallel()
+	descriptor := testDirectiveDescriptor("nestedNote", "vendor.nested-note-1")
+	descriptor.Arguments = nil
+	descriptor.Locations = []protocol.SelectionKind{protocol.CallSelection}
+	descriptor.Phases = append(descriptor.Phases, schema.DirectiveResponse)
+	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.RegisterDirective(runtime.DirectiveDefinition{
+		Descriptor: descriptor,
+		Annotator: runtime.DirectiveResponseAnnotatorFunc(func(runtime.DirectiveResponseContext) (json.RawMessage, error) {
+			return json.RawMessage(`{"recorded":true}`), nil
+		}),
+	}); err != nil {
+		t.Fatalf("RegisterDirective: %v", err)
+	}
+	if err := registry.Register(runtime.BindInvocation[string](runtime.Descriptor{
+		Name: "text", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
+		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
+	}, func(context.Context, runtime.Invocation) (string, error) { return "ok", nil })); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	request := decodeRuntimeRequestWithOptions(t, `{"version":"1","capabilities":["vendor.nested-note-1"],"document":{"requires":["vendor.nested-note-1"],"operations":[{"name":"Q","kind":"query","select":[{"$parallel":{"select":[{"$call":{"name":"text","as":"left","directives":[{"name":"nestedNote"}]}},{"$call":{"name":"text","as":"right","directives":[{"name":"nestedNote"}]}}]}}]}]}}`, protocol.DecodeOptions{Capabilities: map[string]bool{"vendor.nested-note-1": true}})
+	plan, err := runtime.Prepare(frozenRegistry(t, registry), request)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	outcome := plan.Execute(context.Background())
+	if len(outcome.Errors) != 0 || len(outcome.Annotations) != 2 {
+		t.Fatalf("parallel annotation outcome = %#v", outcome)
+	}
+}
+
 func TestDirectiveArgumentsAreDetachedAcrossCallbacks(t *testing.T) {
 	t.Parallel()
 	descriptor := testDirectiveDescriptor("detached", "vendor.detached-1")

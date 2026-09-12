@@ -16,8 +16,6 @@ import (
 	"github.com/valksor/naatre/schema"
 )
 
-const maxParallelExecutions = 8
-
 type executionStatus uint8
 
 const (
@@ -115,6 +113,7 @@ type executionScope struct {
 	grace       time.Duration
 	effects     *effectRecorder
 	annotations *directiveAnnotationRecorder
+	resources   *resourceMeter
 }
 
 type scopedVariable struct {
@@ -166,17 +165,20 @@ type sequenceResult struct {
 }
 
 func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outcome {
+	executionCtx, cancel := context.WithTimeoutCause(ctx, p.resourceLimits.MaxExecutionDuration, errExecutionResourceDeadline)
+	defer cancel()
 	scope := executionScope{
 		bindings:    make(map[string]executionValue),
-		limiter:     make(chan struct{}, maxParallelExecutions),
+		limiter:     make(chan struct{}, p.resourceLimits.MaxConcurrency),
 		grace:       options.abandonGrace(),
 		effects:     &effectRecorder{},
 		annotations: &directiveAnnotationRecorder{},
+		resources:   &resourceMeter{limits: p.resourceLimits},
 	}
 	// Cancellation observed before any selection runs is operation-level: no
 	// field is responsible, so it carries the empty root path.
-	if err := ctx.Err(); err != nil {
-		return Outcome{
+	if err := executionCtx.Err(); err != nil {
+		outcome := Outcome{
 			Data: map[string]any{},
 			Errors: []ExecutionError{{
 				Code: CodeCancelled, Message: "request cancelled",
@@ -185,20 +187,25 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 			Effects:     scope.effects.state(p.kind, true),
 			Annotations: scope.annotations.annotations(),
 		}
+		return enforceOutcomeLimits(outcome, p.resourceLimits)
 	}
-	result := p.executeSequence(ctx, p.nodes, scope, nil)
+	result := p.executeSequence(executionCtx, p.nodes, scope, nil)
 	sortExecutionErrors(result.errors)
-	return Outcome{
+	outcome := Outcome{
 		Data:        result.data,
 		Errors:      result.errors,
 		Effects:     scope.effects.state(p.kind, result.failed),
 		Annotations: scope.annotations.annotations(),
 	}
+	if errors.Is(context.Cause(executionCtx), errExecutionResourceDeadline) {
+		replaceDeadlineFailures(&outcome)
+	}
+	return enforceOutcomeLimits(outcome, p.resourceLimits)
 }
 
 func (p *Plan) executeSequence(ctx context.Context, nodes []planNode, scope executionScope, path []any) sequenceResult {
 	result := sequenceResult{data: make(map[string]any)}
-	for _, node := range nodes {
+	for index, node := range nodes {
 		if err := ctx.Err(); err != nil {
 			result.errors = append(result.errors, nodeExecutionError("CANCELLED", "request cancelled", node, pathForNode(path, node), err))
 			result.failed = true
@@ -207,6 +214,11 @@ func (p *Plan) executeSequence(ctx context.Context, nodes []planNode, scope exec
 		current := p.executeNode(ctx, node, scope, path)
 		result.errors = append(result.errors, current.errors...)
 		result.failed = result.failed || current.failed
+		if shouldExhaustErrorBudget(len(result.errors), p.resourceLimits.MaxErrors, index+1 < len(nodes)) {
+			result.errors = exhaustErrorBudget(result.errors, p.resourceLimits.MaxErrors, node)
+			result.failed = true
+			break
+		}
 		if node.binding != "" {
 			bound := current.value
 			if current.failed && bound.status == valueAvailable {
@@ -228,7 +240,7 @@ func (p *Plan) executeSequence(ctx context.Context, nodes []planNode, scope exec
 				}
 			}
 		}
-		if containsExecutionCode(current.errors, "CANCELLED") {
+		if executionShouldStop(current.errors) {
 			break
 		}
 		if current.failed && p.kind == protocol.Mutation {
@@ -249,6 +261,9 @@ func containsExecutionCode(failures []ExecutionError, code string) bool {
 
 func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
 	nodePath := pathForNode(path, node)
+	if !scope.resources.chargeWork(nodeRuntimeWork(node)) {
+		return resourceExhaustedResult(node, nodePath, "runtime work budget exhausted")
+	}
 	if !p.matchesTypeConditions(node, scope.current) {
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueSkipped}}
 	}
@@ -341,18 +356,18 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, directives
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 	}
 
-	completed, issues, available, completionErr := completeSafely(output, node.definition.descriptor.Output, node.definition.descriptor.OutputNullable, p.types)
+	completed, issues, available, completionErr := completeSafely(output, node.definition.descriptor.Output, node.definition.descriptor.OutputNullable, p.types, p.resourceLimits)
 	result := executionValue{value: completed, typeInfo: node.output, status: valueAvailable, actualType: runtimeActualType(node.output.id, completed)}
 	if completed == nil && available {
 		result.status = valueNull
 	}
 	var failures []ExecutionError
 	if completionErr != nil {
-		failures = append(failures, nodeExecutionError("OUTPUT_COMPLETION", "field output is invalid", node, path, completionErr))
+		failures = append(failures, outputCompletionFailure(node, path, completionErr))
 		available = false
 	}
 	for _, issue := range issues {
-		failures = append(failures, nodeExecutionError("OUTPUT_COMPLETION", "field output is invalid", node, appendPathSegments(path, issue.path...), issue.cause))
+		failures = append(failures, outputCompletionFailure(node, appendPathSegments(path, issue.path...), issue.cause))
 	}
 	if !available {
 		result.status = valueUnavailable
@@ -450,7 +465,7 @@ func (p *Plan) executePipeline(ctx context.Context, node planNode, scope executi
 
 func (p *Plan) executeParallel(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
 	results := make([]nodeResult, len(node.children))
-	workers := min(maxParallelExecutions, len(node.children))
+	workers := min(int(p.resourceLimits.MaxConcurrency), len(node.children))
 	if workers == 0 {
 		return nodeResult{data: map[string]any{}, merge: true}
 	}
@@ -475,7 +490,7 @@ func (p *Plan) executeParallel(ctx context.Context, node planNode, scope executi
 				branchScope.parallel = true
 				result := p.executeNode(ctx, node.children[index], branchScope, path)
 				results[index] = result
-				if containsExecutionCode(result.errors, "CANCELLED") || (result.failed && node.parallelPolicy == protocol.FailFastParallel) {
+				if executionShouldStop(result.errors) || (result.failed && node.parallelPolicy == protocol.FailFastParallel) {
 					mutex.Lock()
 					stopped = true
 					mutex.Unlock()
@@ -579,6 +594,10 @@ func resultForValue(node planNode, value executionValue, presentation any) nodeR
 
 func invalidCollectionResult(node planNode, path []any) nodeResult {
 	failure := nodeExecutionError("INVALID_COLLECTION", "collection value is unavailable", node, path, errors.New("runtime value is not a collection"))
+	return failedNodeResult(node, failure)
+}
+
+func failedNodeResult(node planNode, failure ExecutionError) nodeResult {
 	return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 }
 
@@ -601,10 +620,17 @@ func executionStatusCode(status executionStatus) string {
 	return "RESULT_UNAVAILABLE"
 }
 
-func completeSafely(value any, output schema.TypeID, nullable bool, types schema.Snapshot) (completed any, issues []completionIssue, available bool, err error) {
+func completeSafely(value any, output schema.TypeID, nullable bool, types schema.Snapshot, limits ResourceLimits) (completed any, issues []completionIssue, available bool, err error) {
 	return completeRecovering(func() (any, []completionIssue, bool, error) {
-		return completeContained(value, output, nullable, types)
+		return completeContainedWithLimits(value, output, nullable, types, limits)
 	})
+}
+
+func outputCompletionFailure(node planNode, path []any, cause error) ExecutionError {
+	if errors.Is(cause, errResourceBudget) {
+		return nodeExecutionError(CodeResourceExhausted, "output completion budget exhausted", node, path, cause)
+	}
+	return nodeExecutionError(CodeOutputCompletion, "field output is invalid", node, path, cause)
 }
 
 func completeRecovering(complete func() (any, []completionIssue, bool, error)) (completed any, issues []completionIssue, available bool, err error) {
@@ -624,7 +650,7 @@ func cloneExecutionScope(scope executionScope) executionScope {
 		current: scope.current, parent: scope.parent, bindings: cloneBindings(scope.bindings),
 		variables: maps.Clone(scope.variables),
 		limiter:   scope.limiter, parallel: scope.parallel, grace: scope.grace,
-		effects: scope.effects,
+		effects: scope.effects, annotations: scope.annotations, resources: scope.resources,
 	}
 }
 
@@ -681,6 +707,9 @@ func callWithinGrace(ctx context.Context, release func(), grace time.Duration, i
 		return outcome.value, outcome.err
 	case <-ctx.Done():
 	}
+	if errors.Is(context.Cause(ctx), errExecutionResourceDeadline) {
+		return nil, fmt.Errorf("%w: handler did not return before the execution deadline", context.Cause(ctx))
+	}
 	if grace < 0 {
 		return nil, fmt.Errorf("%w: handler did not return when cancelled", context.Cause(ctx))
 	}
@@ -717,6 +746,11 @@ func nodeExecutionError(code, message string, node planNode, path []any, cause e
 
 func sortExecutionErrors(failures []ExecutionError) {
 	sort.SliceStable(failures, func(left, right int) bool {
+		leftExhausted := len(failures[left].Path) == 1 && failures[left].Path[0] == "$errors"
+		rightExhausted := len(failures[right].Path) == 1 && failures[right].Path[0] == "$errors"
+		if leftExhausted != rightExhausted {
+			return !leftExhausted
+		}
 		compared := comparePaths(failures[left].Path, failures[right].Path)
 		if compared != 0 {
 			return compared < 0
@@ -759,9 +793,16 @@ func memberSource(node planNode, scope executionScope, path []any) (any, *Execut
 		failure := nodeExecutionError(CodeResultNull, "current value is null", node, path, errors.New("non-null member source is null"))
 		return nil, &failure
 	}
-	isolated, copyErr := copyOutput(reflect.ValueOf(sourceValue(scope.current)), 0, &copyState{active: make(map[copyReference]bool)})
+	isolated, copyErr := copyOutput(reflect.ValueOf(sourceValue(scope.current)), 0, &copyState{
+		active: make(map[copyReference]bool),
+		limits: scope.resources.limits,
+	})
 	if copyErr != nil {
-		failure := nodeExecutionError(CodeInternal, "internal execution error", node, path, fmt.Errorf("copy handler source: %w", copyErr))
+		code, message := CodeInternal, "internal execution error"
+		if errors.Is(copyErr, errResourceBudget) {
+			code, message = CodeResourceExhausted, "handler source copy budget exhausted"
+		}
+		failure := nodeExecutionError(code, message, node, path, fmt.Errorf("copy handler source: %w", copyErr))
 		return nil, &failure
 	}
 	return isolated, nil
