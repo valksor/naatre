@@ -262,8 +262,10 @@ is `["users", 2, "display"]`.
 
 ## Fragments and directives
 
-- **LANG-240:** Fragment names are unique within a document. A spread resolves
-  one declared fragment and its optional static type condition. Unknown
+- **LANG-240:** Fragment names are unique within a document. A named spread
+  resolves one declared fragment and its optional static type condition. An
+  inline fragment instead declares `on` and `select` directly, cannot declare
+  `name` or `args`, and adds no response-path segment. Unknown
   fragments, impossible type conditions, and fragment cycles are validation
   errors with both definition and use source locations when available. A
   declared fragment that no spread reaches is also a validation error, located
@@ -273,6 +275,16 @@ is `["users", 2, "display"]`.
   internal selection order. It introduces no response-path segment and no
   binding scope. Bindings in a fragment behave as if its selections were
   written at the spread site.
+- **LANG-244:** A fragment may declare typed `parameters` using the operation
+  variable declaration shape. A named spread binds them through `args` under
+  the negotiated `language.fragment-parameters-1` capability. Bindings are
+  coerced at the spread site; an explicit argument wins over a declaration
+  default, missing differs from null, and a required parameter without either
+  is invalid. Parameters shadow same-named operation or enclosing-fragment
+  variables only within that expansion. Unknown arguments and unknown or
+  non-input parameter types are invalid. Expansion counts every copied
+  selection against a portable budget of 16,384 and permits at most 128 active
+  named expansions; exceeding either limit fails validation before execution.
 - **LANG-242:** Directives gate or annotate their selection but do not hide it
   from static validation. `include(if: false)` and `skip(if: true)` prevent the
   selection and its handlers from starting. Their variables and arguments are

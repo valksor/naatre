@@ -24,6 +24,12 @@ const ParallelMutationCapability = "mutation.parallel-1"
 // CollectionPageCapability gates cursor pagination and pagination metadata.
 const CollectionPageCapability = "collection.page-1"
 
+// FragmentParametersCapability is the negotiated profile required for a
+// fragment to declare typed parameters and for a spread to bind arguments to
+// them. Without it the construct is a validation failure rather than a silently
+// ignored member, since ignoring it would change which values a fragment sees.
+const FragmentParametersCapability = "language.fragment-parameters-1"
+
 // Barrier identifies a semantic boundary that optimizers and executors must
 // preserve.
 type Barrier string

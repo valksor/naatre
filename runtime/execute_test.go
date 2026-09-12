@@ -579,8 +579,12 @@ func registryWithCalls(t *testing.T, calls map[string]registeredCall) runtime.Sn
 }
 
 func decodeRuntimeRequest(t *testing.T, input string) *protocol.Request {
+	return decodeRuntimeRequestWithOptions(t, input, protocol.DecodeOptions{})
+}
+
+func decodeRuntimeRequestWithOptions(t testing.TB, input string, options protocol.DecodeOptions) *protocol.Request {
 	t.Helper()
-	request, err := protocol.DecodeRequest([]byte(input), protocol.DecodeOptions{})
+	request, err := protocol.DecodeRequest([]byte(input), options)
 	if err != nil {
 		t.Fatalf("DecodeRequest: %v", err)
 	}

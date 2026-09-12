@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 
 	"github.com/valksor/naatre/protocol"
@@ -183,6 +184,12 @@ func (p *Plan) evaluateExpression(expression protocol.Expression, scope executio
 		literal, _ := expression.Literal()
 		return literal, statusFromRaw(literal), nil
 	case protocol.VariableExpression:
+		if variable, scoped := scope.variables[expression.Name()]; scoped {
+			if !variable.present {
+				return nil, valueMissing, nil
+			}
+			return append(json.RawMessage(nil), variable.value...), statusFromRaw(variable.value), nil
+		}
 		value, ok := p.variableValues[expression.Name()]
 		if !ok {
 			return nil, valueMissing, nil
@@ -197,6 +204,59 @@ func (p *Plan) evaluateExpression(expression protocol.Expression, scope executio
 	default:
 		return nil, valueUnavailable, errors.New("unsupported prepared expression")
 	}
+}
+
+func (p *Plan) fragmentExecutionScope(node planNode, scope executionScope, path []any) (executionScope, []ExecutionError) {
+	// A fragment introduces only a parameter scope. Result bindings deliberately
+	// share the spread's sequential map, because LANG-241 makes fragment
+	// selections behave as though they were written at the spread site.
+	fragmentScope := scope
+	fragmentScope.variables = maps.Clone(scope.variables)
+	if fragmentScope.variables == nil {
+		fragmentScope.variables = make(map[string]scopedVariable, len(node.fragmentParams))
+	}
+	for _, name := range sortedStringKeys(node.fragmentParams) {
+		binding := node.fragmentParams[name]
+		var raw json.RawMessage
+		var status executionStatus
+		var err error
+		switch {
+		case binding.hasExpression:
+			raw, status, err = p.evaluateExpression(binding.expression, scope)
+		case binding.hasDefault:
+			raw = append(json.RawMessage(nil), binding.defaultValue...)
+			status = statusFromRaw(raw)
+		default:
+			fragmentScope.variables[name] = scopedVariable{}
+			continue
+		}
+		if err != nil || status == valueMissing || status == valueUnavailable || status == valueSkipped {
+			if err == nil {
+				err = errors.New("fragment parameter value is unavailable")
+			}
+			code := executionStatusCode(status)
+			return fragmentScope, []ExecutionError{nodeExecutionError(code, "fragment parameter binding failed", node, path, err)}
+		}
+		coerce := schema.CoerceInput
+		if binding.hasExpression {
+			switch binding.expression.Kind() {
+			case protocol.LiteralExpression, protocol.VariableExpression:
+				// Client-supplied values use the portable input coercer.
+			case protocol.ResultExpression, protocol.CurrentExpression, protocol.ParentExpression:
+				coerce = schema.CoerceRuntimeInput
+			}
+		}
+		value, coerceErr := coerce(p.types, binding.typeID, raw, binding.nullable)
+		if coerceErr != nil {
+			return fragmentScope, []ExecutionError{nodeExecutionError("INPUT_COERCION", "fragment parameter binding failed", node, path, coerceErr)}
+		}
+		canonical, marshalErr := value.MarshalJSON()
+		if marshalErr != nil {
+			return fragmentScope, []ExecutionError{nodeExecutionError("INPUT_COERCION", "fragment parameter binding failed", node, path, marshalErr)}
+		}
+		fragmentScope.variables[name] = scopedVariable{value: canonical, present: true}
+	}
+	return fragmentScope, nil
 }
 
 func encodeExecutionValue(value executionValue) (json.RawMessage, executionStatus, error) {

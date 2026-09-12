@@ -138,6 +138,29 @@ func TestDecodeDocumentPreservesCompleteLanguageAST(t *testing.T) {
 	}
 }
 
+func TestDecodeDocumentPreservesFragmentParametersAndInlineConditions(t *testing.T) {
+	t.Parallel()
+	document, err := protocol.DecodeDocument([]byte(`{"operations":[{"name":"Q","kind":"query","select":[{"$fragment":{"on":"User","select":[{"$field":{"name":"id"}}]}},{"$fragment":{"name":"Part","args":{"value":{"$literal":"bound"}}}}]}],"fragments":[{"name":"Part","parameters":[{"name":"value","type":"String","required":true,"default":"fallback"}],"select":[]}]}`), protocol.Limits{})
+	if err != nil {
+		t.Fatalf("DecodeDocument: %v", err)
+	}
+	parameters := document.Fragments()[0].Parameters()
+	if len(parameters) != 1 || parameters[0].Name() != "value" || parameters[0].Type() != "String" || !parameters[0].Required() {
+		t.Fatalf("fragment parameters = %#v", parameters)
+	}
+	defaultValue, ok := parameters[0].Default()
+	if !ok || string(defaultValue) != `"fallback"` {
+		t.Fatalf("fragment default = %s, %v", defaultValue, ok)
+	}
+	selections := document.Operations()[0].Selections()
+	if selections[0].Name() != "" || selections[0].TypeCondition() != "User" || len(selections[0].Selections()) != 1 {
+		t.Fatalf("inline fragment = %#v", selections[0])
+	}
+	if selections[1].Name() != "Part" || selections[1].TypeCondition() != "" || selections[1].Arguments()["value"].Kind() != protocol.LiteralExpression {
+		t.Fatalf("named spread = %#v", selections[1])
+	}
+}
+
 func assertSourceRange(t *testing.T, input []byte, source protocol.Source, pointer string) {
 	t.Helper()
 	if source.Pointer != pointer || source.Start < 0 || source.End <= source.Start || source.End > len(input) || source.Line < 1 || source.Column < 1 || !json.Valid(input[source.Start:source.End]) {

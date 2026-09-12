@@ -82,12 +82,13 @@ func TestPlannerConsumesPortableLanguageDiagnosticFixture(t *testing.T) {
 	}
 	var fixture struct {
 		Vectors []struct {
-			Name     string          `json:"name"`
-			Document json.RawMessage `json:"document"`
-			Valid    *bool           `json:"valid"`
-			Code     string          `json:"code"`
-			Phase    string          `json:"phase"`
-			Pointer  string          `json:"pointer"`
+			Name         string          `json:"name"`
+			Document     json.RawMessage `json:"document"`
+			Valid        *bool           `json:"valid"`
+			Capabilities []string        `json:"capabilities"`
+			Code         string          `json:"code"`
+			Phase        string          `json:"phase"`
+			Pointer      string          `json:"pointer"`
 		} `json:"vectors"`
 	}
 	if err := json.Unmarshal(content, &fixture); err != nil {
@@ -101,7 +102,7 @@ func TestPlannerConsumesPortableLanguageDiagnosticFixture(t *testing.T) {
 		executed++
 		t.Run(vector.Name, func(t *testing.T) {
 			t.Parallel()
-			assertPortableNegativeVector(t, vector.Name, vector.Code, vector.Phase, vector.Pointer, vector.Document)
+			assertPortableNegativeVector(t, vector.Name, vector.Code, vector.Phase, vector.Pointer, vector.Document, vector.Capabilities)
 		})
 	}
 	if executed == 0 {
@@ -113,15 +114,25 @@ func TestPlannerConsumesPortableLanguageDiagnosticFixture(t *testing.T) {
 // diagnostic the vector declares, at its declared location, before any handler
 // runs. Rejection may happen while decoding or while planning; the vector
 // declares which phase owns it.
-func assertPortableNegativeVector(t *testing.T, name, code, phase, pointer string, document json.RawMessage) {
+func assertPortableNegativeVector(t *testing.T, name, code, phase, pointer string, document json.RawMessage, capabilities []string) {
 	t.Helper()
 	if code == "" || phase == "" || pointer == "" {
 		t.Fatalf("negative vector %q declares no diagnostic", name)
 	}
 	located := "/document" + pointer
-	envelope := append([]byte(`{"version":"1","document":`), document...)
-	envelope = append(envelope, '}')
-	request, decodeErr := protocol.DecodeRequest(envelope, protocol.DecodeOptions{})
+	envelopeObject := map[string]any{"version": "1", "document": json.RawMessage(document)}
+	supported := make(map[string]bool, len(capabilities))
+	if len(capabilities) != 0 {
+		envelopeObject["capabilities"] = capabilities
+		for _, capability := range capabilities {
+			supported[capability] = true
+		}
+	}
+	envelope, marshalErr := json.Marshal(envelopeObject)
+	if marshalErr != nil {
+		t.Fatalf("encode negative vector %q: %v", name, marshalErr)
+	}
+	request, decodeErr := protocol.DecodeRequest(envelope, protocol.DecodeOptions{Capabilities: supported})
 	if decodeErr != nil {
 		assertPortableDecodeDiagnostic(t, code, phase, located, decodeErr)
 		return

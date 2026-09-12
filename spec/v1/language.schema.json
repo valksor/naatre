@@ -57,6 +57,7 @@
       "properties": {
         "name": { "$ref": "#/$defs/identifier" },
         "on": { "$ref": "#/$defs/typeIdentifier" },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/variable" } },
         "select": { "$ref": "#/$defs/selections" }
       }
     },
@@ -357,12 +358,18 @@
     },
     "fragmentPayload": {
       "type": "object",
-      "required": ["name"],
       "additionalProperties": false,
       "properties": {
         "name": { "$ref": "#/$defs/identifier" },
-        "directives": { "$ref": "#/$defs/directives" }
-      }
+        "on": { "$ref": "#/$defs/typeIdentifier" },
+        "args": { "$ref": "#/$defs/arguments" },
+        "directives": { "$ref": "#/$defs/directives" },
+        "select": { "$ref": "#/$defs/selections" }
+      },
+      "oneOf": [
+        { "required": ["name"], "not": { "anyOf": [{ "required": ["on"] }, { "required": ["select"] }] } },
+        { "required": ["on", "select"], "not": { "anyOf": [{ "required": ["name"] }, { "required": ["args"] }] } }
+      ]
     },
     "currentPayload": {
       "type": "object",

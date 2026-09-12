@@ -71,8 +71,8 @@ func TestExecutorConsumesPortablePositiveLanguageVectors(t *testing.T) {
 			}
 		})
 	}
-	if executed != 16 {
-		t.Fatalf("executed positive language vectors = %d, want 16", executed)
+	if executed != 18 {
+		t.Fatalf("executed positive language vectors = %d, want 18", executed)
 	}
 }
 
@@ -122,7 +122,7 @@ func portableExecutionRegistry(t testing.TB, vector string) (runtime.Snapshot, *
 	}})
 	// An abstract shape exists only for the type-condition vector, so every
 	// other vector keeps the minimal schema it declares.
-	if vector == "fragment-type-conditions-over-interface-and-union" {
+	if vector == "fragment-type-conditions-over-interface-and-union" || vector == "inline-fragment-type-condition" {
 		for _, descriptor := range portableAbstractTypes() {
 			registerType(descriptor)
 		}
@@ -152,7 +152,7 @@ func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Regist
 		return runtime.Descriptor{Name: name, Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 			Input: input, Output: output, Metadata: completeMetadata(runtime.ReadEffect)}
 	}
-	if vector == "fragment-type-conditions-over-interface-and-union" {
+	if vector == "fragment-type-conditions-over-interface-and-union" || vector == "inline-fragment-type-condition" {
 		registerPortableTypeConditionDefinitions(t, registry, starts)
 		return
 	}
@@ -211,6 +211,8 @@ func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Regist
 	}
 
 	switch vector {
+	case "parameterized-fragment-binding-shadowing-and-default":
+		registerPortableFragmentParameterDefinition(t, registry, starts, root)
 	case "pipeline-prior-result-and-current":
 		register(runtime.BindInvocation[json.RawMessage](root("user", "LookupInput", "JSONValue"), func(context.Context, runtime.Invocation) (json.RawMessage, error) {
 			starts.Add(1)
@@ -288,6 +290,26 @@ func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Regist
 			_ = json.Unmarshal(raw, &result)
 			return result, nil
 		}))
+	}
+}
+
+func registerPortableFragmentParameterDefinition(t testing.TB, registry *runtime.Registry, starts *atomic.Int64,
+	root func(string, schema.TypeID, schema.TypeID) runtime.Descriptor,
+) {
+	t.Helper()
+	definition := runtime.Bind[schema.InputValue, string](root("echo", "ValueInput", schema.TypeID(schema.String)), func(_ context.Context, input schema.InputValue) (string, error) {
+		starts.Add(1)
+		members, _ := input.Object()
+		value, _ := members["value"].Scalar()
+		raw, err := value.MarshalJSON()
+		if err != nil {
+			return "", err
+		}
+		var result string
+		return result, json.Unmarshal(raw, &result)
+	})
+	if err := registry.Register(definition); err != nil {
+		t.Fatalf("register fragment parameter definition: %v", err)
 	}
 }
 

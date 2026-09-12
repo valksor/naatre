@@ -195,6 +195,7 @@ const (
 type Selection struct {
 	kind          SelectionKind
 	name          string
+	typeCondition string
 	alias         string
 	bind          string
 	arguments     map[string]Expression
@@ -218,6 +219,7 @@ type Selection struct {
 
 func (s Selection) Kind() SelectionKind              { return s.kind }
 func (s Selection) Name() string                     { return s.name }
+func (s Selection) TypeCondition() string            { return s.typeCondition }
 func (s Selection) Alias() string                    { return s.alias }
 func (s Selection) Bind() string                     { return s.bind }
 func (s Selection) Source() Source                   { return s.source }
@@ -259,14 +261,20 @@ func (o Operation) Selections() []Selection         { return cloneSelections(o.s
 type Fragment struct {
 	name       string
 	on         string
+	parameters []VariableDefinition
 	selections []Selection
 	source     Source
 }
 
-func (f Fragment) Name() string            { return f.name }
-func (f Fragment) TypeCondition() string   { return f.on }
-func (f Fragment) Source() Source          { return f.source }
-func (f Fragment) Selections() []Selection { return cloneSelections(f.selections) }
+func (f Fragment) Name() string          { return f.name }
+func (f Fragment) TypeCondition() string { return f.on }
+func (f Fragment) Source() Source        { return f.source }
+
+// Parameters returns the fragment's typed parameters. A parameter shadows an
+// operation variable of the same name for the fragment's selections, and
+// requires the fragment-parameter capability.
+func (f Fragment) Parameters() []VariableDefinition { return cloneVariables(f.parameters) }
+func (f Fragment) Selections() []Selection          { return cloneSelections(f.selections) }
 
 // Document is an immutable operation document.
 type Document struct {
@@ -422,8 +430,10 @@ func cloneOperation(operation Operation) Operation {
 }
 
 func cloneFragment(fragment Fragment) Fragment {
-	fragment.selections = cloneSelections(fragment.selections)
-	return fragment
+	return Fragment{
+		name: fragment.name, on: fragment.on, source: fragment.source,
+		parameters: cloneVariables(fragment.parameters), selections: cloneSelections(fragment.selections),
+	}
 }
 
 func cloneExpressionPointer(input *Expression) *Expression {

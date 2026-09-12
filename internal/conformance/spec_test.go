@@ -43,6 +43,23 @@ func TestCoreSpecificationClauseContract(t *testing.T) {
 	assertCoreVocabulary(t, text)
 }
 
+func TestSpecificationIndexLinksEveryNormativeDocument(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("../../spec/v1/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(content)
+	for _, name := range []string{"core.md", "protocol.md", "schema.md", "language.md", "canonicalization.md"} {
+		if !strings.Contains(index, "]("+name+")") {
+			t.Errorf("specification index does not link %s", name)
+		}
+		if _, err := os.Stat("../../spec/v1/" + name); err != nil {
+			t.Errorf("normative document %s: %v", name, err)
+		}
+	}
+}
+
 func assertCoreVocabulary(t *testing.T, text string) {
 	t.Helper()
 	vocabulary := map[string]string{

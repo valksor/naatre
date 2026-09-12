@@ -106,13 +106,19 @@ func (t *unavailableTree) merge(other *unavailableTree) {
 }
 
 type executionScope struct {
-	current  executionValue
-	parent   executionValue
-	bindings map[string]executionValue
-	limiter  chan struct{}
-	parallel bool
-	grace    time.Duration
-	effects  *effectRecorder
+	current   executionValue
+	parent    executionValue
+	bindings  map[string]executionValue
+	variables map[string]scopedVariable
+	limiter   chan struct{}
+	parallel  bool
+	grace     time.Duration
+	effects   *effectRecorder
+}
+
+type scopedVariable struct {
+	value   json.RawMessage
+	present bool
 }
 
 // effectRecorder tracks whether any write handler started and whether one
@@ -266,7 +272,11 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 	case protocol.ParallelSelection:
 		return p.executeParallel(ctx, node, scope, path)
 	case protocol.FragmentSelection:
-		children := p.executeSequence(ctx, node.children, scope, path)
+		fragmentScope, parameterErrors := p.fragmentExecutionScope(node, scope, nodePath)
+		if len(parameterErrors) != 0 {
+			return nodeResult{failed: true, errors: parameterErrors}
+		}
+		children := p.executeSequence(ctx, node.children, fragmentScope, path)
 		return nodeResult{data: children.data, merge: true, failed: children.failed, errors: children.errors}
 	case protocol.CurrentSelection:
 		return resultForValue(node, scope.current, scope.current.value)
@@ -589,7 +599,8 @@ func completeRecovering(complete func() (any, []completionIssue, bool, error)) (
 func cloneExecutionScope(scope executionScope) executionScope {
 	return executionScope{
 		current: scope.current, parent: scope.parent, bindings: cloneBindings(scope.bindings),
-		limiter: scope.limiter, parallel: scope.parallel, grace: scope.grace,
+		variables: maps.Clone(scope.variables),
+		limiter:   scope.limiter, parallel: scope.parallel, grace: scope.grace,
 		effects: scope.effects,
 	}
 }

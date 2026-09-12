@@ -233,7 +233,7 @@ func (d languageDecoder) fragment(value node, pointer string) (Fragment, error) 
 	if err := expectKindPhase(d.input, value, nodeObject, pointer, "fragment declaration", "LANG-002", "validate"); err != nil {
 		return Fragment{}, err
 	}
-	if err := rejectUnknown(d.input, value, map[string]bool{"name": true, "on": true, "select": true}, "LANG-002", "validate", pointer); err != nil {
+	if err := rejectUnknown(d.input, value, map[string]bool{"name": true, "on": true, "parameters": true, "select": true}, "LANG-002", "validate", pointer); err != nil {
 		return Fragment{}, err
 	}
 	name, err := d.requiredIdentifier(value, "name", pointer, false)
@@ -249,6 +249,14 @@ func (d languageDecoder) fragment(value node, pointer string) (Fragment, error) 
 			return Fragment{}, newDiagnostic(d.input, "INVALID_IDENTIFIER", "LANG-002", "validate", "fragment type condition must be a portable type identifier", joinPointer(pointer, "on"), onNode.start)
 		}
 		fragment.on = onNode.text
+	}
+	// Parameters reuse the variable declaration shape, so duplicate names,
+	// defaults, and nullability are decoded by one rule rather than two.
+	if parametersNode, ok := value.member("parameters"); ok {
+		fragment.parameters, err = d.variables(parametersNode, joinPointer(pointer, "parameters"))
+		if err != nil {
+			return Fragment{}, err
+		}
 	}
 	selectNode, hasSelect := value.member("select")
 	selectPointer := joinPointer(pointer, "select")
@@ -298,7 +306,7 @@ var responseSelectionShapes = map[string]selectionShape{
 	"$page":     {kind: PageSelection, allowed: selectionMembers("as", "first", "after", "last", "before", "select"), requireAlias: true},
 	"$meta":     {kind: MetaSelection, allowed: selectionMembers("name", "as"), requireName: true},
 	"$parallel": {kind: ParallelSelection, allowed: allowedMembers("policy", "directives", "select"), requireSelect: true, parallelPolicy: true},
-	"$fragment": {kind: FragmentSelection, allowed: allowedMembers("name", "directives"), requireName: true},
+	"$fragment": {kind: FragmentSelection, allowed: allowedMembers("name", "on", "directives", "args", "select")},
 	"$current":  {kind: CurrentSelection, allowed: selectionMembers("as"), requireAlias: true},
 	"$nest":     {kind: NestSelection, allowed: selectionMembers("as", "select"), requireAlias: true, requireSelect: true},
 	"$unnest":   {kind: UnnestSelection, allowed: allowedMembers("directives", "select"), requireSelect: true},
@@ -360,6 +368,11 @@ func (d languageDecoder) selection(value node, pointer string, pipelineStep bool
 	if err := d.selectionNames(payload, payloadPointer, shape, &selection); err != nil {
 		return Selection{}, err
 	}
+	if selection.kind == FragmentSelection {
+		if err := d.fragmentSelection(payload, payloadPointer, &selection); err != nil {
+			return Selection{}, err
+		}
+	}
 	if err := d.selectionDecorators(payload, payloadPointer, &selection); err != nil {
 		return Selection{}, err
 	}
@@ -405,6 +418,40 @@ func (d languageDecoder) selectionNames(payload node, pointer string, shape sele
 		selection.bind = bindNode.text
 		selection.bindSource = sourceAt(d.input, joinPointer(pointer, "bind"), bindNode)
 	}
+	return nil
+}
+
+func (d languageDecoder) fragmentSelection(payload node, pointer string, selection *Selection) error {
+	if nameNode, hasName := payload.member("name"); hasName {
+		name, err := d.requiredIdentifier(payload, "name", pointer, false)
+		if err != nil {
+			return err
+		}
+		selection.name = name
+		selection.nameSource = sourceAt(d.input, joinPointer(pointer, "name"), nameNode)
+	}
+	onNode, hasOn := payload.member("on")
+	_, hasSelect := payload.member("select")
+	_, hasArguments := payload.member("args")
+	if selection.name != "" {
+		if hasOn || hasSelect {
+			return newDiagnostic(d.input, "INVALID_FRAGMENT", "LANG-240", "validate", "named fragment spreads cannot declare an inline type condition or selections", pointer, payload.start)
+		}
+		return nil
+	}
+	if !hasOn || !hasSelect {
+		return newDiagnostic(d.input, "INVALID_FRAGMENT", "LANG-240", "validate", "inline fragments require on and select", pointer, payload.start)
+	}
+	if hasArguments {
+		return newDiagnostic(d.input, "INVALID_FRAGMENT", "LANG-244", "validate", "inline fragments cannot bind fragment arguments", joinPointer(pointer, "args"), payload.start)
+	}
+	if onNode.kind != nodeString {
+		return newDiagnostic(d.input, "TYPE_MISMATCH", "LANG-240", "validate", "inline fragment type condition must be a string", joinPointer(pointer, "on"), onNode.start)
+	}
+	if !profileIdentifierPattern.MatchString(onNode.text) {
+		return newDiagnostic(d.input, "INVALID_IDENTIFIER", "LANG-240", "validate", "inline fragment type condition must be a portable type identifier", joinPointer(pointer, "on"), onNode.start)
+	}
+	selection.typeCondition = onNode.text
 	return nil
 }
 

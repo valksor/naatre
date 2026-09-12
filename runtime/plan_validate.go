@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -34,6 +35,16 @@ type planNode struct {
 	parallelPolicy protocol.ParallelPolicy
 	optional       bool
 	typeConditions []schema.TypeID
+	fragmentParams map[string]fragmentParameterBinding
+}
+
+type fragmentParameterBinding struct {
+	expression    protocol.Expression
+	hasExpression bool
+	defaultValue  json.RawMessage
+	hasDefault    bool
+	typeID        schema.TypeID
+	nullable      bool
 }
 
 type plannedVariable struct {
@@ -75,12 +86,19 @@ type planValidator struct {
 	// usedFragments records every fragment reached by a spread from the
 	// operation, so an unreachable declaration is reported rather than silently
 	// carried through planning and cost analysis.
-	usedFragments map[string]bool
-	variables     map[string]*plannedVariable
-	allBindings   map[string]bindingDeclaration
-	context       []protocol.Source
-	issues        []ValidationIssue
+	usedFragments             map[string]bool
+	variables                 map[string]*plannedVariable
+	allBindings               map[string]bindingDeclaration
+	context                   []protocol.Source
+	issues                    []ValidationIssue
+	fragmentSelections        int
+	fragmentExpansionExceeded bool
 }
+
+const (
+	maxFragmentExpansionDepth     = 128
+	maxExpandedFragmentSelections = 16384
+)
 
 func newPlanValidator(registry Snapshot, request *protocol.Request, operation protocol.Operation) *planValidator {
 	validator := &planValidator{
@@ -412,34 +430,143 @@ func (v *planValidator) validateParallelBranch(node planNode) {
 }
 
 func (v *planValidator) validateFragment(selection protocol.Selection, scope *validationScope, root bool, node *planNode) {
-	fragment, ok := v.fragments[selection.Name()]
-	if !ok {
-		v.add("UNKNOWN_FRAGMENT", "LANG-240", "fragment is not declared", selection.Source())
+	if v.fragmentExpansionExceeded {
 		return
 	}
-	v.usedFragments[fragment.Name()] = true
-	if firstUse, active := scope.fragmentStack[fragment.Name()]; active {
-		v.addRelated("FRAGMENT_CYCLE", "LANG-240", "fragment cycle detected", selection.Source(), fragment.Source(), firstUse)
+	var fragment protocol.Fragment
+	fragmentSelections := selection.Selections()
+	condition := selection.TypeCondition()
+	declarationSource := selection.Source()
+	if selection.Name() != "" {
+		var ok bool
+		fragment, ok = v.fragments[selection.Name()]
+		if !ok {
+			v.add("UNKNOWN_FRAGMENT", "LANG-240", "fragment is not declared", selection.Source())
+			return
+		}
+		v.usedFragments[fragment.Name()] = true
+		if firstUse, active := scope.fragmentStack[fragment.Name()]; active {
+			v.addRelated("FRAGMENT_CYCLE", "LANG-240", "fragment cycle detected", selection.Source(), fragment.Source(), firstUse)
+			return
+		}
+		fragmentSelections = fragment.Selections()
+		condition = fragment.TypeCondition()
+		declarationSource = fragment.Source()
+	}
+	if len(scope.fragmentStack) >= maxFragmentExpansionDepth || v.fragmentSelections+len(fragmentSelections) > maxExpandedFragmentSelections {
+		v.fragmentExpansionExceeded = true
+		v.addRelated("FRAGMENT_EXPANSION_LIMIT", "LANG-240", "fragment expansion exceeds the portable planning budget", selection.Source(), declarationSource)
 		return
 	}
+	v.fragmentSelections += len(fragmentSelections)
 	previousCurrent := scope.current
 	previousConditions := scope.typeConditions
-	if condition := fragment.TypeCondition(); condition != "" {
+	if condition != "" {
 		conditionID := schema.TypeID(condition)
 		narrowed, compatible := v.narrowTypeCondition(scope.current, conditionID)
 		if !compatible {
-			v.addRelated("IMPOSSIBLE_TYPE_CONDITION", "LANG-240", "fragment type condition cannot match the static current type", selection.Source(), fragment.Source())
+			v.addRelated("IMPOSSIBLE_TYPE_CONDITION", "LANG-240", "fragment type condition cannot match the static current type", selection.Source(), declarationSource)
 			return
 		}
 		scope.current = narrowed
 		scope.typeConditions = append(append([]schema.TypeID(nil), scope.typeConditions...), conditionID)
 	}
-	scope.fragmentStack[fragment.Name()] = selection.Source()
-	node.children = v.validateSequence(fragment.Selections(), scope, root)
-	delete(scope.fragmentStack, fragment.Name())
+	restoreParameters := func() {}
+	if selection.Name() != "" {
+		restoreParameters = v.bindFragmentParameters(fragment, selection, scope, node)
+		scope.fragmentStack[fragment.Name()] = selection.Source()
+	}
+	node.children = v.validateSequence(fragmentSelections, scope, root)
+	if selection.Name() != "" {
+		delete(scope.fragmentStack, fragment.Name())
+	}
+	restoreParameters()
 	scope.current = previousCurrent
 	scope.typeConditions = previousConditions
 	node.output = staticType{valid: true}
+}
+
+// bindFragmentParameters validates a spread's arguments against the fragment's
+// declared parameters and installs them for the fragment's selections, where
+// they shadow an operation variable of the same name. The returned function
+// restores the shadowed variables, so shadowing lasts exactly as long as the
+// expansion.
+func (v *planValidator) bindFragmentParameters(fragment protocol.Fragment, selection protocol.Selection, scope *validationScope, node *planNode) func() {
+	parameters, arguments := fragment.Parameters(), selection.Arguments()
+	if len(parameters) == 0 && len(arguments) == 0 {
+		return func() {}
+	}
+	if !slices.Contains(v.request.Capabilities(), FragmentParametersCapability) {
+		v.addRelated("UNSUPPORTED_CAPABILITY", "LANG-244", "fragment parameters require a negotiated capability", selection.Source(), fragment.Source())
+		return func() {}
+	}
+	declared := make(map[string]protocol.VariableDefinition, len(parameters))
+	for _, parameter := range parameters {
+		declared[parameter.Name()] = parameter
+	}
+	for _, name := range sortedStringKeys(arguments) {
+		if _, ok := declared[name]; !ok {
+			v.addRelated("UNKNOWN_ARGUMENT", "LANG-244", fmt.Sprintf("fragment has no parameter %q", name), arguments[name].Source(), fragment.Source())
+		}
+	}
+	shadowed := make(map[string]*plannedVariable, len(parameters))
+	node.fragmentParams = make(map[string]fragmentParameterBinding, len(parameters))
+	for _, parameter := range parameters {
+		shadowed[parameter.Name()] = v.variables[parameter.Name()]
+		planned, binding := v.bindFragmentParameter(parameter, arguments, selection, fragment, scope)
+		v.variables[parameter.Name()] = planned
+		node.fragmentParams[parameter.Name()] = binding
+	}
+	return func() {
+		for name, previous := range shadowed {
+			if previous == nil {
+				delete(v.variables, name)
+				continue
+			}
+			v.variables[name] = previous
+		}
+	}
+}
+
+// bindFragmentParameter resolves one parameter from its spread-site argument,
+// its default, or its absence, and type-checks the binding at the spread site.
+func (v *planValidator) bindFragmentParameter(parameter protocol.VariableDefinition, arguments map[string]protocol.Expression,
+	selection protocol.Selection, fragment protocol.Fragment, scope *validationScope,
+) (*plannedVariable, fragmentParameterBinding) {
+	typeID := schema.TypeID(parameter.Type())
+	binding := fragmentParameterBinding{typeID: typeID, nullable: parameter.Nullable()}
+	descriptor, known := v.registry.types.Lookup(typeID)
+	if !known || !descriptor.Input {
+		v.add("UNKNOWN_TYPE", "LANG-244", "fragment parameter references an unknown or non-input type", parameter.Source())
+		return &plannedVariable{definition: parameter}, binding
+	}
+	planned := &plannedVariable{
+		definition: parameter,
+		typeInfo:   staticType{id: typeID, nullable: parameter.Nullable(), valid: true},
+	}
+	argument, bound := arguments[parameter.Name()]
+	fallback, hasDefault := parameter.Default()
+	if hasDefault {
+		planned.guaranteed = true
+		binding.defaultValue = append(json.RawMessage(nil), fallback...)
+		binding.hasDefault = true
+		if _, err := schema.CoerceInput(v.registry.types, typeID, fallback, parameter.Nullable()); err != nil {
+			v.add("TYPE_MISMATCH", "LANG-244", fmt.Sprintf("fragment parameter %q default: %v", parameter.Name(), err), parameter.Source())
+		}
+	}
+	switch {
+	case bound:
+		planned.guaranteed = true
+		binding.expression = argument
+		binding.hasExpression = true
+		// The argument is coerced against the parameter type at the spread
+		// site, so a fragment never observes a value its declaration forbids.
+		v.validateExpression(argument, planned.typeInfo, parameter.Required(), scope)
+	case parameter.Required() && !hasDefault:
+		v.addRelated("MISSING_ARGUMENT", "LANG-244", fmt.Sprintf("fragment requires argument %q", parameter.Name()), selection.Source(), fragment.Source())
+		return planned, binding
+	}
+	return planned, binding
 }
 
 func (v *planValidator) validateOutputSelections(selections []protocol.Selection, output staticType, emitted bool, source protocol.Source, parent *validationScope) []planNode {

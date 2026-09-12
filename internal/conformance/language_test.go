@@ -194,10 +194,13 @@ func assertLanguageCoverage(t *testing.T, fixture languageFixture, names, tags m
 		"empty-list-map", "failed-result-is-unavailable",
 		"forward-result-reference", "implicit-list-item-mapping",
 		"invalid-downstream-argument-after-write", "literal-var-shaped-map-is-inert",
+		"inline-fragment-type-condition", "fragment-expansion-alias-collision",
+		"fragment-non-null-parameter-rejects-null", "fragment-required-parameter-missing",
 		"missing-variable-omits-optional-argument", "missing-variable-rejects-required-consumer",
 		"null-result-rejects-non-null-consumer", "object-member-order-is-non-semantic",
 		"out-of-range-index-is-path-error", "skipped-result-is-unavailable",
 		"skipped-write-inside-query", "unnest-parent-collision",
+		"parameterized-fragment-binding-shadowing-and-default",
 	} {
 		if !names[name] {
 			t.Fatalf("language fixtures omit required scenario %q", name)
