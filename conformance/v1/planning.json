@@ -49,6 +49,7 @@
       "expectedPlan": {
         "operation": "Q",
         "kind": "query",
+		"atomicity": "none",
 		"variableDefinitions": [{
 		  "name": "id",
 		  "type": "ID",

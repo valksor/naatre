@@ -1,0 +1,140 @@
+{
+  "profile": "core.mutation-1",
+  "atomicityModes": ["none", "operation", "group"],
+  "commitOutcomes": ["applied", "not-applied", "unknown"],
+  "effectStates": ["none", "applied", "rolled-back", "compensated", "partially-applied", "indeterminate"],
+  "auditStages": ["attempted", "committed", "rolled-back", "compensated", "indeterminate"],
+  "errorCodes": [
+    "ATOMICITY_NOT_ALLOWED",
+    "ATOMIC_GROUP_NOT_ALLOWED",
+    "ATOMIC_GROUP_REQUIRED",
+    "DUPLICATE_ATOMIC_GROUP",
+    "ATOMIC_PARALLEL_NOT_ALLOWED",
+    "TRANSACTION_PROVIDER_REQUIRED",
+    "TRANSACTION_PARTICIPATION",
+    "TRANSACTION_REQUIRED",
+    "TRANSACTION_BEGIN_FAILED",
+    "TRANSACTION_COMMIT_FAILED",
+    "TRANSACTION_COMMIT_UNKNOWN",
+    "TRANSACTION_ROLLBACK_FAILED",
+    "SAVEPOINT_UNSUPPORTED",
+    "SAVEPOINT_BEGIN_FAILED",
+    "SAVEPOINT_RELEASE_FAILED",
+    "SAVEPOINT_ROLLBACK_FAILED",
+    "OUTBOX_PERSIST_FAILED",
+    "AFTER_COMMIT_FAILED",
+    "EXTERNAL_EFFECT_UNCOORDINATED",
+    "COMPENSATION_FAILED"
+  ],
+  "vectors": [
+    {
+      "name": "operation-commit",
+      "atomicity": "operation",
+      "events": ["attempted", "begin", "write", "outbox", "commit", "committed", "after-commit"],
+      "effect": "applied",
+      "publishesData": true
+    },
+    {
+      "name": "named-groups-commit-independently",
+      "atomicity": "group",
+      "groups": ["account", "ledger"],
+      "events": ["begin:account", "commit:account", "begin:ledger", "commit:ledger"],
+      "effect": "applied",
+      "publishesData": true
+    },
+    {
+      "name": "later-group-rolls-back",
+      "atomicity": "group",
+      "groups": ["account", "ledger"],
+      "fault": "handler:ledger",
+      "effect": "partially-applied",
+      "publishesData": true
+    },
+    {
+      "name": "commit-unknown",
+      "atomicity": "operation",
+      "fault": "commit-unknown",
+      "code": "TRANSACTION_COMMIT_UNKNOWN",
+      "effect": "indeterminate",
+      "publishesData": false
+    },
+    {
+      "name": "rollback-failed",
+      "atomicity": "operation",
+      "fault": "rollback",
+      "code": "TRANSACTION_ROLLBACK_FAILED",
+      "effect": "indeterminate",
+      "publishesData": false
+    },
+    {
+      "name": "outbox-failed",
+      "atomicity": "operation",
+      "fault": "outbox",
+      "code": "OUTBOX_PERSIST_FAILED",
+      "effect": "rolled-back",
+      "publishesData": false
+    },
+    {
+      "name": "after-commit-delivery-failed",
+      "atomicity": "operation",
+      "fault": "after-commit",
+      "code": "AFTER_COMMIT_FAILED",
+      "effect": "applied",
+      "publishesData": true
+    },
+    {
+      "name": "after-commit-delivery-duplicated",
+      "atomicity": "operation",
+      "events": ["commit", "delivery:event-1", "recovery", "delivery:event-1"],
+      "effect": "applied",
+      "publishesData": true
+    },
+    {
+      "name": "external-effect-uncoordinated",
+      "atomicity": "operation",
+      "fault": "handler-after-external-effect",
+      "code": "EXTERNAL_EFFECT_UNCOORDINATED",
+      "effect": "indeterminate",
+      "publishesData": false
+    },
+    {
+      "name": "compensation-failed",
+      "atomicity": "operation",
+      "fault": "compensation",
+      "code": "COMPENSATION_FAILED",
+      "effect": "indeterminate",
+      "publishesData": false
+    },
+    {
+      "name": "cancel-before-commit",
+      "atomicity": "operation",
+      "fault": "cancel-before-commit",
+      "effect": "rolled-back",
+      "publishesData": false
+    },
+    {
+      "name": "cancel-during-confirmed-commit",
+      "atomicity": "operation",
+      "fault": "cancel-during-commit",
+      "effect": "applied",
+      "publishesData": true
+    },
+    {
+      "name": "nested-savepoint-unsupported",
+      "atomicity": "operation",
+      "fault": "prepare",
+      "code": "SAVEPOINT_UNSUPPORTED",
+      "effect": "none",
+      "publishesData": false
+    },
+    {
+      "name": "duplicate-group-name",
+      "atomicity": "group",
+      "groups": ["account", "account"],
+      "fault": "prepare",
+      "code": "DUPLICATE_ATOMIC_GROUP",
+      "effect": "none",
+      "publishesData": false
+    }
+  ]
+}

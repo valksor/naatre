@@ -121,6 +121,7 @@ func newPlanValidator(registry Snapshot, request *protocol.Request, operation pr
 
 func (v *planValidator) validate() ([]planNode, []plannedSelection) {
 	v.validateCapabilities()
+	v.validateAtomicity()
 	v.validateVariables()
 	scope := validationScope{
 		bindings: make(map[string]plannedBinding), responseNames: make(map[string][]responseClaim),
@@ -272,11 +273,62 @@ func (v *planValidator) validateSelection(selection protocol.Selection, scope *v
 		}
 		node.children = v.validateSequence(selection.Selections(), &childScope, root)
 		node.output = staticType{valid: true}
+	case protocol.AtomicSelection:
+		node.children = v.validateSequence(selection.Selections(), scope, root)
+		node.output = staticType{valid: true}
 	default:
 		v.add("UNKNOWN_SELECTION", "LANG-003", "selection kind is not supported", selection.Source())
 	}
 	node.directives = v.validateDirectives(selection.Directives(), scope, &node)
 	return node
+}
+
+func (v *planValidator) validateAtomicity() {
+	mode := v.operation.Atomicity()
+	if v.operation.Kind() != protocol.Mutation {
+		if mode != protocol.NoAtomicity {
+			v.add("ATOMICITY_NOT_ALLOWED", "MUT-002", "only mutations may request transaction atomicity", v.operation.Source())
+		}
+		return
+	}
+	if mode != protocol.NoAtomicity && v.registry.transactions.Provider == nil {
+		v.add("TRANSACTION_PROVIDER_REQUIRED", "MUT-003", "requested atomicity requires a transaction provider", v.operation.Source())
+	}
+	groups := make(map[string]protocol.Source)
+	for _, selection := range v.operation.Selections() {
+		if mode == protocol.GroupAtomicity && selection.Kind() != protocol.AtomicSelection {
+			v.add("ATOMIC_GROUP_REQUIRED", "MUT-004", "group atomicity requires every root selection to be a named atomic group", selection.Source())
+		}
+		if mode == protocol.GroupAtomicity && selection.Kind() == protocol.AtomicSelection {
+			if previous, exists := groups[selection.Name()]; exists {
+				v.addRelated("DUPLICATE_ATOMIC_GROUP", "MUT-004", "atomic group name is already defined in this operation", selection.Source(), previous)
+			} else {
+				groups[selection.Name()] = selection.Source()
+			}
+		}
+		v.validateAtomicSelection(selection, mode, true)
+	}
+}
+
+func (v *planValidator) validateAtomicSelection(selection protocol.Selection, mode protocol.AtomicityMode, root bool) {
+	if selection.Kind() == protocol.AtomicSelection && mode == protocol.NoAtomicity {
+		v.add("ATOMIC_GROUP_NOT_ALLOWED", "MUT-004", "atomic groups require operation or group atomicity", selection.Source())
+	}
+	if selection.Kind() == protocol.AtomicSelection && mode != protocol.NoAtomicity && v.registry.transactions.Provider != nil {
+		needsSavepoint := mode == protocol.OperationAtomicity || !root
+		if needsSavepoint && !v.registry.transactions.capabilities.Savepoints {
+			v.add("SAVEPOINT_UNSUPPORTED", "MUT-005", "nested atomic group requires provider savepoint support", selection.Source())
+		}
+	}
+	if selection.Kind() == protocol.ParallelSelection && mode != protocol.NoAtomicity {
+		v.add("ATOMIC_PARALLEL_NOT_ALLOWED", "MUT-006", "transactional mutation selections must execute serially", selection.Source())
+	}
+	for _, child := range selection.Selections() {
+		v.validateAtomicSelection(child, mode, false)
+	}
+	for _, stage := range selection.Stages() {
+		v.validateAtomicSelection(stage, mode, false)
+	}
 }
 
 func (v *planValidator) validateCall(selection protocol.Selection, scope *validationScope, root bool, node *planNode) {
@@ -645,8 +697,10 @@ func (v *planValidator) validateDefinition(definition Definition, source protoco
 		return
 	}
 	if descriptor.Scope != RootScope {
+		v.validateTransactionParticipation(descriptor, source)
 		return
 	}
+	v.validateTransactionParticipation(descriptor, source)
 	switch v.operation.Kind() {
 	case protocol.Query:
 		if descriptor.Kind != protocol.Query {
@@ -660,6 +714,18 @@ func (v *planValidator) validateDefinition(definition Definition, source protoco
 		if descriptor.Kind != protocol.Subscription {
 			v.add("INVALID_SUBSCRIPTION", "CORE-018", "subscription selection is not a subscription root", source)
 		}
+	}
+}
+
+func (v *planValidator) validateTransactionParticipation(descriptor Descriptor, source protocol.Source) {
+	if v.operation.Kind() != protocol.Mutation {
+		return
+	}
+	if v.operation.Atomicity() == protocol.NoAtomicity && descriptor.Metadata.Transaction == TransactionRequired {
+		v.add("TRANSACTION_REQUIRED", "MUT-003", "handler requires a transaction boundary", source)
+	}
+	if v.operation.Atomicity() != protocol.NoAtomicity && descriptor.Metadata.Transaction == TransactionNone {
+		v.add("TRANSACTION_PARTICIPATION", "MUT-003", "handler cannot participate in the requested transaction", source)
 	}
 }
 

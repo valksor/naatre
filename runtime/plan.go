@@ -47,6 +47,7 @@ const (
 type PlanDescription struct {
 	Operation           string                    `json:"operation"`
 	Kind                protocol.OperationKind    `json:"kind"`
+	Atomicity           protocol.AtomicityMode    `json:"atomicity"`
 	Requirements        []string                  `json:"requirements,omitempty"`
 	VariableDefinitions []PlanVariableDescription `json:"variableDefinitions,omitempty"`
 	Nodes               []PlanNodeDescription     `json:"nodes"`
@@ -148,7 +149,7 @@ func (p *Plan) Description() PlanDescription {
 		return PlanDescription{}
 	}
 	return PlanDescription{
-		Operation: p.operationName, Kind: p.kind,
+		Operation: p.operationName, Kind: p.kind, Atomicity: p.atomicity,
 		Requirements:        append([]string(nil), p.requirements...),
 		VariableDefinitions: describeVariables(p.variables),
 		Nodes:               describePlanNodes(p.nodes), Result: selectedObject(p.nodes, p.types),
@@ -202,7 +203,7 @@ func selectedFields(nodes []planNode, types schema.Snapshot, inheritedOptional b
 	for _, node := range nodes {
 		if node.outputName == "" {
 			switch node.kind {
-			case protocol.FragmentSelection, protocol.ParallelSelection, protocol.UnnestSelection:
+			case protocol.FragmentSelection, protocol.ParallelSelection, protocol.UnnestSelection, protocol.AtomicSelection:
 				fields = append(fields, selectedFields(node.children, types, inheritedOptional || node.optional)...)
 			case protocol.FieldSelection, protocol.CallSelection, protocol.PipelineSelection,
 				protocol.MapSelection, protocol.IndexSelection, protocol.SliceSelection,
@@ -222,7 +223,7 @@ func selectedFields(nodes []planNode, types schema.Snapshot, inheritedOptional b
 
 func selectedNode(node planNode, types schema.Snapshot) SelectedResultDescription {
 	switch node.kind {
-	case protocol.NestSelection, protocol.ParallelSelection, protocol.FragmentSelection, protocol.UnnestSelection:
+	case protocol.NestSelection, protocol.ParallelSelection, protocol.FragmentSelection, protocol.UnnestSelection, protocol.AtomicSelection:
 		return selectedObject(node.children, types)
 	case protocol.MapSelection:
 		result := selectedStaticType(node.output, types)

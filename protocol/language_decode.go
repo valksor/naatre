@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -141,7 +142,7 @@ func (d languageDecoder) operation(value node, pointer string) (Operation, error
 	if err := expectKindPhase(d.input, value, nodeObject, pointer, "operation object", "LANG-002", "validate"); err != nil {
 		return Operation{}, err
 	}
-	if err := rejectUnknown(d.input, value, map[string]bool{"name": true, "kind": true, "variables": true, "select": true}, "LANG-002", "validate", pointer); err != nil {
+	if err := rejectUnknown(d.input, value, map[string]bool{"name": true, "kind": true, "atomicity": true, "variables": true, "select": true}, "LANG-002", "validate", pointer); err != nil {
 		return Operation{}, err
 	}
 	name, err := d.requiredIdentifier(value, "name", pointer, false)
@@ -167,7 +168,13 @@ func (d languageDecoder) operation(value node, pointer string) (Operation, error
 	if err != nil {
 		return Operation{}, err
 	}
-	operation := Operation{name: name, kind: OperationKind(kindNode.text), selections: selections, source: sourceAt(d.input, pointer, value)}
+	atomicity, err := d.defaultedStringEnum(value, "atomicity", pointer, string(NoAtomicity),
+		[]string{string(NoAtomicity), string(OperationAtomicity), string(GroupAtomicity)},
+		"INVALID_ATOMICITY", "MUT-002", "atomicity must be none, operation, or group")
+	if err != nil {
+		return Operation{}, err
+	}
+	operation := Operation{name: name, kind: OperationKind(kindNode.text), atomicity: AtomicityMode(atomicity), selections: selections, source: sourceAt(d.input, pointer, value)}
 	if variablesNode, ok := value.member("variables"); ok {
 		operation.variables, err = d.variables(variablesNode, joinPointer(pointer, "variables"))
 		if err != nil {
@@ -175,6 +182,17 @@ func (d languageDecoder) operation(value node, pointer string) (Operation, error
 		}
 	}
 	return operation, nil
+}
+
+func (d languageDecoder) defaultedStringEnum(parent node, name, pointer, fallback string, allowed []string, code, clause, message string) (string, error) {
+	value, exists := parent.member(name)
+	if !exists {
+		return fallback, nil
+	}
+	if value.kind != nodeString || !slices.Contains(allowed, value.text) {
+		return "", newDiagnostic(d.input, code, clause, "validate", message, joinPointer(pointer, name), value.start)
+	}
+	return value.text, nil
 }
 
 func (d languageDecoder) variables(value node, pointer string) ([]VariableDefinition, error) {
@@ -310,6 +328,7 @@ var responseSelectionShapes = map[string]selectionShape{
 	"$current":  {kind: CurrentSelection, allowed: selectionMembers("as"), requireAlias: true},
 	"$nest":     {kind: NestSelection, allowed: selectionMembers("as", "select"), requireAlias: true, requireSelect: true},
 	"$unnest":   {kind: UnnestSelection, allowed: allowedMembers("directives", "select"), requireSelect: true},
+	"$atomic":   {kind: AtomicSelection, allowed: allowedMembers("name", "directives", "select"), requireName: true, requireSelect: true},
 }
 
 var pipelineSelectionShapes = map[string]selectionShape{
@@ -572,15 +591,13 @@ func (d languageDecoder) parallelPolicy(payload node, pointer string, shape sele
 	if !shape.parallelPolicy {
 		return nil
 	}
-	selection.policy = CollectParallel
-	policyNode, ok := payload.member("policy")
-	if !ok {
-		return nil
+	policy, err := d.defaultedStringEnum(payload, "policy", pointer, string(CollectParallel),
+		[]string{string(CollectParallel), string(FailFastParallel)},
+		"INVALID_POLICY", "LANG-011", "parallel policy must be collect or fail-fast")
+	if err != nil {
+		return err
 	}
-	if policyNode.kind != nodeString || (policyNode.text != string(CollectParallel) && policyNode.text != string(FailFastParallel)) {
-		return newDiagnostic(d.input, "INVALID_POLICY", "LANG-011", "validate", "parallel policy must be collect or fail-fast", joinPointer(pointer, "policy"), policyNode.start)
-	}
-	selection.policy = ParallelPolicy(policyNode.text)
+	selection.policy = ParallelPolicy(policy)
 	return nil
 }
 

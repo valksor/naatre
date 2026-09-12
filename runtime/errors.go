@@ -41,14 +41,31 @@ const (
 	// are language-neutral; enforcement is owned by #11 and #12.
 	CodeUnauthorized      = "UNAUTHORIZED"
 	CodeResourceExhausted = "RESOURCE_EXHAUSTED"
+	// Transaction lifecycle codes distinguish the boundary at which an atomic
+	// mutation failed. In particular, commit uncertainty is not rollback.
+	CodeTransactionBeginFailed      = "TRANSACTION_BEGIN_FAILED"
+	CodeTransactionCommitFailed     = "TRANSACTION_COMMIT_FAILED"
+	CodeTransactionCommitUnknown    = "TRANSACTION_COMMIT_UNKNOWN"
+	CodeTransactionRollbackFailed   = "TRANSACTION_ROLLBACK_FAILED"
+	CodeSavepointBeginFailed        = "SAVEPOINT_BEGIN_FAILED"
+	CodeSavepointReleaseFailed      = "SAVEPOINT_RELEASE_FAILED"
+	CodeSavepointRollbackFailed     = "SAVEPOINT_ROLLBACK_FAILED"
+	CodeOutboxPersistFailed         = "OUTBOX_PERSIST_FAILED"
+	CodeAfterCommitFailed           = "AFTER_COMMIT_FAILED"
+	CodeExternalEffectUncoordinated = "EXTERNAL_EFFECT_UNCOORDINATED"
+	CodeCompensationFailed          = "COMPENSATION_FAILED"
 )
 
 // reservedCodes are the codes only a runtime may produce. An application that
 // claims one would let a domain failure impersonate a protocol guarantee.
 var reservedCodes = []string{
 	CodeCancelled, CodeHandlerFailed, CodeInternal, CodeOutputCompletion,
-	CodeInvalidCollection, CodeResultMissing, CodeResultNull, CodeResultSkipped,
+	CodeInvalidCollection, CodeInvalidCursor, CodeResultMissing, CodeResultNull, CodeResultSkipped,
 	CodeResultScope, CodeResultUnavailable, CodeUnauthorized, CodeResourceExhausted,
+	CodeTransactionBeginFailed, CodeTransactionCommitFailed, CodeTransactionCommitUnknown,
+	CodeTransactionRollbackFailed, CodeSavepointBeginFailed, CodeSavepointReleaseFailed,
+	CodeSavepointRollbackFailed, CodeOutboxPersistFailed, CodeAfterCommitFailed,
+	CodeExternalEffectUncoordinated, CodeCompensationFailed,
 }
 
 // applicationCodePattern constrains a domain code to a stable, wire-safe

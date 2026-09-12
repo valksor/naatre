@@ -70,6 +70,12 @@ const (
 	EffectIndeterminate EffectState = "indeterminate"
 	// EffectRolledBack is reported only when a transaction confirmed the undo.
 	EffectRolledBack EffectState = "rolled-back"
+	// EffectPartiallyApplied reports that at least one named group committed and
+	// a later group did not commit.
+	EffectPartiallyApplied EffectState = "partially-applied"
+	// EffectCompensated reports a confirmed transaction rollback followed by
+	// successful saga compensation for every registered external effect.
+	EffectCompensated EffectState = "compensated"
 )
 
 // Outcome contains deterministic partial data and ordered public errors.
@@ -125,18 +131,21 @@ type plannedSelection struct {
 
 // Plan is immutable and safe for concurrent reads and execution.
 type Plan struct {
-	operationName  string
-	kind           protocol.OperationKind
-	requirements   []string
-	variables      []protocol.VariableDefinition
-	selections     []plannedSelection
-	nodes          []planNode
-	types          schema.Snapshot
-	variableValues map[string]json.RawMessage
-	authorization  AuthorizationConfig
-	interceptors   []registeredInterceptor
-	resourceLimits ResourceLimits
-	staticCost     uint64
+	operationName   string
+	kind            protocol.OperationKind
+	atomicity       protocol.AtomicityMode
+	operationSource protocol.Source
+	requirements    []string
+	variables       []protocol.VariableDefinition
+	selections      []plannedSelection
+	nodes           []planNode
+	types           schema.Snapshot
+	variableValues  map[string]json.RawMessage
+	authorization   AuthorizationConfig
+	interceptors    []registeredInterceptor
+	transactions    TransactionConfig
+	resourceLimits  ResourceLimits
+	staticCost      uint64
 }
 
 // StaticCost is the complete request-independent planned cost admitted before
@@ -179,10 +188,11 @@ func PrepareWithOptions(registry Snapshot, request *protocol.Request, options Pr
 		return nil, &ValidationErrors{issues: planner.issues}
 	}
 	return &Plan{
-		operationName: operation.Name(), kind: operation.Kind(), requirements: request.Document().Requires(),
+		operationName: operation.Name(), kind: operation.Kind(), atomicity: operation.Atomicity(), operationSource: operation.Source(), requirements: request.Document().Requires(),
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
 		variableValues: captureVariableValues(request, operation.Variables()),
 		authorization:  registry.authorization, interceptors: slices.Clone(registry.interceptors),
+		transactions:   registry.transactions,
 		resourceLimits: limits, staticCost: planner.staticCost,
 	}, nil
 }

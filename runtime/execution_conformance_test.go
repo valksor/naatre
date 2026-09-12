@@ -74,8 +74,8 @@ func TestExecutorConsumesPortablePositiveLanguageVectors(t *testing.T) {
 			}
 		})
 	}
-	if executed != 18 {
-		t.Fatalf("executed positive language vectors = %d, want 18", executed)
+	if executed != 20 {
+		t.Fatalf("executed positive language vectors = %d, want 20", executed)
 	}
 }
 
@@ -137,11 +137,47 @@ func portableExecutionRegistry(t testing.TB, vector string) (runtime.Snapshot, *
 	registry := runtime.NewRegistry(types)
 	starts := &atomic.Int64{}
 	registerPortableExecutionDefinitions(t, registry, vector, starts, objectUsers)
+	if vector == "mutation-operation-atomicity" || vector == "mutation-named-atomic-groups" {
+		configurePortableTransactions(t, registry)
+	}
 	snapshot, err := registry.Freeze()
 	if err != nil {
 		t.Fatalf("freeze registry: %v", err)
 	}
 	return snapshot, starts
+}
+
+func configurePortableTransactions(t testing.TB, registry *runtime.Registry) {
+	t.Helper()
+	provider := fakeTransactionProvider{
+		capabilities: runtime.TransactionCapabilities{Savepoints: true},
+		begin: func(ctx context.Context, _ runtime.TransactionRequest) (context.Context, runtime.Transaction, error) {
+			return ctx, fakeTransaction{
+				commit:   func(context.Context) (runtime.CommitOutcome, error) { return runtime.CommitApplied, nil },
+				rollback: func(context.Context) error { return nil },
+				savepoint: func(savepointCtx context.Context, _ string) (context.Context, runtime.Savepoint, error) {
+					return savepointCtx, fakeSavepoint{
+						release:  func(context.Context) error { return nil },
+						rollback: func(context.Context) error { return nil },
+					}, nil
+				},
+			}, nil
+		},
+	}
+	if err := registry.ConfigureTransactions(runtime.TransactionConfig{Provider: provider}); err != nil {
+		t.Fatalf("configure transactions: %v", err)
+	}
+}
+
+func registerPortableMutation(register func(runtime.Definition), root func(string, schema.TypeID, schema.TypeID) runtime.Descriptor, starts *atomic.Int64) {
+	descriptor := root("write", schema.TypeID(schema.String), schema.TypeID(schema.String))
+	descriptor.Kind = protocol.Mutation
+	descriptor.Metadata = completeMetadata(runtime.WriteEffect)
+	descriptor.Metadata.Transaction = runtime.TransactionRequired
+	register(runtime.BindInvocation[string](descriptor, func(context.Context, runtime.Invocation) (string, error) {
+		starts.Add(1)
+		return "written", nil
+	}))
 }
 
 func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Registry, vector string, starts *atomic.Int64, objectUsers bool) {
@@ -154,6 +190,10 @@ func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Regist
 	root := func(name string, input, output schema.TypeID) runtime.Descriptor {
 		return runtime.Descriptor{Name: name, Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 			Input: input, Output: output, Metadata: completeMetadata(runtime.ReadEffect)}
+	}
+	if vector == "mutation-operation-atomicity" || vector == "mutation-named-atomic-groups" {
+		registerPortableMutation(register, root, starts)
+		return
 	}
 	if vector == "fragment-type-conditions-over-interface-and-union" || vector == "inline-fragment-type-condition" {
 		registerPortableTypeConditionDefinitions(t, registry, starts)

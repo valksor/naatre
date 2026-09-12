@@ -164,7 +164,7 @@ func (v *planValidator) accumulatePlanResourceUsage(usage *planResourceUsage, no
 	case protocol.PipelineSelection, protocol.MapSelection, protocol.IndexSelection,
 		protocol.SliceSelection, protocol.PageSelection, protocol.MetaSelection,
 		protocol.FragmentSelection, protocol.CurrentSelection, protocol.NestSelection,
-		protocol.UnnestSelection:
+		protocol.UnnestSelection, protocol.AtomicSelection:
 	}
 	cost := node.staticCost
 	if node.hasDefinition {

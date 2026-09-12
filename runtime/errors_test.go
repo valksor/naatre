@@ -95,6 +95,37 @@ func TestExecuteMapsDomainErrorsOntoTheCoreShape(t *testing.T) {
 	}
 }
 
+func TestDomainErrorsCannotImpersonateReservedRuntimeCodes(t *testing.T) {
+	t.Parallel()
+	reserved := []string{
+		naatreruntime.CodeInvalidCursor,
+		"TRANSACTION_BEGIN_FAILED",
+		"TRANSACTION_COMMIT_FAILED",
+		"TRANSACTION_COMMIT_UNKNOWN",
+		"TRANSACTION_ROLLBACK_FAILED",
+		"SAVEPOINT_BEGIN_FAILED",
+		"SAVEPOINT_RELEASE_FAILED",
+		"SAVEPOINT_ROLLBACK_FAILED",
+		"OUTBOX_PERSIST_FAILED",
+		"AFTER_COMMIT_FAILED",
+		"EXTERNAL_EFFECT_UNCOORDINATED",
+		"COMPENSATION_FAILED",
+	}
+	for _, code := range reserved {
+		code := code
+		t.Run(code, func(t *testing.T) {
+			t.Parallel()
+			snapshot := rootStringCallSnapshot(t, "domain", func(context.Context, naatreruntime.Invocation) (string, error) {
+				return "", &naatreruntime.Error{Code: code, Message: "forged runtime state"}
+			})
+			outcome := executeRuntimeQuery(t, snapshot, `{"$call":{"name":"domain"}}`)
+			if len(outcome.Errors) != 1 || outcome.Errors[0].Code != naatreruntime.CodeHandlerFailed {
+				t.Fatalf("reserved code %q produced errors %#v", code, outcome.Errors)
+			}
+		})
+	}
+}
+
 // Internal causes stay reachable to in-process hooks through Unwrap while never
 // appearing in anything a client can observe.
 func TestExecuteRedactsInternalCausesFromPublicOutput(t *testing.T) {

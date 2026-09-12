@@ -115,6 +115,7 @@ type executionScope struct {
 	annotations  *directiveAnnotationRecorder
 	resources    *resourceMeter
 	cursorScopes map[uint64]CursorScope
+	transaction  Transaction
 }
 
 type scopedVariable struct {
@@ -127,8 +128,10 @@ type scopedVariable struct {
 // from "an effect started and the operation then failed". Parallel branches
 // share one recorder, so it is atomic.
 type effectRecorder struct {
-	started   atomic.Bool
-	completed atomic.Bool
+	started           atomic.Bool
+	completed         atomic.Bool
+	transactionMu     sync.Mutex
+	transactionStates []EffectState
 }
 
 // state folds the recorded effects and the operation result into the reported
@@ -137,6 +140,9 @@ type effectRecorder struct {
 func (r *effectRecorder) state(kind protocol.OperationKind, failed bool) EffectState {
 	if kind != protocol.Mutation {
 		return EffectNotApplicable
+	}
+	if state, ok := r.transactionState(); ok {
+		return state
 	}
 	switch {
 	case !r.started.Load():
@@ -148,6 +154,52 @@ func (r *effectRecorder) state(kind protocol.OperationKind, failed bool) EffectS
 	default:
 		return EffectIndeterminate
 	}
+}
+
+func (r *effectRecorder) recordTransactionState(state EffectState) {
+	r.transactionMu.Lock()
+	defer r.transactionMu.Unlock()
+	r.transactionStates = append(r.transactionStates, state)
+}
+
+func (r *effectRecorder) transactionState() (EffectState, bool) {
+	r.transactionMu.Lock()
+	defer r.transactionMu.Unlock()
+	if len(r.transactionStates) == 0 {
+		return "", false
+	}
+	hasApplied, hasRolledBack, hasCompensated := false, false, false
+	for _, state := range r.transactionStates {
+		switch state {
+		case EffectIndeterminate:
+			return EffectIndeterminate, true
+		case EffectPartiallyApplied:
+			return EffectPartiallyApplied, true
+		case EffectApplied:
+			hasApplied = true
+		case EffectRolledBack:
+			hasRolledBack = true
+		case EffectCompensated:
+			hasCompensated = true
+		case EffectNotApplicable, EffectNone:
+		}
+	}
+	if hasApplied && hasRolledBack {
+		return EffectPartiallyApplied, true
+	}
+	if hasApplied && hasCompensated {
+		return EffectPartiallyApplied, true
+	}
+	if hasApplied {
+		return EffectApplied, true
+	}
+	if hasCompensated {
+		return EffectCompensated, true
+	}
+	if hasRolledBack {
+		return EffectRolledBack, true
+	}
+	return EffectNone, true
 }
 
 type nodeResult struct {
@@ -201,7 +253,12 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 			Effects: scope.effects.state(p.kind, true), Annotations: scope.annotations.annotations(),
 		}, p.resourceLimits)
 	}
-	result := p.executeSequence(executionCtx, p.nodes, scope, nil)
+	var result sequenceResult
+	if p.kind == protocol.Mutation && p.atomicity == protocol.OperationAtomicity {
+		result = p.executeOperationTransaction(executionCtx, scope)
+	} else {
+		result = p.executeSequence(executionCtx, p.nodes, scope, nil)
+	}
 	sortExecutionErrors(result.errors)
 	outcome := Outcome{
 		Data:        result.data,
@@ -319,6 +376,8 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 		children := p.executeSequence(ctx, node.children, cloneExecutionScope(scope), path)
 		value := executionValue{value: children.data, typeInfo: node.output, status: valueAvailable}
 		return nodeResult{value: value, data: children.data, merge: true, failed: children.failed, errors: children.errors}
+	case protocol.AtomicSelection:
+		return p.executeAtomic(ctx, node, scope)
 	default:
 		err := nodeExecutionError("INTERNAL", "internal execution error", node, nodePath, errors.New("unknown prepared selection kind"))
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
@@ -664,6 +723,7 @@ func cloneExecutionScope(scope executionScope) executionScope {
 		limiter:   scope.limiter, parallel: scope.parallel, grace: scope.grace,
 		effects: scope.effects, annotations: scope.annotations, resources: scope.resources,
 		cursorScopes: scope.cursorScopes,
+		transaction:  scope.transaction,
 	}
 }
 

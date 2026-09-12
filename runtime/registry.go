@@ -288,6 +288,7 @@ type Registry struct {
 	directives    map[string]registeredDirective
 	authorization AuthorizationConfig
 	interceptors  []registeredInterceptor
+	transactions  TransactionConfig
 	frozen        bool
 }
 
@@ -298,6 +299,7 @@ type Snapshot struct {
 	directives    map[string]registeredDirective
 	authorization AuthorizationConfig
 	interceptors  []registeredInterceptor
+	transactions  TransactionConfig
 }
 
 func NewRegistry(types schema.Snapshot) *Registry {
@@ -368,6 +370,7 @@ func (r *Registry) Freeze() (Snapshot, error) {
 	return Snapshot{
 		types: r.types, definitions: definitions, directives: cloneRegisteredDirectives(r.directives), authorization: r.authorization,
 		interceptors: slices.Clone(r.interceptors),
+		transactions: r.transactions,
 	}, nil
 }
 

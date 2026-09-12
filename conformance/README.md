@@ -25,7 +25,9 @@ The `core.language-1` vectors cover every core composition tag and expression,
 response shaping, collection edge states, result-reference scopes, and the
 zero-handler boundary for invalid operations. Their document grammar is the
 strict JSON Schema in `spec/v1/language.schema.json`; semantic execution of the
-vectors is implemented by the validation and runtime conformance issues.
+vectors is implemented by the validation and runtime conformance issues. An
+invalid vector with `"layer":"decode"` must fail structural decoding; other
+invalid vectors decode successfully and fail semantic planning or execution.
 
 `v1/planning.json` fixes the request-neutral description of resolved plans.
 The same document prepared with different correlation IDs, variable values,
@@ -68,6 +70,12 @@ boundaries, scope bindings, safe failure code, live/snapshot modes, and static
 cost contract. The Go runtime supplies HMAC-protected versioned cursors,
 pre-handler scope verification, key rotation and expiry, stable forward and
 backward paging, optional edge metadata, and separately costed `totalCount`.
+
+`v1/mutations.json` fixes the `core.mutation-1` operation and named-group
+boundaries, commit uncertainty, rollback and savepoint faults, cancellation,
+outbox/after-commit ordering, external-effect compensation, audit stages, and
+truthful effect states. The Go runtime lifecycle tests execute every listed
+boundary and fault class.
 
 `v1/resources.json` fixes the `core.resources-1` stable codes and location
 classes for decoder, planning, runtime, completion, and serialization limits.

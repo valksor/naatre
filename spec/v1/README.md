@@ -20,6 +20,7 @@ Documents:
 7. [HTTP binding](http.md)
 8. [Persisted and allowlisted operations](persisted.md)
 9. [Cursor pagination and collection metadata](collections.md)
+10. [Mutations and transaction boundaries](mutations.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

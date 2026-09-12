@@ -43,6 +43,7 @@
       "properties": {
         "name": { "$ref": "#/$defs/identifier" },
         "kind": { "enum": ["query", "mutation", "subscription"] },
+        "atomicity": { "enum": ["none", "operation", "group"] },
         "variables": {
           "type": "array",
           "items": { "$ref": "#/$defs/variable" }
@@ -143,7 +144,8 @@
         { "$ref": "#/$defs/fragmentSelection" },
         { "$ref": "#/$defs/currentSelection" },
         { "$ref": "#/$defs/nestSelection" },
-        { "$ref": "#/$defs/unnestSelection" }
+        { "$ref": "#/$defs/unnestSelection" },
+        { "$ref": "#/$defs/atomicSelection" }
       ]
     },
     "fieldSelection": {
@@ -224,6 +226,8 @@
       "additionalProperties": false,
       "properties": { "$unnest": { "$ref": "#/$defs/unnestPayload" } }
     },
+    "atomicSelection": { "type": "object", "required": ["$atomic"], "additionalProperties": false,
+      "properties": { "$atomic": { "$ref": "#/$defs/atomicPayload" } } },
     "fieldPayload": {
       "type": "object",
       "required": ["name"],
@@ -401,6 +405,9 @@
         "select": { "$ref": "#/$defs/selections" }
       }
     },
+    "atomicPayload": { "type": "object", "required": ["name", "select"], "additionalProperties": false,
+      "properties": { "name": { "$ref": "#/$defs/identifier" },
+        "directives": { "$ref": "#/$defs/directives" }, "select": { "$ref": "#/$defs/selections" } } },
     "pipelineStep": {
       "oneOf": [
         { "$ref": "#/$defs/fieldStep" },

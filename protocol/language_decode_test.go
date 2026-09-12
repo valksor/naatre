@@ -161,6 +161,38 @@ func TestDecodeDocumentPreservesFragmentParametersAndInlineConditions(t *testing
 	}
 }
 
+func TestDecodeDocumentPreservesMutationAtomicityAndAtomicGroups(t *testing.T) {
+	t.Parallel()
+	document, err := protocol.DecodeDocument([]byte(`{"operations":[{"name":"M","kind":"mutation","atomicity":"group","select":[{"$atomic":{"name":"account","select":[{"$call":{"name":"update"}}]}}]}]}`), protocol.Limits{})
+	if err != nil {
+		t.Fatalf("DecodeDocument: %v", err)
+	}
+	operation := document.Operations()[0]
+	if operation.Atomicity() != protocol.GroupAtomicity {
+		t.Fatalf("Atomicity() = %q, want %q", operation.Atomicity(), protocol.GroupAtomicity)
+	}
+	group := operation.Selections()[0]
+	if group.Kind() != protocol.AtomicSelection || group.Name() != "account" || len(group.Selections()) != 1 {
+		t.Fatalf("atomic group = %#v", group)
+	}
+	if group.Selections()[0].Kind() != protocol.CallSelection {
+		t.Fatalf("atomic child = %#v", group.Selections()[0])
+	}
+}
+
+func TestDecodeDocumentRejectsInvalidMutationAtomicity(t *testing.T) {
+	t.Parallel()
+	assertDocumentDiagnostic(t, `{"operations":[{"name":"M","kind":"mutation","atomicity":"all","select":[]}]}`, "INVALID_ATOMICITY", "/operations/0/atomicity")
+	assertDocumentDiagnostic(t, `{"operations":[{"name":"M","kind":"mutation","atomicity":true,"select":[]}]}`, "INVALID_ATOMICITY", "/operations/0/atomicity")
+}
+
+func TestDecodeDocumentRejectsAtomicGroupBinding(t *testing.T) {
+	t.Parallel()
+	assertDocumentDiagnostic(t,
+		`{"operations":[{"name":"M","kind":"mutation","atomicity":"group","select":[{"$atomic":{"name":"account","bind":"result","select":[]}}]}]}`,
+		"UNKNOWN_FIELD", "/operations/0/select/0/$atomic/bind")
+}
+
 func assertSourceRange(t *testing.T, input []byte, source protocol.Source, pointer string) {
 	t.Helper()
 	if source.Pointer != pointer || source.Start < 0 || source.End <= source.Start || source.End > len(input) || source.Line < 1 || source.Column < 1 || !json.Valid(input[source.Start:source.End]) {
@@ -222,6 +254,7 @@ func TestDecodeDocumentMatchesLanguageConformanceStructure(t *testing.T) {
 	var fixture struct {
 		Vectors []struct {
 			Name               string          `json:"name"`
+			Layer              string          `json:"layer"`
 			Document           json.RawMessage `json:"document"`
 			EquivalentDocument json.RawMessage `json:"equivalentDocument"`
 			Valid              *bool           `json:"valid"`
@@ -233,7 +266,6 @@ func TestDecodeDocumentMatchesLanguageConformanceStructure(t *testing.T) {
 	if err := json.Unmarshal(content, &fixture); err != nil {
 		t.Fatalf("decode %s: %v", fixturePath, err)
 	}
-	decoderRejections := map[string]bool{"negative-index": true, "mixed-page-directions": true}
 	for _, vector := range fixture.Vectors {
 		vector := vector
 		t.Run(vector.Name, func(t *testing.T) {
@@ -241,7 +273,7 @@ func TestDecodeDocumentMatchesLanguageConformanceStructure(t *testing.T) {
 				t.Fatal("language vector omits valid")
 			}
 			document, decodeErr := protocol.DecodeDocument(vector.Document, protocol.Limits{})
-			if decoderRejections[vector.Name] {
+			if vector.Layer == "decode" {
 				if *vector.Valid {
 					t.Fatal("decoder rejection vector is marked valid")
 				}

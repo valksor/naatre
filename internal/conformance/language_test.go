@@ -24,6 +24,7 @@ type languageFixture struct {
 
 type languageVector struct {
 	Name               string                  `json:"name"`
+	Layer              string                  `json:"layer"`
 	Document           json.RawMessage         `json:"document"`
 	EquivalentDocument json.RawMessage         `json:"equivalentDocument"`
 	Valid              *bool                   `json:"valid"`
@@ -84,7 +85,7 @@ func TestLanguageJSONSchemaHasClosedLocalReferences(t *testing.T) {
 }
 
 var coreSelectionTags = []string{
-	"$call", "$current", "$field", "$fragment", "$index", "$map", "$meta",
+	"$atomic", "$call", "$current", "$field", "$fragment", "$index", "$map", "$meta",
 	"$nest", "$page", "$parallel", "$pipeline", "$slice", "$unnest",
 }
 
@@ -105,6 +106,12 @@ func assertLanguageVector(t *testing.T, vector languageVector, seenNames map[str
 		t.Fatalf("language vector has incomplete or duplicate identity %q", vector.Name)
 	}
 	seenNames[vector.Name] = true
+	if vector.Layer != "" && vector.Layer != "decode" {
+		t.Fatalf("language vector %q has unsupported validation layer %q", vector.Name, vector.Layer)
+	}
+	if *vector.Valid && vector.Layer != "" {
+		t.Fatalf("valid language vector %q declares failure layer %q", vector.Name, vector.Layer)
+	}
 	assertJSONObject(t, vector.Name+" document", vector.Document)
 	if len(vector.RequestVariables) > 0 {
 		assertJSONObject(t, vector.Name+" request variables", vector.RequestVariables)

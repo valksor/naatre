@@ -105,6 +105,15 @@ const (
 	Subscription OperationKind = "subscription"
 )
 
+// AtomicityMode declares the transaction boundary requested by a mutation.
+type AtomicityMode string
+
+const (
+	NoAtomicity        AtomicityMode = "none"
+	OperationAtomicity AtomicityMode = "operation"
+	GroupAtomicity     AtomicityMode = "group"
+)
+
 // SelectionKind identifies one tagged language construct.
 type SelectionKind string
 
@@ -122,6 +131,7 @@ const (
 	CurrentSelection  SelectionKind = "current"
 	NestSelection     SelectionKind = "nest"
 	UnnestSelection   SelectionKind = "unnest"
+	AtomicSelection   SelectionKind = "atomic"
 )
 
 // Source identifies a byte range in the original request.
@@ -256,6 +266,7 @@ func (s Selection) Selections() []Selection { return cloneSelections(s.children)
 type Operation struct {
 	name       string
 	kind       OperationKind
+	atomicity  AtomicityMode
 	variables  []VariableDefinition
 	selections []Selection
 	source     Source
@@ -263,6 +274,7 @@ type Operation struct {
 
 func (o Operation) Name() string                    { return o.name }
 func (o Operation) Kind() OperationKind             { return o.kind }
+func (o Operation) Atomicity() AtomicityMode        { return o.atomicity }
 func (o Operation) Source() Source                  { return o.source }
 func (o Operation) Variables() []VariableDefinition { return cloneVariables(o.variables) }
 func (o Operation) Selections() []Selection         { return cloneSelections(o.selections) }
