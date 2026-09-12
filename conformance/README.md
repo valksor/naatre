@@ -74,3 +74,9 @@ positions; aggregate replay/live vectors separately cap event count, bytes,
 filter and authorization work, queues, memory, and duration. The Go reference
 runtime executes core request budgets; #70 owns broker-backed replay/live
 execution evidence.
+
+`v1/http.json` fixes the language-neutral `core.http-1` endpoint, method,
+media negotiation, singleton-header, status/body, encoding, deadline, cache,
+browser, bounded-response, and HTTP-version cases. It is the portable contract
+fixture; #73 owns the concrete Go `net/http` adapter, slow-client,
+cancellation, graceful-shutdown, and version-specific integration harness.

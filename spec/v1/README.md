@@ -17,6 +17,7 @@ Documents:
 4. [Composition language](language.md)
 5. [Canonicalization and semantic hashing](canonicalization.md)
 6. [Authentication, authorization, and interceptor security](security.md)
+7. [HTTP binding](http.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

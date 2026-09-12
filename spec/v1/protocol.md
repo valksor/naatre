@@ -74,8 +74,10 @@ error path.
 
 ## Media types and limits
 
-- **PROTO-200:** JSON requests use `application/naatre+json;version=1`.
-  Responses use the same media type. UTF-8 is the only encoding.
+- **PROTO-200:** Request and response envelopes are UTF-8 JSON. Each transport
+  profile MUST assign explicit versioned media types and MUST NOT infer Naatre
+  semantics from `application/json`. The normative HTTP media types and
+  negotiation rules are defined by HTTP-100 through HTTP-106.
 - **PROTO-201:** Transports MUST declare and enforce byte, token, nesting,
   string, member, array-item, identifier, and numeric-token limits before full
   materialization.

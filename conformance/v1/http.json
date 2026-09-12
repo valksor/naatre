@@ -1,0 +1,108 @@
+{
+  "profile": "core.http-1",
+  "endpoint": {"path":"/v1/execute","method":"POST","optionalGet":true},
+  "mediaTypes": {
+    "request": "application/vnd.naatre.request+json;version=1",
+    "response": "application/vnd.naatre.response+json;version=1",
+    "problem": "application/problem+json",
+    "stream": "text/event-stream"
+  },
+  "methodCases": [
+    {"name":"post","method":"POST","accepted":true,"status":200,"bodyKind":"naatre","publicCode":"OK"},
+    {"name":"get-persisted","method":"GET","accepted":true,"status":200,"bodyKind":"naatre","publicCode":"OK"},
+    {"name":"get-inline-rejected","method":"GET","accepted":false,"status":400,"bodyKind":"problem","publicCode":"GET_NOT_ELIGIBLE"},
+    {"name":"head-rejected","method":"HEAD","accepted":false,"status":405,"bodyKind":"problem","publicCode":"METHOD_NOT_ALLOWED"},
+    {"name":"put-rejected","method":"PUT","accepted":false,"status":405,"bodyKind":"problem","publicCode":"METHOD_NOT_ALLOWED"},
+    {"name":"options-preflight","method":"OPTIONS","accepted":true,"status":204,"bodyKind":"none","publicCode":"NO_CONTENT"}
+  ],
+  "negotiationCases": [
+    {"name":"request-v1","header":"Content-Type","value":"application/vnd.naatre.request+json;version=1","accepted":true,"status":200,"publicCode":"OK"},
+    {"name":"request-v1-utf8","header":"Content-Type","value":"application/vnd.naatre.request+json;version=1;charset=utf-8","accepted":true,"status":200,"publicCode":"OK"},
+    {"name":"request-missing-content-type","header":"Content-Type","value":"","accepted":false,"status":415,"publicCode":"UNSUPPORTED_MEDIA_TYPE"},
+    {"name":"request-generic-json","header":"Content-Type","value":"application/json","accepted":false,"status":415,"publicCode":"UNSUPPORTED_MEDIA_TYPE"},
+    {"name":"request-version-2","header":"Content-Type","value":"application/vnd.naatre.request+json;version=2","accepted":false,"status":415,"publicCode":"UNSUPPORTED_MEDIA_TYPE"},
+    {"name":"request-non-utf8","header":"Content-Type","value":"application/vnd.naatre.request+json;version=1;charset=iso-8859-1","accepted":false,"status":415,"publicCode":"UNSUPPORTED_MEDIA_TYPE"},
+    {"name":"accept-absent","header":"Accept","value":"","accepted":true,"status":200,"publicCode":"OK"},
+    {"name":"accept-v1","header":"Accept","value":"application/vnd.naatre.response+json;version=1","accepted":true,"status":200,"publicCode":"OK"},
+    {"name":"accept-wildcard","header":"Accept","value":"*/*","accepted":true,"status":200,"publicCode":"OK"},
+    {"name":"accept-version-2","header":"Accept","value":"application/vnd.naatre.response+json;version=2","accepted":false,"status":406,"publicCode":"NOT_ACCEPTABLE"},
+    {"name":"accept-v1-q-zero","header":"Accept","value":"application/vnd.naatre.response+json;version=1;q=0","accepted":false,"status":406,"publicCode":"NOT_ACCEPTABLE"},
+    {"name":"accept-event-stream","header":"Accept","value":"text/event-stream","accepted":true,"status":200,"publicCode":"OK"}
+  ],
+  "headerCases": [
+    {"name":"duplicate-content-type","header":"Content-Type","duplicate":true,"conflicting":false,"accepted":false,"status":400,"publicCode":"MALFORMED_HEADER"},
+    {"name":"conflicting-content-encoding","header":"Content-Encoding","duplicate":true,"conflicting":true,"accepted":false,"status":400,"publicCode":"MALFORMED_HEADER"},
+    {"name":"duplicate-authorization","header":"Authorization","duplicate":true,"conflicting":false,"accepted":false,"status":400,"publicCode":"MALFORMED_HEADER"},
+    {"name":"duplicate-deadline","header":"Naatre-Timeout-Ms","duplicate":true,"conflicting":false,"accepted":false,"status":400,"publicCode":"MALFORMED_HEADER"},
+    {"name":"forged-principal","header":"Naatre-Principal","duplicate":false,"conflicting":false,"accepted":false,"status":400,"publicCode":"UNTRUSTED_IDENTITY_HEADER"},
+    {"name":"comma-list-accept","header":"Accept","duplicate":true,"conflicting":false,"accepted":true,"status":200,"publicCode":"OK"}
+  ],
+  "statusCases": [
+    {"name":"success","status":200,"bodyKind":"naatre","publicCode":"OK","headersSent":false},
+    {"name":"partial-execution","status":200,"bodyKind":"naatre","publicCode":"PARTIAL","headersSent":false},
+    {"name":"malformed-json","status":400,"bodyKind":"problem","publicCode":"MALFORMED_JSON","headersSent":false},
+    {"name":"malformed-header","status":400,"bodyKind":"problem","publicCode":"MALFORMED_HEADER","headersSent":false},
+    {"name":"get-not-eligible","status":400,"bodyKind":"problem","publicCode":"GET_NOT_ELIGIBLE","headersSent":false},
+    {"name":"invalid-timeout","status":400,"bodyKind":"problem","publicCode":"INVALID_TIMEOUT","headersSent":false},
+    {"name":"untrusted-identity-header","status":400,"bodyKind":"problem","publicCode":"UNTRUSTED_IDENTITY_HEADER","headersSent":false},
+    {"name":"invalid-operation","status":422,"bodyKind":"naatre","publicCode":"VALIDATION_FAILED","headersSent":false},
+    {"name":"unauthenticated","status":401,"bodyKind":"problem","publicCode":"UNAUTHENTICATED","headersSent":false},
+    {"name":"forbidden","status":403,"bodyKind":"naatre","publicCode":"UNAUTHORIZED","headersSent":false},
+    {"name":"method-not-allowed","status":405,"bodyKind":"problem","publicCode":"METHOD_NOT_ALLOWED","headersSent":false},
+    {"name":"unsupported-media-type","status":415,"bodyKind":"problem","publicCode":"UNSUPPORTED_MEDIA_TYPE","headersSent":false},
+    {"name":"unsupported-content-encoding","status":415,"bodyKind":"problem","publicCode":"UNSUPPORTED_CONTENT_ENCODING","headersSent":false},
+    {"name":"not-acceptable","status":406,"bodyKind":"problem","publicCode":"NOT_ACCEPTABLE","headersSent":false},
+    {"name":"request-timeout","status":408,"bodyKind":"problem","publicCode":"REQUEST_TIMEOUT","headersSent":false},
+    {"name":"request-too-large","status":413,"bodyKind":"problem","publicCode":"REQUEST_TOO_LARGE","headersSent":false},
+    {"name":"uri-too-long","status":414,"bodyKind":"problem","publicCode":"URI_TOO_LONG","headersSent":false},
+    {"name":"rate-limited","status":429,"bodyKind":"problem","publicCode":"RATE_LIMITED","headersSent":false},
+    {"name":"overloaded-before-decode","status":503,"bodyKind":"problem","publicCode":"OVERLOADED","headersSent":false},
+    {"name":"execution-deadline","status":504,"bodyKind":"naatre","publicCode":"RESOURCE_EXHAUSTED","headersSent":false},
+    {"name":"internal-execution","status":500,"bodyKind":"naatre","publicCode":"INTERNAL","headersSent":false},
+    {"name":"failure-after-headers","status":0,"bodyKind":"terminate","publicCode":"TRANSPORT_TERMINATED","headersSent":true}
+  ],
+  "encodingCases": [
+    {"name":"identity","encoding":"identity","streaming":false,"accepted":true,"compressedLimit":true,"decompressedLimit":true,"rejectBeforeFullRead":false},
+    {"name":"gzip","encoding":"gzip","streaming":false,"accepted":true,"compressedLimit":true,"decompressedLimit":true,"rejectBeforeFullRead":false},
+    {"name":"gzip-bomb","encoding":"gzip","streaming":false,"accepted":false,"compressedLimit":true,"decompressedLimit":true,"rejectBeforeFullRead":true},
+    {"name":"unsupported-br","encoding":"br","streaming":false,"accepted":false,"compressedLimit":false,"decompressedLimit":false,"rejectBeforeFullRead":true},
+    {"name":"streaming-identity","encoding":"identity","streaming":true,"accepted":true,"compressedLimit":true,"decompressedLimit":true,"rejectBeforeFullRead":false},
+    {"name":"streaming-gzip","encoding":"gzip","streaming":true,"accepted":false,"compressedLimit":true,"decompressedLimit":true,"rejectBeforeFullRead":true}
+  ],
+  "deadlineCases": [
+    {"name":"valid-client-timeout","accepted":true,"status":200,"bodyKind":"naatre","publicCode":"OK","cappedByServerMaximum":false,"cancelsActiveHandlers":false},
+    {"name":"malformed-client-timeout","accepted":false,"status":400,"bodyKind":"problem","publicCode":"INVALID_TIMEOUT","cappedByServerMaximum":false,"cancelsActiveHandlers":false},
+    {"name":"server-maximum","accepted":true,"status":200,"bodyKind":"naatre","publicCode":"OK","cappedByServerMaximum":true,"cancelsActiveHandlers":false},
+    {"name":"disconnect-before-headers","accepted":true,"status":0,"bodyKind":"terminate","publicCode":"TRANSPORT_TERMINATED","cappedByServerMaximum":false,"cancelsActiveHandlers":true},
+    {"name":"execution-deadline","accepted":true,"status":504,"bodyKind":"naatre","publicCode":"RESOURCE_EXHAUSTED","cappedByServerMaximum":false,"cancelsActiveHandlers":true}
+  ],
+  "cacheCases": [
+    {"name":"post-default-no-store","method":"POST","eligible":true,"shared":false,"publicOutput":false,"authorizationInvariant":false,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":["Accept","Accept-Encoding","Naatre-Capabilities"],"keyDimensions":[],"etag":false,"conditionalRequests":false},
+    {"name":"get-inline-rejected","method":"GET","eligible":false,"shared":false,"publicOutput":false,"authorizationInvariant":false,"tenantSeparated":true,"canonicalVariableKey":false,"sensitiveVariablesInUrl":false,"vary":[],"keyDimensions":[],"etag":false,"conditionalRequests":false},
+    {"name":"get-effectful-rejected","method":"GET","eligible":false,"shared":false,"publicOutput":false,"authorizationInvariant":false,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":[],"keyDimensions":[],"etag":false,"conditionalRequests":false},
+    {"name":"get-sensitive-variables-rejected","method":"GET","eligible":false,"shared":false,"publicOutput":false,"authorizationInvariant":false,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":[],"keyDimensions":[],"etag":false,"conditionalRequests":false},
+    {"name":"get-private-persisted","method":"GET","eligible":true,"shared":false,"publicOutput":false,"authorizationInvariant":false,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":["Accept","Accept-Encoding","Naatre-Capabilities","Naatre-Tenant"],"keyDimensions":["document","schema","variables","capabilities","tenant","principal","authorizationRevision","mediaType","contentEncoding"],"etag":true,"conditionalRequests":true},
+    {"name":"shared-public-persisted","method":"GET","eligible":true,"shared":true,"publicOutput":true,"authorizationInvariant":true,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":["Accept","Accept-Encoding","Naatre-Capabilities","Naatre-Schema","Naatre-Tenant"],"keyDimensions":["document","schema","variables","capabilities","tenant","mediaType","contentEncoding","classificationRevision"],"etag":true,"conditionalRequests":true},
+    {"name":"shared-auth-variant-rejected","method":"GET","eligible":true,"shared":false,"publicOutput":true,"authorizationInvariant":false,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":["Accept","Accept-Encoding","Naatre-Capabilities","Authorization","Naatre-Tenant"],"keyDimensions":["document","schema","variables","capabilities","tenant","principal","authorizationRevision","mediaType","contentEncoding"],"etag":true,"conditionalRequests":true},
+    {"name":"shared-tenant-isolated","method":"GET","eligible":true,"shared":true,"publicOutput":true,"authorizationInvariant":true,"tenantSeparated":true,"canonicalVariableKey":true,"sensitiveVariablesInUrl":false,"vary":["Accept","Accept-Encoding","Naatre-Capabilities","Naatre-Schema","Naatre-Tenant"],"keyDimensions":["document","schema","variables","capabilities","tenant","mediaType","contentEncoding","classificationRevision"],"etag":true,"conditionalRequests":true}
+  ],
+  "browserCases": [
+    {"name":"post-stream-fetch","transport":"fetch-event-stream","credentialsInUrl":false,"requiresPreflight":true,"requiresCsrfPolicy":false,"forwardAuthorization":true},
+    {"name":"cors-preflight","transport":"options","credentialsInUrl":false,"requiresPreflight":true,"requiresCsrfPolicy":false,"forwardAuthorization":false},
+    {"name":"cookie-csrf","transport":"fetch","credentialsInUrl":false,"requiresPreflight":true,"requiresCsrfPolicy":true,"forwardAuthorization":false},
+    {"name":"cross-origin-redirect","transport":"redirect","credentialsInUrl":false,"requiresPreflight":false,"requiresCsrfPolicy":false,"forwardAuthorization":false},
+    {"name":"history-safe-url","transport":"get","credentialsInUrl":false,"requiresPreflight":false,"requiresCsrfPolicy":false,"forwardAuthorization":false}
+  ],
+  "responseCases": [
+    {"name":"non-2xx-problem","non2xx":true,"bodyKind":"problem","retainStructured":true,"truncated":false,"publicCode":"REMOTE_PROBLEM"},
+    {"name":"non-2xx-naatre","non2xx":true,"bodyKind":"naatre","retainStructured":true,"truncated":false,"publicCode":"REMOTE_NAATRE"},
+    {"name":"truncated-problem","non2xx":true,"bodyKind":"problem","retainStructured":true,"truncated":true,"publicCode":"TRUNCATED_RESPONSE"},
+    {"name":"truncated-naatre","non2xx":true,"bodyKind":"naatre","retainStructured":true,"truncated":true,"publicCode":"TRUNCATED_RESPONSE"},
+    {"name":"oversized-response","non2xx":false,"bodyKind":"problem","retainStructured":true,"truncated":true,"publicCode":"RESPONSE_LIMIT_EXCEEDED"}
+  ],
+  "protocolVersions": [
+    {"name":"HTTP/1.1","equivalentSemantics":true,"requiresTrailers":false},
+    {"name":"HTTP/2","equivalentSemantics":true,"requiresTrailers":false},
+    {"name":"HTTP/3","equivalentSemantics":true,"requiresTrailers":false}
+  ]
+}

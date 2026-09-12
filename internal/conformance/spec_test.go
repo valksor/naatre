@@ -50,7 +50,7 @@ func TestSpecificationIndexLinksEveryNormativeDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := string(content)
-	for _, name := range []string{"core.md", "protocol.md", "schema.md", "language.md", "canonicalization.md", "security.md"} {
+	for _, name := range []string{"core.md", "protocol.md", "schema.md", "language.md", "canonicalization.md", "security.md", "http.md"} {
 		if !strings.Contains(index, "]("+name+")") {
 			t.Errorf("specification index does not link %s", name)
 		}

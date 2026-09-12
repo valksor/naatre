@@ -1,23 +1,41 @@
 # ripwire quality acks v1 — written by --quality-ack; a finding stays suppressed until it worsens past its acked magnitude
 # format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)
+ack dead-code:new-symbol 9cd416681ad811de 0 cid=0227a2f1e8c4af29 Go test entrypoint is invoked by go test and has no lexical caller
 ack dead-code:preexisting 7a16856d104c1242 0 cid=929c4cf68c910d24 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication 1dbc75029553fd6f 129 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 22f1088041164831 113 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 2e7ec416acf59c24 94 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 32777e3f3ae72c9d 181 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack duplication 34899dee8e04fa15 248 issue 12 required boundary tests and reviewed false-positive structural matches
 ack duplication 3b5e52a1d1e5a5ca 125 issue 12 required boundary tests and reviewed false-positive structural matches
 ack duplication 3dadbf052ce90cb7 310 issue 12 required boundary tests and reviewed false-positive structural matches
 ack duplication 4388922a6025f259 168 issue 12 required boundary tests and reviewed false-positive structural matches
+ack duplication 49d83f64be19cda2 101 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 505efd35a31adbcc 181 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication 5114f9ebe5f5f1ca 113 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 5b5dccc9b0880f0c 129 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 5d96d0313ecc7028 110 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 6f36fc22bfd5ab4c 40 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack duplication 711680aa6682ed2f 231 issue 12 required boundary tests and reviewed false-positive structural matches
 ack duplication 725a91de16d7022c 309 issue 12 required boundary tests and reviewed false-positive structural matches
+ack duplication 845cdef0fb9aba0c 110 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 84a53a31272aa577 110 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 8aeda4cf683fb983 102 issue 12 required boundary tests and reviewed false-positive structural matches
+ack duplication 8ca7ee8e204e269a 110 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 903d3d2a0dfa016f 94 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication a3ce14b71e46b631 129 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication a5f0154387107bf6 197 issue 12 required boundary tests and reviewed false-positive structural matches
 ack duplication a8c780acfd847936 197 issue 12 required boundary tests and reviewed false-positive structural matches
+ack duplication a9788ae3217042bf 113 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication b50560cc45b91ff2 358 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication c277a2ae2ff8a042 89 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication c2e350c7e8c30ae4 153 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack duplication d5b4e9dfa6a295dc 168 issue 12 required boundary tests and reviewed false-positive structural matches
+ack duplication dd05c535cdbe9978 113 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication dd1b308c35815b66 46 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack duplication ebd64f181f32c025 101 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication ee52c5e0004701c1 162 issue 12 required boundary tests and reviewed false-positive structural matches
+ack duplication f8343b992b6f0b03 101 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack new-clone-of-reused-helper 3dadbf052ce90cb7 5 issue 12 required boundary tests and reviewed false-positive structural matches
 ack new-clone-of-reused-helper 725a91de16d7022c 5 issue 12 required boundary tests and reviewed false-positive structural matches
 ack new-clone-of-reused-helper 8aeda4cf683fb983 4 issue 12 required boundary tests and reviewed false-positive structural matches
