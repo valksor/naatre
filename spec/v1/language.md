@@ -295,7 +295,8 @@ is `["users", 2, "display"]`.
 - **LANG-303:** Queries are transitively read-only through fragments,
   directives, pipelines, mappings, metadata, and references. Mutations are
   sequential by default. Parallel mutation requires explicit registry metadata
-  and a negotiated profile; a client tag alone cannot enable it.
+  and the negotiated `mutation.parallel-1` profile; a client tag alone cannot
+  enable it.
 - **LANG-304:** Static validation traverses all branches even when a Boolean
   directive currently skips them. Any invalid type, reference, collision,
   capability, or effect rejects the operation before the first application

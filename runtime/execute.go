@@ -55,10 +55,14 @@ type plannedSelection struct {
 
 // Plan is immutable and safe for concurrent reads and execution.
 type Plan struct {
-	operationName string
-	kind          protocol.OperationKind
-	selections    []plannedSelection
-	types         schema.Snapshot
+	operationName  string
+	kind           protocol.OperationKind
+	requirements   []string
+	variables      []protocol.VariableDefinition
+	selections     []plannedSelection
+	nodes          []planNode
+	types          schema.Snapshot
+	flatExecutable bool
 }
 
 // Prepare resolves and validates the complete selected operation without
@@ -72,44 +76,28 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan := &Plan{operationName: operation.Name(), kind: operation.Kind(), types: registry.types}
-	responseNames := make(map[string]protocol.Source)
-	for _, selection := range operation.Selections() {
-		if selection.Kind() != protocol.CallSelection {
-			return nil, validationError("UNSUPPORTED_SELECTION", "reference executor currently requires a call selection", selection.Source())
-		}
-		definition, ok := registry.definitions["root:"+selection.Name()]
-		if !ok {
-			return nil, validationError("UNKNOWN_CALL", "call is not registered", selection.Source())
-		}
-		if operation.Kind() == protocol.Query && definition.descriptor.Metadata.Effect != ReadEffect {
-			return nil, validationError("QUERY_WRITE", "query transitively reaches a write", selection.Source())
-		}
-		if operation.Kind() == protocol.Subscription && definition.descriptor.Kind != protocol.Subscription {
-			return nil, validationError("INVALID_SUBSCRIPTION", "subscription selection is not a subscription root", selection.Source())
-		}
-		if operation.Kind() == protocol.Query && definition.descriptor.Kind != protocol.Query {
-			return nil, validationError("INVALID_OPERATION_KIND", "query selects a non-query root", selection.Source())
-		}
-		if operation.Kind() == protocol.Mutation && definition.descriptor.Kind == protocol.Subscription {
-			return nil, validationError("INVALID_OPERATION_KIND", "mutation selects a subscription root", selection.Source())
-		}
-		outputName := selection.Alias()
-		if outputName == "" {
-			outputName = selection.Name()
-		}
-		if _, duplicate := responseNames[outputName]; duplicate {
-			return nil, validationError("DUPLICATE_RESPONSE_NAME", "response name collides after aliasing", selection.Source())
-		}
-		responseNames[outputName] = selection.Source()
-		plan.selections = append(plan.selections, plannedSelection{definition: definition, outputName: outputName, source: selection.Source()})
+	planner := newPlanValidator(registry, request, operation)
+	nodes, executable := planner.validate()
+	if len(planner.issues) != 0 {
+		return nil, &ValidationErrors{issues: planner.issues}
 	}
-	return plan, nil
+	return &Plan{
+		operationName: operation.Name(), kind: operation.Kind(), requirements: request.Document().Requires(),
+		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
+		flatExecutable: supportsFlatExecution(nodes),
+	}, nil
 }
 
 // Execute runs a prepared operation in selection order. Query failures preserve
 // independent sibling data; mutation failures stop later mutation scheduling.
 func (p *Plan) Execute(ctx context.Context) Outcome {
+	if !p.flatExecutable {
+		return p.unsupportedExecutionOutcome()
+	}
+	return p.executeFlat(ctx)
+}
+
+func (p *Plan) executeFlat(ctx context.Context) Outcome {
 	outcome := Outcome{Data: make(map[string]any)}
 	for _, selection := range p.selections {
 		if err := ctx.Err(); err != nil {
@@ -163,6 +151,31 @@ func (p *Plan) Execute(ctx context.Context) Outcome {
 	return outcome
 }
 
+func (p *Plan) unsupportedExecutionOutcome() Outcome {
+	source := protocol.Source{}
+	path := []any(nil)
+	if len(p.nodes) != 0 {
+		source = p.nodes[0].source
+		if p.nodes[0].outputName != "" {
+			path = []any{p.nodes[0].outputName}
+		}
+	}
+	return Outcome{Data: make(map[string]any), Errors: []ExecutionError{{
+		Code: "UNSUPPORTED_EXECUTION_PLAN", Message: "structured plan execution is not available in the flat reference executor",
+		Path: path, Source: source, internal: errors.New("ordered composition execution is owned by runtime issue #8"),
+	}}}
+}
+
+func supportsFlatExecution(nodes []planNode) bool {
+	for _, node := range nodes {
+		if node.kind != protocol.CallSelection || !node.hasDefinition || len(node.children) != 0 ||
+			len(node.selection.Arguments()) != 0 || len(node.selection.Directives()) != 0 || node.binding != "" {
+			return false
+		}
+	}
+	return true
+}
+
 func selectOperation(operations []protocol.Operation, requested string, source protocol.Source) (protocol.Operation, error) {
 	if requested == "" {
 		if len(operations) != 1 {
@@ -176,10 +189,6 @@ func selectOperation(operations []protocol.Operation, requested string, source p
 		}
 	}
 	return protocol.Operation{}, &protocol.Diagnostic{Code: "UNKNOWN_OPERATION", Clause: "PROTO-005", Phase: "validate", Message: fmt.Sprintf("operation %q not found", requested), Pointer: source.Pointer, Offset: source.Start, Line: source.Line, Column: source.Column}
-}
-
-func validationError(code, message string, source protocol.Source) error {
-	return &protocol.Diagnostic{Code: code, Clause: "CORE-102", Phase: "validate", Message: message, Pointer: source.Pointer, Offset: source.Start, Line: source.Line, Column: source.Column}
 }
 
 func invokeContained(ctx context.Context, definition Definition, invocation Invocation) (output any, err error) {

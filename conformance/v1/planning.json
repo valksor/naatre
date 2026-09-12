@@ -1,0 +1,113 @@
+{
+  "profile": "core.language-1",
+  "kind": "plan-reuse",
+  "vectors": [
+    {
+      "name": "request-state-isolation",
+      "requests": [
+        {
+          "version": "1",
+          "id": "request-a",
+          "variables": {"id": "u-1"},
+		  "extensions": {"com.example.plan-context": {"policyInput": "tenant-a", "authorizationIdentity": "principal-a"}},
+          "document": {
+            "operations": [{
+              "name": "Q",
+              "kind": "query",
+              "variables": [{"name": "id", "type": "ID", "required": true}],
+              "select": [{
+                "$call": {
+                  "name": "lookup",
+                  "args": {"id": {"$var": "id"}},
+                  "select": [{"$field": {"name": "name"}}]
+                }
+              }]
+            }]
+          }
+        },
+        {
+          "version": "1",
+          "id": "a-different-correlation-identity",
+          "variables": {"id": "another-user"},
+		  "extensions": {"com.example.plan-context": {"policyInput": "tenant-b", "authorizationIdentity": "principal-b"}},
+          "document": {
+            "operations": [{
+              "name": "Q",
+              "kind": "query",
+              "variables": [{"name": "id", "type": "ID", "required": true}],
+              "select": [{
+                "$call": {
+                  "name": "lookup",
+                  "args": {"id": {"$var": "id"}},
+                  "select": [{"$field": {"name": "name"}}]
+                }
+              }]
+            }]
+          }
+        }
+      ],
+      "expectedPlan": {
+        "operation": "Q",
+        "kind": "query",
+		"variableDefinitions": [{
+		  "name": "id",
+		  "type": "ID",
+		  "required": true,
+		  "nullable": false
+		}],
+        "nodes": [{
+          "kind": "call",
+          "name": "lookup",
+          "responseName": "lookup",
+          "arguments": "LookupInput",
+          "output": "User",
+          "effect": "read",
+          "authorizationPolicy": "test",
+          "sourcePointer": "/document/operations/0/select/0",
+		  "responsePath": ["lookup"],
+		  "scheduling": "sequential",
+		  "ordinal": 0,
+		  "barriers": ["completion", "authorization"],
+		  "inputs": [{
+			"name": "id",
+			"expression": {"kind": "variable", "reference": "id"}
+		  }],
+          "children": [{
+            "kind": "field",
+            "name": "name",
+            "responseName": "name",
+            "current": "User",
+            "output": "String",
+            "effect": "read",
+            "authorizationPolicy": "test",
+			"sourcePointer": "/document/operations/0/select/0/$call/select/0",
+			"responsePath": ["lookup", "name"],
+			"scheduling": "sequential",
+			"ordinal": 0,
+			"barriers": ["completion", "authorization"]
+          }]
+		}],
+		"result": {
+		  "kind": "object",
+		  "fields": [{
+			"name": "lookup",
+			"required": true,
+			"sourcePointer": "/document/operations/0/select/0",
+			"result": {
+			  "kind": "object",
+			  "type": "User",
+			  "fields": [{
+				"name": "name",
+				"required": true,
+				"sourcePointer": "/document/operations/0/select/0/$call/select/0",
+				"result": {"kind": "scalar", "type": "String"}
+			  }]
+			}
+		  }]
+		}
+      },
+			"excludedRequestState": ["id", "variables", "extensions", "policyInput", "authorizationIdentity"],
+			"excludedRequestValues": ["request-a", "u-1", "tenant-a", "principal-a", "a-different-correlation-identity", "another-user", "tenant-b", "principal-b"]
+    }
+  ]
+}

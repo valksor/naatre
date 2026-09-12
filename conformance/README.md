@@ -26,3 +26,16 @@ response shaping, collection edge states, result-reference scopes, and the
 zero-handler boundary for invalid operations. Their document grammar is the
 strict JSON Schema in `spec/v1/language.schema.json`; semantic execution of the
 vectors is implemented by the validation and runtime conformance issues.
+
+`v1/planning.json` fixes the request-neutral description of resolved plans.
+The same document prepared with different correlation IDs, variable values,
+policy inputs, and authorization identities must retain the same static handler,
+type, effect, authorization-policy, and source-pointer description without
+retaining any of that per-request state.
+
+The core planner resolves the built-in `include` and `skip` directives and
+rejects unregistered directives; #19 owns custom directive declarations and
+hooks. It validates `collection.page-1` admission and collection item scopes;
+#16 owns advertised pagination metadata and cursor execution. Until #8 lands,
+the reference executor runs only flat argument-free call plans and returns
+`UNSUPPORTED_EXECUTION_PLAN` before invoking a handler for structured plans.

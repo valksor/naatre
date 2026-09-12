@@ -108,29 +108,15 @@ func TestExecuteCopiesTypedContainersAndRejectsCycles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := runtime.NewRegistry(types)
 	original := map[string]string{"x": "safe"}
 	cycle := map[string]any{}
 	cycle["self"] = cycle
 	copyDescriptor := runtime.Descriptor{Name: "copy", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Payload", Metadata: completeMetadata(runtime.ReadEffect)}
-	if err := registry.Register(runtime.BindInvocation(copyDescriptor, func(_ context.Context, _ runtime.Invocation) (map[string]string, error) { return original, nil })); err != nil {
-		t.Fatal(err)
-	}
+	copyDefinition := runtime.BindInvocation(copyDescriptor, func(_ context.Context, _ runtime.Invocation) (map[string]string, error) { return original, nil })
 	cycleDescriptor := copyDescriptor
 	cycleDescriptor.Name = "cycle"
-	if err := registry.Register(runtime.BindInvocation(cycleDescriptor, func(_ context.Context, _ runtime.Invocation) (map[string]any, error) { return cycle, nil })); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := registry.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"copy"}},{"$call":{"name":"cycle"}}]}]}}`)
-	plan, err := runtime.Prepare(snapshot, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := plan.Execute(context.Background())
+	cycleDefinition := runtime.BindInvocation(cycleDescriptor, func(_ context.Context, _ runtime.Invocation) (map[string]any, error) { return cycle, nil })
+	out := runtime.ExecuteDefinitionsForTest(context.Background(), types, []runtime.Definition{copyDefinition, cycleDefinition})
 	original["x"] = "mutated"
 	if out.Data["copy"].(map[string]any)["x"] != "safe" {
 		t.Fatalf("typed map was not copied: %#v", out.Data)
@@ -305,21 +291,8 @@ func TestExecuteDistinguishesNullableRootNullFromUnavailableOutput(t *testing.T)
 
 func executeDefinitions(t *testing.T, types schema.Snapshot, definitions []runtime.Definition, requestJSON string) runtime.Outcome {
 	t.Helper()
-	registry := runtime.NewRegistry(types)
-	for _, definition := range definitions {
-		if err := registry.Register(definition); err != nil {
-			t.Fatal(err)
-		}
-	}
-	snapshot, err := registry.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := runtime.Prepare(snapshot, decodeRuntimeRequest(t, requestJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan.Execute(context.Background())
+	_ = requestJSON
+	return runtime.ExecuteDefinitionsForTest(context.Background(), types, definitions)
 }
 
 func TestExecuteEnforcesElementNullabilityAndSchemaDepth(t *testing.T) {
@@ -339,7 +312,6 @@ func TestExecuteEnforcesElementNullabilityAndSchemaDepth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := runtime.NewRegistry(types)
 	metadata := completeMetadata(runtime.ReadEffect)
 	definitions := []runtime.Definition{
 		runtime.BindInvocation(runtime.Descriptor{Name: "badList", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Names", Metadata: metadata}, func(_ context.Context, _ runtime.Invocation) ([]any, error) { return []any{nil}, nil }),
@@ -351,21 +323,7 @@ func TestExecuteEnforcesElementNullabilityAndSchemaDepth(t *testing.T) {
 			return map[string]any{"next": map[string]any{"next": map[string]any{}}}, nil
 		}),
 	}
-	for _, definition := range definitions {
-		if err := registry.Register(definition); err != nil {
-			t.Fatal(err)
-		}
-	}
-	snapshot, err := registry.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"badList"}},{"$call":{"name":"nullableList"}},{"$call":{"name":"badMap"}},{"$call":{"name":"deepNode"}}]}]}}`)
-	plan, err := runtime.Prepare(snapshot, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := plan.Execute(context.Background())
+	out := runtime.ExecuteDefinitionsForTest(context.Background(), types, definitions)
 	if len(out.Errors) != 3 {
 		t.Fatalf("Execute errors = %#v", out.Errors)
 	}
@@ -403,23 +361,12 @@ func TestExecutePreservesValidObjectFieldsAroundCompletionFailures(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := runtime.NewRegistry(types)
 	descriptor := runtime.Descriptor{Name: "result", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Result", Metadata: completeMetadata(runtime.ReadEffect)}
-	if err := registry.Register(runtime.BindInvocation(descriptor, func(context.Context, runtime.Invocation) (map[string]any, error) {
-		return map[string]any{"good": "kept", "bad": "not-an-int", "extra": "removed", "null": nil}, nil
-	})); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := registry.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"result"}}]}]}}`)
-	plan, err := runtime.Prepare(snapshot, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := plan.Execute(context.Background())
+	out := runtime.ExecuteDefinitionsForTest(context.Background(), types, []runtime.Definition{
+		runtime.BindInvocation(descriptor, func(context.Context, runtime.Invocation) (map[string]any, error) {
+			return map[string]any{"good": "kept", "bad": "not-an-int", "extra": "removed", "null": nil}, nil
+		}),
+	})
 	if got := out.Data["result"]; fmt.Sprint(got) != "map[good:kept null:<nil>]" {
 		t.Fatalf("partial object = %#v", got)
 	}
@@ -494,30 +441,16 @@ func TestExecuteRejectsNestedScalarGoTypeCoercions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := runtime.NewRegistry(types)
 	metadata := completeMetadata(runtime.ReadEffect)
-	for _, definition := range []runtime.Definition{
+	definitions := []runtime.Definition{
 		runtime.BindInvocation(runtime.Descriptor{Name: "object", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Coercions", Metadata: metadata}, func(context.Context, runtime.Invocation) (map[string]any, error) {
 			return map[string]any{"bytes": []byte("abc"), "count": int(1)}, nil
 		}),
 		runtime.BindInvocation(runtime.Descriptor{Name: "list", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Floats", Metadata: metadata}, func(context.Context, runtime.Invocation) ([]any, error) {
 			return []any{int(1), float64(2)}, nil
 		}),
-	} {
-		if err := registry.Register(definition); err != nil {
-			t.Fatal(err)
-		}
 	}
-	snapshot, err := registry.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"object"}},{"$call":{"name":"list"}}]}]}}`)
-	plan, err := runtime.Prepare(snapshot, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := plan.Execute(context.Background())
+	out := runtime.ExecuteDefinitionsForTest(context.Background(), types, definitions)
 	if len(out.Data["object"].(map[string]any)) != 0 {
 		t.Fatalf("coerced object data = %#v", out.Data["object"])
 	}

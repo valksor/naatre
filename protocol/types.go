@@ -137,15 +137,17 @@ const (
 // Expression is an immutable typed argument expression. Literal bytes remain
 // lossless until schema coercion.
 type Expression struct {
-	kind    ExpressionKind
-	name    string
-	literal json.RawMessage
-	source  Source
+	kind          ExpressionKind
+	name          string
+	literal       json.RawMessage
+	source        Source
+	payloadSource Source
 }
 
-func (e Expression) Kind() ExpressionKind { return e.kind }
-func (e Expression) Name() string         { return e.name }
-func (e Expression) Source() Source       { return e.source }
+func (e Expression) Kind() ExpressionKind  { return e.kind }
+func (e Expression) Name() string          { return e.name }
+func (e Expression) Source() Source        { return e.source }
+func (e Expression) PayloadSource() Source { return e.payloadSource }
 func (e Expression) Literal() (json.RawMessage, bool) {
 	return cloneRaw(e.literal), e.kind == LiteralExpression
 }
@@ -191,23 +193,27 @@ const (
 
 // Selection is an immutable typed selection node.
 type Selection struct {
-	kind       SelectionKind
-	name       string
-	alias      string
-	bind       string
-	arguments  map[string]Expression
-	directives []Directive
-	children   []Selection
-	stages     []Selection
-	policy     ParallelPolicy
-	at         *big.Int
-	start      *big.Int
-	end        *big.Int
-	first      *big.Int
-	last       *big.Int
-	after      *Expression
-	before     *Expression
-	source     Source
+	kind          SelectionKind
+	name          string
+	alias         string
+	bind          string
+	arguments     map[string]Expression
+	directives    []Directive
+	children      []Selection
+	stages        []Selection
+	policy        ParallelPolicy
+	at            *big.Int
+	start         *big.Int
+	end           *big.Int
+	first         *big.Int
+	last          *big.Int
+	after         *Expression
+	before        *Expression
+	source        Source
+	payloadSource Source
+	nameSource    Source
+	aliasSource   Source
+	bindSource    Source
 }
 
 func (s Selection) Kind() SelectionKind              { return s.kind }
@@ -215,6 +221,10 @@ func (s Selection) Name() string                     { return s.name }
 func (s Selection) Alias() string                    { return s.alias }
 func (s Selection) Bind() string                     { return s.bind }
 func (s Selection) Source() Source                   { return s.source }
+func (s Selection) PayloadSource() Source            { return s.payloadSource }
+func (s Selection) NameSource() Source               { return s.nameSource }
+func (s Selection) AliasSource() Source              { return s.aliasSource }
+func (s Selection) BindSource() Source               { return s.bindSource }
 func (s Selection) Arguments() map[string]Expression { return cloneExpressions(s.arguments) }
 func (s Selection) Directives() []Directive          { return cloneDirectives(s.directives) }
 func (s Selection) Stages() []Selection              { return cloneSelections(s.stages) }

@@ -353,7 +353,10 @@ func (d languageDecoder) selection(value node, pointer string, pipelineStep bool
 	if err := rejectUnknown(d.input, payload, shape.allowed, "LANG-004", "validate", payloadPointer); err != nil {
 		return Selection{}, err
 	}
-	selection := Selection{kind: shape.kind, source: sourceAt(d.input, pointer, value)}
+	selection := Selection{
+		kind: shape.kind, source: sourceAt(d.input, pointer, value),
+		payloadSource: sourceAt(d.input, payloadPointer, payload),
+	}
 	if err := d.selectionNames(payload, payloadPointer, shape, &selection); err != nil {
 		return Selection{}, err
 	}
@@ -376,6 +379,9 @@ func (d languageDecoder) selectionNames(payload node, pointer string, shape sele
 		if err != nil {
 			return err
 		}
+		if nameNode, exists := payload.member("name"); exists {
+			selection.nameSource = sourceAt(d.input, joinPointer(pointer, "name"), nameNode)
+		}
 	}
 	if aliasNode, exists := payload.member("as"); exists {
 		if aliasNode.kind != nodeString {
@@ -385,6 +391,7 @@ func (d languageDecoder) selectionNames(payload node, pointer string, shape sele
 			return newDiagnostic(d.input, "INVALID_IDENTIFIER", "LANG-002", "validate", "response alias must be a portable identifier", joinPointer(pointer, "as"), aliasNode.start)
 		}
 		selection.alias = aliasNode.text
+		selection.aliasSource = sourceAt(d.input, joinPointer(pointer, "as"), aliasNode)
 	} else if shape.requireAlias {
 		return newDiagnostic(d.input, "MISSING_FIELD", "LANG-008", "validate", "selection requires a response alias", joinPointer(pointer, "as"), payload.start)
 	}
@@ -396,6 +403,7 @@ func (d languageDecoder) selectionNames(payload node, pointer string, shape sele
 			return newDiagnostic(d.input, "INVALID_IDENTIFIER", "LANG-220", "validate", "binding must be a portable identifier", joinPointer(pointer, "bind"), bindNode.start)
 		}
 		selection.bind = bindNode.text
+		selection.bindSource = sourceAt(d.input, joinPointer(pointer, "bind"), bindNode)
 	}
 	return nil
 }
@@ -554,7 +562,10 @@ func (d languageDecoder) expression(value node, pointer string) (Expression, err
 	}
 	tag := value.object[0].name
 	payload := value.object[0].value
-	expression := Expression{source: sourceAt(d.input, pointer, value)}
+	expression := Expression{
+		source:        sourceAt(d.input, pointer, value),
+		payloadSource: sourceAt(d.input, joinPointer(pointer, tag), payload),
+	}
 	switch tag {
 	case "$literal":
 		expression.kind = LiteralExpression
