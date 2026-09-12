@@ -87,7 +87,7 @@ type Metadata struct {
 	Transaction         TransactionParticipation `json:"transaction"`
 	AuthorizationPolicy string                   `json:"authorizationPolicy"`
 	Deprecation         string                   `json:"deprecation,omitempty"`
-	Idempotency         string                   `json:"idempotency,omitempty"`
+	Idempotency         IdempotencyPolicy        `json:"idempotency,omitempty"`
 	Cost                uint64                   `json:"cost"`
 	ParallelMutation    bool                     `json:"parallelMutation"`
 	Collection          *CollectionMetadata      `json:"collection,omitempty"`
@@ -605,6 +605,11 @@ func validateMetadata(descriptor Descriptor) error {
 	}
 	if descriptor.Metadata.AuthorizationPolicy == "" {
 		return fmt.Errorf("registration %q requires authorization policy metadata", descriptor.Name)
+	}
+	switch descriptor.Metadata.Idempotency {
+	case "", IdempotencyNonIdempotent, IdempotencyIdempotent, IdempotencyConditional:
+	default:
+		return fmt.Errorf("registration %q has unknown idempotency policy %q", descriptor.Name, descriptor.Metadata.Idempotency)
 	}
 	return validatePortableDescriptorMetadata(descriptor)
 }

@@ -147,7 +147,7 @@ func registryWithRootKinds(t *testing.T, tests []rootRegistryCase) *runtime.Regi
 		metadata.Deterministic = test.kind != protocol.Subscription
 		metadata.Cacheable = test.kind == protocol.Query
 		metadata.Deprecation = "use replacement"
-		metadata.Idempotency = "request-key"
+		metadata.Idempotency = runtime.IdempotencyConditional
 		metadata.Cost = 13
 		descriptor := runtime.Descriptor{
 			Name: test.name, Scope: runtime.RootScope, Kind: test.kind,

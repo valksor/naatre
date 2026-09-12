@@ -116,6 +116,8 @@ type executionScope struct {
 	resources    *resourceMeter
 	cursorScopes map[uint64]CursorScope
 	transaction  Transaction
+	idempotency  *executionIdempotency
+	reliability  *executionReliabilityState
 }
 
 type scopedVariable struct {
@@ -228,6 +230,8 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 		annotations:  &directiveAnnotationRecorder{},
 		resources:    &resourceMeter{limits: p.resourceLimits},
 		cursorScopes: make(map[uint64]CursorScope),
+		idempotency:  newExecutionIdempotency(ctx, options),
+		reliability:  &executionReliabilityState{},
 	}
 	// Cancellation observed before any selection runs is operation-level: no
 	// field is responsible, so it carries the empty root path.
@@ -266,6 +270,8 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 		Effects:     scope.effects.state(p.kind, result.failed),
 		Annotations: scope.annotations.annotations(),
 	}
+	outcome.Reliability.Deduplicated = scope.reliability.deduplicated.Load()
+	outcome.Reliability.Attempts = scope.reliability.attempts.Load()
 	if errors.Is(context.Cause(executionCtx), errExecutionResourceDeadline) {
 		replaceDeadlineFailures(&outcome)
 	}

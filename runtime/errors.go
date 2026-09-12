@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Core execution error codes. A runtime reserves these so a client can rely on
@@ -54,6 +55,11 @@ const (
 	CodeAfterCommitFailed           = "AFTER_COMMIT_FAILED"
 	CodeExternalEffectUncoordinated = "EXTERNAL_EFFECT_UNCOORDINATED"
 	CodeCompensationFailed          = "COMPENSATION_FAILED"
+	CodeRetryBudgetExhausted        = "RETRY_BUDGET_EXHAUSTED"
+	CodeIdempotencyConflict         = "IDEMPOTENCY_CONFLICT"
+	CodeIdempotencyIndeterminate    = "IDEMPOTENCY_INDETERMINATE"
+	CodeIdempotencyNotAllowed       = "IDEMPOTENCY_NOT_ALLOWED"
+	CodeIdempotencyStoreUnavailable = "IDEMPOTENCY_STORE_UNAVAILABLE"
 )
 
 // reservedCodes are the codes only a runtime may produce. An application that
@@ -66,6 +72,8 @@ var reservedCodes = []string{
 	CodeTransactionRollbackFailed, CodeSavepointBeginFailed, CodeSavepointReleaseFailed,
 	CodeSavepointRollbackFailed, CodeOutboxPersistFailed, CodeAfterCommitFailed,
 	CodeExternalEffectUncoordinated, CodeCompensationFailed,
+	CodeRetryBudgetExhausted, CodeIdempotencyConflict, CodeIdempotencyIndeterminate,
+	CodeIdempotencyNotAllowed, CodeIdempotencyStoreUnavailable,
 }
 
 // applicationCodePattern constrains a domain code to a stable, wire-safe
@@ -89,6 +97,9 @@ type Error struct {
 	// Retryable is advice about the failure class. It is never permission to
 	// replay a write; idempotency metadata remains authoritative.
 	Retryable bool
+	// RetryAfter is a server-side lower bound for a later attempt. It is safe
+	// scheduling metadata and is ignored unless Retryable is true.
+	RetryAfter time.Duration
 	// Details is optional namespaced context. Keys must be namespaced with a
 	// period so a vendor cannot collide with core or another vendor.
 	Details map[string]any
@@ -121,7 +132,7 @@ func (e *Error) valid() bool {
 	if !applicationCodePattern.MatchString(e.Code) || slices.Contains(reservedCodes, e.Code) {
 		return false
 	}
-	return strings.TrimSpace(e.Message) != ""
+	return strings.TrimSpace(e.Message) != "" && e.RetryAfter >= 0
 }
 
 // publicDetails copies only namespaced detail keys, dropping anything that
@@ -152,6 +163,7 @@ func applyDomainError(failure ExecutionError, err error) ExecutionError {
 	failure.Code = domain.Code
 	failure.Message = domain.Message
 	failure.Retryable = domain.Retryable
+	failure.RetryAfter = domain.RetryAfter
 	failure.Details = domain.publicDetails()
 	return failure
 }

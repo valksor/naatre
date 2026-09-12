@@ -294,8 +294,7 @@ func (p *Plan) rollbackTransaction(baseCtx, txCtx context.Context, tx Transactio
 
 func (p *Plan) executeAtomic(ctx context.Context, node planNode, scope executionScope) nodeResult {
 	if scope.transaction == nil {
-		result := p.executeRootTransaction(ctx, scope, node.name, node.children)
-		return nodeResult{data: result.data, merge: true, failed: result.failed, errors: result.errors}
+		return p.executeRootAtomic(ctx, node, scope)
 	}
 	savepointCtx, savepoint, err := scope.transaction.Savepoint(ctx, node.name)
 	if err != nil || savepointCtx == nil || savepoint == nil {
@@ -322,6 +321,16 @@ func (p *Plan) executeAtomic(ctx context.Context, node planNode, scope execution
 		return nodeResult{failed: true, errors: []ExecutionError{failure}}
 	}
 	return nodeResult{data: children.data, merge: true, errors: children.errors}
+}
+
+func (p *Plan) executeRootAtomic(ctx context.Context, node planNode, scope executionScope) nodeResult {
+	if scope.idempotency != nil {
+		if key, protected := scope.idempotency.groupKeys[node.name]; protected {
+			return p.executeIdempotentGroup(ctx, node, scope, key)
+		}
+	}
+	result := p.executeRootTransaction(ctx, scope, node.name, node.children)
+	return nodeResult{data: result.data, merge: true, failed: result.failed, errors: result.errors}
 }
 
 func (p *Plan) transactionFailure(code, message string, cause error) ExecutionError {

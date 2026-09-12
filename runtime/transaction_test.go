@@ -772,6 +772,7 @@ func transactionPlan(t *testing.T, provider runtime.TransactionProvider, audit r
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.WriteEffect),
 	}
 	descriptor.Metadata.Transaction = runtime.TransactionRequired
+	descriptor.Metadata.Idempotency = runtime.IdempotencyIdempotent
 	if err := registry.Register(runtime.BindInvocation[string](descriptor, func(ctx context.Context, _ runtime.Invocation) (string, error) {
 		return handler(ctx)
 	})); err != nil {

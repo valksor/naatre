@@ -1,0 +1,29 @@
+{
+  "profile": "core.reliability-1",
+  "policies": ["non-idempotent", "idempotent", "conditionally-idempotent"],
+  "states": ["running", "completed", "indeterminate"],
+  "durabilities": ["process-local", "durable"],
+  "errorCodes": [
+    "RETRY_BUDGET_EXHAUSTED",
+    "IDEMPOTENCY_CONFLICT",
+    "IDEMPOTENCY_INDETERMINATE",
+    "IDEMPOTENCY_NOT_ALLOWED",
+    "IDEMPOTENCY_STORE_UNAVAILABLE"
+  ],
+  "vectors": [
+    {"name":"handler-failure-retries","fault":"retryable-handler","state":"completed","attempts":2,"executesEffect":true,"deduplicated":false},
+    {"name":"transport-interruption-is-indeterminate","fault":"commit-unknown","state":"indeterminate","code":"IDEMPOTENCY_INDETERMINATE","attempts":1,"executesEffect":true,"deduplicated":false},
+    {"name":"concurrent-waiter-replays","fault":"duplicate-while-running","state":"completed","attempts":0,"executesEffect":false,"deduplicated":true},
+    {"name":"completed-record-expires","fault":"retention-expired","state":"running","attempts":1,"executesEffect":true,"deduplicated":false},
+    {"name":"running-lease-expires-indeterminate","fault":"lease-expired","state":"indeterminate","code":"IDEMPOTENCY_INDETERMINATE","attempts":0,"executesEffect":false,"deduplicated":true},
+    {"name":"store-outage-fails-closed","fault":"claim-unavailable","state":"running","code":"IDEMPOTENCY_STORE_UNAVAILABLE","attempts":0,"executesEffect":false,"deduplicated":false},
+    {"name":"crash-after-effect-before-result","fault":"result-persistence-lost","state":"indeterminate","code":"IDEMPOTENCY_STORE_UNAVAILABLE","attempts":1,"executesEffect":true,"deduplicated":false},
+    {"name":"stale-owner-is-fenced","fault":"stale-fence-complete","state":"completed","attempts":0,"executesEffect":false,"deduplicated":true},
+    {"name":"process-local-provider-restart","fault":"provider-restart","state":"running","attempts":1,"executesEffect":true,"deduplicated":false},
+    {"name":"mismatched-fingerprint-conflicts","fault":"same-key-different-input","state":"running","code":"IDEMPOTENCY_CONFLICT","attempts":0,"executesEffect":false,"deduplicated":false},
+    {"name":"replay-is-reauthorized","fault":"authorization-revoked","state":"completed","code":"UNAUTHORIZED","attempts":0,"executesEffect":false,"deduplicated":true},
+    {"name":"shared-budget-bounds-layers","fault":"nested-retry-layers","state":"running","code":"RETRY_BUDGET_EXHAUSTED","attempts":3,"executesEffect":false,"deduplicated":false},
+    {"name":"deadline-cancels-scheduling","fault":"deadline-before-backoff","state":"running","attempts":1,"executesEffect":false,"deduplicated":false},
+    {"name":"retry-after-lower-bound","fault":"overload-retry-after","state":"completed","attempts":2,"executesEffect":false,"deduplicated":false}
+  ]
+}

@@ -32,13 +32,14 @@ func BindInvocation[Output any](descriptor Descriptor, handler Handler[Invocatio
 
 // ExecutionError is the safe public shape of one runtime failure.
 type ExecutionError struct {
-	Code      string
-	Message   string
-	Path      []any
-	Source    protocol.Source
-	Retryable bool
-	Details   map[string]any
-	internal  error
+	Code       string
+	Message    string
+	Path       []any
+	Source     protocol.Source
+	Retryable  bool
+	RetryAfter time.Duration
+	Details    map[string]any
+	internal   error
 }
 
 // Error renders only the public code and message, so logging or wrapping an
@@ -86,6 +87,9 @@ type Outcome struct {
 	// Effects describes the operation's effect state. It is safe outcome
 	// metadata, not an error, and never implies permission to replay a write.
 	Effects EffectState
+	// Reliability reports safe attempt and deduplication metadata without
+	// exposing caller-supplied idempotency keys.
+	Reliability ReliabilityInfo
 }
 
 // ErrIncomplete reports that an outcome carries unresolved data, so it must not
@@ -146,6 +150,7 @@ type Plan struct {
 	transactions    TransactionConfig
 	resourceLimits  ResourceLimits
 	staticCost      uint64
+	document        json.RawMessage
 }
 
 // StaticCost is the complete request-independent planned cost admitted before
@@ -194,6 +199,7 @@ func PrepareWithOptions(registry Snapshot, request *protocol.Request, options Pr
 		authorization:  registry.authorization, interceptors: slices.Clone(registry.interceptors),
 		transactions:   registry.transactions,
 		resourceLimits: limits, staticCost: planner.staticCost,
+		document: append(json.RawMessage(nil), request.Document().CanonicalJSON()...),
 	}, nil
 }
 
@@ -210,6 +216,11 @@ type ExecuteOptions struct {
 	// as cancelled. Zero selects DefaultAbandonGrace; a negative value
 	// abandons an uncooperative handler as soon as cancellation is observed.
 	AbandonGrace time.Duration
+	// Retry opts into bounded automatic retries. The selected handlers must
+	// independently declare retry safety.
+	Retry RetryPolicy
+	// Idempotency protects a request or named mutation groups with caller keys.
+	Idempotency IdempotencyOptions
 }
 
 func (o ExecuteOptions) abandonGrace() time.Duration {
@@ -228,7 +239,7 @@ func (p *Plan) Execute(ctx context.Context) Outcome {
 
 // ExecuteWith runs a prepared operation under an explicit policy.
 func (p *Plan) ExecuteWith(ctx context.Context, options ExecuteOptions) Outcome {
-	return p.executeComposed(ctx, options)
+	return p.executeReliably(ctx, options)
 }
 
 func captureVariableValues(request *protocol.Request, definitions []protocol.VariableDefinition) map[string]json.RawMessage {
