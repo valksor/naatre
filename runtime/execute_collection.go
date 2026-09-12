@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
-	"strconv"
 
 	"github.com/valksor/naatre/protocol"
 	"github.com/valksor/naatre/schema"
@@ -57,6 +56,9 @@ func (p *Plan) executeCollectionWindow(ctx context.Context, node planNode, scope
 	if admissionFailure != nil {
 		return *admissionFailure
 	}
+	if node.kind == protocol.PageSelection {
+		return p.executeSecureCollectionPage(ctx, node, scope, items, path)
+	}
 	start, end := 0, len(items)
 	if node.kind == protocol.SliceSelection {
 		if value, exists := node.selection.Start(); exists {
@@ -64,13 +66,6 @@ func (p *Plan) executeCollectionWindow(ctx context.Context, node planNode, scope
 		}
 		if value, exists := node.selection.End(); exists {
 			end = clampedBound(value, len(items))
-		}
-	} else {
-		var cursorErr error
-		start, end, cursorErr = p.pageBounds(node, scope, len(items))
-		if cursorErr != nil {
-			failure := nodeExecutionError("INVALID_CURSOR", "collection cursor is invalid", node, path, cursorErr)
-			return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 		}
 	}
 	if start > end {
@@ -92,6 +87,177 @@ func (p *Plan) executeCollectionWindow(ctx context.Context, node planNode, scope
 	})
 	value := executionValue{value: output, typeInfo: node.output, status: valueAvailable}
 	return nodeResult{value: value, data: output, emit: node.outputName != "", failed: failed, errors: failures}
+}
+
+func (p *Plan) preflightCollectionCursors(ctx context.Context, nodes []planNode, scope executionScope) []ExecutionError {
+	var failures []ExecutionError
+	var walk func([]planNode, []any)
+	walk = func(current []planNode, path []any) {
+		for _, node := range current {
+			nodePath := pathForNode(path, node)
+			if node.kind == protocol.PageSelection {
+				cursorScope, err := p.validatePreparedCursor(ctx, node, scope)
+				if err != nil {
+					failures = append(failures, nodeExecutionError(CodeInvalidCursor, "collection cursor is invalid", node, nodePath, err))
+				} else {
+					scope.cursorScopes[node.cursorID] = cursorScope
+				}
+			}
+			walk(node.children, nodePath)
+		}
+	}
+	walk(nodes, nil)
+	return failures
+}
+
+func (p *Plan) validatePreparedCursor(ctx context.Context, node planNode, scope executionScope) (CursorScope, error) {
+	metadata := node.input.collection
+	if !hasSecureCollectionRuntime(metadata) {
+		return CursorScope{}, ErrInvalidCursor
+	}
+	cursorScope, err := metadata.CursorScope(ctx)
+	if err != nil {
+		return CursorScope{}, ErrInvalidCursor
+	}
+	var expression protocol.Expression
+	var direction CursorDirection
+	if after, ok := node.selection.After(); ok {
+		expression, direction = after, CursorForward
+	} else if before, ok := node.selection.Before(); ok {
+		expression, direction = before, CursorBackward
+	} else {
+		return cursorScope, nil
+	}
+	cursor, err := p.cursorText(expression, scope)
+	if err != nil {
+		return CursorScope{}, ErrInvalidCursor
+	}
+	_, err = metadata.CursorCodec.Decode(cursor, cursorScope, direction)
+	if err != nil {
+		return CursorScope{}, err
+	}
+	return cursorScope, nil
+}
+
+func (p *Plan) executeSecureCollectionPage(ctx context.Context, node planNode, scope executionScope, items []any, path []any) nodeResult {
+	metadata := node.input.collection
+	cursorScope, ok := scope.cursorScopes[node.cursorID]
+	if !ok {
+		return invalidCursorResult(node, path, ErrInvalidCursor)
+	}
+	entries, err := collectionPageEntries(items, metadata)
+	if err != nil {
+		return invalidCursorResult(node, path, err)
+	}
+	request, err := p.collectionPageRequest(node, scope, cursorScope)
+	if err != nil {
+		return invalidCursorResult(node, path, err)
+	}
+	page, err := Paginate(metadata.CursorCodec, entries, request)
+	if err != nil {
+		return invalidCursorResult(node, path, err)
+	}
+	if !scope.resources.chargeCollection(uint64(len(page.Items))) {
+		return resourceExhaustedResult(node, path, "collection item budget exhausted")
+	}
+	window := make([]any, len(page.Items))
+	for index, item := range page.Items {
+		window[index] = item.value
+	}
+	descriptor, _ := p.types.Lookup(node.input.id)
+	sourceIndexBase := 0
+	if len(page.Items) != 0 {
+		sourceIndexBase = page.Items[0].index
+	}
+	output, failures, failed := p.executeCollectionItems(ctx, node, scope, collectionExecution{
+		items: window, descriptor: descriptor, sourceIndexBase: sourceIndexBase, path: path,
+	})
+	presentation := presentCollectionPage(page, output)
+	value := executionValue{value: output, typeInfo: node.output, status: valueAvailable}
+	return nodeResult{value: value, data: presentation, emit: node.outputName != "", failed: failed, errors: failures}
+}
+
+type indexedCollectionItem struct {
+	value any
+	index int
+}
+
+func collectionPageEntries(items []any, metadata *CollectionMetadata) ([]PageEntry[indexedCollectionItem], error) {
+	entries := make([]PageEntry[indexedCollectionItem], 0, len(items))
+	for index, item := range items {
+		position, err := metadata.Position(item)
+		if err != nil {
+			return nil, err
+		}
+		var edge map[string]any
+		if metadata.EdgeMetadata != nil {
+			edge, err = metadata.EdgeMetadata(item)
+			if err != nil {
+				return nil, err
+			}
+		}
+		entries = append(entries, PageEntry[indexedCollectionItem]{
+			Item: indexedCollectionItem{value: item, index: index}, Position: position, EdgeMetadata: edge,
+		})
+	}
+	return entries, nil
+}
+
+func presentCollectionPage(page CollectionPage[indexedCollectionItem], output []any) map[string]any {
+	presentation := map[string]any{"items": output, "pageInfo": page.PageInfo}
+	if len(page.Edges) == 0 {
+		return presentation
+	}
+	edges := make([]any, len(page.Edges))
+	for index, edge := range page.Edges {
+		edges[index] = map[string]any{"cursor": edge.Cursor, "item": output[index], "metadata": edge.Metadata}
+	}
+	presentation["edges"] = edges
+	return presentation
+}
+
+func (p *Plan) collectionPageRequest(node planNode, scope executionScope, cursorScope CursorScope) (PageRequest, error) {
+	request := PageRequest{Scope: cursorScope}
+	if first, ok := node.selection.First(); ok && first.IsUint64() {
+		value := first.Uint64()
+		request.First = &value
+	}
+	if last, ok := node.selection.Last(); ok && last.IsUint64() {
+		value := last.Uint64()
+		request.Last = &value
+	}
+	if after, ok := node.selection.After(); ok {
+		cursor, err := p.cursorText(after, scope)
+		if err != nil {
+			return PageRequest{}, err
+		}
+		request.After = cursor
+	}
+	if before, ok := node.selection.Before(); ok {
+		cursor, err := p.cursorText(before, scope)
+		if err != nil {
+			return PageRequest{}, err
+		}
+		request.Before = cursor
+	}
+	return request, nil
+}
+
+func (p *Plan) cursorText(expression protocol.Expression, scope executionScope) (string, error) {
+	raw, _, err := p.evaluateExpression(expression, scope)
+	if err != nil {
+		return "", err
+	}
+	var cursor string
+	if err := json.Unmarshal(raw, &cursor); err != nil || cursor == "" {
+		return "", ErrInvalidCursor
+	}
+	return cursor, nil
+}
+
+func invalidCursorResult(node planNode, path []any, cause error) nodeResult {
+	failure := nodeExecutionError(CodeInvalidCursor, "collection cursor is invalid", node, path, cause)
+	return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 }
 
 func admittedCollection(scope executionScope, node planNode, path []any) ([]any, *nodeResult) {
@@ -155,51 +321,6 @@ func (p *Plan) executeMetadata(node planNode, scope executionScope, path []any) 
 	}
 	value := executionValue{value: int32(len(items)), typeInfo: node.output, status: valueAvailable}
 	return nodeResult{value: value, data: value.value, emit: node.outputName != ""}
-}
-
-func (p *Plan) pageBounds(node planNode, scope executionScope, length int) (int, int, error) {
-	start, end := 0, length
-	if after, ok := node.selection.After(); ok {
-		cursor, err := p.cursorIndex(after, scope)
-		if err != nil {
-			return 0, 0, err
-		}
-		start = min(cursor+1, length)
-	}
-	if before, ok := node.selection.Before(); ok {
-		cursor, err := p.cursorIndex(before, scope)
-		if err != nil {
-			return 0, 0, err
-		}
-		end = min(cursor, length)
-	}
-	if first, ok := node.selection.First(); ok {
-		end = min(end, start+clampedBound(first, length))
-	}
-	if last, ok := node.selection.Last(); ok {
-		start = max(start, end-clampedBound(last, length))
-	}
-	return start, end, nil
-}
-
-func (p *Plan) cursorIndex(expression protocol.Expression, scope executionScope) (int, error) {
-	raw, _, err := p.evaluateExpression(expression, scope)
-	if err != nil {
-		return 0, err
-	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		value, parseErr := strconv.ParseInt(text, 10, 64)
-		if parseErr != nil || value < 0 || value > 9007199254740991 {
-			return 0, errors.New("cursor is not a non-negative collection offset")
-		}
-		return int(value), nil
-	}
-	var number int64
-	if err := json.Unmarshal(raw, &number); err != nil || number < 0 || number > 9007199254740991 {
-		return 0, errors.New("cursor is not a non-negative collection offset")
-	}
-	return int(number), nil
 }
 
 func exactIndex(value *big.Int) (int, bool) {

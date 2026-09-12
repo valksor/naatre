@@ -259,6 +259,7 @@ type callableContract struct {
 	InputNullable, OutputNullable, Deterministic, Cacheable, RetrySafe            bool
 	Deprecation                                                                   *Deprecation
 	Cost                                                                          uint64
+	Collection                                                                    *CollectionDescriptor
 	Capabilities                                                                  []string
 	Traits                                                                        []TraitDescriptor
 	Source                                                                        *SourceMetadata
@@ -271,7 +272,7 @@ func callableFromOperation(value OperationDescriptor) callableContract {
 		Deprecation: value.Deprecation, Effect: value.Effect, Deterministic: value.Deterministic,
 		Cacheable: value.Cacheable, RetrySafe: value.RetrySafe, ThreadSafety: value.ThreadSafety,
 		Batching: value.Batching, Transaction: value.Transaction, Authorization: value.AuthorizationPolicy,
-		Cost: value.Cost, Capabilities: value.Capabilities, Traits: value.Traits, Source: value.Source,
+		Cost: value.Cost, Collection: value.Collection, Capabilities: value.Capabilities, Traits: value.Traits, Source: value.Source,
 	}
 }
 
@@ -282,7 +283,7 @@ func callableFromMember(value MemberDescriptor) callableContract {
 		Deprecation: value.Deprecation, Effect: value.Effect, Deterministic: value.Deterministic,
 		Cacheable: value.Cacheable, RetrySafe: value.RetrySafe, ThreadSafety: value.ThreadSafety,
 		Batching: value.Batching, Transaction: value.Transaction, AuthorizationPolicy: value.AuthorizationPolicy,
-		Cost: value.Cost, Capabilities: value.Capabilities, Traits: value.Traits, Source: value.Source,
+		Cost: value.Cost, Collection: value.Collection, Capabilities: value.Capabilities, Traits: value.Traits, Source: value.Source,
 	})
 	contract.Kind = ""
 	return contract
@@ -306,9 +307,32 @@ func diffCallable(diff *SchemaDiff, prefix string, before, after callableContrac
 	diff.scalar(prefix+"/transaction", ChangeDangerous, before.Transaction, after.Transaction)
 	diff.scalar(prefix+"/authorizationPolicy", ChangeDangerous, before.Authorization, after.Authorization)
 	diff.scalar(prefix+"/cost", ChangeDangerous, before.Cost, after.Cost)
+	diffCollection(diff, prefix+"/collection", before.Collection, after.Collection)
 	diff.scalar(prefix+"/capabilities", ChangeDangerous, before.Capabilities, after.Capabilities)
 	diff.scalar(prefix+"/traits", ChangeDangerous, before.Traits, after.Traits)
 	diff.scalar(prefix+"/source", ChangeBehaviorOnly, before.Source, after.Source)
+}
+
+func diffCollection(diff *SchemaDiff, path string, before, after *CollectionDescriptor) {
+	if reflect.DeepEqual(before, after) {
+		return
+	}
+	if before == nil {
+		diff.add(path, ChangeAdditive, before, after)
+		return
+	}
+	if after == nil {
+		diff.add(path, ChangeBreaking, before, after)
+		return
+	}
+	maximumClassification := ChangeAdditive
+	if after.MaxPageSize < before.MaxPageSize {
+		maximumClassification = ChangeBreaking
+	}
+	if before.MaxPageSize != after.MaxPageSize {
+		diff.add(path+"/maxPageSize", maximumClassification, before.MaxPageSize, after.MaxPageSize)
+	}
+	diff.scalar(path+"/totalCountCost", ChangeDangerous, before.TotalCountCost, after.TotalCountCost)
 }
 
 func diffRetiredReuse(diff *SchemaDiff, retired []RetiredIdentity, after documentWire) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -117,6 +118,72 @@ func TestDirectivePlannerAdditionalCostUsesStaticBudget(t *testing.T) {
 	assertValidationLimit(t, err, "LIMIT_STATIC_COST")
 }
 
+func TestPageSizeAndTotalCountParticipateInStaticCost(t *testing.T) {
+	t.Parallel()
+	snapshot, _, _ := collectionResourceSnapshotWithCost(t, 3)
+	request := decodeRuntimeRequestWithOptions(t, `{"version":"1","capabilities":["collection.page-1"],"document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$page":{"as":"page","first":4,"select":[{"$field":{"name":"name"}}]}},{"$meta":{"name":"totalCount","as":"total"}}]}}]}]}}`, protocol.DecodeOptions{Capabilities: map[string]bool{"collection.page-1": true}})
+	plan, err := runtime.PrepareWithOptions(snapshot, request, runtime.PrepareOptions{Limits: runtime.ResourceLimits{MaxStaticCost: 17}})
+	if err != nil {
+		t.Fatalf("PrepareWithOptions: %v", err)
+	}
+	if got := plan.StaticCost(); got != 17 {
+		t.Fatalf("StaticCost = %d, want 17", got)
+	}
+	_, err = runtime.PrepareWithOptions(snapshot, request, runtime.PrepareOptions{Limits: runtime.ResourceLimits{MaxStaticCost: 16}})
+	assertValidationLimit(t, err, "LIMIT_STATIC_COST")
+}
+
+func TestNestedPageMultiplierOverflowFailsValidation(t *testing.T) {
+	t.Parallel()
+	const pageSize = uint64(9007199254740991)
+	types := freezeCompositionTypes(t,
+		schema.TypeDescriptor{ID: "User", Kind: schema.ObjectType, Output: true, MaxDepth: 2, Fields: map[string]schema.FieldDescriptor{
+			"friends": {Type: "Users"}, "name": {Type: schema.TypeID(schema.String)},
+		}},
+		schema.TypeDescriptor{ID: "Users", Kind: schema.ListType, Output: true, Element: "User", MaxDepth: 2},
+	)
+	registry := runtime.NewRegistry(types)
+	rootMetadata := completeMetadata(runtime.ReadEffect)
+	rootMetadata.Collection = secureCollectionMetadata(t, pageSize, 0)
+	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
+		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
+		Input: schema.TypeID(schema.String), Output: "Users", Metadata: rootMetadata,
+	}, func(context.Context, runtime.Invocation) ([]map[string]any, error) { return nil, nil }))
+	fieldMetadata := completeMetadata(runtime.ReadEffect)
+	fieldMetadata.Cost = 1
+	fieldMetadata.Collection = secureCollectionMetadata(t, pageSize, 0)
+	registerComposition(t, registry, runtime.BindField[map[string]any, []map[string]any](runtime.Descriptor{
+		Name: "friends", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,
+		Output: "Users", Metadata: fieldMetadata,
+	}, func(context.Context, map[string]any) ([]map[string]any, error) { return nil, nil }))
+	nameMetadata := completeMetadata(runtime.ReadEffect)
+	nameMetadata.Cost = 1
+	registerComposition(t, registry, runtime.BindField[map[string]any, string](runtime.Descriptor{
+		Name: "name", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,
+		Output: schema.TypeID(schema.String), Metadata: nameMetadata,
+	}, func(context.Context, map[string]any) (string, error) { return "", nil }))
+	snapshot, err := registry.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	request := decodeRuntimeRequestWithOptions(t, `{"version":"1","capabilities":["collection.page-1"],"document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$page":{"as":"outer","first":9007199254740991,"select":[{"$field":{"name":"friends","select":[{"$page":{"as":"inner","first":9007199254740991,"select":[{"$field":{"name":"name"}}]}}]}}]}}]}}]}]}}`, protocol.DecodeOptions{Capabilities: map[string]bool{"collection.page-1": true}})
+	_, err = runtime.PrepareWithOptions(snapshot, request, runtime.PrepareOptions{Limits: runtime.ResourceLimits{MaxCollectionItems: pageSize, MaxStaticCost: math.MaxUint64}})
+	assertValidationLimit(t, err, "LIMIT_COST_OVERFLOW")
+}
+
+func TestPrepareRejectsPageAboveCollectionMaximumBeforeHandlers(t *testing.T) {
+	t.Parallel()
+	snapshot, _, fieldCalls := collectionResourceSnapshotWithCost(t, 1)
+	request := decodeRuntimeRequestWithOptions(t, `{"version":"1","capabilities":["collection.page-1"],"document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$page":{"as":"page","first":6,"select":[{"$field":{"name":"name"}}]}}]}}]}]}}`, protocol.DecodeOptions{Capabilities: map[string]bool{"collection.page-1": true}})
+	_, err := runtime.Prepare(snapshot, request)
+	if got := validationCodes(t, err); !slices.Contains(got, "PAGE_SIZE_LIMIT") {
+		t.Fatalf("validation codes = %v, want PAGE_SIZE_LIMIT", got)
+	}
+	if fieldCalls.Load() != 0 {
+		t.Fatalf("field handler calls = %d, want 0", fieldCalls.Load())
+	}
+}
+
 func TestPrepareResourceLimitsConfigureFragmentExpansion(t *testing.T) {
 	t.Parallel()
 	snapshot, _ := staticResourceSnapshot(t, 1)
@@ -176,7 +243,7 @@ func TestRuntimeCollectionBudgetAcceptsExactBoundary(t *testing.T) {
 
 func TestRuntimeCollectionMultipliesDeclaredHandlerCost(t *testing.T) {
 	t.Parallel()
-	snapshot, fieldCalls := collectionResourceSnapshotWithCost(t, 3)
+	snapshot, _, fieldCalls := collectionResourceSnapshotWithCost(t, 3)
 	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$map":{"as":"items","select":[{"$field":{"name":"name"}}]}}]}}]}]}}`)
 	plan, err := runtime.PrepareWithOptions(snapshot, request, runtime.PrepareOptions{Limits: runtime.ResourceLimits{MaxRuntimeWork: 5}})
 	if err != nil {
@@ -411,16 +478,24 @@ func staticResourceSnapshot(t *testing.T, cost uint64) (runtime.Snapshot, *atomi
 }
 
 func collectionResourceSnapshot(t *testing.T) (runtime.Snapshot, *atomic.Int64) {
-	return collectionResourceSnapshotWithCost(t, 0)
+	snapshot, _, fieldCalls := collectionResourceSnapshotWithCost(t, 0)
+	return snapshot, fieldCalls
 }
 
-func collectionResourceSnapshotWithCost(t *testing.T, fieldCost uint64) (runtime.Snapshot, *atomic.Int64) {
+func collectionResourceSnapshotWithCost(t *testing.T, fieldCost uint64, configured ...*runtime.CollectionMetadata) (runtime.Snapshot, *atomic.Int64, *atomic.Int64) {
 	t.Helper()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	collectionMetadata := completeMetadata(runtime.ReadEffect)
+	collectionMetadata.Collection = secureCollectionMetadata(t, 5, 5)
+	if len(configured) != 0 {
+		collectionMetadata.Collection = configured[0]
+	}
+	rootCalls := &atomic.Int64{}
 	if err := registry.Register(runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
-		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
+		Input: schema.TypeID(schema.String), Output: "Users", Metadata: collectionMetadata,
 	}, func(context.Context, runtime.Invocation) ([]map[string]any, error) {
+		rootCalls.Add(1)
 		return []map[string]any{{"name": "Ada"}, {"name": "Grace"}, {"name": "Lin"}}, nil
 	})); err != nil {
 		t.Fatalf("Register call: %v", err)
@@ -437,7 +512,7 @@ func collectionResourceSnapshotWithCost(t *testing.T, fieldCost uint64) (runtime
 	})); err != nil {
 		t.Fatalf("Register field: %v", err)
 	}
-	return frozenRegistry(t, registry), fieldCalls
+	return frozenRegistry(t, registry), rootCalls, fieldCalls
 }
 
 func assertValidationLimit(t *testing.T, err error, code string) {

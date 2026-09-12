@@ -90,6 +90,19 @@ type Metadata struct {
 	Idempotency         string                   `json:"idempotency,omitempty"`
 	Cost                uint64                   `json:"cost"`
 	ParallelMutation    bool                     `json:"parallelMutation"`
+	Collection          *CollectionMetadata      `json:"collection,omitempty"`
+}
+
+// CollectionMetadata advertises bounded collection behavior to planning.
+// Cursor secrets and provider-specific position extraction stay outside the
+// public schema descriptor.
+type CollectionMetadata struct {
+	MaxPageSize    uint64                                     `json:"maxPageSize"`
+	TotalCountCost uint64                                     `json:"totalCountCost,omitempty"`
+	CursorCodec    *CursorCodec                               `json:"-"`
+	CursorScope    func(context.Context) (CursorScope, error) `json:"-"`
+	Position       func(any) (CursorPosition, error)          `json:"-"`
+	EdgeMetadata   func(any) (map[string]any, error)          `json:"-"`
 }
 
 // Descriptor is the portable public contract for one registered handler.
@@ -446,10 +459,44 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 	if err := validateBinding(types, definition); err != nil {
 		return err
 	}
+	if err := validateCollectionMetadata(output, descriptor.Metadata.Collection); err != nil {
+		return fmt.Errorf("registration %q: %w", descriptor.Name, err)
+	}
 	if err := validateHandlerTypes(types, definition, output); err != nil {
 		return fmt.Errorf("registration %q: %w", descriptor.Name, err)
 	}
 	return validateMetadata(descriptor)
+}
+
+func validateCollectionMetadata(output schema.TypeDescriptor, metadata *CollectionMetadata) error {
+	if metadata == nil {
+		return nil
+	}
+	if output.Kind != schema.ListType && output.Kind != schema.MapType {
+		return errors.New("collection metadata requires a collection output type")
+	}
+	if metadata.MaxPageSize == 0 {
+		return errors.New("collection metadata requires a positive maximum page size")
+	}
+	if metadata.TotalCountCost > schema.MaxDirectiveCost {
+		return errors.New("collection total count cost exceeds the portable maximum")
+	}
+	secureFields := 0
+	for _, present := range []bool{metadata.CursorCodec != nil, metadata.CursorScope != nil, metadata.Position != nil} {
+		if present {
+			secureFields++
+		}
+	}
+	if secureFields != 0 && secureFields != 3 {
+		return errors.New("collection cursor runtime requires codec, scope, and position providers")
+	}
+	if metadata.EdgeMetadata != nil && secureFields != 3 {
+		return errors.New("collection edge metadata requires a cursor runtime")
+	}
+	if metadata.CursorCodec != nil && metadata.MaxPageSize > metadata.CursorCodec.maxPageSize {
+		return errors.New("collection maximum page size exceeds cursor codec maximum")
+	}
+	return nil
 }
 
 func validateBinding(types schema.Snapshot, definition Definition) error {

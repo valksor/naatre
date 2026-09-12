@@ -190,36 +190,45 @@ type OperationDescriptor struct {
 	Idempotency         string                 `json:"idempotency,omitempty"`
 	Cost                uint64                 `json:"cost,omitempty"`
 	ParallelMutation    bool                   `json:"parallelMutation,omitempty"`
+	Collection          *CollectionDescriptor  `json:"collection,omitempty"`
 	Capabilities        []string               `json:"capabilities,omitempty"`
 	Traits              []TraitDescriptor      `json:"traits,omitempty"`
 	Source              *SourceMetadata        `json:"source,omitempty"`
 }
 
+// CollectionDescriptor is the portable, non-secret portion of a pageable
+// collection contract.
+type CollectionDescriptor struct {
+	MaxPageSize    uint64 `json:"maxPageSize"`
+	TotalCountCost uint64 `json:"totalCountCost,omitempty"`
+}
+
 type MemberDescriptor struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Owner               TypeID            `json:"owner"`
-	Kind                string            `json:"kind"`
-	Input               TypeID            `json:"input,omitempty"`
-	InputNullable       bool              `json:"inputNullable,omitempty"`
-	Output              TypeID            `json:"output"`
-	OutputNullable      bool              `json:"outputNullable,omitempty"`
-	Description         string            `json:"description,omitempty"`
-	Deprecation         *Deprecation      `json:"deprecation,omitempty"`
-	Effect              string            `json:"effect"`
-	Deterministic       bool              `json:"deterministic,omitempty"`
-	Cacheable           bool              `json:"cacheable,omitempty"`
-	RetrySafe           bool              `json:"retrySafe,omitempty"`
-	ThreadSafety        string            `json:"threadSafety,omitempty"`
-	Batching            string            `json:"batching,omitempty"`
-	Transaction         string            `json:"transaction,omitempty"`
-	AuthorizationPolicy string            `json:"authorizationPolicy,omitempty"`
-	Idempotency         string            `json:"idempotency,omitempty"`
-	Cost                uint64            `json:"cost,omitempty"`
-	ParallelMutation    bool              `json:"parallelMutation,omitempty"`
-	Capabilities        []string          `json:"capabilities,omitempty"`
-	Traits              []TraitDescriptor `json:"traits,omitempty"`
-	Source              *SourceMetadata   `json:"source,omitempty"`
+	ID                  string                `json:"id"`
+	Name                string                `json:"name"`
+	Owner               TypeID                `json:"owner"`
+	Kind                string                `json:"kind"`
+	Input               TypeID                `json:"input,omitempty"`
+	InputNullable       bool                  `json:"inputNullable,omitempty"`
+	Output              TypeID                `json:"output"`
+	OutputNullable      bool                  `json:"outputNullable,omitempty"`
+	Description         string                `json:"description,omitempty"`
+	Deprecation         *Deprecation          `json:"deprecation,omitempty"`
+	Effect              string                `json:"effect"`
+	Deterministic       bool                  `json:"deterministic,omitempty"`
+	Cacheable           bool                  `json:"cacheable,omitempty"`
+	RetrySafe           bool                  `json:"retrySafe,omitempty"`
+	ThreadSafety        string                `json:"threadSafety,omitempty"`
+	Batching            string                `json:"batching,omitempty"`
+	Transaction         string                `json:"transaction,omitempty"`
+	AuthorizationPolicy string                `json:"authorizationPolicy,omitempty"`
+	Idempotency         string                `json:"idempotency,omitempty"`
+	Cost                uint64                `json:"cost,omitempty"`
+	ParallelMutation    bool                  `json:"parallelMutation,omitempty"`
+	Collection          *CollectionDescriptor `json:"collection,omitempty"`
+	Capabilities        []string              `json:"capabilities,omitempty"`
+	Traits              []TraitDescriptor     `json:"traits,omitempty"`
+	Source              *SourceMetadata       `json:"source,omitempty"`
 }
 
 type ExportOptions struct {
@@ -803,6 +812,9 @@ func validateOperationDescriptor(operation OperationDescriptor, activeIDs, activ
 	if err := validateDeprecation(operation.Deprecation); err != nil {
 		return fmt.Errorf("operation %q: %w", operation.ID, err)
 	}
+	if err := validateCollectionDescriptor("operation "+operation.ID, operation.Collection); err != nil {
+		return err
+	}
 	if err := validateTraits(operation.Traits, options); err != nil {
 		return err
 	}
@@ -826,10 +838,26 @@ func validateMemberDescriptor(member MemberDescriptor, activeIDs, activeNames ma
 	if err := validateDeprecation(member.Deprecation); err != nil {
 		return fmt.Errorf("member %q: %w", member.ID, err)
 	}
+	if err := validateCollectionDescriptor("member "+member.ID, member.Collection); err != nil {
+		return err
+	}
 	if err := validateTraits(member.Traits, options); err != nil {
 		return err
 	}
 	return validateSource(member.Source)
+}
+
+func validateCollectionDescriptor(owner string, collection *CollectionDescriptor) error {
+	if collection == nil {
+		return nil
+	}
+	if collection.MaxPageSize == 0 {
+		return fmt.Errorf("%s collection requires a positive maximum page size", owner)
+	}
+	if collection.TotalCountCost > MaxDirectiveCost {
+		return fmt.Errorf("%s collection total count cost exceeds the portable maximum", owner)
+	}
+	return nil
 }
 
 func reserveActiveIdentity(id, name string, activeIDs, activeNames map[string]bool) error {
@@ -897,6 +925,9 @@ func validateDocumentReferences(wire documentWire) error {
 		if err := validateCallableTypeReferences("operation "+operation.ID, operation.Input, operation.Output, types); err != nil {
 			return err
 		}
+		if err := validateCollectionOutput("operation "+operation.ID, operation.Output, operation.Collection, types); err != nil {
+			return err
+		}
 	}
 	for _, member := range wire.Members {
 		if _, exists := types[member.Owner]; !exists {
@@ -905,12 +936,16 @@ func validateDocumentReferences(wire documentWire) error {
 		if err := validateCallableTypeReferences("member "+member.ID, member.Input, member.Output, types); err != nil {
 			return err
 		}
+		if err := validateCollectionOutput("member "+member.ID, member.Output, member.Collection, types); err != nil {
+			return err
+		}
 	}
 	return validateDirectiveTypeReferences(wire.Directives, types)
 }
 
 type schemaTypeReference struct {
-	input bool
+	input      bool
+	collection bool
 }
 
 func validateDirectiveTypeReferences(directives []DirectiveDescriptor, types map[TypeID]schemaTypeReference) error {
@@ -934,9 +969,18 @@ func schemaTypeIndex(declarations []TypeDeclaration) map[TypeID]schemaTypeRefere
 		types[TypeID(scalar)] = schemaTypeReference{input: true}
 	}
 	for _, declaration := range declarations {
-		types[declaration.ID] = schemaTypeReference{input: declaration.Input}
+		types[declaration.ID] = schemaTypeReference{
+			input: declaration.Input, collection: declaration.Kind == ListType || declaration.Kind == MapType,
+		}
 	}
 	return types
+}
+
+func validateCollectionOutput(owner string, output TypeID, collection *CollectionDescriptor, types map[TypeID]schemaTypeReference) error {
+	if collection != nil && !types[output].collection {
+		return fmt.Errorf("%s collection metadata requires a collection output type", owner)
+	}
+	return nil
 }
 
 func validateCallableTypeReferences(owner string, input, output TypeID, types map[TypeID]schemaTypeReference) error {
@@ -1037,6 +1081,10 @@ func cloneOperations(input []OperationDescriptor) []OperationDescriptor {
 	result := slices.Clone(input)
 	for index := range result {
 		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
+		if result[index].Collection != nil {
+			collection := *result[index].Collection
+			result[index].Collection = &collection
+		}
 		result[index].Capabilities = slices.Clone(result[index].Capabilities)
 		result[index].Traits = cloneTraits(result[index].Traits)
 		result[index].Source = cloneSource(result[index].Source)
@@ -1048,6 +1096,10 @@ func cloneMembers(input []MemberDescriptor) []MemberDescriptor {
 	result := slices.Clone(input)
 	for index := range result {
 		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
+		if result[index].Collection != nil {
+			collection := *result[index].Collection
+			result[index].Collection = &collection
+		}
 		result[index].Capabilities = slices.Clone(result[index].Capabilities)
 		result[index].Traits = cloneTraits(result[index].Traits)
 		result[index].Source = cloneSource(result[index].Source)

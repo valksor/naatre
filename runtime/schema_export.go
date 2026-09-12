@@ -64,6 +64,7 @@ func portableOperation(descriptor Descriptor) schema.OperationDescriptor {
 		ThreadSafety: string(metadata.ThreadSafety), Batching: string(metadata.Batching),
 		Transaction: string(metadata.Transaction), AuthorizationPolicy: metadata.AuthorizationPolicy,
 		Idempotency: metadata.Idempotency, Cost: metadata.Cost, ParallelMutation: metadata.ParallelMutation,
+		Collection:   portableCollection(metadata.Collection),
 		Capabilities: slices.Clone(descriptor.Capabilities), Traits: cloneRuntimeTraits(descriptor.Traits),
 		Source: cloneRuntimeSource(descriptor.Source),
 	}
@@ -81,9 +82,17 @@ func portableMember(descriptor Descriptor) schema.MemberDescriptor {
 		ThreadSafety: string(metadata.ThreadSafety), Batching: string(metadata.Batching),
 		Transaction: string(metadata.Transaction), AuthorizationPolicy: metadata.AuthorizationPolicy,
 		Idempotency: metadata.Idempotency, Cost: metadata.Cost, ParallelMutation: metadata.ParallelMutation,
+		Collection:   portableCollection(metadata.Collection),
 		Capabilities: slices.Clone(descriptor.Capabilities), Traits: cloneRuntimeTraits(descriptor.Traits),
 		Source: cloneRuntimeSource(descriptor.Source),
 	}
+}
+
+func portableCollection(metadata *CollectionMetadata) *schema.CollectionDescriptor {
+	if metadata == nil {
+		return nil
+	}
+	return &schema.CollectionDescriptor{MaxPageSize: metadata.MaxPageSize, TotalCountCost: metadata.TotalCountCost}
 }
 
 func portableDescriptorID(descriptor Descriptor) string {
@@ -114,6 +123,10 @@ func cloneRuntimeDescriptor(descriptor Descriptor) Descriptor {
 	if descriptor.Deprecation != nil {
 		deprecation := *descriptor.Deprecation
 		descriptor.Deprecation = &deprecation
+	}
+	if descriptor.Metadata.Collection != nil {
+		collection := *descriptor.Metadata.Collection
+		descriptor.Metadata.Collection = &collection
 	}
 	return descriptor
 }

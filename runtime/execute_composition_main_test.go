@@ -125,9 +125,11 @@ func TestExecuteDeepQueryGoldenShapesCollectionOperationsWithoutImplicitMapping(
 	registry := runtime.NewRegistry(types)
 	var rootCalls atomic.Int64
 	var fieldCalls atomic.Int64
+	usersMetadata := completeMetadata(runtime.ReadEffect)
+	usersMetadata.Collection = secureCollectionMetadata(t, 3, 0)
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
-		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
+		Input: schema.TypeID(schema.String), Output: "Users", Metadata: usersMetadata,
 	}, func(context.Context, runtime.Invocation) ([]map[string]any, error) {
 		rootCalls.Add(1)
 		return []map[string]any{{"name": "Ada"}, {"name": "Grace"}, {"name": "Lin"}}, nil
@@ -156,12 +158,18 @@ func TestExecuteDeepQueryGoldenShapesCollectionOperationsWithoutImplicitMapping(
 	if len(outcome.Errors) != 0 {
 		t.Fatalf("Execute errors = %#v", outcome.Errors)
 	}
+	normalizeUserPageCursors(t, outcome.Data, "firstTwo", "")
 	assertJSONEqual(t, outcome.Data, map[string]any{"users": map[string]any{
-		"total":    int32(3),
-		"items":    []any{map[string]any{"label": "Ada"}, map[string]any{"label": "Grace"}, map[string]any{"label": "Lin"}},
-		"last":     map[string]any{"name": "Lin"},
-		"tail":     []any{map[string]any{"name": "Grace"}, map[string]any{"name": "Lin"}},
-		"firstTwo": []any{map[string]any{"name": "Ada"}, map[string]any{"name": "Grace"}},
+		"total": int32(3),
+		"items": []any{map[string]any{"label": "Ada"}, map[string]any{"label": "Grace"}, map[string]any{"label": "Lin"}},
+		"last":  map[string]any{"name": "Lin"},
+		"tail":  []any{map[string]any{"name": "Grace"}, map[string]any{"name": "Lin"}},
+		"firstTwo": map[string]any{
+			"items": []any{map[string]any{"name": "Ada"}, map[string]any{"name": "Grace"}},
+			"pageInfo": runtime.PageInfo{
+				HasNextPage: true,
+			},
+		},
 	}})
 	assertGoldenData(t, "deep_query.golden.json", outcome.Data)
 	if rootCalls.Load() != 1 || fieldCalls.Load() != 8 {

@@ -56,13 +56,18 @@ unregistered directives, and supports registered version-pinned custom
 directives through bounded planning, one-shot execution wrappers, and ordered
 response annotations. Portable schema and canonical fixtures cover directive
 identity, filtering, diffing, and cross-language normalization. It validates
-`collection.page-1` admission and collection item scopes;
-#16 owns advertised pagination metadata and opaque cursor execution. The
-reference executor consumes all 15 positive semantic language vectors directly,
+`collection.page-1` admission and collection item scopes. The
+reference executor consumes all 18 positive semantic language vectors directly,
 including ordered pipelines, explicit collection operations, fragments,
 parallel branches, bindings, directives, and edge-state propagation. The core
-page vector exercises bounded cursor-free paging; portable cursor behavior and
-security remain in #16.
+page vector exercises bounded paging without an input cursor and verifies the
+standard opaque-cursor page result.
+
+`v1/collections.json` fixes the `collection.page-1` composite-position
+boundaries, scope bindings, safe failure code, live/snapshot modes, and static
+cost contract. The Go runtime supplies HMAC-protected versioned cursors,
+pre-handler scope verification, key rotation and expiry, stable forward and
+backward paging, optional edge metadata, and separately costed `totalCount`.
 
 `v1/resources.json` fixes the `core.resources-1` stable codes and location
 classes for decoder, planning, runtime, completion, and serialization limits.

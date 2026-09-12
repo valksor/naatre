@@ -173,12 +173,16 @@ Example pipeline:
 - **LANG-124:** `$page` requires `collection.page-1`. Forward pagination uses
   `first` with optional `after`; backward pagination uses `last` with optional
   `before`. Counts are positive bounded integers, cursors are opaque typed
-  values, and mixing directions is invalid. Page item order is server-declared
-  and stable for the page snapshot.
+  values, and mixing directions is invalid. Every accepted page presents the
+  `items` and `pageInfo` object defined by `collections.md`; item order is the
+  server-declared stable order for the declared consistency mode. A runtime
+  without a complete secure cursor configuration rejects `$page` at validation.
 - **LANG-125:** `$meta` requires the metadata member advertised by the
-  collection type. Core names are `count`, `totalCount`, and `pageInfo`;
-  `totalCount` and `pageInfo` require `collection.page-1`. Metadata selection is
-  list-level and never maps over items.
+  collection type. Core names are `count` and `totalCount`; `totalCount`
+  requires `collection.page-1`. Page information belongs to the `$page`
+  result rather than a list-level metadata selection. Metadata selection is
+  list-level and never maps over items; an explicitly selected `totalCount` is
+  therefore projected as a sibling of the page result.
 - **LANG-126:** Applying `$map`, `$index`, `$slice`, `$page`, or collection
   metadata to a scalar, object, null, or missing value is a validation error
   when the static type proves it and otherwise a path error before any child

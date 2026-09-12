@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"slices"
 	"sort"
 
@@ -11,10 +12,11 @@ import (
 )
 
 type staticType struct {
-	id       schema.TypeID
-	nullable bool
-	valid    bool
-	possible map[schema.TypeID]bool
+	id         schema.TypeID
+	nullable   bool
+	valid      bool
+	possible   map[schema.TypeID]bool
+	collection *CollectionMetadata
 }
 
 type planNode struct {
@@ -37,6 +39,8 @@ type planNode struct {
 	typeConditions []schema.TypeID
 	fragmentParams map[string]fragmentParameterBinding
 	directives     []plannedDirective
+	staticCost     uint64
+	cursorID       uint64
 }
 
 type fragmentParameterBinding struct {
@@ -96,6 +100,7 @@ type planValidator struct {
 	fragmentExpansionExceeded bool
 	directiveCost             uint64
 	staticCost                uint64
+	nextCursorID              uint64
 	resourceLimits            ResourceLimits
 }
 
@@ -222,6 +227,10 @@ func (v *planValidator) validateSelection(selection protocol.Selection, scope *v
 		source: selection.Source(), parallelPolicy: selection.Policy(), optional: selectionIsOptional(selection),
 		typeConditions: append([]schema.TypeID(nil), scope.typeConditions...),
 	}
+	if selection.Kind() == protocol.PageSelection {
+		v.nextCursorID++
+		node.cursorID = v.nextCursorID
+	}
 	if emitResponse {
 		node.outputName = v.claimResponseName(selection, scope)
 	}
@@ -279,7 +288,7 @@ func (v *planValidator) validateCall(selection protocol.Selection, scope *valida
 	node.definition, node.hasDefinition = definition, true
 	v.validateDefinition(definition, selectionNameSource(selection))
 	v.validateArguments(definition.descriptor, selection.Arguments(), selection.Source(), scope)
-	node.output = staticType{id: definition.descriptor.Output, nullable: definition.descriptor.OutputNullable, valid: true}
+	node.output = staticTypeForDefinition(definition)
 	node.children = v.validateOutputSelections(selection.Selections(), node.output, node.outputName != "", selection.Source(), scope)
 }
 
@@ -300,7 +309,7 @@ func (v *planValidator) validateField(selection protocol.Selection, scope *valid
 	}
 	node.definition, node.hasDefinition = definition, true
 	v.validateDefinition(definition, selectionNameSource(selection))
-	node.output = staticType{id: definition.descriptor.Output, nullable: definition.descriptor.OutputNullable, valid: true}
+	node.output = staticTypeForDefinition(definition)
 	node.children = v.validateOutputSelections(selection.Selections(), node.output, node.outputName != "", selection.Source(), scope)
 }
 
@@ -356,8 +365,8 @@ func (v *planValidator) validateCollection(selection protocol.Selection, scope *
 	if !ok {
 		return
 	}
-	if selection.Kind() == protocol.PageSelection && !slices.Contains(v.request.Capabilities(), CollectionPageCapability) {
-		v.add("UNSUPPORTED_CAPABILITY", "LANG-124", "page selection requires collection.page-1", selectionPayloadSource(selection))
+	if selection.Kind() == protocol.PageSelection {
+		v.validatePageSelection(selection, scope.current.collection)
 	}
 	if start, hasStart := selection.Start(); hasStart {
 		if end, hasEnd := selection.End(); hasEnd && start.Cmp(end) > 0 {
@@ -375,18 +384,62 @@ func (v *planValidator) validateCollection(selection protocol.Selection, scope *
 	node.children = v.validateOutputSelections(selection.Selections(), item, node.outputName != "", selection.Source(), scope)
 }
 
+func staticTypeForDefinition(definition Definition) staticType {
+	descriptor := definition.descriptor
+	return staticType{id: descriptor.Output, nullable: descriptor.OutputNullable, valid: true, collection: descriptor.Metadata.Collection}
+}
+
+func (v *planValidator) validatePageSelection(selection protocol.Selection, collection *CollectionMetadata) {
+	if !slices.Contains(v.request.Capabilities(), CollectionPageCapability) {
+		v.add("UNSUPPORTED_CAPABILITY", "LANG-124", "page selection requires collection.page-1", selectionPayloadSource(selection))
+	}
+	_, hasAfter := selection.After()
+	_, hasBefore := selection.Before()
+	if !hasAfter && !hasBefore && !hasSecureCollectionRuntime(collection) {
+		v.add("COLLECTION_PAGE_UNAVAILABLE", "LANG-124", "page selection requires a configured secure cursor runtime", selectionPayloadSource(selection))
+	}
+	limit := v.resourceLimits.MaxCollectionItems
+	if collection != nil && collection.MaxPageSize != 0 {
+		limit = min(limit, collection.MaxPageSize)
+	}
+	for _, size := range []*big.Int{selectionPageSize(selection)} {
+		if size != nil && (!size.IsUint64() || size.Uint64() > limit) {
+			v.add("PAGE_SIZE_LIMIT", "LANG-124", "requested page size exceeds the collection limit", selectionPayloadSource(selection))
+		}
+	}
+}
+
+func hasSecureCollectionRuntime(collection *CollectionMetadata) bool {
+	return collection != nil && collection.CursorCodec != nil && collection.CursorScope != nil && collection.Position != nil
+}
+
+func selectionPageSize(selection protocol.Selection) *big.Int {
+	if size, ok := selection.First(); ok {
+		return size
+	}
+	size, _ := selection.Last()
+	return size
+}
+
 func (v *planValidator) validateMeta(selection protocol.Selection, scope *validationScope, node *planNode) {
 	if _, ok := v.collection(scope.current, selection.Source()); !ok {
 		return
 	}
-	if (selection.Name() == "totalCount" || selection.Name() == "pageInfo") &&
+	if selection.Name() == "totalCount" &&
 		!slices.Contains(v.request.Capabilities(), CollectionPageCapability) {
 		v.add("UNSUPPORTED_CAPABILITY", "LANG-125", "pagination metadata requires collection.page-1", selectionNameSource(selection))
 		return
 	}
 	if selection.Name() != "count" {
-		v.add("UNKNOWN_METADATA", "LANG-125", "collection metadata is not available", selection.Source())
-		return
+		if selection.Name() != "totalCount" {
+			v.add("UNKNOWN_METADATA", "LANG-125", "collection metadata is not available", selection.Source())
+			return
+		}
+		if scope.current.collection == nil {
+			v.add("UNKNOWN_METADATA", "LANG-125", "totalCount is not advertised by the collection", selection.Source())
+			return
+		}
+		node.staticCost = scope.current.collection.TotalCountCost
 	}
 	node.output = staticType{id: schema.TypeID(schema.Int32), valid: true}
 }

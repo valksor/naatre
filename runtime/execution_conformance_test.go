@@ -54,6 +54,9 @@ func TestExecutorConsumesPortablePositiveLanguageVectors(t *testing.T) {
 				t.Fatalf("Prepare: %v", err)
 			}
 			outcome := plan.Execute(context.Background())
+			if vector.Name == "collection-index-slice-page-and-current" {
+				normalizeUserPageCursors(t, outcome.Data, "page", "<opaque>")
+			}
 			if vector.HandlerStarts != nil && int(starts.Load()) != *vector.HandlerStarts {
 				t.Fatalf("handler starts = %d, want %d", starts.Load(), *vector.HandlerStarts)
 			}
@@ -163,7 +166,11 @@ func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Regist
 		if vector == "empty-list-map" {
 			name = "emptyUsers"
 		}
-		register(runtime.BindInvocation[[]any](root(name, schema.TypeID(schema.String), "PortableUsers"), func(context.Context, runtime.Invocation) ([]any, error) {
+		descriptor := root(name, schema.TypeID(schema.String), "PortableUsers")
+		if vector == "collection-index-slice-page-and-current" {
+			descriptor.Metadata.Collection = secureCollectionMetadata(t, 2, 0)
+		}
+		register(runtime.BindInvocation[[]any](descriptor, func(context.Context, runtime.Invocation) ([]any, error) {
 			starts.Add(1)
 			switch vector {
 			case "empty-list-map":

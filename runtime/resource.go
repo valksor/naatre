@@ -96,6 +96,13 @@ func checkedResourceAdd(left, right uint64) (uint64, bool) {
 	return left + right, true
 }
 
+func checkedResourceMultiply(left, right uint64) (uint64, bool) {
+	if left != 0 && right > math.MaxUint64/left {
+		return 0, false
+	}
+	return left * right, true
+}
+
 type planResourceUsage struct {
 	nodes, calls, fields, queued, cost uint64
 	parallelWidth                      uint64
@@ -104,20 +111,42 @@ type planResourceUsage struct {
 func (v *planValidator) validatePlanResources(nodes []planNode) {
 	usage := planResourceUsage{cost: v.directiveCost}
 	reported := make(map[string]bool)
-	var walk func([]planNode, uint64)
-	walk = func(current []planNode, depth uint64) {
+	var walk func([]planNode, uint64, uint64)
+	walk = func(current []planNode, depth, multiplier uint64) {
 		for index := range current {
 			node := &current[index]
-			v.accumulatePlanResourceUsage(&usage, node, reported)
+			v.accumulatePlanResourceUsage(&usage, node, multiplier, reported)
 			v.checkPlanResourceUsage(usage, depth, node.source, reported)
-			walk(node.children, depth+1)
+			nextMultiplier, multiplied := pageCostMultiplier(*node, multiplier)
+			if !multiplied {
+				v.addResourceIssue(reported, "LIMIT_COST_OVERFLOW", "page cost multiplier overflowed", node.source)
+			}
+			walk(node.children, depth+1, nextMultiplier)
 		}
 	}
-	walk(nodes, 1)
+	walk(nodes, 1, 1)
 	v.staticCost = usage.cost
 }
 
-func (v *planValidator) accumulatePlanResourceUsage(usage *planResourceUsage, node *planNode, reported map[string]bool) {
+func pageCostMultiplier(node planNode, multiplier uint64) (uint64, bool) {
+	if node.kind != protocol.PageSelection {
+		return multiplier, true
+	}
+	size, ok := node.selection.First()
+	if !ok {
+		size, ok = node.selection.Last()
+	}
+	if !ok || !size.IsUint64() {
+		return multiplier, true
+	}
+	next, multiplied := checkedResourceMultiply(multiplier, size.Uint64())
+	if !multiplied {
+		return math.MaxUint64, false
+	}
+	return next, true
+}
+
+func (v *planValidator) accumulatePlanResourceUsage(usage *planResourceUsage, node *planNode, multiplier uint64, reported map[string]bool) {
 	usage.nodes++
 	switch node.kind {
 	case protocol.CallSelection:
@@ -137,10 +166,17 @@ func (v *planValidator) accumulatePlanResourceUsage(usage *planResourceUsage, no
 		protocol.FragmentSelection, protocol.CurrentSelection, protocol.NestSelection,
 		protocol.UnnestSelection:
 	}
-	if !node.hasDefinition {
+	cost := node.staticCost
+	if node.hasDefinition {
+		cost = node.definition.descriptor.Metadata.Cost
+	}
+	cost, multiplied := checkedResourceMultiply(cost, multiplier)
+	if !multiplied {
+		v.addResourceIssue(reported, "LIMIT_COST_OVERFLOW", "static cost accounting overflowed", node.source)
+		usage.cost = math.MaxUint64
 		return
 	}
-	next, ok := checkedResourceAdd(usage.cost, node.definition.descriptor.Metadata.Cost)
+	next, ok := checkedResourceAdd(usage.cost, cost)
 	if !ok {
 		v.addResourceIssue(reported, "LIMIT_COST_OVERFLOW", "static cost accounting overflowed", node.source)
 		usage.cost = math.MaxUint64

@@ -84,7 +84,7 @@
       },
       "valid": true,
       "capabilities": ["collection.page-1"],
-      "expectedData": {"users": {"first": {"id": "u-1"}, "tail": [{"id": "u-2"}], "page": [{"id": "u-1"}, {"id": "u-2"}], "raw": [{"id": "u-1"}, {"id": "u-2"}]}}
+      "expectedData": {"users": {"first": {"id": "u-1"}, "tail": [{"id": "u-2"}], "page": {"items": [{"id": "u-1"}, {"id": "u-2"}], "pageInfo": {"hasNextPage": false, "hasPreviousPage": false, "startCursor": "<opaque>", "endCursor": "<opaque>"}}, "raw": [{"id": "u-1"}, {"id": "u-2"}]}}
     },
     {
       "name": "fragment-parallel-unnest-and-expression-contexts",

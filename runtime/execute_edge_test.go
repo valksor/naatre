@@ -478,10 +478,12 @@ func TestExecuteRejectsOverflowingStaleCursorWithoutPanicking(t *testing.T) {
 		ID: "Users", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.ID),
 	})
 	registry := runtime.NewRegistry(types)
+	var calls atomic.Int64
 	registerComposition(t, registry, runtime.BindInvocation[[]string](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
 	}, func(context.Context, runtime.Invocation) ([]string, error) {
+		calls.Add(1)
 		return []string{"u-1"}, nil
 	}))
 	snapshot, err := registry.Freeze()
@@ -498,5 +500,8 @@ func TestExecuteRejectsOverflowingStaleCursorWithoutPanicking(t *testing.T) {
 	outcome := plan.Execute(context.Background())
 	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != "INVALID_CURSOR" {
 		t.Fatalf("Execute errors = %#v", outcome.Errors)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("collection handler calls = %d, want 0", calls.Load())
 	}
 }

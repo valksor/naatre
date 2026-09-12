@@ -2,13 +2,59 @@ package runtime_test
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/valksor/naatre/protocol"
 	"github.com/valksor/naatre/runtime"
 	"github.com/valksor/naatre/schema"
 )
+
+func secureCollectionMetadata(t testing.TB, maxPageSize, totalCountCost uint64) *runtime.CollectionMetadata {
+	t.Helper()
+	codec, err := runtime.NewCursorCodec(runtime.CursorCodecConfig{
+		ActiveKeyID: "test-key",
+		Keys: map[string][]byte{
+			"test-key": []byte("0123456789abcdef0123456789abcdef"),
+		},
+		TTL:         time.Hour,
+		Now:         func() time.Time { return time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC) },
+		MaxPageSize: maxPageSize,
+	})
+	if err != nil {
+		t.Fatalf("NewCursorCodec: %v", err)
+	}
+	scope, err := runtime.NewCursorScope("test.collection", []byte(`{}`), []byte(`[]`), runtime.CursorScopeOptions{})
+	if err != nil {
+		t.Fatalf("NewCursorScope: %v", err)
+	}
+	return &runtime.CollectionMetadata{
+		MaxPageSize: maxPageSize, TotalCountCost: totalCountCost, CursorCodec: codec,
+		CursorScope: func(context.Context) (runtime.CursorScope, error) { return scope, nil },
+		Position: func(item any) (runtime.CursorPosition, error) {
+			if value, ok := item.(map[string]any); ok {
+				if name, ok := value["name"].(string); ok {
+					return runtime.CursorPosition{SortKey: name, TieBreaker: name}, nil
+				}
+			}
+			key := fmt.Sprintf("%#v", item)
+			return runtime.CursorPosition{SortKey: key, TieBreaker: key}, nil
+		},
+	}
+}
+
+func normalizeUserPageCursors(t testing.TB, data map[string]any, pageName, replacement string) {
+	t.Helper()
+	page := data["users"].(map[string]any)[pageName].(map[string]any)
+	info := page["pageInfo"].(runtime.PageInfo)
+	if info.StartCursor == "" || info.EndCursor == "" {
+		t.Fatalf("page info has no opaque boundaries: %#v", info)
+	}
+	info.StartCursor, info.EndCursor = replacement, replacement
+	page["pageInfo"] = info
+}
 
 func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 	t.Helper()
@@ -93,6 +139,7 @@ func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 		return "", nil
 	}), "text")
 	users := rootDescriptor("users", schema.TypeID(schema.String), "Users")
+	users.Metadata.Collection = secureCollectionMetadata(t, 1000, 0)
 	register(runtime.BindInvocation[[]map[string]any](users, func(context.Context, runtime.Invocation) ([]map[string]any, error) {
 		calls.Add(1)
 		return nil, nil

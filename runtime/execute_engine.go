@@ -104,16 +104,17 @@ func (t *unavailableTree) merge(other *unavailableTree) {
 }
 
 type executionScope struct {
-	current     executionValue
-	parent      executionValue
-	bindings    map[string]executionValue
-	variables   map[string]scopedVariable
-	limiter     chan struct{}
-	parallel    bool
-	grace       time.Duration
-	effects     *effectRecorder
-	annotations *directiveAnnotationRecorder
-	resources   *resourceMeter
+	current      executionValue
+	parent       executionValue
+	bindings     map[string]executionValue
+	variables    map[string]scopedVariable
+	limiter      chan struct{}
+	parallel     bool
+	grace        time.Duration
+	effects      *effectRecorder
+	annotations  *directiveAnnotationRecorder
+	resources    *resourceMeter
+	cursorScopes map[uint64]CursorScope
 }
 
 type scopedVariable struct {
@@ -168,12 +169,13 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 	executionCtx, cancel := context.WithTimeoutCause(ctx, p.resourceLimits.MaxExecutionDuration, errExecutionResourceDeadline)
 	defer cancel()
 	scope := executionScope{
-		bindings:    make(map[string]executionValue),
-		limiter:     make(chan struct{}, p.resourceLimits.MaxConcurrency),
-		grace:       options.abandonGrace(),
-		effects:     &effectRecorder{},
-		annotations: &directiveAnnotationRecorder{},
-		resources:   &resourceMeter{limits: p.resourceLimits},
+		bindings:     make(map[string]executionValue),
+		limiter:      make(chan struct{}, p.resourceLimits.MaxConcurrency),
+		grace:        options.abandonGrace(),
+		effects:      &effectRecorder{},
+		annotations:  &directiveAnnotationRecorder{},
+		resources:    &resourceMeter{limits: p.resourceLimits},
+		cursorScopes: make(map[uint64]CursorScope),
 	}
 	// Cancellation observed before any selection runs is operation-level: no
 	// field is responsible, so it carries the empty root path.
@@ -191,6 +193,13 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 			replaceDeadlineFailures(&outcome)
 		}
 		return enforceOutcomeLimits(outcome, p.resourceLimits)
+	}
+	if failures := p.preflightCollectionCursors(executionCtx, p.nodes, scope); len(failures) != 0 {
+		sortExecutionErrors(failures)
+		return enforceOutcomeLimits(Outcome{
+			Data: map[string]any{}, Errors: failures,
+			Effects: scope.effects.state(p.kind, true), Annotations: scope.annotations.annotations(),
+		}, p.resourceLimits)
 	}
 	result := p.executeSequence(executionCtx, p.nodes, scope, nil)
 	sortExecutionErrors(result.errors)
@@ -654,6 +663,7 @@ func cloneExecutionScope(scope executionScope) executionScope {
 		variables: maps.Clone(scope.variables),
 		limiter:   scope.limiter, parallel: scope.parallel, grace: scope.grace,
 		effects: scope.effects, annotations: scope.annotations, resources: scope.resources,
+		cursorScopes: scope.cursorScopes,
 	}
 }
 

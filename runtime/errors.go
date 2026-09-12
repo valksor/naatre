@@ -27,6 +27,9 @@ const (
 	// CodeInvalidCollection reports a collection operation applied to a value
 	// that is not a collection.
 	CodeInvalidCollection = "INVALID_COLLECTION"
+	// CodeInvalidCursor deliberately covers malformed, tampered, expired, and
+	// scope-mismatched cursors without disclosing which check failed.
+	CodeInvalidCursor = "INVALID_CURSOR"
 	// CodeResultMissing, CodeResultNull, CodeResultSkipped, CodeResultScope and
 	// CodeResultUnavailable report why a continuation had no usable value.
 	CodeResultMissing     = "RESULT_MISSING"

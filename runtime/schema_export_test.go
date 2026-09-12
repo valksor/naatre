@@ -101,6 +101,54 @@ func TestRuntimeSnapshotExportsIndependentPortableSchemaByteIdentically(t *testi
 	}
 }
 
+func TestRuntimeSnapshotExportsPortableCollectionContract(t *testing.T) {
+	t.Parallel()
+	authored, err := schema.ParseDocument([]byte(`{
+		"version":"1","canonicalVersion":"c14n-1","revision":"collections-r1",
+		"types":[
+			{"id":"User","kind":"object","output":true,"fields":[{"id":"User.name","name":"name","type":"String"}]},
+			{"id":"Users","kind":"list","output":true,"element":"User"}
+		],
+		"operations":[{"id":"query.users","name":"users","kind":"query","input":"String","output":"Users","effect":"read","deterministic":true,"cacheable":true,"retrySafe":true,"threadSafety":"thread-safe","batching":"ineligible","transaction":"none","authorizationPolicy":"users.read","collection":{"maxPageSize":25,"totalCountCost":7}}]
+	}`), schema.ImportOptions{})
+	if err != nil {
+		t.Fatalf("ParseDocument: %v", err)
+	}
+	types, err := authored.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	registry := runtime.NewRegistry(types)
+	metadata := completeMetadata(runtime.ReadEffect)
+	metadata.AuthorizationPolicy = "users.read"
+	metadata.Collection = &runtime.CollectionMetadata{MaxPageSize: 25, TotalCountCost: 7}
+	if err := registry.Register(runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
+		ID: "query.users", Name: "users", Scope: runtime.RootScope, Kind: protocol.Query,
+		Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Users", Metadata: metadata,
+	}, func(context.Context, runtime.Invocation) ([]map[string]any, error) { return nil, nil })); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	snapshot, err := registry.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	exported, err := snapshot.ExportSchema(authored.ExportOptions())
+	if err != nil {
+		t.Fatalf("ExportSchema: %v", err)
+	}
+	operations := exported.Operations()
+	if len(operations) != 1 || operations[0].Collection == nil || operations[0].Collection.MaxPageSize != 25 || operations[0].Collection.TotalCountCost != 7 {
+		t.Fatalf("exported collection contract = %#v", operations)
+	}
+	canonical, err := exported.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	if bytes.Contains(canonical, []byte("fixture-key-material")) || bytes.Contains(canonical, []byte("CursorCodec")) {
+		t.Fatalf("runtime cursor configuration leaked into portable schema: %s", canonical)
+	}
+}
+
 func TestRuntimeSchemaExportsBuiltInAndCustomDirectiveDescriptors(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))

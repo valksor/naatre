@@ -3,6 +3,7 @@ package schema_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -117,6 +118,70 @@ func TestSchemaDocumentRoundTripsEmptyAndNonIdentifierEnumSpellings(t *testing.T
 			t.Fatalf("enum %q state = %q, %t, %t", spelling, actual, known, ok)
 		}
 	}
+}
+
+func TestPortableSchemaRejectsInvalidCollectionContracts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		document string
+		want     string
+	}{
+		{
+			name:     "member requires positive maximum",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"member-max-r1","types":[{"id":"User","kind":"object","output":true,"fields":[{"id":"User.name","name":"name","type":"String"}]},{"id":"Users","kind":"list","output":true,"element":"User"}],"operations":[],"members":[{"id":"User.friends.resolver","name":"friends","owner":"User","kind":"field","output":"Users","effect":"read","collection":{"maxPageSize":0}}]}`,
+			want:     "positive maximum page size",
+		},
+		{
+			name:     "operation requires collection output",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"operation-output-r1","types":[],"operations":[{"id":"query.name","name":"name","kind":"query","output":"String","effect":"read","collection":{"maxPageSize":10}}],"members":[]}`,
+			want:     "collection output type",
+		},
+		{
+			name:     "member requires collection output",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"member-output-r1","types":[{"id":"User","kind":"object","output":true,"fields":[{"id":"User.name","name":"name","type":"String"}]}],"operations":[],"members":[{"id":"User.name.resolver","name":"name","owner":"User","kind":"field","output":"String","effect":"read","collection":{"maxPageSize":10}}]}`,
+			want:     "collection output type",
+		},
+		{
+			name:     "total count cost is bounded",
+			document: `{"version":"1","canonicalVersion":"c14n-1","revision":"collection-cost-r1","types":[{"id":"Users","kind":"list","output":true,"element":"String"}],"operations":[{"id":"query.users","name":"users","kind":"query","output":"Users","effect":"read","collection":{"maxPageSize":10,"totalCountCost":1048577}}],"members":[]}`,
+			want:     "total count cost exceeds",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := schema.ParseDocument([]byte(test.document), schema.ImportOptions{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ParseDocument error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSchemaDiffClassifiesCollectionContractChanges(t *testing.T) {
+	t.Parallel()
+	before := collectionDiffDocument(t, "collections-r1", 10, 10, 2)
+	after := collectionDiffDocument(t, "collections-r2", 5, 20, 3)
+	diff := schema.DiffDocuments(before, after)
+	want := map[string]schema.ChangeClassification{
+		"operation:query.users/collection/maxPageSize":           schema.ChangeBreaking,
+		"operation:query.users/collection/totalCountCost":        schema.ChangeDangerous,
+		"member:User.friends.resolver/collection/maxPageSize":    schema.ChangeAdditive,
+		"member:User.friends.resolver/collection/totalCountCost": schema.ChangeDangerous,
+	}
+	for path, classification := range want {
+		if !slices.ContainsFunc(diff.Changes, func(change schema.SchemaChange) bool {
+			return change.Path == path && change.Classification == classification
+		}) {
+			t.Errorf("missing %s %s in %#v", path, classification, diff.Changes)
+		}
+	}
+}
+
+func collectionDiffDocument(t testing.TB, revision string, operationMaximum, memberMaximum, totalCountCost uint64) schema.Document {
+	t.Helper()
+	return parseSchemaDocument(t, fmt.Sprintf(`{"version":"1","canonicalVersion":"c14n-1","revision":%q,"types":[{"id":"User","kind":"object","output":true,"maxDepth":2,"fields":[{"id":"User.friends","name":"friends","type":"Users"}]},{"id":"Users","kind":"list","output":true,"element":"User","maxDepth":2}],"operations":[{"id":"query.users","name":"users","kind":"query","output":"Users","effect":"read","collection":{"maxPageSize":%d,"totalCountCost":%d}}],"members":[{"id":"User.friends.resolver","name":"friends","owner":"User","kind":"field","output":"Users","effect":"read","collection":{"maxPageSize":%d,"totalCountCost":%d}}]}`,
+		revision, operationMaximum, totalCountCost, memberMaximum, totalCountCost))
 }
 
 func TestSchemaExportCanonicalizesDirectiveDefaultsBeforeExposure(t *testing.T) {

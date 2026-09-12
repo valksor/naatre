@@ -19,6 +19,7 @@ Documents:
 6. [Authentication, authorization, and interceptor security](security.md)
 7. [HTTP binding](http.md)
 8. [Persisted and allowlisted operations](persisted.md)
+9. [Cursor pagination and collection metadata](collections.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

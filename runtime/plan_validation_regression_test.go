@@ -33,6 +33,46 @@ func TestPrepareValidatesCollectionPlanSemantics(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsPageWithoutSecureCollectionRuntime(t *testing.T) {
+	t.Parallel()
+	types := freezeCompositionTypes(t, schema.TypeDescriptor{ID: "Users", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.String)})
+	registry := runtime.NewRegistry(types)
+	registerComposition(t, registry, runtime.BindInvocation[[]string](runtime.Descriptor{
+		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
+		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
+	}, func(context.Context, runtime.Invocation) ([]string, error) { return nil, nil }))
+	snapshot, err := registry.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	request := decodeRuntimeRequestWithOptions(t, `{"version":"1","capabilities":["collection.page-1"],"document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$page":{"as":"page","first":1}}]}}]}]}}`, protocol.DecodeOptions{Capabilities: map[string]bool{"collection.page-1": true}})
+	if got := validationCodes(t, prepareError(snapshot, request)); !slices.Contains(got, "COLLECTION_PAGE_UNAVAILABLE") {
+		t.Fatalf("validation codes = %v, want COLLECTION_PAGE_UNAVAILABLE", got)
+	}
+}
+
+func TestPrepareAlwaysRejectsPageInfoMetadata(t *testing.T) {
+	t.Parallel()
+	snapshot, _ := validationRegistry(t)
+	tests := []struct {
+		name    string
+		request string
+		options protocol.DecodeOptions
+	}{
+		{name: "without capability", request: `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$meta":{"name":"pageInfo"}}]}}]}]}}`},
+		{name: "with capability", request: `{"version":"1","capabilities":["collection.page-1"],"document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"users","select":[{"$meta":{"name":"pageInfo"}}]}}]}]}}`, options: protocol.DecodeOptions{Capabilities: map[string]bool{"collection.page-1": true}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := decodeRuntimeRequestWithOptions(t, test.request, test.options)
+			codes := validationCodes(t, prepareError(snapshot, request))
+			if !slices.Contains(codes, "UNKNOWN_METADATA") || slices.Contains(codes, "UNSUPPORTED_CAPABILITY") {
+				t.Fatalf("validation codes = %v, want only metadata rejection", codes)
+			}
+		})
+	}
+}
+
 func TestIndexPlanSeparatesMissingAvailabilityFromElementNullability(t *testing.T) {
 	t.Parallel()
 	snapshot, _ := validationRegistry(t)

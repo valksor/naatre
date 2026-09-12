@@ -1,9 +1,15 @@
 {
   "users": {
-    "firstTwo": [
-      {"name": "Ada"},
-      {"name": "Grace"}
-    ],
+    "firstTwo": {
+      "items": [
+        {"name": "Ada"},
+        {"name": "Grace"}
+      ],
+      "pageInfo": {
+        "hasNextPage": true,
+        "hasPreviousPage": false
+      }
+    },
     "items": [
       {"label": "Ada"},
       {"label": "Grace"},

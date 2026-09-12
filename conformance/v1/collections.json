@@ -1,0 +1,81 @@
+{
+  "profile": "collection.page-1",
+  "cursorVersion": 1,
+  "integrity": "hmac-sha-256",
+  "safeError": "INVALID_CURSOR",
+  "scopeBindings": ["collection", "filters", "sort", "direction", "tenant", "authorization", "snapshotPolicy", "snapshot", "keyId", "version", "expiry"],
+  "boundaryCases": [
+    {
+      "name": "forward-duplicate-sort-key",
+      "direction": "forward",
+      "size": 2,
+      "entries": [
+        {"item": "u-1", "sortKey": "Ada", "tieBreaker": "u-1"},
+        {"item": "u-2", "sortKey": "Ada", "tieBreaker": "u-2"},
+        {"item": "u-3", "sortKey": "Lin", "tieBreaker": "u-3"}
+      ],
+      "expectedItems": ["u-1", "u-2"],
+      "hasNextPage": true,
+      "hasPreviousPage": false
+    },
+    {
+      "name": "forward-after-deleted-boundary-with-inserts",
+      "direction": "forward",
+      "size": 2,
+      "after": {"sortKey": "Ada", "tieBreaker": "u-2"},
+      "entries": [
+        {"item": "u-0", "sortKey": "Aaron", "tieBreaker": "u-0"},
+        {"item": "u-1", "sortKey": "Ada", "tieBreaker": "u-1"},
+        {"item": "u-4", "sortKey": "Bea", "tieBreaker": "u-4"},
+        {"item": "u-3", "sortKey": "Lin", "tieBreaker": "u-3"}
+      ],
+      "expectedItems": ["u-4", "u-3"],
+      "hasNextPage": false,
+      "hasPreviousPage": true
+    },
+    {
+      "name": "backward-before-composite-boundary",
+      "direction": "backward",
+      "size": 2,
+      "before": {"sortKey": "Lin", "tieBreaker": "u-3"},
+      "entries": [
+        {"item": "u-0", "sortKey": "Aaron", "tieBreaker": "u-0"},
+        {"item": "u-1", "sortKey": "Ada", "tieBreaker": "u-1"},
+        {"item": "u-4", "sortKey": "Bea", "tieBreaker": "u-4"},
+        {"item": "u-3", "sortKey": "Lin", "tieBreaker": "u-3"}
+      ],
+      "expectedItems": ["u-1", "u-4"],
+      "hasNextPage": true,
+      "hasPreviousPage": true
+    },
+    {
+      "name": "empty-after-final-boundary",
+      "direction": "forward",
+      "size": 2,
+      "after": {"sortKey": "Lin", "tieBreaker": "u-3"},
+      "entries": [
+        {"item": "u-1", "sortKey": "Ada", "tieBreaker": "u-1"},
+        {"item": "u-2", "sortKey": "Ada", "tieBreaker": "u-2"},
+        {"item": "u-3", "sortKey": "Lin", "tieBreaker": "u-3"}
+      ],
+      "expectedItems": [],
+      "hasNextPage": false,
+      "hasPreviousPage": true
+    }
+  ],
+  "failureCases": [
+    {"name": "tampered", "code": "INVALID_CURSOR"},
+    {"name": "cross-tenant", "code": "INVALID_CURSOR"},
+    {"name": "changed-filter", "code": "INVALID_CURSOR"},
+    {"name": "changed-sort", "code": "INVALID_CURSOR"},
+    {"name": "stale-snapshot", "code": "INVALID_CURSOR"},
+    {"name": "expired", "code": "INVALID_CURSOR"},
+    {"name": "removed-key", "code": "INVALID_CURSOR"}
+  ],
+  "consistency": ["live-best-effort", "snapshot-stable"],
+  "cost": {
+    "pageSizeMultiplier": true,
+    "totalCountExplicit": true,
+    "totalCountSeparate": true
+  }
+}
