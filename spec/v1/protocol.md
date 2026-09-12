@@ -13,13 +13,17 @@
   idempotency, or tracing authority.
 - **PROTO-004:** Exactly one of `document` and `persisted` MUST be present.
   `document` is the typed document object. `persisted` is an object containing
-  `algorithm` and lowercase `digest`.
+  exactly `algorithm`, `canonicalVersion`, and lowercase `digest`, using the
+  `sha-256` / `c14n-1` document digest record from CANON-201. Unknown algorithms
+  or canonicalization versions fail closed.
 - **PROTO-005:** `operation` is required only when a document contains more
   than one operation. It cannot change the operation's declared kind.
 - **PROTO-006:** `variables` is an unordered object of application literals.
   Missing variables and variables explicitly set to null remain distinct.
-- **PROTO-007:** `capabilities` is an ordered-insensitive array of unique ASCII
-  capability identifiers. Unsupported required capabilities fail validation.
+- **PROTO-007:** `capabilities` is an order-insensitive array of unique,
+  case-sensitive ASCII identifiers matching
+  `[A-Za-z_][A-Za-z0-9_.-]{0,127}`. Unsupported required capabilities fail
+  validation.
 - **PROTO-008:** `extensions` keys MUST be registered reverse-DNS namespaces.
   Unknown normative fields and unnegotiated extension namespaces are rejected.
 - **PROTO-009:** Duplicate members after JSON unescaping, trailing data, BOMs,
@@ -35,7 +39,7 @@ Valid:
 Invalid (conflicting sources):
 
 ```json
-{"version":"1","document":{"operations":[]},"persisted":{"algorithm":"sha-256","digest":"00"}}
+{"version":"1","document":{"operations":[]},"persisted":{"algorithm":"sha-256","canonicalVersion":"c14n-1","digest":"00"}}
 ```
 
 ## Response

@@ -277,7 +277,7 @@ func coerceEnum(descriptor TypeDescriptor, raw json.RawMessage) (InputValue, err
 	return InputValue{typeID: descriptor.ID, presence: PresenceValue, enum: value, enumKnown: known}, nil
 }
 
-func validateInputDefaults(snapshot Snapshot) error {
+func canonicalizeInputDefaults(snapshot Snapshot) error {
 	for _, identifier := range sortedKeys(snapshot.types) {
 		descriptor := snapshot.types[identifier]
 		if descriptor.Kind != InputObjectType && descriptor.Kind != OneOfType {
@@ -290,13 +290,21 @@ func validateInputDefaults(snapshot Snapshot) error {
 				continue
 			}
 			defaults++
-			if _, err := CoerceInput(snapshot, field.Type, field.Default, field.Nullable); err != nil {
+			coerced, err := CoerceInput(snapshot, field.Type, field.Default, field.Nullable)
+			if err != nil {
 				return fmt.Errorf("schema type %q field %q has invalid default: %w", descriptor.ID, name, err)
 			}
+			canonical, err := coerced.MarshalJSON()
+			if err != nil {
+				return fmt.Errorf("schema type %q field %q cannot encode default: %w", descriptor.ID, name, err)
+			}
+			field.Default = append(json.RawMessage(nil), canonical...)
+			descriptor.Fields[name] = field
 		}
 		if descriptor.Kind == OneOfType && defaults > 1 {
 			return fmt.Errorf("one-of schema %q has multiple defaulted members", descriptor.ID)
 		}
+		snapshot.types[identifier] = descriptor
 	}
 	return nil
 }

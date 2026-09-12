@@ -24,8 +24,10 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Unit tests
         run: go test ./...
-      - name: Independent scalar conformance
-        run: node conformance/independent/scalars.mjs
+      - name: Independent JavaScript conformance
+        run: |
+          node conformance/independent/scalars.mjs
+          node conformance/independent/canonical.mjs
       - name: Race tests
         run: go test -race ./...
       - name: Vet

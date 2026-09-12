@@ -31,6 +31,91 @@ func TestCanonicalizeJSONPreservesArraysAndDistinguishesEmptyContainers(t *testi
 	if got, want := string(canonical), `{"a":{},"ordered":[3,2,1],"z":[]}`; got != want {
 		t.Fatalf("canonical JSON = %s, want %s", got, want)
 	}
+	underflow, err := protocol.CanonicalizeJSON([]byte(`{"negative":-1e-400,"positive":1e-400}`), protocol.Limits{})
+	if err != nil {
+		t.Fatalf("CanonicalizeJSON finite underflow: %v", err)
+	}
+	if got, want := string(underflow), `{"negative":0,"positive":0}`; got != want {
+		t.Fatalf("canonical underflow = %s, want %s", got, want)
+	}
+}
+
+func TestCanonicalizeDocumentSortsOnlyRequiredCapabilities(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"requires":["vendor.audit-1","core.language-1"],"operations":[{"select":[{"$field":{"name":"b"}},{"$field":{"name":"a"}}],"name":"Q","kind":"query"}]}`)
+	canonical, err := protocol.CanonicalizeDocument(input, protocol.Limits{})
+	if err != nil {
+		t.Fatalf("CanonicalizeDocument: %v", err)
+	}
+	want := `{"operations":[{"kind":"query","name":"Q","select":[{"$field":{"name":"b"}},{"$field":{"name":"a"}}]}],"requires":["core.language-1","vendor.audit-1"]}`
+	if string(canonical) != want {
+		t.Fatalf("canonical document = %s, want %s", canonical, want)
+	}
+}
+
+func TestCanonicalizeDocumentRejectsInvalidRequiredCapabilities(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		`[]`,
+		`{"operations":[],"requires":"core.language-1"}`,
+		`{"operations":[],"requires":[1]}`,
+		`{"operations":[],"requires":["bad capability"]}`,
+		`{"operations":[],"requires":["é"]}`,
+		`{"operations":[],"requires":["core.language-1","core.language-1"]}`,
+	} {
+		if _, err := protocol.CanonicalizeDocument([]byte(input), protocol.Limits{}); err == nil {
+			t.Fatalf("CanonicalizeDocument(%s) succeeded, want error", input)
+		}
+	}
+}
+
+func TestCanonicalizeSchemaNormalizesRegistrationAndSetOrder(t *testing.T) {
+	t.Parallel()
+
+	left := []byte(`{"revision":"schema-7","capabilities":["vendor.audit-1","core.language-1"],"types":[{"id":"Result","kind":"union","variants":["User","Admin"]},{"id":"Slug","kind":"scalar","scalar":{"acceptedWireShapes":["string","number"]}},{"id":"Role","kind":"enum","enumValues":["USER","ADMIN"]}]}`)
+	right := []byte(`{"types":[{"enumValues":["ADMIN","USER"],"kind":"enum","id":"Role"},{"scalar":{"acceptedWireShapes":["number","string"]},"kind":"scalar","id":"Slug"},{"variants":["Admin","User"],"kind":"union","id":"Result"}],"capabilities":["core.language-1","vendor.audit-1"],"revision":"schema-7"}`)
+	leftCanonical, leftErr := protocol.CanonicalizeSchema(left, protocol.Limits{})
+	rightCanonical, rightErr := protocol.CanonicalizeSchema(right, protocol.Limits{})
+	if leftErr != nil || rightErr != nil {
+		t.Fatalf("CanonicalizeSchema errors = %v, %v", leftErr, rightErr)
+	}
+	if string(leftCanonical) != string(rightCanonical) {
+		t.Fatalf("schema registration order changed identity:\n%s\n%s", leftCanonical, rightCanonical)
+	}
+}
+
+func TestCanonicalizeSchemaRejectsInvalidAndDuplicateIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		`{"revision":"schema-7","types":[{"id":"bad id","kind":"object"}]}`,
+		`{"revision":"schema-7","types":[{"id":"User","kind":"object"},{"id":"User","kind":"object"}]}`,
+		`{"revision":"schema-7","types":[{"id":"Role","kind":"enum","enumValues":["ADMIN","ADMIN"]}]}`,
+		`{"revision":"schema-7","types":[{"id":"Result","kind":"union","variants":["bad id"]}]}`,
+		`{"revision":"schema-7","types":[{"id":"Slug","kind":"scalar","scalar":{"acceptedWireShapes":["string","string"]}}]}`,
+	} {
+		if _, err := protocol.CanonicalizeSchema([]byte(input), protocol.Limits{}); err == nil {
+			t.Fatalf("CanonicalizeSchema(%s) succeeded, want error", input)
+		}
+	}
+}
+
+func TestCanonicalizeHashPayloadNormalizesCapabilitySets(t *testing.T) {
+	t.Parallel()
+
+	left, err := protocol.CanonicalizeHashPayload(protocol.ApprovalHash, []byte(`{"capabilities":["vendor.audit-1","core.language-1"]}`), protocol.Limits{})
+	if err != nil {
+		t.Fatalf("CanonicalizeHashPayload: %v", err)
+	}
+	right, err := protocol.CanonicalizeHashPayload(protocol.ApprovalHash, []byte(`{"capabilities":["core.language-1","vendor.audit-1"]}`), protocol.Limits{})
+	if err != nil {
+		t.Fatalf("CanonicalizeHashPayload: %v", err)
+	}
+	if string(left) != string(right) {
+		t.Fatalf("capability order changed approval identity: %s != %s", left, right)
+	}
 }
 
 func TestCanonicalizeJSONPreservesReplacementCharacter(t *testing.T) {

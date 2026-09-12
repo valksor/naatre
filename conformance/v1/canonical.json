@@ -1,24 +1,320 @@
 {
-  "profile": "core.document.c14n-1",
-  "vectors": [
+  "profile": "core.interop.c14n-1",
+  "canonicalVersion": "c14n-1",
+  "hashAlgorithm": "sha-256",
+  "scalarProfile": "core.scalar.c14n-1",
+  "requiredScalarVectors": [
+    "int64-js-boundary",
+    "uint64-max",
+    "bigint-leading-zeroes",
+    "decimal-scale",
+    "decimal-negative-zero",
+    "timestamp-nanoseconds",
+    "duration-min",
+    "uuid-lowercase",
+    "bytes-base64url"
+  ],
+  "jsonVectors": [
     {
       "name": "utf16-key-order",
       "input": "{\"\\ue000\":2,\"😀\":1,\"object\":{},\"a\":\"e\\u0301\",\"empty\":[]}",
+      "parsedType": "object",
       "canonical": "{\"a\":\"é\",\"empty\":[],\"object\":{},\"😀\":1,\"\":2}"
     },
     {
-      "name": "document-domain",
+      "name": "object-order-and-whitespace",
+      "input": " { \"z\" : true, \"a\" : null } ",
+      "parsedType": "object",
+      "canonical": "{\"a\":null,\"z\":true}"
+    },
+    {
+      "name": "ordered-array-and-empty-containers",
+      "input": "{\"z\":[],\"a\":{},\"ordered\":[3,2,1]}",
+      "parsedType": "object",
+      "canonical": "{\"a\":{},\"ordered\":[3,2,1],\"z\":[]}"
+    },
+    {
+      "name": "unicode-normalization-is-inert",
+      "input": "{\"nfd\":\"e\\u0301\",\"nfc\":\"é\"}",
+      "parsedType": "object",
+      "canonical": "{\"nfc\":\"é\",\"nfd\":\"é\"}"
+    },
+    {
+      "name": "binary64-negative-zero-and-exponents",
+      "input": "{\"small\":1e-7,\"negativeZero\":-0,\"large\":1e+21}",
+      "parsedType": "object",
+      "canonical": "{\"large\":1e+21,\"negativeZero\":0,\"small\":1e-7}"
+    },
+    {
+      "name": "binary64-finite-underflow",
+      "input": "{\"negative\":-1e-400,\"positive\":1e-400}",
+      "parsedType": "object",
+      "canonical": "{\"negative\":0,\"positive\":0}"
+    },
+    {
+      "name": "rfc8785-number-sample",
+      "input": "[333333333.33333329,1E30,4.50,2e-3,0.000000000000000000000000001]",
+      "parsedType": "array",
+      "canonical": "[333333333.3333333,1e+30,4.5,0.002,1e-27]"
+    },
+    {
+      "name": "large-integer-string-remains-exact",
+      "input": "{\"value\":\"9007199254740993\"}",
+      "parsedType": "object",
+      "canonical": "{\"value\":\"9007199254740993\"}"
+    },
+    {
+      "name": "replacement-character-is-data",
+      "input": "{\"value\":\"\\ufffd\"}",
+      "parsedType": "object",
+      "canonical": "{\"value\":\"�\"}"
+    },
+    {
+      "name": "control-and-quote-escaping",
+      "input": "{\"value\":\"\\u0000\\b\\t\\n\\f\\r\\\"\\\\\"}",
+      "parsedType": "object",
+      "canonical": "{\"value\":\"\\u0000\\b\\t\\n\\f\\r\\\"\\\\\"}"
+    }
+  ],
+  "hashVectors": [
+    {
+      "name": "same-payload-document-domain",
       "input": "{\"a\":1}",
+      "parsedType": "object",
       "canonical": "{\"a\":1}",
       "purpose": "document",
-      "algorithm": "sha-256",
-      "canonicalVersion": "c14n-1",
+      "domainInput": "naatre:document:c14n-1\n{\"a\":1}",
       "digest": "b809e62e9151db9918fb436114be52cefba449c768fd9ee800b22b9eba490428"
+    },
+    {
+      "name": "same-payload-schema-domain",
+      "input": "{\"a\":1}",
+      "parsedType": "object",
+      "canonical": "{\"a\":1}",
+      "purpose": "schema",
+      "domainInput": "naatre:schema:c14n-1\n{\"a\":1}",
+      "digest": "9204b198952b27d5ff01ba7dd57b0bd16963fa819c8160ff77b5a934cc3eff03"
+    },
+    {
+      "name": "same-payload-approval-domain",
+      "input": "{\"a\":1}",
+      "parsedType": "object",
+      "canonical": "{\"a\":1}",
+      "purpose": "approval",
+      "domainInput": "naatre:approval:c14n-1\n{\"a\":1}",
+      "digest": "70b7738187e8c09ef427dff9fc909bb8480cbbfb428e30d0a1e2b30d144cf40c"
+    },
+    {
+      "name": "same-payload-result-cache-domain",
+      "input": "{\"a\":1}",
+      "parsedType": "object",
+      "canonical": "{\"a\":1}",
+      "purpose": "result-cache",
+      "domainInput": "naatre:result-cache:c14n-1\n{\"a\":1}",
+      "digest": "45c139607a426c0b9dacb0cc5ed88599ac466cfe600bbce0f7bd315bf76960f8"
+    },
+    {
+      "name": "same-payload-idempotency-domain",
+      "input": "{\"a\":1}",
+      "parsedType": "object",
+      "canonical": "{\"a\":1}",
+      "purpose": "idempotency",
+      "domainInput": "naatre:idempotency:c14n-1\n{\"a\":1}",
+      "digest": "6301efcc73537f75472c1ad302494a5a86b6c022be02a309ea9168517d73ab9c"
+    },
+    {
+      "name": "same-payload-signed-message-domain",
+      "input": "{\"a\":1}",
+      "parsedType": "object",
+      "canonical": "{\"a\":1}",
+      "purpose": "signed-message",
+      "domainInput": "naatre:signed-message:c14n-1\n{\"a\":1}",
+      "digest": "bc9a9086bda6d88f30ff8504350052ccf12ed19da5974d5c1e0532e651066b0d"
+    },
+    {
+      "name": "document-payload",
+      "input": "{\"operations\":[{\"select\":[{\"$field\":{\"name\":\"viewer\"}}],\"kind\":\"query\",\"name\":\"GetViewer\"}]}",
+      "parsedType": "object",
+      "canonical": "{\"operations\":[{\"kind\":\"query\",\"name\":\"GetViewer\",\"select\":[{\"$field\":{\"name\":\"viewer\"}}]}]}",
+      "purpose": "document",
+      "domainInput": "naatre:document:c14n-1\n{\"operations\":[{\"kind\":\"query\",\"name\":\"GetViewer\",\"select\":[{\"$field\":{\"name\":\"viewer\"}}]}]}",
+      "digest": "1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85"
+    },
+    {
+      "name": "schema-payload",
+      "input": "{\"types\":[{\"kind\":\"object\",\"id\":\"User\"}],\"revision\":\"schema-7\"}",
+      "parsedType": "object",
+      "canonical": "{\"revision\":\"schema-7\",\"types\":[{\"id\":\"User\",\"kind\":\"object\"}]}",
+      "purpose": "schema",
+      "domainInput": "naatre:schema:c14n-1\n{\"revision\":\"schema-7\",\"types\":[{\"id\":\"User\",\"kind\":\"object\"}]}",
+      "digest": "b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f"
+    },
+    {
+      "name": "approval-payload",
+      "input": "{\"approvalMetadata\":{\"reviewer\":\"security\"},\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"policyRevision\":\"policy-3\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"}}",
+      "parsedType": "object",
+      "canonical": "{\"approvalMetadata\":{\"reviewer\":\"security\"},\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"policyRevision\":\"policy-3\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"}}",
+      "purpose": "approval",
+      "domainInput": "naatre:approval:c14n-1\n{\"approvalMetadata\":{\"reviewer\":\"security\"},\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"policyRevision\":\"policy-3\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"}}",
+      "digest": "a1f50b4cb1d4f3a1e0afaf260dd4477c353fd4583b6b8cec279dedccc63b3e7f"
+    },
+    {
+      "name": "result-cache-payload",
+      "input": "{\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"},\"variables\":{\"id\":\"9007199254740993\"}}",
+      "parsedType": "object",
+      "canonical": "{\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"},\"variables\":{\"id\":\"9007199254740993\"}}",
+      "purpose": "result-cache",
+      "domainInput": "naatre:result-cache:c14n-1\n{\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"},\"variables\":{\"id\":\"9007199254740993\"}}",
+      "digest": "e076047b07213d25aa49e163f9436745c6e338201bcd340c20e7303ec79ff81d"
+    },
+    {
+      "name": "idempotency-payload",
+      "input": "{\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"idempotencyKey\":\"create-42\",\"principal\":\"tenant-7:user-9\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"},\"variables\":{\"id\":\"9007199254740993\"}}",
+      "parsedType": "object",
+      "canonical": "{\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"idempotencyKey\":\"create-42\",\"principal\":\"tenant-7:user-9\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"},\"variables\":{\"id\":\"9007199254740993\"}}",
+      "purpose": "idempotency",
+      "domainInput": "naatre:idempotency:c14n-1\n{\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"idempotencyKey\":\"create-42\",\"principal\":\"tenant-7:user-9\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"b76474f0c31c072de136ada011ccd50cad80b947a19cb11b714c5c88b770f62f\"},\"variables\":{\"id\":\"9007199254740993\"}}",
+      "digest": "578a1e1912e8537d8c5f0a0f3e9ada4a098dd8b292b941f08cc357109c86c957"
+    },
+    {
+      "name": "signed-message-payload",
+      "input": "{\"algorithm\":\"ed25519\",\"issuedAt\":\"2026-09-12T00:00:00Z\",\"keyId\":\"key-7\",\"message\":{\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"variables\":{\"id\":\"9007199254740993\"}},\"nonce\":\"nonce-7\"}",
+      "parsedType": "object",
+      "canonical": "{\"algorithm\":\"ed25519\",\"issuedAt\":\"2026-09-12T00:00:00Z\",\"keyId\":\"key-7\",\"message\":{\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"variables\":{\"id\":\"9007199254740993\"}},\"nonce\":\"nonce-7\"}",
+      "purpose": "signed-message",
+      "domainInput": "naatre:signed-message:c14n-1\n{\"algorithm\":\"ed25519\",\"issuedAt\":\"2026-09-12T00:00:00Z\",\"keyId\":\"key-7\",\"message\":{\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"1fd8bd2cd3aa42d970994b9a1b386b8706a537da056f250777fdfbd0d0e82c85\"},\"variables\":{\"id\":\"9007199254740993\"}},\"nonce\":\"nonce-7\"}",
+      "digest": "8c1f4bb2e6f850f961f876e00dee9d11ef3f4d5811568622a74bfaf2c01fedbb"
+    }
+  ],
+  "equivalenceVectors": [
+    {
+      "name": "object-member-order-is-equivalent",
+      "purpose": "document",
+      "left": "{\"operations\":[],\"fragments\":[]}",
+      "right": "{\"fragments\":[],\"operations\":[]}",
+      "equal": true
+    },
+    {
+      "name": "ordered-selections-are-distinct",
+      "purpose": "document",
+      "left": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[{\"$field\":{\"name\":\"a\"}},{\"$field\":{\"name\":\"b\"}}]}]}",
+      "right": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[{\"$field\":{\"name\":\"b\"}},{\"$field\":{\"name\":\"a\"}}]}]}",
+      "equal": false
+    },
+    {
+      "name": "operation-kind-is-distinct",
+      "purpose": "document",
+      "left": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[]}]}",
+      "right": "{\"operations\":[{\"kind\":\"mutation\",\"name\":\"Q\",\"select\":[]}]}",
+      "equal": false
+    },
+    {
+      "name": "variable-default-is-distinct",
+      "purpose": "document",
+      "left": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[],\"variables\":[{\"default\":1,\"name\":\"page\",\"type\":\"Int32\"}]}]}",
+      "right": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[],\"variables\":[{\"default\":2,\"name\":\"page\",\"type\":\"Int32\"}]}]}",
+      "equal": false
+    },
+    {
+      "name": "required-extension-is-distinct",
+      "purpose": "document",
+      "left": "{\"operations\":[],\"requires\":[\"core.language-1\"]}",
+      "right": "{\"operations\":[],\"requires\":[\"core.language-1\",\"vendor.audit-1\"]}",
+      "equal": false
+    },
+    {
+      "name": "required-extension-order-is-equivalent",
+      "purpose": "document",
+      "left": "{\"operations\":[],\"requires\":[\"vendor.audit-1\",\"core.language-1\"]}",
+      "right": "{\"operations\":[],\"requires\":[\"core.language-1\",\"vendor.audit-1\"]}",
+      "equal": true
+    },
+    {
+      "name": "schema-revision-is-distinct",
+      "purpose": "schema",
+      "left": "{\"revision\":\"schema-7\",\"types\":[]}",
+      "right": "{\"revision\":\"schema-8\",\"types\":[]}",
+      "equal": false
+    },
+    {
+      "name": "schema-registration-and-set-order-is-equivalent",
+      "purpose": "schema",
+      "left": "{\"revision\":\"schema-7\",\"capabilities\":[\"vendor.audit-1\",\"core.language-1\"],\"types\":[{\"id\":\"Result\",\"kind\":\"union\",\"variants\":[\"User\",\"Admin\"]},{\"id\":\"Slug\",\"kind\":\"scalar\",\"scalar\":{\"acceptedWireShapes\":[\"string\",\"number\"]}},{\"id\":\"Role\",\"kind\":\"enum\",\"enumValues\":[\"USER\",\"ADMIN\"]}]}",
+      "right": "{\"types\":[{\"enumValues\":[\"ADMIN\",\"USER\"],\"kind\":\"enum\",\"id\":\"Role\"},{\"scalar\":{\"acceptedWireShapes\":[\"number\",\"string\"]},\"kind\":\"scalar\",\"id\":\"Slug\"},{\"variants\":[\"Admin\",\"User\"],\"kind\":\"union\",\"id\":\"Result\"}],\"capabilities\":[\"core.language-1\",\"vendor.audit-1\"],\"revision\":\"schema-7\"}",
+      "equal": true
+    },
+    {
+      "name": "empty-object-and-list-are-distinct",
+      "purpose": "document",
+      "left": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[{\"$call\":{\"args\":{\"value\":{\"$literal\":{}}},\"name\":\"echo\"}}]}]}",
+      "right": "{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[{\"$call\":{\"args\":{\"value\":{\"$literal\":[]}},\"name\":\"echo\"}}]}]}",
+      "equal": false
+    }
+  ],
+  "isolationVectors": [
+    {
+      "name": "variables-do-not-change-document-but-change-cache",
+      "documentLeft": "{\"operations\":[]}",
+      "documentRight": "{\"operations\":[]}",
+      "purpose": "result-cache",
+      "payloadLeft": "{\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"d2903662f3606d4c30073313f5f6fd1c9a3fccc27bc1e2b19652fcb7278d6ae0\"},\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"7a013a7c47be431479c804b9da11175f7bba082ed482c0ab87a71c66c210ff2d\"},\"variables\":{\"id\":\"1\"}}",
+      "payloadRight": "{\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"d2903662f3606d4c30073313f5f6fd1c9a3fccc27bc1e2b19652fcb7278d6ae0\"},\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"7a013a7c47be431479c804b9da11175f7bba082ed482c0ab87a71c66c210ff2d\"},\"variables\":{\"id\":\"2\"}}",
+      "documentEqual": true,
+      "identityEqual": false
+    },
+    {
+      "name": "approval-metadata-does-not-change-document-but-changes-approval",
+      "documentLeft": "{\"operations\":[]}",
+      "documentRight": "{\"operations\":[]}",
+      "purpose": "approval",
+      "payloadLeft": "{\"approvalMetadata\":{\"reviewer\":\"a\"},\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"d2903662f3606d4c30073313f5f6fd1c9a3fccc27bc1e2b19652fcb7278d6ae0\"},\"policyRevision\":\"policy-3\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"7a013a7c47be431479c804b9da11175f7bba082ed482c0ab87a71c66c210ff2d\"}}",
+      "payloadRight": "{\"approvalMetadata\":{\"reviewer\":\"b\"},\"capabilities\":[\"core.language-1\"],\"document\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"d2903662f3606d4c30073313f5f6fd1c9a3fccc27bc1e2b19652fcb7278d6ae0\"},\"policyRevision\":\"policy-3\",\"schema\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"7a013a7c47be431479c804b9da11175f7bba082ed482c0ab87a71c66c210ff2d\"}}",
+      "documentEqual": true,
+      "identityEqual": false
     }
   ],
   "malformed": [
-    {"name":"escaped-duplicate","input":"{\"a\":1,\"\\u0061\":2}","code":"DUPLICATE_KEY"},
-    {"name":"unpaired-surrogate","input":"{\"a\":\"\\ud800\"}","code":"INVALID_UNICODE"},
-    {"name":"trailing-data","input":"{\"a\":1} false","code":"TRAILING_DATA"}
+    {
+      "name": "escaped-duplicate",
+      "input": "{\"a\":1,\"\\u0061\":2}",
+      "code": "DUPLICATE_KEY"
+    },
+    {
+      "name": "literal-duplicate",
+      "input": "{\"a\":1,\"a\":2}",
+      "code": "DUPLICATE_KEY"
+    },
+    {
+      "name": "unpaired-high-surrogate",
+      "input": "{\"a\":\"\\ud800\"}",
+      "code": "INVALID_UNICODE"
+    },
+    {
+      "name": "unpaired-low-surrogate",
+      "input": "{\"a\":\"\\udc00\"}",
+      "code": "INVALID_UNICODE"
+    },
+    {
+      "name": "trailing-data",
+      "input": "{\"a\":1} false",
+      "code": "TRAILING_DATA"
+    },
+    {
+      "name": "unescaped-control",
+      "inputBase64": "eyJhIjoiASJ9",
+      "code": "MALFORMED_JSON"
+    },
+    {
+      "name": "invalid-utf8",
+      "inputBase64": "eyJ4Ijoi/yJ9",
+      "code": "INVALID_UTF8"
+    },
+    { "name": "utf8-bom", "inputBase64": "77u/e30=", "code": "INVALID_UTF8" },
+    { "name": "nan-token", "input": "{\"a\":NaN}", "code": "MALFORMED_JSON" },
+    {
+      "name": "infinity-token",
+      "input": "{\"a\":Infinity}",
+      "code": "MALFORMED_JSON"
+    }
   ]
 }

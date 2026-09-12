@@ -21,6 +21,7 @@
     {
       "name": "nested-explicit-map-and-list-metadata",
       "document": {
+        "requires": ["core.language-1"],
         "operations": [{
           "name": "Users",
           "kind": "query",

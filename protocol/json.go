@@ -58,6 +58,9 @@ func parseJSON(input []byte, limits Limits) (node, error) {
 	if len(input) > limits.MaxBytes {
 		return node{}, newDiagnostic(input, "LIMIT_BYTES", "PROTO-201", "decode", "request exceeds byte limit", "", limits.MaxBytes)
 	}
+	if len(input) >= 3 && input[0] == 0xef && input[1] == 0xbb && input[2] == 0xbf {
+		return node{}, newDiagnostic(input, "INVALID_UTF8", "CANON-001", "decode", "UTF-8 BOM is not allowed", "", 0)
+	}
 	if !utf8.Valid(input) {
 		return node{}, newDiagnostic(input, "INVALID_UTF8", "CANON-001", "decode", "request is not valid UTF-8", "", firstInvalidUTF8(input))
 	}

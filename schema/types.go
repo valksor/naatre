@@ -180,7 +180,7 @@ func (c *Catalog) Freeze() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	snapshot := Snapshot{types: cloneTypeMap(c.types), scalars: maps.Clone(c.scalars)}
-	if err := validateInputDefaults(snapshot); err != nil {
+	if err := canonicalizeInputDefaults(snapshot); err != nil {
 		return Snapshot{}, err
 	}
 	c.frozen = true

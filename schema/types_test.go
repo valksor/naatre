@@ -23,6 +23,14 @@ func TestCatalogFreezesPortableTypeDescriptors(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Register(User): %v", err)
 	}
+	if err := catalog.Register(schema.TypeDescriptor{
+		ID: "InvoiceInput", Kind: schema.InputObjectType, Input: true,
+		Fields: map[string]schema.FieldDescriptor{
+			"amount": {Type: schema.TypeID(schema.Decimal), Default: json.RawMessage(`"001.2300"`)},
+		},
+	}); err != nil {
+		t.Fatalf("Register(InvoiceInput): %v", err)
+	}
 
 	snapshot, err := catalog.Freeze()
 	if err != nil {
@@ -36,6 +44,10 @@ func TestCatalogFreezesPortableTypeDescriptors(t *testing.T) {
 	again, _ := snapshot.Lookup("User")
 	if again.Fields["id"].Type != schema.TypeID(schema.ID) {
 		t.Fatal("snapshot descriptor mutated through lookup")
+	}
+	invoice, ok := snapshot.Lookup("InvoiceInput")
+	if !ok || string(invoice.Fields["amount"].Default) != `"1.23"` {
+		t.Fatalf("canonical default = %s, found = %t", invoice.Fields["amount"].Default, ok)
 	}
 }
 

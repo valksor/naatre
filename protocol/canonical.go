@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -36,15 +37,222 @@ type Digest struct {
 // CanonicalizeJSON validates JSON and returns c14n-1 bytes. Objects use RFC
 // 8785 UTF-16 key order while arrays remain ordered.
 func CanonicalizeJSON(input []byte, limits Limits) ([]byte, error) {
+	return canonicalizeJSON(input, limits, canonicalGeneric)
+}
+
+// CanonicalizeDocument returns the canonical AST bytes used by the document
+// hash profile. Callers validate the closed language grammar first; this step
+// additionally normalizes the document-level requires set without changing any
+// ordered language array.
+func CanonicalizeDocument(input []byte, limits Limits) ([]byte, error) {
+	return canonicalizeJSON(input, limits, canonicalDocument)
+}
+
+// CanonicalizeSchema returns canonical public schema bytes with registration-
+// order-independent type and set-like descriptor arrays.
+func CanonicalizeSchema(input []byte, limits Limits) ([]byte, error) {
+	return canonicalizeJSON(input, limits, canonicalSchema)
+}
+
+// CanonicalizeHashPayload applies the finite normalization profile owned by a
+// semantic hash purpose before returning c14n-1 bytes.
+func CanonicalizeHashPayload(purpose HashPurpose, input []byte, limits Limits) ([]byte, error) {
+	switch purpose {
+	case DocumentHash:
+		return CanonicalizeDocument(input, limits)
+	case SchemaHash:
+		return CanonicalizeSchema(input, limits)
+	case ApprovalHash, ResultCacheHash:
+		root, err := parseJSON(input, limits)
+		if err != nil {
+			return nil, err
+		}
+		if root.kind != nodeObject {
+			return nil, purposePayloadDiagnostic(input, purpose, "hash payload must be an object", "", root.start)
+		}
+		if err := normalizePurposeCapabilities(input, purpose, &root); err != nil {
+			return nil, err
+		}
+		return canonicalizeNode(root)
+	case IdempotencyHash, SignedMessageHash:
+		return CanonicalizeJSON(input, limits)
+	default:
+		return nil, fmt.Errorf("unknown semantic hash purpose %q", purpose)
+	}
+}
+
+func normalizePurposeCapabilities(input []byte, purpose HashPurpose, root *node) error {
+	index, exists := root.memberByID["capabilities"]
+	if !exists {
+		return nil
+	}
+	capabilities := &root.object[index].value
+	if capabilities.kind != nodeArray {
+		return purposePayloadDiagnostic(input, purpose, "capabilities must be an array", "/capabilities", capabilities.start)
+	}
+	seen := make(map[string]bool, len(capabilities.array))
+	for itemIndex, item := range capabilities.array {
+		pointer := fmt.Sprintf("/capabilities/%d", itemIndex)
+		if item.kind != nodeString || !capabilityPattern(item.text) || seen[item.text] {
+			return purposePayloadDiagnostic(input, purpose, "capabilities entries must be unique portable identifiers", pointer, item.start)
+		}
+		seen[item.text] = true
+	}
+	sort.Slice(capabilities.array, func(left, right int) bool {
+		return capabilities.array[left].text < capabilities.array[right].text
+	})
+	return nil
+}
+
+func purposePayloadDiagnostic(input []byte, purpose HashPurpose, message, pointer string, offset int) error {
+	clause := "CANON-221"
+	if purpose == ResultCacheHash {
+		clause = "CANON-222"
+	}
+	return newDiagnostic(input, "INVALID_HASH_PAYLOAD", clause, "validate", message, pointer, offset)
+}
+
+type canonicalProfile uint8
+
+const (
+	canonicalGeneric canonicalProfile = iota
+	canonicalDocument
+	canonicalSchema
+)
+
+func canonicalizeJSON(input []byte, limits Limits, profile canonicalProfile) ([]byte, error) {
 	root, err := parseJSON(input, limits)
 	if err != nil {
 		return nil, err
 	}
+	switch profile {
+	case canonicalGeneric:
+	case canonicalDocument:
+		if err := normalizeDocument(input, &root); err != nil {
+			return nil, err
+		}
+	case canonicalSchema:
+		if err := normalizeSchema(input, &root); err != nil {
+			return nil, err
+		}
+	}
+	return canonicalizeNode(root)
+}
+
+func canonicalizeNode(root node) ([]byte, error) {
 	var output bytes.Buffer
 	if err := writeCanonical(&output, root); err != nil {
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func normalizeDocument(input []byte, root *node) error {
+	if root.kind != nodeObject {
+		return newDiagnostic(input, "INVALID_DOCUMENT", "CANON-100", "validate", "document must be an object", "", root.start)
+	}
+	index, exists := root.memberByID["requires"]
+	if !exists {
+		return nil
+	}
+	requires := &root.object[index].value
+	if requires.kind != nodeArray {
+		return newDiagnostic(input, "INVALID_DOCUMENT", "CANON-100", "validate", "requires must be an array", "/requires", requires.start)
+	}
+	seen := make(map[string]bool, len(requires.array))
+	for itemIndex, item := range requires.array {
+		pointer := fmt.Sprintf("/requires/%d", itemIndex)
+		if item.kind != nodeString || !capabilityPattern(item.text) {
+			return newDiagnostic(input, "INVALID_DOCUMENT", "CANON-100", "validate", "requires entries must be portable profile identifiers", pointer, item.start)
+		}
+		if seen[item.text] {
+			return newDiagnostic(input, "DUPLICATE_CAPABILITY", "CANON-100", "validate", "requires entries must be unique", pointer, item.start)
+		}
+		seen[item.text] = true
+	}
+	sort.Slice(requires.array, func(left, right int) bool {
+		return requires.array[left].text < requires.array[right].text
+	})
+	return nil
+}
+
+func normalizeSchema(input []byte, root *node) error {
+	if root.kind != nodeObject {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "schema must be an object", "", root.start)
+	}
+	revision, hasRevision := root.member("revision")
+	if !hasRevision || revision.kind != nodeString || !capabilityPattern(revision.text) {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "schema requires a portable revision", "/revision", revision.start)
+	}
+	typesIndex, hasTypes := root.memberByID["types"]
+	if !hasTypes || root.object[typesIndex].value.kind != nodeArray {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "schema requires a types array", "/types", root.start)
+	}
+	if err := normalizeStringSetMember(input, root, "capabilities", "/capabilities", true); err != nil {
+		return err
+	}
+	types := &root.object[typesIndex].value
+	identifiers := make(map[string]bool, len(types.array))
+	for typeIndex := range types.array {
+		current := &types.array[typeIndex]
+		pointer := fmt.Sprintf("/types/%d", typeIndex)
+		identifier, ok := schemaTypeIdentifier(current)
+		if !ok || identifiers[identifier] {
+			return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "types require unique portable identifiers", pointer+"/id", current.start)
+		}
+		identifiers[identifier] = true
+		for _, member := range []string{"variants", "enumValues"} {
+			if err := normalizeStringSetMember(input, current, member, pointer+"/"+member, true); err != nil {
+				return err
+			}
+		}
+		if scalarIndex, exists := current.memberByID["scalar"]; exists {
+			scalar := &current.object[scalarIndex].value
+			if scalar.kind != nodeObject {
+				return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", "scalar descriptor must be an object", pointer+"/scalar", scalar.start)
+			}
+			if err := normalizeStringSetMember(input, scalar, "acceptedWireShapes", pointer+"/scalar/acceptedWireShapes", true); err != nil {
+				return err
+			}
+		}
+	}
+	sort.Slice(types.array, func(left, right int) bool {
+		leftID, _ := schemaTypeIdentifier(&types.array[left])
+		rightID, _ := schemaTypeIdentifier(&types.array[right])
+		return leftID < rightID
+	})
+	return nil
+}
+
+func schemaTypeIdentifier(value *node) (string, bool) {
+	if value.kind != nodeObject {
+		return "", false
+	}
+	identifier, exists := value.member("id")
+	return identifier.text, exists && identifier.kind == nodeString && capabilityPattern(identifier.text)
+}
+
+func normalizeStringSetMember(input []byte, parent *node, name, pointer string, identifiers bool) error {
+	index, exists := parent.memberByID[name]
+	if !exists {
+		return nil
+	}
+	values := &parent.object[index].value
+	if values.kind != nodeArray {
+		return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" must be an array", pointer, values.start)
+	}
+	seen := make(map[string]bool, len(values.array))
+	for itemIndex, item := range values.array {
+		itemPointer := fmt.Sprintf("%s/%d", pointer, itemIndex)
+		if item.kind != nodeString || (identifiers && !capabilityPattern(item.text)) || seen[item.text] {
+			return newDiagnostic(input, "INVALID_SCHEMA", "CANON-104", "validate", name+" entries must be unique portable identifiers", itemPointer, item.start)
+		}
+		seen[item.text] = true
+	}
+	sort.Slice(values.array, func(left, right int) bool {
+		return values.array[left].text < values.array[right].text
+	})
+	return nil
 }
 
 // ValidateJSON applies the same strict decoder and resource limits used by
@@ -176,7 +384,7 @@ func writeCanonicalString(output *bytes.Buffer, value string) {
 
 func canonicalJSONNumber(raw string) (string, error) {
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+	if (err != nil && !errors.Is(err, strconv.ErrRange)) || math.IsInf(value, 0) || math.IsNaN(value) {
 		return "", fmt.Errorf("canonical JSON number %q is not finite binary64", raw)
 	}
 	if value == 0 {

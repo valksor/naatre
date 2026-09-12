@@ -10,14 +10,17 @@ them. Issue #6 owns the complete decoder and AST implementation.
 
 ## Document grammar
 
-- **LANG-001:** A document object contains `operations` and optional
-  `fragments`; no other normative keys are allowed. Operations and fragments
-  are arrays. Their array order is semantic; their object member order is not.
+- **LANG-001:** A document object contains `operations`, optional `fragments`,
+  and optional duplicate-free `requires`; no other normative keys are allowed.
+  Operations and fragments are arrays whose order is semantic. `requires` is
+  an unordered set of required capability or extension profile identifiers and
+  is sorted for canonical identity. Object member order is not semantic.
 - **LANG-002:** An operation contains `name`, `kind`, optional `variables`, and
   ordered `select`. A fragment contains `name`, optional `on`, and ordered
   `select`. Language names match `[A-Za-z_][A-Za-z0-9_]{0,127}`; schema type
-  references use TYPE-001's `[A-Za-z_][A-Za-z0-9_.-]{0,127}` grammar. `$` is
-  reserved for language tags and cannot begin an application identifier.
+  references and `requires` entries use TYPE-001's
+  `[A-Za-z_][A-Za-z0-9_.-]{0,127}` grammar. All names are case-sensitive; `$`
+  is reserved for language tags and cannot begin an application identifier.
 - **LANG-003:** Every selection and pipeline step is an object with exactly one
   recognized tag. The selection tags are `$field`, `$call`, `$pipeline`,
   `$map`, `$index`, `$slice`, `$page`, `$meta`, `$parallel`, `$fragment`,

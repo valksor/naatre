@@ -164,8 +164,9 @@ func (d Document) Operations() []Operation {
 
 // PersistedReference identifies a canonical persisted document.
 type PersistedReference struct {
-	Algorithm string
-	Digest    string
+	Algorithm        string
+	CanonicalVersion string
+	Digest           string
 }
 
 // Request is an immutable single-operation request envelope.

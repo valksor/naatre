@@ -7,7 +7,10 @@ import (
 	"unicode/utf8"
 )
 
-var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+var (
+	identifierPattern        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	profileIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,127}$`)
+)
 
 // DecodeRequest strictly decodes one Naatre request without resolving schema
 // or invoking application behavior.
@@ -253,20 +256,21 @@ func decodePersisted(input []byte, value node) (PersistedReference, error) {
 	if err := expectKindPhase(input, value, nodeObject, "/persisted", "persisted reference", "PROTO-004", "decode"); err != nil {
 		return PersistedReference{}, err
 	}
-	if err := rejectUnknown(input, value, map[string]bool{"algorithm": true, "digest": true}, "PROTO-004", "decode", "/persisted"); err != nil {
+	if err := rejectUnknown(input, value, map[string]bool{"algorithm": true, "canonicalVersion": true, "digest": true}, "PROTO-004", "decode", "/persisted"); err != nil {
 		return PersistedReference{}, err
 	}
 	algorithm, hasAlgorithm := value.member("algorithm")
+	canonicalVersion, hasCanonicalVersion := value.member("canonicalVersion")
 	digest, hasDigest := value.member("digest")
-	if !hasAlgorithm || algorithm.kind != nodeString || algorithm.text != "sha-256" || !hasDigest || digest.kind != nodeString || len(digest.text) != 64 || strings.ToLower(digest.text) != digest.text {
-		return PersistedReference{}, newDiagnostic(input, "INVALID_PERSISTED_REFERENCE", "PROTO-004", "decode", "persisted reference requires sha-256 and 64 lowercase hex digits", "/persisted", value.start)
+	if !hasAlgorithm || algorithm.kind != nodeString || algorithm.text != "sha-256" || !hasCanonicalVersion || canonicalVersion.kind != nodeString || canonicalVersion.text != "c14n-1" || !hasDigest || digest.kind != nodeString || len(digest.text) != 64 || strings.ToLower(digest.text) != digest.text {
+		return PersistedReference{}, newDiagnostic(input, "INVALID_PERSISTED_REFERENCE", "PROTO-004", "decode", "persisted reference requires sha-256, c14n-1, and 64 lowercase hex digits", "/persisted", value.start)
 	}
 	for _, char := range digest.text {
 		if !strings.ContainsRune("0123456789abcdef", char) {
 			return PersistedReference{}, newDiagnostic(input, "INVALID_PERSISTED_REFERENCE", "PROTO-004", "decode", "persisted digest is not lowercase hexadecimal", "/persisted/digest", digest.start)
 		}
 	}
-	return PersistedReference{Algorithm: algorithm.text, Digest: digest.text}, nil
+	return PersistedReference{Algorithm: algorithm.text, CanonicalVersion: canonicalVersion.text, Digest: digest.text}, nil
 }
 
 func rejectUnknown(input []byte, value node, allowed map[string]bool, clause, phase, pointer string) error {
@@ -284,15 +288,7 @@ func sourceAt(input []byte, pointer string, value node) Source {
 }
 
 func capabilityPattern(value string) bool {
-	if value == "" || len(value) > 128 {
-		return false
-	}
-	for _, char := range value {
-		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '.' && char != '-' {
-			return false
-		}
-	}
-	return true
+	return profileIdentifierPattern.MatchString(value)
 }
 
 func namespacePattern(value string) bool {

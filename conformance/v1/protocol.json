@@ -8,6 +8,9 @@
       "code": "",
       "phase": ""
     },
+    {"name":"persisted-c14n-1","input":"{\"version\":\"1\",\"persisted\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}","valid":true,"code":"","phase":""},
+    {"name":"persisted-missing-canonical-version","input":"{\"version\":\"1\",\"persisted\":{\"algorithm\":\"sha-256\",\"digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}","valid":false,"code":"INVALID_PERSISTED_REFERENCE","phase":"decode"},
+    {"name":"persisted-unknown-canonical-version","input":"{\"version\":\"1\",\"persisted\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-2\",\"digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}","valid":false,"code":"INVALID_PERSISTED_REFERENCE","phase":"decode"},
     {
       "name": "unsupported-version",
       "input": "{\"version\":\"2\",\"document\":{\"operations\":[]}}",

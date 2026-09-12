@@ -43,6 +43,43 @@ func TestDecodeRequestPreservesOrderedSelectionsAndLosslessVariables(t *testing.
 	}
 }
 
+func TestDecodeRequestUsesPortableCaseSensitiveCapabilityIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"version":"1","document":{"operations":[]},"capabilities":["Vendor.Audit-1"]}`)
+	options := protocol.DecodeOptions{Capabilities: map[string]bool{"Vendor.Audit-1": true}}
+	if _, err := protocol.DecodeRequest(input, options); err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	options.Capabilities = map[string]bool{"vendor.audit-1": true}
+	if _, err := protocol.DecodeRequest(input, options); err == nil {
+		t.Fatal("case-insensitive capability lookup succeeded")
+	}
+}
+
+func TestDecodeRequestBindsPersistedReferenceCanonicalVersion(t *testing.T) {
+	t.Parallel()
+
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	request, err := protocol.DecodeRequest([]byte(`{"version":"1","persisted":{"algorithm":"sha-256","canonicalVersion":"c14n-1","digest":"`+digest+`"}}`), protocol.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	reference, ok := request.Persisted()
+	if !ok || reference.Algorithm != "sha-256" || reference.CanonicalVersion != "c14n-1" || reference.Digest != digest {
+		t.Fatalf("persisted reference = %#v, %t", reference, ok)
+	}
+	for _, persisted := range []string{
+		`{"algorithm":"sha-256","digest":"` + digest + `"}`,
+		`{"algorithm":"sha-256","canonicalVersion":"c14n-2","digest":"` + digest + `"}`,
+		`{"algorithm":"sha-256","canonicalVersion":"c14n-1","digest":"` + digest + `","purpose":"document"}`,
+	} {
+		if _, err := protocol.DecodeRequest([]byte(`{"version":"1","persisted":`+persisted+`}`), protocol.DecodeOptions{}); err == nil {
+			t.Fatalf("DecodeRequest accepted persisted reference %s", persisted)
+		}
+	}
+}
+
 func TestDecodedRequestAccessorsCannotMutateAST(t *testing.T) {
 	t.Parallel()
 
