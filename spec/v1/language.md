@@ -265,7 +265,10 @@ is `["users", 2, "display"]`.
 - **LANG-240:** Fragment names are unique within a document. A spread resolves
   one declared fragment and its optional static type condition. Unknown
   fragments, impossible type conditions, and fragment cycles are validation
-  errors with both definition and use source locations when available.
+  errors with both definition and use source locations when available. A
+  declared fragment that no spread reaches is also a validation error, located
+  at its declaration; a fragment reachable only from an unreached fragment is
+  itself unreached.
 - **LANG-241:** Fragment expansion preserves spread position and the fragment's
   internal selection order. It introduces no response-path segment and no
   binding scope. Bindings in a fragment behave as if its selections were

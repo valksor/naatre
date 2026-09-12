@@ -249,11 +249,15 @@
     },
     {
       "name": "slice-start-after-end",
-      "document": {"operations": [{"name": "Slice", "kind": "query", "select": [{"$slice": {"as": "items", "start": 3, "end": 2}}]}]},
+      "document": {"operations": [{"name": "Slice", "kind": "query", "select": [
+        {"$call": {"name": "users", "select": [
+          {"$slice": {"as": "items", "start": 3, "end": 2, "select": [{"$field": {"name": "name"}}]}}
+        ]}}
+      ]}]},
       "valid": false,
       "code": "INVALID_SLICE",
       "phase": "validate",
-      "pointer": "/operations/0/select/0/$slice",
+      "pointer": "/operations/0/select/0/$call/select/0/$slice",
       "handlerStarts": 0
     },
     {
@@ -310,6 +314,77 @@
       "code": "DUPLICATE_RESPONSE_NAME",
       "phase": "validate",
       "pointer": "/operations/0/select/1/$field/as",
+      "handlerStarts": 0
+    },
+    {
+      "name": "fragment-type-conditions-over-interface-and-union",
+      "note": "One spread narrows a union to a concrete variant and another narrows it to an interface. Both conditions are statically checked, and a branch whose condition does not hold contributes no response member.",
+      "document": {"operations": [{"name": "F", "kind": "query", "select": [
+        {"$call": {"name": "actor", "select": [
+          {"$fragment": {"name": "OnUser"}},
+          {"$fragment": {"name": "OnAdmin"}}
+        ]}}
+      ]}], "fragments": [
+        {"name": "OnUser", "on": "User", "select": [{"$field": {"name": "id"}}]},
+        {"name": "OnAdmin", "on": "PortableAdmin", "select": [{"$field": {"name": "displayName"}}]}
+      ]},
+      "valid": true,
+      "handlerStarts": 1,
+      "expectedData": {"actor": {"id": "u-1"}}
+    },
+    {
+      "name": "unknown-fragment-spread",
+      "note": "A spread naming no declared fragment is a validation failure located at the spread site.",
+      "document": {"operations": [{"name": "F", "kind": "query", "select": [
+        {"$call": {"name": "actor", "select": [{"$fragment": {"name": "Missing"}}]}}
+      ]}]},
+      "valid": false,
+      "code": "UNKNOWN_FRAGMENT",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$call/select/0",
+      "handlerStarts": 0
+    },
+    {
+      "name": "fragment-cycle",
+      "note": "A cyclic fragment graph is rejected deterministically rather than expanded until memory or stack is exhausted.",
+      "document": {"operations": [{"name": "F", "kind": "query", "select": [
+        {"$call": {"name": "actor", "select": [{"$fragment": {"name": "A"}}]}}
+      ]}], "fragments": [
+        {"name": "A", "select": [{"$fragment": {"name": "B"}}]},
+        {"name": "B", "select": [{"$fragment": {"name": "A"}}]}
+      ]},
+      "valid": false,
+      "code": "FRAGMENT_CYCLE",
+      "phase": "validate",
+      "pointer": "/fragments/1/select/0",
+      "handlerStarts": 0
+    },
+    {
+      "name": "unused-fragment",
+      "note": "A declared fragment that no spread reaches is reported, so it cannot be carried silently through planning and cost analysis. A fragment reachable only from another unused fragment is itself unused.",
+      "document": {"operations": [{"name": "F", "kind": "query", "select": [
+        {"$call": {"name": "text"}}
+      ]}], "fragments": [
+        {"name": "Never", "on": "User", "select": [{"$field": {"name": "name"}}]}
+      ]},
+      "valid": false,
+      "code": "UNUSED_FRAGMENT",
+      "phase": "validate",
+      "pointer": "/fragments/0",
+      "handlerStarts": 0
+    },
+    {
+      "name": "impossible-fragment-type-condition",
+      "note": "Editor is not a variant of the Actor union, so the condition can never match and the spread is rejected before execution.",
+      "document": {"operations": [{"name": "F", "kind": "query", "select": [
+        {"$call": {"name": "actor", "select": [{"$fragment": {"name": "OnEditor"}}]}}
+      ]}], "fragments": [
+        {"name": "OnEditor", "on": "Editor", "select": [{"$field": {"name": "name"}}]}
+      ]},
+      "valid": false,
+      "code": "IMPOSSIBLE_TYPE_CONDITION",
+      "phase": "validate",
+      "pointer": "/operations/0/select/0/$call/select/0",
       "handlerStarts": 0
     },
     {
@@ -380,13 +455,15 @@
     {
       "name": "unnest-parent-collision",
       "document": {"operations": [{"name": "Merge", "kind": "query", "select": [
-        {"$field": {"name": "id"}},
-        {"$unnest": {"select": [{"$field": {"name": "externalID", "as": "id"}}]}}
+        {"$call": {"name": "lookup", "args": {"id": {"$literal": "u-1"}}, "select": [
+          {"$field": {"name": "id"}},
+          {"$unnest": {"select": [{"$field": {"name": "externalID", "as": "id"}}]}}
+        ]}}
       ]}]},
       "valid": false,
       "code": "DUPLICATE_RESPONSE_NAME",
       "phase": "validate",
-      "pointer": "/operations/0/select/1/$unnest/select/0/$field/as",
+      "pointer": "/operations/0/select/0/$call/select/1/$unnest/select/0/$field/as",
       "handlerStarts": 0
     }
   ]

@@ -1,3 +1,3 @@
 # ripwire quality acks v1 — written by --quality-ack; a finding stays suppressed until it worsens past its acked magnitude
 # format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)
-ack verbosity 6aa361097e6f3edd 373 cid=830175c21d366473 conformance fixture vectors are authored contract data; adding required vectors is the deliverable, not code debt
+ack verbosity 6aa361097e6f3edd 450 cid=e0a046791c5113c8 conformance fixture vectors are authored contract data; adding required vectors is the deliverable, not code debt

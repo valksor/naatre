@@ -20,8 +20,13 @@ func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 		{ID: "ConsumeInput", Kind: schema.InputObjectType, Input: true, Fields: map[string]schema.FieldDescriptor{
 			"value": {Type: schema.TypeID(schema.String), Required: true},
 		}},
+		{ID: "IntInput", Kind: schema.InputObjectType, Input: true, Fields: map[string]schema.FieldDescriptor{
+			"value": {Type: schema.TypeID(schema.Int32), Required: true},
+		}},
 		{ID: "User", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{
-			"name": {Type: schema.TypeID(schema.String)},
+			"name":       {Type: schema.TypeID(schema.String)},
+			"id":         {Type: schema.TypeID(schema.ID)},
+			"externalID": {Type: schema.TypeID(schema.ID)},
 		}},
 		{ID: "Admin", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{
 			"name": {Type: schema.TypeID(schema.String)},
@@ -123,6 +128,8 @@ func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 		calls.Add(1)
 		return "", nil
 	}), "transactional")
+	registerValidationVectorRoots(t, registry, &calls, rootDescriptor)
+	registerValidationMembers(t, registry, &calls)
 	field := runtime.Descriptor{Name: "name", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,
 		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect)}
 	if err := registry.Register(runtime.BindField[map[string]any, string](field, func(context.Context, map[string]any) (string, error) {
@@ -152,4 +159,71 @@ func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 		t.Fatalf("freeze registry: %v", err)
 	}
 	return snapshot, &calls
+}
+
+// registerValidationMembers binds the object members the portable language
+// vectors address, including the interface owners that fragment type
+// conditions narrow to.
+func registerValidationMembers(t testing.TB, registry *runtime.Registry, calls *atomic.Int64) {
+	t.Helper()
+	for _, member := range []struct {
+		owner  schema.TypeID
+		name   string
+		output schema.TypeID
+	}{
+		{"User", "id", schema.TypeID(schema.ID)},
+		{"User", "externalID", schema.TypeID(schema.ID)},
+		{"GroupA", "name", schema.TypeID(schema.String)},
+		{"GroupB", "name", schema.TypeID(schema.String)},
+		{"Staff", "name", schema.TypeID(schema.String)},
+		{"Editor", "name", schema.TypeID(schema.String)},
+	} {
+		definition := runtime.BindField[map[string]any, string](runtime.Descriptor{
+			Name: member.name, Scope: runtime.ObjectScope, Owner: member.owner, Member: runtime.FieldMember,
+			Output: member.output, Metadata: completeMetadata(runtime.ReadEffect),
+		}, func(context.Context, map[string]any) (string, error) {
+			calls.Add(1)
+			return "", nil
+		})
+		if err := registry.Register(definition); err != nil {
+			t.Fatalf("register %s.%s: %v", member.owner, member.name, err)
+		}
+	}
+}
+
+// registerValidationVectorRoots binds the root calls the portable language
+// vectors reference beyond the shared set, including the writes a query vector
+// must be rejected for reaching.
+func registerValidationVectorRoots(t testing.TB, registry *runtime.Registry, calls *atomic.Int64,
+	rootDescriptor func(name string, input, output schema.TypeID) runtime.Descriptor,
+) {
+	t.Helper()
+	text := func(descriptor runtime.Descriptor) runtime.Definition {
+		return runtime.BindInvocation[string](descriptor, func(context.Context, runtime.Invocation) (string, error) {
+			calls.Add(1)
+			return "", nil
+		})
+	}
+	write := func(name string) runtime.Descriptor {
+		descriptor := rootDescriptor(name, schema.TypeID(schema.String), schema.TypeID(schema.String))
+		descriptor.Kind = protocol.Mutation
+		descriptor.Metadata = completeMetadata(runtime.WriteEffect)
+		return descriptor
+	}
+	createUser := write("createUser")
+	createUser.Output = "User"
+	definitions := []runtime.Definition{
+		text(rootDescriptor("load", schema.TypeID(schema.String), schema.TypeID(schema.String))),
+		text(rootDescriptor("requiresInt", "IntInput", schema.TypeID(schema.String))),
+		text(write("deleteUser")),
+		runtime.BindInvocation[map[string]any](createUser, func(context.Context, runtime.Invocation) (map[string]any, error) {
+			calls.Add(1)
+			return nil, nil
+		}),
+	}
+	for _, definition := range definitions {
+		if err := registry.Register(definition); err != nil {
+			t.Fatalf("register vector root: %v", err)
+		}
+	}
 }

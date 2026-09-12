@@ -71,8 +71,8 @@ func TestExecutorConsumesPortablePositiveLanguageVectors(t *testing.T) {
 			}
 		})
 	}
-	if executed != 15 {
-		t.Fatalf("executed positive language vectors = %d, want 15", executed)
+	if executed != 16 {
+		t.Fatalf("executed positive language vectors = %d, want 16", executed)
 	}
 }
 
@@ -120,6 +120,13 @@ func portableExecutionRegistry(t testing.TB, vector string) (runtime.Snapshot, *
 	registerType(schema.TypeDescriptor{ID: "CompareInput", Kind: schema.InputObjectType, Input: true, Fields: map[string]schema.FieldDescriptor{
 		"item": {Type: "User", Required: true}, "owner": {Type: "PortableUsers", Required: true},
 	}})
+	// An abstract shape exists only for the type-condition vector, so every
+	// other vector keeps the minimal schema it declares.
+	if vector == "fragment-type-conditions-over-interface-and-union" {
+		for _, descriptor := range portableAbstractTypes() {
+			registerType(descriptor)
+		}
+	}
 	types, err := catalog.Freeze()
 	if err != nil {
 		t.Fatalf("freeze types: %v", err)
@@ -144,6 +151,10 @@ func registerPortableExecutionDefinitions(t testing.TB, registry *runtime.Regist
 	root := func(name string, input, output schema.TypeID) runtime.Descriptor {
 		return runtime.Descriptor{Name: name, Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 			Input: input, Output: output, Metadata: completeMetadata(runtime.ReadEffect)}
+	}
+	if vector == "fragment-type-conditions-over-interface-and-union" {
+		registerPortableTypeConditionDefinitions(t, registry, starts)
+		return
 	}
 	if vector == "nested-explicit-map-and-list-metadata" || vector == "empty-list-map" ||
 		vector == "collection-index-slice-page-and-current" || vector == "fragment-parallel-unnest-and-expression-contexts" ||
@@ -333,5 +344,50 @@ func assertGoldenData(t testing.TB, name string, data map[string]any) {
 	expectedCanonical, expectedErr := protocol.CanonicalizeJSON(expected, protocol.Limits{})
 	if actualErr != nil || expectedErr != nil || !bytes.Equal(actualCanonical, expectedCanonical) {
 		t.Fatalf("golden %s = %s, want %s (%v, %v)", name, actual, expected, actualErr, expectedErr)
+	}
+}
+
+// registerPortableTypeConditionDefinitions binds the abstract shape the type
+// condition vector narrows. The runtime value is tagged User, so the User
+// condition matches and the admin-only branch contributes nothing.
+func registerPortableTypeConditionDefinitions(t testing.TB, registry *runtime.Registry, starts *atomic.Int64) {
+	t.Helper()
+	register := func(definition runtime.Definition) {
+		if err := registry.Register(definition); err != nil {
+			t.Fatalf("register definition: %v", err)
+		}
+	}
+	register(runtime.BindInvocation[schema.TaggedValue](runtime.Descriptor{
+		Name: "actor", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
+		Input: schema.TypeID(schema.String), Output: "PortableActor", Metadata: completeMetadata(runtime.ReadEffect),
+	}, func(context.Context, runtime.Invocation) (schema.TaggedValue, error) {
+		starts.Add(1)
+		return schema.MustTag("User", map[string]any{"id": "u-1", "displayName": "Ada"}), nil
+	}))
+	member := func(owner schema.TypeID, name string, output schema.TypeID) {
+		register(runtime.BindField[map[string]any, string](runtime.Descriptor{
+			Name: name, Scope: runtime.ObjectScope, Owner: owner, Member: runtime.FieldMember,
+			Output: output, Metadata: completeMetadata(runtime.ReadEffect),
+		}, func(_ context.Context, source map[string]any) (string, error) {
+			value, _ := source[name].(string)
+			return value, nil
+		}))
+	}
+	for _, owner := range []schema.TypeID{"User", "PortableAdmin", "PortableNamed"} {
+		member(owner, "displayName", schema.TypeID(schema.String))
+	}
+	member("User", "id", schema.TypeID(schema.ID))
+}
+
+// portableAbstractTypes is the interface and union shape the fragment type
+// condition vector narrows.
+func portableAbstractTypes() []schema.TypeDescriptor {
+	named := map[string]schema.FieldDescriptor{"displayName": {Type: schema.TypeID(schema.String)}}
+	return []schema.TypeDescriptor{
+		{ID: "PortableAdmin", Kind: schema.ObjectType, Output: true, Fields: named},
+		{ID: "PortableNamed", Kind: schema.InterfaceType, Output: true, Fields: named,
+			Variants: []schema.TypeID{"User", "PortableAdmin"}},
+		{ID: "PortableActor", Kind: schema.UnionType, Output: true,
+			Variants: []schema.TypeID{"User", "PortableAdmin"}},
 	}
 }

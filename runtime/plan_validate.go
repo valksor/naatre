@@ -68,20 +68,25 @@ type validationScope struct {
 }
 
 type planValidator struct {
-	registry    Snapshot
-	request     *protocol.Request
-	operation   protocol.Operation
-	fragments   map[string]protocol.Fragment
-	variables   map[string]*plannedVariable
-	allBindings map[string]bindingDeclaration
-	context     []protocol.Source
-	issues      []ValidationIssue
+	registry  Snapshot
+	request   *protocol.Request
+	operation protocol.Operation
+	fragments map[string]protocol.Fragment
+	// usedFragments records every fragment reached by a spread from the
+	// operation, so an unreachable declaration is reported rather than silently
+	// carried through planning and cost analysis.
+	usedFragments map[string]bool
+	variables     map[string]*plannedVariable
+	allBindings   map[string]bindingDeclaration
+	context       []protocol.Source
+	issues        []ValidationIssue
 }
 
 func newPlanValidator(registry Snapshot, request *protocol.Request, operation protocol.Operation) *planValidator {
 	validator := &planValidator{
 		registry: registry, request: request, operation: operation,
-		fragments: make(map[string]protocol.Fragment), variables: make(map[string]*plannedVariable),
+		fragments: make(map[string]protocol.Fragment), usedFragments: make(map[string]bool),
+		variables:   make(map[string]*plannedVariable),
 		allBindings: make(map[string]bindingDeclaration),
 	}
 	for _, fragment := range request.Document().Fragments() {
@@ -104,6 +109,13 @@ func (v *planValidator) validate() ([]planNode, []plannedSelection) {
 		planned := v.variables[variable.Name()]
 		if planned != nil && !planned.used {
 			v.add("UNUSED_VARIABLE", "LANG-005", "variable is declared but never used", variable.Source())
+		}
+	}
+	// A fragment reached only from another unreachable fragment is itself
+	// unreachable, which falls out of marking at the spread site.
+	for _, fragment := range v.request.Document().Fragments() {
+		if !v.usedFragments[fragment.Name()] {
+			v.add("UNUSED_FRAGMENT", "LANG-240", "fragment is declared but never spread", fragment.Source())
 		}
 	}
 	sort.SliceStable(v.issues, func(left, right int) bool {
@@ -405,6 +417,7 @@ func (v *planValidator) validateFragment(selection protocol.Selection, scope *va
 		v.add("UNKNOWN_FRAGMENT", "LANG-240", "fragment is not declared", selection.Source())
 		return
 	}
+	v.usedFragments[fragment.Name()] = true
 	if firstUse, active := scope.fragmentStack[fragment.Name()]; active {
 		v.addRelated("FRAGMENT_CYCLE", "LANG-240", "fragment cycle detected", selection.Source(), fragment.Source(), firstUse)
 		return

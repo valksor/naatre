@@ -70,6 +70,10 @@ func TestPlanReuseConformanceFixture(t *testing.T) {
 	}
 }
 
+// Every portable negative vector is executed against the planner, not merely
+// shape-checked. A fixture that declares a diagnostic nobody runs is
+// decoration: it cannot detect drift between the language contract and the
+// implementation.
 func TestPlannerConsumesPortableLanguageDiagnosticFixture(t *testing.T) {
 	t.Parallel()
 	content, err := os.ReadFile(filepath.Join("..", "conformance", "v1", "language.json"))
@@ -80,7 +84,7 @@ func TestPlannerConsumesPortableLanguageDiagnosticFixture(t *testing.T) {
 		Vectors []struct {
 			Name     string          `json:"name"`
 			Document json.RawMessage `json:"document"`
-			Valid    bool            `json:"valid"`
+			Valid    *bool           `json:"valid"`
 			Code     string          `json:"code"`
 			Phase    string          `json:"phase"`
 			Pointer  string          `json:"pointer"`
@@ -89,41 +93,77 @@ func TestPlannerConsumesPortableLanguageDiagnosticFixture(t *testing.T) {
 	if err := json.Unmarshal(content, &fixture); err != nil {
 		t.Fatalf("decode language fixture: %v", err)
 	}
-	var vector *struct {
-		Name     string          `json:"name"`
-		Document json.RawMessage `json:"document"`
-		Valid    bool            `json:"valid"`
-		Code     string          `json:"code"`
-		Phase    string          `json:"phase"`
-		Pointer  string          `json:"pointer"`
-	}
-	for index := range fixture.Vectors {
-		if fixture.Vectors[index].Name == "implicit-list-item-mapping" {
-			vector = &fixture.Vectors[index]
-			break
+	executed := 0
+	for _, vector := range fixture.Vectors {
+		if vector.Valid == nil || *vector.Valid {
+			continue
 		}
+		executed++
+		t.Run(vector.Name, func(t *testing.T) {
+			t.Parallel()
+			assertPortableNegativeVector(t, vector.Name, vector.Code, vector.Phase, vector.Pointer, vector.Document)
+		})
 	}
-	if vector == nil || vector.Valid || vector.Code == "" || vector.Phase == "" || vector.Pointer == "" {
-		t.Fatalf("missing portable diagnostic vector: %#v", vector)
+	if executed == 0 {
+		t.Fatal("language fixture declares no negative vectors")
 	}
-	envelope := append([]byte(`{"version":"1","document":`), vector.Document...)
+}
+
+// assertPortableNegativeVector requires the document to be rejected with the
+// diagnostic the vector declares, at its declared location, before any handler
+// runs. Rejection may happen while decoding or while planning; the vector
+// declares which phase owns it.
+func assertPortableNegativeVector(t *testing.T, name, code, phase, pointer string, document json.RawMessage) {
+	t.Helper()
+	if code == "" || phase == "" || pointer == "" {
+		t.Fatalf("negative vector %q declares no diagnostic", name)
+	}
+	located := "/document" + pointer
+	envelope := append([]byte(`{"version":"1","document":`), document...)
 	envelope = append(envelope, '}')
-	request, err := protocol.DecodeRequest(envelope, protocol.DecodeOptions{})
-	if err != nil {
-		t.Fatalf("decode portable vector: %v", err)
+	request, decodeErr := protocol.DecodeRequest(envelope, protocol.DecodeOptions{})
+	if decodeErr != nil {
+		assertPortableDecodeDiagnostic(t, code, phase, located, decodeErr)
+		return
 	}
 	snapshot, calls := validationRegistry(t)
-	_, err = runtime.Prepare(snapshot, request)
+	_, prepareErr := runtime.Prepare(snapshot, request)
 	var validationErr *runtime.ValidationErrors
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("Prepare error = %T %v, want ValidationErrors", err, err)
+	if !errors.As(prepareErr, &validationErr) {
+		t.Fatalf("Prepare error = %T %v, want ValidationErrors declaring %s", prepareErr, prepareErr, code)
 	}
-	issues := validationErr.Issues()
-	if len(issues) != 1 || issues[0].Diagnostic.Code != vector.Code || issues[0].Diagnostic.Phase != vector.Phase ||
-		issues[0].Diagnostic.Pointer != "/document"+vector.Pointer {
-		t.Fatalf("portable diagnostic = %#v, want %s %s /document%s", issues, vector.Code, vector.Phase, vector.Pointer)
-	}
+	assertPortableIssue(t, code, phase, located, validationErr.Issues())
+	// A rejected document must never have reached a handler.
 	if calls.Load() != 0 {
-		t.Fatalf("portable invalid vector invoked %d handlers", calls.Load())
+		t.Fatalf("invalid vector invoked %d handlers", calls.Load())
 	}
+}
+
+func assertPortableDecodeDiagnostic(t *testing.T, code, phase, pointer string, err error) {
+	t.Helper()
+	var diagnostic *protocol.Diagnostic
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("decode error = %T %v, want Diagnostic declaring %s", err, err, code)
+	}
+	if diagnostic.Code != code || diagnostic.Phase != phase || diagnostic.Pointer != pointer {
+		t.Fatalf("decode diagnostic = %s %s %s, want %s %s %s",
+			diagnostic.Code, diagnostic.Phase, diagnostic.Pointer, code, phase, pointer)
+	}
+}
+
+// assertPortableIssue requires the declared diagnostic to be present at its
+// declared location. Other issues may accompany it, since one malformed
+// document can violate several clauses, but the declared one must be exact.
+func assertPortableIssue(t *testing.T, code, phase, pointer string, issues []runtime.ValidationIssue) {
+	t.Helper()
+	for _, issue := range issues {
+		if issue.Diagnostic.Code == code && issue.Diagnostic.Phase == phase && issue.Diagnostic.Pointer == pointer {
+			return
+		}
+	}
+	reported := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		reported = append(reported, issue.Diagnostic.Code+" "+issue.Diagnostic.Pointer)
+	}
+	t.Fatalf("issues %v do not contain %s %s at %s", reported, code, phase, pointer)
 }
