@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/valksor/naatre/protocol"
 	"github.com/valksor/naatre/schema"
@@ -106,6 +107,7 @@ type executionScope struct {
 	bindings map[string]executionValue
 	limiter  chan struct{}
 	parallel bool
+	grace    time.Duration
 }
 
 type nodeResult struct {
@@ -123,8 +125,12 @@ type sequenceResult struct {
 	errors []ExecutionError
 }
 
-func (p *Plan) executeComposed(ctx context.Context) Outcome {
-	scope := executionScope{bindings: make(map[string]executionValue), limiter: make(chan struct{}, maxParallelExecutions)}
+func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outcome {
+	scope := executionScope{
+		bindings: make(map[string]executionValue),
+		limiter:  make(chan struct{}, maxParallelExecutions),
+		grace:    options.abandonGrace(),
+	}
 	result := p.executeSequence(ctx, p.nodes, scope, nil)
 	sortExecutionErrors(result.errors)
 	return Outcome{Data: result.data, Errors: result.errors}
@@ -271,9 +277,8 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 		failure := nodeExecutionError("CANCELLED", "request cancelled", node, path, err)
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 	}
-	output, err := node.definition.call(ctx, source, input)
+	output, err := callWithinGrace(ctx, node, source, input, release, scope.grace)
 	if err != nil {
-		release()
 		code, message := "HANDLER_FAILED", "field unavailable"
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			code, message = "CANCELLED", "request cancelled"
@@ -288,7 +293,6 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 	}
 
 	completed, issues, available, completionErr := completeSafely(output, node.definition.descriptor.Output, node.definition.descriptor.OutputNullable, p.types)
-	release()
 	result := executionValue{value: completed, typeInfo: node.output, status: valueAvailable, actualType: runtimeActualType(node.output.id, completed)}
 	if completed == nil && available {
 		result.status = valueNull
@@ -538,7 +542,7 @@ func completeRecovering(complete func() (any, []completionIssue, bool, error)) (
 func cloneExecutionScope(scope executionScope) executionScope {
 	return executionScope{
 		current: scope.current, parent: scope.parent, bindings: cloneBindings(scope.bindings),
-		limiter: scope.limiter, parallel: scope.parallel,
+		limiter: scope.limiter, parallel: scope.parallel, grace: scope.grace,
 	}
 }
 
@@ -557,6 +561,54 @@ func acquireExecutionSlot(ctx context.Context, scope executionScope) (func(), er
 		return func() { <-scope.limiter }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// handlerOutcome carries one handler return across the abandonment boundary.
+type handlerOutcome struct {
+	value any
+	err   error
+}
+
+// callWithinGrace runs a handler and bounds how long the response waits for it.
+// Cancellation signals a handler to stop; it does not stop it, and Go cannot
+// stop an arbitrary goroutine. A handler that has not returned once grace
+// elapses after cancellation is abandoned: the response reports the selection
+// as cancelled while the handler keeps its accounting slot until it exits, so
+// an uncooperative handler delays neither the response nor its siblings.
+//
+// release is transferred to whichever path owns the handler, so the slot is
+// always freed exactly once, by the handler itself when it is abandoned.
+func callWithinGrace(ctx context.Context, node planNode, source, input any, release func(), grace time.Duration) (any, error) {
+	// An uncancellable context can never abandon, so it needs no extra
+	// goroutine and keeps the common sequential path direct.
+	if ctx.Done() == nil {
+		defer release()
+		return node.definition.call(ctx, source, input)
+	}
+	// Buffered, so an abandoned handler publishes its result and exits rather
+	// than blocking forever on a receiver that has already moved on.
+	returned := make(chan handlerOutcome, 1)
+	go func() {
+		defer release()
+		value, err := node.definition.call(ctx, source, input)
+		returned <- handlerOutcome{value: value, err: err}
+	}()
+	select {
+	case outcome := <-returned:
+		return outcome.value, outcome.err
+	case <-ctx.Done():
+	}
+	if grace < 0 {
+		return nil, fmt.Errorf("%w: handler did not return when cancelled", context.Cause(ctx))
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case outcome := <-returned:
+		return outcome.value, outcome.err
+	case <-timer.C:
+		return nil, fmt.Errorf("%w: handler did not return within %s of cancellation", context.Cause(ctx), grace)
 	}
 }
 

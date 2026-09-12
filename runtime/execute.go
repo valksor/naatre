@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/valksor/naatre/protocol"
 	"github.com/valksor/naatre/schema"
@@ -89,10 +90,38 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 	}, nil
 }
 
-// Execute runs a prepared operation in selection order. Query failures preserve
-// independent sibling data; mutation failures stop later mutation scheduling.
+// DefaultAbandonGrace is how long Execute waits, after cancellation, for a
+// handler to observe it and return before the handler is abandoned.
+const DefaultAbandonGrace = 5 * time.Second
+
+// ExecuteOptions tunes one execution. The zero value is the default policy.
+type ExecuteOptions struct {
+	// AbandonGrace bounds the wait for a handler to return after the request
+	// is cancelled. Go cannot stop an arbitrary goroutine, so a handler that
+	// ignores cancellation is detached rather than waited for: it keeps its
+	// accounting slot until it exits, and the response reports the selection
+	// as cancelled. Zero selects DefaultAbandonGrace; a negative value
+	// abandons an uncooperative handler as soon as cancellation is observed.
+	AbandonGrace time.Duration
+}
+
+func (o ExecuteOptions) abandonGrace() time.Duration {
+	if o.AbandonGrace == 0 {
+		return DefaultAbandonGrace
+	}
+	return o.AbandonGrace
+}
+
+// Execute runs a prepared operation in selection order under the default
+// policy. Query failures preserve independent sibling data; mutation failures
+// stop later mutation scheduling.
 func (p *Plan) Execute(ctx context.Context) Outcome {
-	return p.executeComposed(ctx)
+	return p.executeComposed(ctx, ExecuteOptions{})
+}
+
+// ExecuteWith runs a prepared operation under an explicit policy.
+func (p *Plan) ExecuteWith(ctx context.Context, options ExecuteOptions) Outcome {
+	return p.executeComposed(ctx, options)
 }
 
 func captureVariableValues(request *protocol.Request, definitions []protocol.VariableDefinition) map[string]json.RawMessage {

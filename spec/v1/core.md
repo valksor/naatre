@@ -144,11 +144,21 @@ directive, even when the request variable currently skips the fragment.
   they do not promise the same winners across schedules.
 - **CORE-305:** Cancellation is cooperative. It stops new admissions, reaches
   active handlers through the host cancellation primitive, and waits according
-  to the runtime ownership policy. It is not proof that a write rolled back.
+  to the runtime ownership policy of CORE-308. It is not proof that a write
+  rolled back.
 - **CORE-306:** Handler panics or equivalent host failures MUST be contained at
   the handler boundary and exposed only as redacted internal errors.
 - **CORE-307:** A context-dependent read can return different data across two
   executions without violating deterministic assembly.
+- **CORE-308:** The runtime ownership policy is bounded response waiting. A
+  runtime MUST join every handler that returns within a declared grace period
+  measured from cancellation, and MUST abandon one that does not: the selection
+  is reported as cancelled, the handler retains its accounting slot until it
+  actually exits, and neither the response nor any sibling selection waits for
+  it further. A runtime MUST declare its default grace period and MUST NOT
+  report an abandoned handler as stopped, rolled back, or completed. Handlers
+  MUST observe cancellation; abandonment bounds the response and is not a
+  guarantee that the handler ended.
 
 Valid: two parallel reads finish in either order but data and errors are placed
 in declaration/path order.
@@ -165,6 +175,7 @@ a cancelled mutation is automatically reported as rolled back.
 | CORE-304 | Parallel failures sort by response path then source location. | Completion timing determines response error order. |
 | CORE-305 | Cancellation stops queued admission and reaches every active handler. | A cancellation response claims an already-running write rolled back. |
 | CORE-306 | A host panic is contained and redacted at the handler boundary. | Panic text escapes through direct invocation. |
+| CORE-308 | A handler that ignores cancellation is abandoned after the declared grace and the response is still delivered. | The response blocks indefinitely on a handler that ignores cancellation. |
 | CORE-307 | A context-dependent read returns different application values while response structure remains stable. | Different external data is called a scheduler determinism violation. |
 
 ## Capabilities and compatibility
