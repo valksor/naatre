@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/valksor/naatre/protocol"
@@ -39,14 +40,79 @@ type ExecutionError struct {
 	internal  error
 }
 
+// Error renders only the public code and message, so logging or wrapping an
+// execution error cannot disclose its internal cause.
+func (e ExecutionError) Error() string { return e.Code + ": " + e.Message }
+
 // Unwrap exposes the internal cause only to in-process server hooks. It is not
-// serialized by the public response shape.
+// serialized by the public response shape. ExecutionError implements error so
+// a hook can reach the cause through errors.Unwrap, errors.Is, and errors.As.
 func (e ExecutionError) Unwrap() error { return e.internal }
+
+// EffectState reports what happened to the operation's effects, separately
+// from whether the response could be assembled. A mutation can apply an effect
+// and still fail to project its response, and a generic retryable error would
+// hide that difference.
+type EffectState string
+
+const (
+	// EffectNotApplicable is reported for an operation that declares no effect.
+	EffectNotApplicable EffectState = "not-applicable"
+	// EffectNone is reported when no effectful handler started.
+	EffectNone EffectState = "none"
+	// EffectApplied is reported when every effectful handler completed and the
+	// response was assembled from them.
+	EffectApplied EffectState = "applied"
+	// EffectIndeterminate is reported when an effectful handler started and the
+	// operation then failed. Without a transaction the runtime cannot say
+	// whether the effect survived, and MUST NOT claim it was undone.
+	EffectIndeterminate EffectState = "indeterminate"
+	// EffectRolledBack is reported only when a transaction confirmed the undo.
+	EffectRolledBack EffectState = "rolled-back"
+)
 
 // Outcome contains deterministic partial data and ordered public errors.
 type Outcome struct {
 	Data   map[string]any
 	Errors []ExecutionError
+	// Effects describes the operation's effect state. It is safe outcome
+	// metadata, not an error, and never implies permission to replay a write.
+	Effects EffectState
+}
+
+// ErrIncomplete reports that an outcome carries unresolved data, so it must not
+// be projected onto a model whose required fields are non-null.
+var ErrIncomplete = errors.New("naatre: outcome is incomplete")
+
+// RequireComplete returns the data only when nothing was left unresolved. An
+// execution error always means some selection has no value, so a caller cannot
+// silently cast partial data into a successful domain model; a legitimate null
+// carries no error and stays complete.
+func (o Outcome) RequireComplete() (map[string]any, error) {
+	if len(o.Errors) == 0 {
+		return o.Data, nil
+	}
+	paths := make([]string, 0, len(o.Errors))
+	for _, failure := range o.Errors {
+		paths = append(paths, fmt.Sprintf("%s at %s", failure.Code, formatResponsePath(failure.Path)))
+	}
+	return nil, fmt.Errorf("%w: %s", ErrIncomplete, strings.Join(paths, "; "))
+}
+
+// formatResponsePath renders a response path for diagnostics. The root path is
+// empty, which is how an operation-level failure is identified.
+func formatResponsePath(path []any) string {
+	if len(path) == 0 {
+		return "<root>"
+	}
+	var rendered strings.Builder
+	for index, segment := range path {
+		if index != 0 {
+			rendered.WriteByte('.')
+		}
+		fmt.Fprintf(&rendered, "%v", segment)
+	}
+	return rendered.String()
 }
 
 type plannedSelection struct {

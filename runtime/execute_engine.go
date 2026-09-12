@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/valksor/naatre/protocol"
@@ -108,6 +109,35 @@ type executionScope struct {
 	limiter  chan struct{}
 	parallel bool
 	grace    time.Duration
+	effects  *effectRecorder
+}
+
+// effectRecorder tracks whether any write handler started and whether one
+// completed, so the outcome can separate "no effect" from "effect applied" and
+// from "an effect started and the operation then failed". Parallel branches
+// share one recorder, so it is atomic.
+type effectRecorder struct {
+	started   atomic.Bool
+	completed atomic.Bool
+}
+
+// state folds the recorded effects and the operation result into the reported
+// effect state. Without a transaction the runtime cannot observe an undo, so it
+// reports indeterminate rather than claiming a rollback.
+func (r *effectRecorder) state(kind protocol.OperationKind, failed bool) EffectState {
+	if kind != protocol.Mutation {
+		return EffectNotApplicable
+	}
+	switch {
+	case !r.started.Load():
+		return EffectNone
+	case failed:
+		return EffectIndeterminate
+	case r.completed.Load():
+		return EffectApplied
+	default:
+		return EffectIndeterminate
+	}
 }
 
 type nodeResult struct {
@@ -130,10 +160,27 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 		bindings: make(map[string]executionValue),
 		limiter:  make(chan struct{}, maxParallelExecutions),
 		grace:    options.abandonGrace(),
+		effects:  &effectRecorder{},
+	}
+	// Cancellation observed before any selection runs is operation-level: no
+	// field is responsible, so it carries the empty root path.
+	if err := ctx.Err(); err != nil {
+		return Outcome{
+			Data: map[string]any{},
+			Errors: []ExecutionError{{
+				Code: CodeCancelled, Message: "request cancelled",
+				Path: []any{}, Retryable: true, internal: err,
+			}},
+			Effects: scope.effects.state(p.kind, true),
+		}
 	}
 	result := p.executeSequence(ctx, p.nodes, scope, nil)
 	sortExecutionErrors(result.errors)
-	return Outcome{Data: result.data, Errors: result.errors}
+	return Outcome{
+		Data:    result.data,
+		Errors:  result.errors,
+		Effects: scope.effects.state(p.kind, result.failed),
+	}
 }
 
 func (p *Plan) executeSequence(ctx context.Context, nodes []planNode, scope executionScope, path []any) sequenceResult {
@@ -253,23 +300,9 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
 	}
 
-	var source any
-	if node.kind == protocol.FieldSelection || node.definition.descriptor.Scope == ObjectScope {
-		if scope.current.status != valueAvailable && scope.current.status != valueNull {
-			err := unavailableContinuationError(node, path, scope.current.status)
-			return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
-		}
-		if scope.current.status == valueNull {
-			err := nodeExecutionError("RESULT_NULL", "current value is null", node, path, errors.New("non-null member source is null"))
-			return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
-		}
-		source = sourceValue(scope.current)
-		isolated, copyErr := copyOutput(reflect.ValueOf(source), 0, &copyState{active: make(map[copyReference]bool)})
-		if copyErr != nil {
-			failure := nodeExecutionError("INTERNAL", "internal execution error", node, path, fmt.Errorf("copy handler source: %w", copyErr))
-			return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
-		}
-		source = isolated
+	source, sourceErr := memberSource(node, scope, path)
+	if sourceErr != nil {
+		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*sourceErr}}
 	}
 
 	release, err := acquireExecutionSlot(ctx, scope)
@@ -277,18 +310,12 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 		failure := nodeExecutionError("CANCELLED", "request cancelled", node, path, err)
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 	}
+	// Recorded before the call, so an effect that started and then failed is
+	// never reported as though it never happened.
+	scope.recordEffect(node, &scope.effects.started)
 	output, err := callWithinGrace(ctx, node, source, input, release, scope.grace)
 	if err != nil {
-		code, message := "HANDLER_FAILED", "field unavailable"
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			code, message = "CANCELLED", "request cancelled"
-		} else {
-			var panicFailure *handlerPanic
-			if errors.As(err, &panicFailure) {
-				code, message = "INTERNAL", "internal execution error"
-			}
-		}
-		failure := nodeExecutionError(code, message, node, path, err)
+		failure := handlerFailure(node, path, err)
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
 	}
 
@@ -311,6 +338,9 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 		result.unavailable = unavailableMembers(issues, inherited)
 	}
 
+	if available {
+		scope.recordEffect(node, &scope.effects.completed)
+	}
 	presentation := completed
 	if available && len(node.children) != 0 {
 		childScope := childExecutionScope(scope, result, scope.current)
@@ -543,6 +573,7 @@ func cloneExecutionScope(scope executionScope) executionScope {
 	return executionScope{
 		current: scope.current, parent: scope.parent, bindings: cloneBindings(scope.bindings),
 		limiter: scope.limiter, parallel: scope.parallel, grace: scope.grace,
+		effects: scope.effects,
 	}
 }
 
@@ -651,4 +682,52 @@ func statusFromRaw(raw json.RawMessage) executionStatus {
 		return valueNull
 	}
 	return valueAvailable
+}
+
+// recordEffect marks a write-effect milestone, so effect state never depends on
+// a caller remembering to check the handler's registered effect.
+func (s executionScope) recordEffect(node planNode, milestone *atomic.Bool) {
+	if s.effects == nil || node.definition.descriptor.Metadata.Effect != WriteEffect {
+		return
+	}
+	milestone.Store(true)
+}
+
+// memberSource isolates the current value for a handler that reads one. A
+// member cannot be projected from an unavailable or null continuation, and the
+// value is copied so a handler cannot reach runtime-owned state.
+func memberSource(node planNode, scope executionScope, path []any) (any, *ExecutionError) {
+	if node.kind != protocol.FieldSelection && node.definition.descriptor.Scope != ObjectScope {
+		return nil, nil
+	}
+	if scope.current.status != valueAvailable && scope.current.status != valueNull {
+		failure := unavailableContinuationError(node, path, scope.current.status)
+		return nil, &failure
+	}
+	if scope.current.status == valueNull {
+		failure := nodeExecutionError(CodeResultNull, "current value is null", node, path, errors.New("non-null member source is null"))
+		return nil, &failure
+	}
+	isolated, copyErr := copyOutput(reflect.ValueOf(sourceValue(scope.current)), 0, &copyState{active: make(map[copyReference]bool)})
+	if copyErr != nil {
+		failure := nodeExecutionError(CodeInternal, "internal execution error", node, path, fmt.Errorf("copy handler source: %w", copyErr))
+		return nil, &failure
+	}
+	return isolated, nil
+}
+
+// handlerFailure classifies a handler error into its public shape. Cancellation
+// and containment stay runtime-owned; only a genuine domain failure may select
+// its own public code.
+func handlerFailure(node planNode, path []any, err error) ExecutionError {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		failure := nodeExecutionError(CodeCancelled, "request cancelled", node, path, err)
+		failure.Retryable = true
+		return failure
+	}
+	var panicFailure *handlerPanic
+	if errors.As(err, &panicFailure) {
+		return nodeExecutionError(CodeInternal, "internal execution error", node, path, err)
+	}
+	return applyDomainError(nodeExecutionError(CodeHandlerFailed, "field unavailable", node, path, err), err)
 }
