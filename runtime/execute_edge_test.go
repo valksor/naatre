@@ -351,6 +351,10 @@ func TestExecuteBatchEligibleCallsRetainCompletionBarrier(t *testing.T) {
 // TYPE-206 forbids representing a failed output by deleting unrelated parent
 // data. A completion issue nested below a member must leave that member
 // available with its remaining valid data.
+// TYPE-206 forbids representing a failed output by deleting unrelated parent
+// data. A completion issue nested below a member leaves that member available
+// with its remaining valid data, while the member that actually failed stays
+// unavailable however deep the selection reaches it.
 func TestExecuteNestedCompletionFailureKeepsSiblingData(t *testing.T) {
 	t.Parallel()
 	types := freezeCompositionTypes(t, []schema.TypeDescriptor{
@@ -370,13 +374,6 @@ func TestExecuteNestedCompletionFailureKeepsSiblingData(t *testing.T) {
 	}, func(context.Context, runtime.Invocation) (map[string]any, error) {
 		return map[string]any{"name": "Ada", "profile": map[string]any{"bio": 7, "nickname": "ada"}}, nil
 	}))
-	registerComposition(t, registry, runtime.BindField[map[string]any, string](runtime.Descriptor{
-		Name: "name", Scope: runtime.ObjectScope, Owner: "Person", Member: runtime.FieldMember,
-		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
-	}, func(_ context.Context, source map[string]any) (string, error) {
-		value, _ := source["name"].(string)
-		return value, nil
-	}))
 	registerComposition(t, registry, runtime.BindField[map[string]any, map[string]any](runtime.Descriptor{
 		Name: "profile", Scope: runtime.ObjectScope, Owner: "Person", Member: runtime.FieldMember,
 		Output: "Profile", Metadata: completeMetadata(runtime.ReadEffect),
@@ -384,38 +381,44 @@ func TestExecuteNestedCompletionFailureKeepsSiblingData(t *testing.T) {
 		value, _ := source["profile"].(map[string]any)
 		return value, nil
 	}))
-	registerComposition(t, registry, runtime.BindField[map[string]any, string](runtime.Descriptor{
-		Name: "nickname", Scope: runtime.ObjectScope, Owner: "Profile", Member: runtime.FieldMember,
-		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
-	}, func(_ context.Context, source map[string]any) (string, error) {
-		value, _ := source["nickname"].(string)
-		return value, nil
-	}))
+	var bioCalls atomic.Int64
+	registerSourceStringField(t, registry, "Person", "name", nil)
+	registerSourceStringField(t, registry, "Profile", "nickname", nil)
+	registerSourceStringField(t, registry, "Profile", "bio", &bioCalls)
 	snapshot, err := registry.Freeze()
 	if err != nil {
 		t.Fatalf("freeze registry: %v", err)
 	}
-	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"person","select":[{"$field":{"name":"name"}},{"$field":{"name":"profile","select":[{"$field":{"name":"nickname"}}]}}]}}]}]}}`)
-	plan, err := runtime.Prepare(snapshot, request)
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
+	for _, selected := range []struct{ name, selection string }{
+		{"failed member unselected", `{"$field":{"name":"nickname"}}`},
+		{"failed member selected", `{"$field":{"name":"bio"}},{"$field":{"name":"nickname"}}`},
+	} {
+		t.Run(selected.name, func(t *testing.T) {
+			bioCalls.Store(0)
+			request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"person","select":[{"$field":{"name":"name"}},{"$field":{"name":"profile","select":[`+selected.selection+`]}}]}}]}]}}`)
+			plan, err := runtime.Prepare(snapshot, request)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			outcome := plan.Execute(context.Background())
+			// Selecting the failed member adds no second error and no handler
+			// call, and never costs its valid sibling.
+			assertSingleCompletionError(t, outcome, []any{"person", "profile", "bio"})
+			if bioCalls.Load() != 0 {
+				t.Fatalf("failed nested member handler calls = %d, want 0", bioCalls.Load())
+			}
+			assertJSONEqual(t, outcome.Data, map[string]any{"person": map[string]any{
+				"name": "Ada", "profile": map[string]any{"nickname": "ada"},
+			}})
+		})
 	}
-	outcome := plan.Execute(context.Background())
-	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != "OUTPUT_COMPLETION" ||
-		!slices.Equal(outcome.Errors[0].Path, []any{"person", "profile", "bio"}) {
-		t.Fatalf("Execute errors = %#v", outcome.Errors)
-	}
-	assertJSONEqual(t, outcome.Data, map[string]any{"person": map[string]any{
-		"name": "Ada", "profile": map[string]any{"nickname": "ada"},
-	}})
 }
 
 // A member whose own completion fails stays unavailable, and its sibling
 // members survive.
 func TestExecuteDirectCompletionFailureKeepsSiblingMembers(t *testing.T) {
 	t.Parallel()
-	types := compositionTypes(t)
-	registry := runtime.NewRegistry(types)
+	registry := runtime.NewRegistry(compositionTypes(t))
 	registerComposition(t, registry, runtime.BindInvocation[map[string]any](runtime.Descriptor{
 		Name: "broken", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "User", Metadata: completeMetadata(runtime.ReadEffect),
@@ -423,20 +426,8 @@ func TestExecuteDirectCompletionFailureKeepsSiblingMembers(t *testing.T) {
 		return map[string]any{"name": int32(7), "mutateName": "ok"}, nil
 	}))
 	var nameCalls atomic.Int64
-	registerComposition(t, registry, runtime.BindField[map[string]any, string](runtime.Descriptor{
-		Name: "name", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,
-		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
-	}, func(_ context.Context, source map[string]any) (string, error) {
-		nameCalls.Add(1)
-		return source["name"].(string), nil
-	}))
-	registerComposition(t, registry, runtime.BindField[map[string]any, string](runtime.Descriptor{
-		Name: "mutateName", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,
-		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
-	}, func(_ context.Context, source map[string]any) (string, error) {
-		value, _ := source["mutateName"].(string)
-		return value, nil
-	}))
+	registerSourceStringField(t, registry, "User", "name", &nameCalls)
+	registerSourceStringField(t, registry, "User", "mutateName", nil)
 	snapshot, err := registry.Freeze()
 	if err != nil {
 		t.Fatalf("freeze registry: %v", err)
@@ -447,15 +438,38 @@ func TestExecuteDirectCompletionFailureKeepsSiblingMembers(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	outcome := plan.Execute(context.Background())
-	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != "OUTPUT_COMPLETION" ||
-		!slices.Equal(outcome.Errors[0].Path, []any{"broken", "name"}) {
-		t.Fatalf("Execute errors = %#v", outcome.Errors)
-	}
-	// The invalid member never reaches its handler, and its sibling survives.
+	assertSingleCompletionError(t, outcome, []any{"broken", "name"})
 	if nameCalls.Load() != 0 {
 		t.Fatalf("invalid member handler calls = %d, want 0", nameCalls.Load())
 	}
 	assertJSONEqual(t, outcome.Data, map[string]any{"broken": map[string]any{"mutateName": "ok"}})
+}
+
+// registerSourceStringField registers an object field that reads its own name
+// from the completed source. The read asserts rather than checks, so reaching
+// this handler for a member whose completion failed surfaces as a contained
+// panic instead of a silent empty string. A non-nil calls counts invocations.
+func registerSourceStringField(t testing.TB, registry *runtime.Registry, owner schema.TypeID, name string, calls *atomic.Int64) {
+	t.Helper()
+	registerComposition(t, registry, runtime.BindField[map[string]any, string](runtime.Descriptor{
+		Name: name, Scope: runtime.ObjectScope, Owner: owner, Member: runtime.FieldMember,
+		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
+	}, func(_ context.Context, source map[string]any) (string, error) {
+		if calls != nil {
+			calls.Add(1)
+		}
+		return source[name].(string), nil
+	}))
+}
+
+// assertSingleCompletionError requires exactly one output-completion error at
+// path, which fails if a blocked member also produced a handler error.
+func assertSingleCompletionError(t testing.TB, outcome runtime.Outcome, path []any) {
+	t.Helper()
+	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != "OUTPUT_COMPLETION" ||
+		!slices.Equal(outcome.Errors[0].Path, path) {
+		t.Fatalf("Execute errors = %#v", outcome.Errors)
+	}
 }
 
 func TestExecuteRejectsOverflowingStaleCursorWithoutPanicking(t *testing.T) {

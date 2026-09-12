@@ -27,11 +27,77 @@ const (
 )
 
 type executionValue struct {
-	value              any
-	typeInfo           staticType
-	actualType         schema.TypeID
-	status             executionStatus
-	unavailableMembers map[string]bool
+	value       any
+	typeInfo    staticType
+	actualType  schema.TypeID
+	status      executionStatus
+	unavailable *unavailableTree
+}
+
+// unavailableTree marks the members of a completed value whose own output
+// completion failed. Output completion omits such a member, so selecting it
+// must report unavailable partial data rather than invoke its handler against
+// completed data that no longer carries it. Nested members are held as
+// children so the mark survives the descent into a nested object, while an
+// ancestor stays available with its remaining valid data (TYPE-206).
+type unavailableTree struct {
+	self     bool
+	children map[string]*unavailableTree
+}
+
+// member reports the subtree recorded for name and whether name itself is
+// unavailable.
+func (t *unavailableTree) member(name string) (*unavailableTree, bool) {
+	if t == nil {
+		return nil, false
+	}
+	child := t.children[name]
+	if child == nil {
+		return nil, false
+	}
+	return child, child.self
+}
+
+func (t *unavailableTree) insert(path []any) {
+	node := t
+	for _, segment := range path {
+		name, ok := segment.(string)
+		if !ok {
+			// A list index is represented by the TYPE-200 null placeholder for
+			// that element, never by marking an ancestor unavailable.
+			return
+		}
+		if node.children == nil {
+			node.children = make(map[string]*unavailableTree)
+		}
+		child := node.children[name]
+		if child == nil {
+			child = &unavailableTree{}
+			node.children[name] = child
+		}
+		node = child
+	}
+	node.self = true
+}
+
+// merge copies the marks of other into t, leaving other untouched so a parent
+// value can share its subtrees with several children.
+func (t *unavailableTree) merge(other *unavailableTree) {
+	if other == nil {
+		return
+	}
+	t.self = t.self || other.self
+	for name, child := range other.children {
+		if t.children == nil {
+			t.children = make(map[string]*unavailableTree)
+		}
+		existing := t.children[name]
+		if existing == nil {
+			existing = &unavailableTree{}
+			t.children[name] = existing
+		}
+		existing.merge(child)
+	}
 }
 
 type executionScope struct {
@@ -163,8 +229,15 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 }
 
 func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
-	if node.kind == protocol.FieldSelection && scope.current.unavailableMembers[node.name] {
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}}
+	// A member whose completion failed stays unavailable however deep the
+	// selection reaches it; its surviving nested marks descend with it.
+	var inherited *unavailableTree
+	if node.kind == protocol.FieldSelection {
+		nested, unavailable := scope.current.unavailable.member(node.name)
+		if unavailable {
+			return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}}
+		}
+		inherited = nested
 	}
 
 	input, status, inputErr := p.handlerInput(node, scope)
@@ -231,7 +304,7 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 	if !available {
 		result.status = valueUnavailable
 	} else {
-		result.unavailableMembers = p.unavailableObjectMembers(result.actualType, issues)
+		result.unavailable = unavailableMembers(issues, inherited)
 	}
 
 	presentation := completed
@@ -244,35 +317,32 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 	return nodeResult{value: result, data: presentation, emit: node.outputName != "" && available, failed: len(failures) != 0, errors: failures}
 }
 
-func (p *Plan) unavailableObjectMembers(actualType schema.TypeID, issues []completionIssue) map[string]bool {
-	descriptor, ok := p.types.Lookup(actualType)
-	if !ok || descriptor.Kind != schema.ObjectType {
-		return nil
-	}
-	var unavailable map[string]bool
+// unavailableMembers records every member this completion could not produce,
+// keeping the marks this value inherited from the completion that produced its
+// source. Each issue marks only the member it names, so an ancestor keeps its
+// remaining valid data instead of being deleted wholesale (TYPE-206).
+func unavailableMembers(issues []completionIssue, inherited *unavailableTree) *unavailableTree {
+	var unavailable *unavailableTree
 	for _, issue := range issues {
 		path := issue.path
 		if len(path) != 0 && path[0] == "$value" {
 			path = path[1:]
 		}
-		// Only a member whose own completion failed is unavailable. A deeper
-		// issue leaves the member available with its remaining valid data, so
-		// that a failed leaf never deletes unrelated parent data (TYPE-206).
-		if len(path) != 1 {
-			continue
-		}
-		name, ok := path[0].(string)
-		if !ok {
-			continue
-		}
-		if _, declared := descriptor.Fields[name]; !declared {
+		if len(path) == 0 {
 			continue
 		}
 		if unavailable == nil {
-			unavailable = make(map[string]bool)
+			unavailable = &unavailableTree{}
 		}
-		unavailable[name] = true
+		unavailable.insert(path)
 	}
+	if inherited == nil {
+		return unavailable
+	}
+	if unavailable == nil {
+		unavailable = &unavailableTree{}
+	}
+	unavailable.merge(inherited)
 	return unavailable
 }
 
