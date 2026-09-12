@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 
@@ -260,16 +261,20 @@ func (d Definition) call(ctx context.Context, source, input any) (output any, er
 
 // Registry collects definitions during application startup.
 type Registry struct {
-	mu          sync.Mutex
-	types       schema.Snapshot
-	definitions map[string]Definition
-	frozen      bool
+	mu            sync.Mutex
+	types         schema.Snapshot
+	definitions   map[string]Definition
+	authorization AuthorizationConfig
+	interceptors  []registeredInterceptor
+	frozen        bool
 }
 
 // Snapshot is an immutable, concurrent-readable registry.
 type Snapshot struct {
-	types       schema.Snapshot
-	definitions map[string]Definition
+	types         schema.Snapshot
+	definitions   map[string]Definition
+	authorization AuthorizationConfig
+	interceptors  []registeredInterceptor
 }
 
 func NewRegistry(types schema.Snapshot) *Registry {
@@ -301,12 +306,20 @@ func (r *Registry) Register(definition Definition) error {
 func (r *Registry) Freeze() (Snapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, registration := range r.interceptors {
+		if !interceptorHasRegisteredTarget(registration, r.definitions) {
+			return Snapshot{}, fmt.Errorf("%s interceptor has no registered target", registration.Level)
+		}
+	}
 	definitions := make(map[string]Definition, len(r.definitions))
 	for key, definition := range r.definitions {
 		definitions[key] = definition
 	}
 	r.frozen = true
-	return Snapshot{types: r.types, definitions: definitions}, nil
+	return Snapshot{
+		types: r.types, definitions: definitions, authorization: r.authorization,
+		interceptors: slices.Clone(r.interceptors),
+	}, nil
 }
 
 // Descriptors returns every portable registration descriptor in stable order.

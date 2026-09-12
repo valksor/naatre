@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -131,6 +132,8 @@ type Plan struct {
 	nodes          []planNode
 	types          schema.Snapshot
 	variableValues map[string]json.RawMessage
+	authorization  AuthorizationConfig
+	interceptors   []registeredInterceptor
 }
 
 // Prepare resolves and validates the complete selected operation without
@@ -146,6 +149,9 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 	}
 	planner := newPlanValidator(registry, request, operation)
 	nodes, executable := planner.validate()
+	if len(planner.issues) == 0 {
+		planner.issues = append(planner.issues, authorizePlannedNodes(registry.authorization, operation.Kind(), nodes)...)
+	}
 	if len(planner.issues) != 0 {
 		return nil, &ValidationErrors{issues: planner.issues}
 	}
@@ -153,6 +159,7 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 		operationName: operation.Name(), kind: operation.Kind(), requirements: request.Document().Requires(),
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
 		variableValues: captureVariableValues(request, operation.Variables()),
+		authorization:  registry.authorization, interceptors: slices.Clone(registry.interceptors),
 	}, nil
 }
 

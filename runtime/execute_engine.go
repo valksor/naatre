@@ -306,16 +306,19 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 		inherited = nested
 	}
 
+	source, sourceErr := memberSource(node, scope, path)
+	if sourceErr != nil {
+		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*sourceErr}}
+	}
+	if authorizationErr := p.authorizeNode(ctx, node, source, path); authorizationErr != nil {
+		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*authorizationErr}}
+	}
+
 	input, status, inputErr := p.handlerInput(node, scope)
 	if inputErr != nil {
 		code := executionStatusCode(status)
 		err := nodeExecutionError(code, "handler input is unavailable", node, path, inputErr)
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
-	}
-
-	source, sourceErr := memberSource(node, scope, path)
-	if sourceErr != nil {
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*sourceErr}}
 	}
 
 	release, err := acquireExecutionSlot(ctx, scope)
@@ -326,7 +329,9 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, scope exec
 	// Recorded before the call, so an effect that started and then failed is
 	// never reported as though it never happened.
 	scope.recordEffect(node, &scope.effects.started)
-	output, err := callWithinGrace(ctx, node, source, input, release, scope.grace)
+	output, err := callWithinGrace(ctx, release, scope.grace, func() (any, error) {
+		return p.invokeHandler(ctx, node, source, input, path)
+	})
 	if err != nil {
 		failure := handlerFailure(node, path, err)
 		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
@@ -585,15 +590,15 @@ func completeSafely(value any, output schema.TypeID, nullable bool, types schema
 }
 
 func completeRecovering(complete func() (any, []completionIssue, bool, error)) (completed any, issues []completionIssue, available bool, err error) {
-	defer func() {
-		if recover() != nil {
-			completed = nil
-			issues = nil
-			available = false
-			err = errors.New("completion hook panic")
-		}
-	}()
-	return complete()
+	containPanic(func() {
+		completed, issues, available, err = complete()
+	}, func() {
+		completed = nil
+		issues = nil
+		available = false
+		err = errors.New("completion hook panic")
+	})
+	return completed, issues, available, err
 }
 
 func cloneExecutionScope(scope executionScope) executionScope {
@@ -638,19 +643,19 @@ type handlerOutcome struct {
 //
 // release is transferred to whichever path owns the handler, so the slot is
 // always freed exactly once, by the handler itself when it is abandoned.
-func callWithinGrace(ctx context.Context, node planNode, source, input any, release func(), grace time.Duration) (any, error) {
+func callWithinGrace(ctx context.Context, release func(), grace time.Duration, invoke func() (any, error)) (any, error) {
 	// An uncancellable context can never abandon, so it needs no extra
 	// goroutine and keeps the common sequential path direct.
 	if ctx.Done() == nil {
 		defer release()
-		return node.definition.call(ctx, source, input)
+		return invoke()
 	}
 	// Buffered, so an abandoned handler publishes its result and exits rather
 	// than blocking forever on a receiver that has already moved on.
 	returned := make(chan handlerOutcome, 1)
 	go func() {
 		defer release()
-		value, err := node.definition.call(ctx, source, input)
+		value, err := invoke()
 		returned <- handlerOutcome{value: value, err: err}
 	}()
 	select {
@@ -755,6 +760,9 @@ func handlerFailure(node planNode, path []any, err error) ExecutionError {
 	}
 	var panicFailure *handlerPanic
 	if errors.As(err, &panicFailure) {
+		return nodeExecutionError(CodeInternal, "internal execution error", node, path, err)
+	}
+	if errors.Is(err, ErrInterceptorNextCalled) {
 		return nodeExecutionError(CodeInternal, "internal execution error", node, path, err)
 	}
 	return applyDomainError(nodeExecutionError(CodeHandlerFailed, "field unavailable", node, path, err), err)

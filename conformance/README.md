@@ -33,6 +33,15 @@ policy inputs, and authorization identities must retain the same static handler,
 type, effect, authorization-policy, and source-pointer description without
 retaining any of that per-request state.
 
+`v1/security.json` fixes the `core.security-1` denial shape, static and dynamic
+decision semantics, operation-kind distinction, lifecycle and cache-scope
+rules, and equivalent decisions for planned, cached, batched, streamed, and
+remote placement. Its executable vectors cover aliases, fragments, parallel
+groups, nested calls, whole-collection denial, mixed replay history, and cursor
+binding across principal, tenant, schema, and authorization revisions. The Go
+reference runtime executes the core handler and lifecycle vectors directly;
+#70 owns downstream cache, batch, stream, replay, and remote adapters.
+
 The core planner resolves the built-in `include` and `skip` directives and
 rejects unregistered directives; #19 owns custom directive declarations and
 hooks. It validates `collection.page-1` admission and collection item scopes;

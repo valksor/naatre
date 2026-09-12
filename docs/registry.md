@@ -34,3 +34,27 @@ Explicit registration limits which names a Naatre request can reach; it is not a
 sandbox and cannot stop a registered handler from accessing the network,
 database, filesystem, or other process capabilities. Applications remain
 responsible for those effects and for the truth of their registration metadata.
+
+## Authorization and interceptors
+
+`Registry.ConfigureAuthorization` selects allow-by-default compatibility mode
+or deny-by-default mode. Production services should always select
+`runtime.AuthorizationDenyByDefault` and install a dynamic authorizer. The
+runtime checks that policy before argument evaluation and before every planned
+field or call handler. Policy callbacks receive no raw argument map, policy
+errors and panics fail closed, and a returned allow is rejected when its expiry,
+authorization revision, or cache scope is not current.
+
+`Registry.RegisterInterceptor` installs trusted handler wrappers. Their fixed
+outer-to-inner order is global, operation, type, field, and exact handler, with
+registration order preserved inside a level. The continuation has no arguments
+and is one-shot. Cancellation before or during the wrapper wins over any value
+it returns. Configuration and registration both close when the registry is
+frozen.
+
+`Snapshot.InvokeRoot`, `InvokeField`, and `InvokeCall` are low-level typed
+binding probes for trusted application code. They do not represent Naatre
+request execution and do not run a plan's authorization or interceptor chain.
+Untrusted requests must enter through `Prepare` and `Plan.Execute`; a trusted
+callback that captures and uses a raw snapshot remains inside the in-process
+trust boundary described by SEC-303.

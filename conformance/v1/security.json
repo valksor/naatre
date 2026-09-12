@@ -1,0 +1,162 @@
+{
+  "profile": "core.security-1",
+  "decisionTime": "2026-09-12T12:00:00Z",
+  "safeDenial": {
+    "code": "UNAUTHORIZED",
+    "message": "access denied",
+    "details": null
+  },
+  "executionVectors": [
+    {
+      "name": "alias-fragment-parallel-nested-call",
+      "principal": {
+        "subject": "reader-1",
+        "tenant": "tenant-a",
+        "authorizationRevision": "auth-r2"
+      },
+      "document": {
+        "operations": [{
+          "name": "Q",
+          "kind": "query",
+          "select": [{"$parallel": {"select": [
+            {"$call": {"name": "secret", "as": "visible", "select": [{"$fragment": {"name": "Protected"}}]}},
+            {"$call": {"name": "secret", "as": "hidden", "select": [{"$field": {"name": "value"}}]}}
+          ]}}]
+        }],
+        "fragments": [{
+          "name": "Protected",
+          "on": "Secret",
+          "select": [{"$call": {"name": "detail", "as": "nested", "args": {}}}]
+        }]
+      },
+      "runtimeDecisions": {
+        "visible": {"allowed": true, "authorizationRevision": "auth-r2", "cacheScope": "principal"},
+        "visible/nested": {"allowed": true, "authorizationRevision": "auth-r2", "cacheScope": "no-store"},
+        "hidden": {"allowed": false, "cacheScope": "no-store"}
+      },
+      "expectedData": {"visible": {"nested": "classified:detail"}},
+      "expectedErrors": [{"code": "UNAUTHORIZED", "path": ["hidden"]}],
+      "expectedHandlerStarts": 2
+    },
+    {
+      "name": "collection-denial-hides-values-count-and-cursor-metadata",
+      "principal": {"subject": "reader-1", "tenant": "tenant-a", "authorizationRevision": "auth-r2"},
+      "document": {
+        "operations": [{
+          "name": "Q",
+          "kind": "query",
+          "select": [{"$call": {"name": "secrets", "as": "vault", "select": [
+            {"$meta": {"name": "count", "as": "total"}},
+            {"$map": {"as": "items", "select": [{"$field": {"name": "value"}}]}}
+          ]}}]
+        }]
+      },
+      "runtimeDecisions": {
+        "vault": {"allowed": false, "cacheScope": "no-store"}
+      },
+      "expectedData": {},
+      "expectedErrors": [{"code": "UNAUTHORIZED", "path": ["vault"]}],
+      "expectedHandlerStarts": 0
+    },
+    {
+      "name": "static-planning-denial-precedes-execution",
+      "principal": {"subject": "reader-1", "tenant": "tenant-a", "authorizationRevision": "auth-r2"},
+      "document": {
+        "operations": [{
+          "name": "Q",
+          "kind": "query",
+          "select": [{"$call": {"name": "secret", "select": [{"$field": {"name": "value"}}]}}]
+        }]
+      },
+      "planningDecisions": {"secret": false, "secret/value": true},
+      "expectedPrepareCode": "POLICY_DENIED",
+      "expectedHandlerStarts": 0
+    }
+  ],
+  "operationVectors": [
+    {"name": "query-read", "operation": "query", "expectedDecision": "allow"},
+    {"name": "mutation-write", "operation": "mutation", "expectedDecision": "deny"},
+    {"name": "subscription-attach", "operation": "subscription", "expectedDecision": "deny"}
+  ],
+  "lifecycleVectors": [
+    {
+      "name": "unexpired-matching-principal-scope",
+      "principal": {"subject": "reader-1", "tenant": "tenant-a", "authorizationRevision": "auth-r2"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:05:00Z", "cacheScope": "principal"},
+      "expectedAllowed": true,
+      "expectedHandlerStarts": 2
+    },
+    {
+      "name": "expiry-equality-is-denied",
+      "principal": {"subject": "reader-1", "tenant": "tenant-a", "authorizationRevision": "auth-r2"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:00:00Z", "cacheScope": "principal"},
+      "expectedAllowed": false,
+      "expectedHandlerStarts": 0
+    },
+    {
+      "name": "revoked-authorization-revision",
+      "principal": {"subject": "reader-1", "tenant": "tenant-a", "authorizationRevision": "auth-r3"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:05:00Z", "cacheScope": "principal"},
+      "expectedAllowed": false,
+      "expectedHandlerStarts": 0
+    },
+    {
+      "name": "tenant-scope-requires-tenant",
+      "principal": {"subject": "reader-1", "authorizationRevision": "auth-r2"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:05:00Z", "cacheScope": "tenant"},
+      "expectedAllowed": false,
+      "expectedHandlerStarts": 0
+    },
+    {
+      "name": "unknown-cache-scope-fails-closed",
+      "principal": {"subject": "reader-1", "tenant": "tenant-a", "authorizationRevision": "auth-r2"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:05:00Z", "cacheScope": "global"},
+      "expectedAllowed": false,
+      "expectedHandlerStarts": 0
+    }
+  ],
+  "equivalenceVectors": [
+    {
+      "name": "same-current-allow-across-placement",
+      "currentBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:05:00Z", "cacheScope": "principal"},
+      "executions": [
+        {"mode": "planned", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": true},
+        {"mode": "cached", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": true},
+        {"mode": "batched", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": true},
+        {"mode": "streamed", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": true},
+        {"mode": "remote", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": true}
+      ]
+    },
+    {
+      "name": "revision-change-denies-every-placement",
+      "currentBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r3", "resource": "Secret/value", "operation": "query"},
+      "decision": {"allowed": true, "authorizationRevision": "auth-r2", "expiresAt": "2026-09-12T12:05:00Z", "cacheScope": "principal"},
+      "executions": [
+        {"mode": "planned", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": false},
+        {"mode": "cached", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": false},
+        {"mode": "batched", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": false},
+        {"mode": "streamed", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": false},
+        {"mode": "remote", "candidateBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "Secret/value", "operation": "query"}, "expectedAllowed": false}
+      ]
+    }
+  ],
+  "replayVectors": [
+    {
+      "name": "mixed-history-and-bound-identity",
+      "currentBinding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "topic-a", "operation": "subscription"},
+      "candidates": [
+        {"id": "event-visible", "permitted": true, "binding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "topic-a", "operation": "subscription"}},
+        {"id": "event-forbidden", "permitted": false, "binding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "topic-a", "operation": "subscription"}},
+        {"id": "event-other-principal", "permitted": true, "binding": {"subject": "reader-2", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "topic-a", "operation": "subscription"}},
+        {"id": "event-other-tenant", "permitted": true, "binding": {"subject": "reader-1", "tenant": "tenant-b", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r2", "resource": "topic-a", "operation": "subscription"}},
+        {"id": "event-old-schema", "permitted": true, "binding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r3", "authorizationRevision": "auth-r2", "resource": "topic-a", "operation": "subscription"}},
+        {"id": "event-revoked", "permitted": true, "binding": {"subject": "reader-1", "tenant": "tenant-a", "schemaRevision": "schema-r4", "authorizationRevision": "auth-r1", "resource": "topic-a", "operation": "subscription"}}
+      ],
+      "expectedVisible": ["event-visible"],
+      "expectedRejected": ["event-forbidden", "event-other-principal", "event-other-tenant", "event-old-schema", "event-revoked"],
+      "safeLossOutcome": {"code": "REPLAY_UNAVAILABLE", "message": "replay unavailable"},
+      "forbiddenLossObservables": ["topic-a", "event-forbidden", "5", "earliest-position", "schema-r3", "auth-r1"]
+    }
+  ]
+}
