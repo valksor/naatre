@@ -73,7 +73,7 @@ func (r *Response) ID() (string, bool) { return r.id, r.hasID }
 func (r *Response) RequestID() string  { return r.requestID }
 
 func (r *Response) Data() (json.RawMessage, bool) {
-	return append(json.RawMessage(nil), r.data...), r.hasData
+	return cloneRaw(r.data), r.hasData
 }
 
 func (r *Response) Errors() []ResponseError {

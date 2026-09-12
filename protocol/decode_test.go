@@ -112,10 +112,8 @@ func TestDecodeRequestRejectsMalformedEnvelopeBeforeValidation(t *testing.T) {
 		code    string
 		pointer string
 	}{
-		{name: "fragments are not silently discarded", input: `{"version":"1","document":{"operations":[],"fragments":[]}}`, code: "UNKNOWN_FIELD"},
-		{name: "operation variables are not silently discarded", input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","variables":{},"select":[]}]}}`, code: "UNKNOWN_FIELD"},
+		{name: "operation variables have the specified array shape", input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","variables":{},"select":[]}]}}`, code: "TYPE_MISMATCH"},
 		{name: "fail fast is not silently discarded", input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","failFast":true,"select":[]}]}}`, code: "UNKNOWN_FIELD"},
-		{name: "binding is not silently discarded", input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[{"$call":{"name":"get","bind":"x"}}]}]}}`, code: "UNKNOWN_FIELD"},
 		{name: "escaped duplicate", input: `{"version":"1","id":"first","\u0069d":"second","document":{"operations":[]}}`, code: "DUPLICATE_KEY", pointer: "/id"},
 		{name: "unknown field", input: `{"version":"1","document":{"operations":[]},"kind":"query"}`, code: "UNKNOWN_FIELD", pointer: "/kind"},
 		{name: "trailing data", input: `{"version":"1","document":{"operations":[]}} true`, code: "TRAILING_DATA", pointer: ""},
@@ -173,6 +171,12 @@ func TestDecodeRequestEnforcesLimitsAndCapabilities(t *testing.T) {
 			code:    "LIMIT_NUMBER",
 		},
 		{
+			name:    "document literal",
+			input:   `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"echo","args":{"value":{"$literal":"large"}}}}]}]}}`,
+			options: protocol.DecodeOptions{Limits: protocol.Limits{MaxLiteralBytes: 4}},
+			code:    "LIMIT_LITERAL",
+		},
+		{
 			name:    "unsupported capability",
 			input:   `{"version":"1","document":{"operations":[]},"capabilities":["stream.sse"]}`,
 			options: protocol.DecodeOptions{Capabilities: map[string]bool{"core": true}},
@@ -189,7 +193,7 @@ func TestDecodeRequestEnforcesLimitsAndCapabilities(t *testing.T) {
 	}
 }
 
-func TestDecodeRequestRejectsSelectionFieldsItCannotPreserve(t *testing.T) {
+func TestDecodeRequestRejectsMalformedSelectionFields(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -198,9 +202,9 @@ func TestDecodeRequestRejectsSelectionFieldsItCannotPreserve(t *testing.T) {
 		code  string
 	}{
 		{
-			name:  "call arguments are not silently discarded",
+			name:  "call arguments use tagged expressions",
 			input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[{"$call":{"name":"get","args":{"id":"1"}}}]}]}}`,
-			code:  "UNKNOWN_FIELD",
+			code:  "INVALID_EXPRESSION",
 		},
 		{
 			name:  "wrong alias type",
@@ -211,11 +215,6 @@ func TestDecodeRequestRejectsSelectionFieldsItCannotPreserve(t *testing.T) {
 			name:  "wrong child selection type",
 			input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[{"$field":{"name":"user","select":{}}}]}]}}`,
 			code:  "TYPE_MISMATCH",
-		},
-		{
-			name:  "unsupported parallel is explicit",
-			input: `{"version":"1","document":{"operations":[{"name":"Get","kind":"query","select":[{"$parallel":{"select":[]}}]}]}}`,
-			code:  "UNSUPPORTED_SELECTION",
 		},
 		{
 			name:  "call payload must be object",

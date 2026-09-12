@@ -4,30 +4,33 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 )
 
 // Limits bounds work performed by the strict decoder. Zero fields use safe
 // defaults so callers can override only the limits they need.
 type Limits struct {
-	MaxBytes       int
-	MaxTokens      int
-	MaxDepth       int
-	MaxStringBytes int
-	MaxMembers     int
-	MaxArrayItems  int
-	MaxNumberBytes int
+	MaxBytes        int
+	MaxTokens       int
+	MaxDepth        int
+	MaxStringBytes  int
+	MaxMembers      int
+	MaxArrayItems   int
+	MaxNumberBytes  int
+	MaxLiteralBytes int
 }
 
 // DefaultLimits returns the core profile's decoder limits.
 func DefaultLimits() Limits {
 	return Limits{
-		MaxBytes:       1 << 20,
-		MaxTokens:      100_000,
-		MaxDepth:       64,
-		MaxStringBytes: 1 << 20,
-		MaxMembers:     10_000,
-		MaxArrayItems:  100_000,
-		MaxNumberBytes: 128,
+		MaxBytes:        1 << 20,
+		MaxTokens:       100_000,
+		MaxDepth:        64,
+		MaxStringBytes:  1 << 20,
+		MaxMembers:      10_000,
+		MaxArrayItems:   100_000,
+		MaxNumberBytes:  128,
+		MaxLiteralBytes: 1 << 20,
 	}
 }
 
@@ -53,6 +56,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxNumberBytes == 0 {
 		l.MaxNumberBytes = defaults.MaxNumberBytes
+	}
+	if l.MaxLiteralBytes == 0 {
+		l.MaxLiteralBytes = defaults.MaxLiteralBytes
 	}
 	return l
 }
@@ -117,21 +123,109 @@ type Source struct {
 	Column  int
 }
 
-// Selection is an immutable typed selection node.
-type Selection struct {
-	kind     SelectionKind
-	name     string
-	alias    string
-	bind     string
-	source   Source
-	children []Selection
+// ExpressionKind identifies a closed core argument expression.
+type ExpressionKind string
+
+const (
+	LiteralExpression  ExpressionKind = "literal"
+	VariableExpression ExpressionKind = "variable"
+	ParentExpression   ExpressionKind = "parent"
+	CurrentExpression  ExpressionKind = "current"
+	ResultExpression   ExpressionKind = "result"
+)
+
+// Expression is an immutable typed argument expression. Literal bytes remain
+// lossless until schema coercion.
+type Expression struct {
+	kind    ExpressionKind
+	name    string
+	literal json.RawMessage
+	source  Source
 }
 
-func (s Selection) Kind() SelectionKind { return s.kind }
-func (s Selection) Name() string        { return s.name }
-func (s Selection) Alias() string       { return s.alias }
-func (s Selection) Bind() string        { return s.bind }
-func (s Selection) Source() Source      { return s.source }
+func (e Expression) Kind() ExpressionKind { return e.kind }
+func (e Expression) Name() string         { return e.name }
+func (e Expression) Source() Source       { return e.source }
+func (e Expression) Literal() (json.RawMessage, bool) {
+	return cloneRaw(e.literal), e.kind == LiteralExpression
+}
+
+// Directive is an immutable language directive invocation.
+type Directive struct {
+	name      string
+	arguments map[string]Expression
+	source    Source
+}
+
+func (d Directive) Name() string                     { return d.name }
+func (d Directive) Source() Source                   { return d.source }
+func (d Directive) Arguments() map[string]Expression { return cloneExpressions(d.arguments) }
+
+// VariableDefinition declares one operation-local typed input.
+type VariableDefinition struct {
+	name       string
+	typeID     string
+	required   bool
+	nullable   bool
+	defaultRaw json.RawMessage
+	hasDefault bool
+	source     Source
+}
+
+func (v VariableDefinition) Name() string   { return v.name }
+func (v VariableDefinition) Type() string   { return v.typeID }
+func (v VariableDefinition) Required() bool { return v.required }
+func (v VariableDefinition) Nullable() bool { return v.nullable }
+func (v VariableDefinition) Source() Source { return v.source }
+func (v VariableDefinition) Default() (json.RawMessage, bool) {
+	return cloneRaw(v.defaultRaw), v.hasDefault
+}
+
+// ParallelPolicy controls admission after a parallel branch failure.
+type ParallelPolicy string
+
+const (
+	CollectParallel  ParallelPolicy = "collect"
+	FailFastParallel ParallelPolicy = "fail-fast"
+)
+
+// Selection is an immutable typed selection node.
+type Selection struct {
+	kind       SelectionKind
+	name       string
+	alias      string
+	bind       string
+	arguments  map[string]Expression
+	directives []Directive
+	children   []Selection
+	stages     []Selection
+	policy     ParallelPolicy
+	at         *big.Int
+	start      *big.Int
+	end        *big.Int
+	first      *big.Int
+	last       *big.Int
+	after      *Expression
+	before     *Expression
+	source     Source
+}
+
+func (s Selection) Kind() SelectionKind              { return s.kind }
+func (s Selection) Name() string                     { return s.name }
+func (s Selection) Alias() string                    { return s.alias }
+func (s Selection) Bind() string                     { return s.bind }
+func (s Selection) Source() Source                   { return s.source }
+func (s Selection) Arguments() map[string]Expression { return cloneExpressions(s.arguments) }
+func (s Selection) Directives() []Directive          { return cloneDirectives(s.directives) }
+func (s Selection) Stages() []Selection              { return cloneSelections(s.stages) }
+func (s Selection) Policy() ParallelPolicy           { return s.policy }
+func (s Selection) At() (*big.Int, bool)             { return cloneInteger(s.at), s.at != nil }
+func (s Selection) Start() (*big.Int, bool)          { return cloneInteger(s.start), s.start != nil }
+func (s Selection) End() (*big.Int, bool)            { return cloneInteger(s.end), s.end != nil }
+func (s Selection) First() (*big.Int, bool)          { return cloneInteger(s.first), s.first != nil }
+func (s Selection) Last() (*big.Int, bool)           { return cloneInteger(s.last), s.last != nil }
+func (s Selection) After() (Expression, bool)        { return pointedValue(s.after) }
+func (s Selection) Before() (Expression, bool)       { return pointedValue(s.before) }
 
 // Selections returns an isolated copy of child selections.
 func (s Selection) Selections() []Selection { return cloneSelections(s.children) }
@@ -140,26 +234,62 @@ func (s Selection) Selections() []Selection { return cloneSelections(s.children)
 type Operation struct {
 	name       string
 	kind       OperationKind
+	variables  []VariableDefinition
 	selections []Selection
 	source     Source
 }
 
-func (o Operation) Name() string            { return o.name }
-func (o Operation) Kind() OperationKind     { return o.kind }
-func (o Operation) Source() Source          { return o.source }
-func (o Operation) Selections() []Selection { return cloneSelections(o.selections) }
+func (o Operation) Name() string                    { return o.name }
+func (o Operation) Kind() OperationKind             { return o.kind }
+func (o Operation) Source() Source                  { return o.source }
+func (o Operation) Variables() []VariableDefinition { return cloneVariables(o.variables) }
+func (o Operation) Selections() []Selection         { return cloneSelections(o.selections) }
+
+// Fragment is an immutable reusable selection declaration.
+type Fragment struct {
+	name       string
+	on         string
+	selections []Selection
+	source     Source
+}
+
+func (f Fragment) Name() string            { return f.name }
+func (f Fragment) TypeCondition() string   { return f.on }
+func (f Fragment) Source() Source          { return f.source }
+func (f Fragment) Selections() []Selection { return cloneSelections(f.selections) }
 
 // Document is an immutable operation document.
 type Document struct {
 	operations []Operation
+	fragments  []Fragment
+	requires   []string
+	canonical  json.RawMessage
+	source     Source
 }
 
 // Operations returns isolated operation values and selection slices.
 func (d Document) Operations() []Operation {
-	return cloneSliceWith(d.operations, func(operation Operation) Operation {
-		operation.selections = cloneSelections(operation.selections)
-		return operation
-	})
+	return cloneOperations(d.operations)
+}
+
+func (d Document) Fragments() []Fragment {
+	return cloneFragments(d.fragments)
+}
+
+func (d Document) Requires() []string { return cloneSlice(d.requires) }
+func (d Document) Source() Source     { return d.source }
+
+// CanonicalJSON returns the language-neutral c14n-1 serialization of the AST.
+func (d Document) CanonicalJSON() json.RawMessage {
+	return cloneRaw(d.canonical)
+}
+
+// MarshalJSON emits the same stable AST serialization as CanonicalJSON.
+func (d Document) MarshalJSON() ([]byte, error) {
+	if len(d.canonical) == 0 {
+		return nil, fmt.Errorf("cannot serialize an empty document")
+	}
+	return d.CanonicalJSON(), nil
 }
 
 // PersistedReference identifies a canonical persisted document.
@@ -195,7 +325,13 @@ func (r *Request) Document() *Document {
 	if r.document == nil {
 		return nil
 	}
-	return &Document{operations: r.document.Operations()}
+	return &Document{
+		operations: r.document.Operations(),
+		fragments:  r.document.Fragments(),
+		requires:   r.document.Requires(),
+		canonical:  r.document.CanonicalJSON(),
+		source:     r.document.Source(),
+	}
 }
 
 func (r *Request) Persisted() (PersistedReference, bool) {
@@ -216,15 +352,96 @@ func (r *Request) Capabilities() []string {
 }
 
 func cloneSelections(input []Selection) []Selection {
-	return cloneSliceWith(input, func(selection Selection) Selection {
-		selection.children = cloneSelections(selection.children)
-		return selection
-	})
+	return cloneSliceWith(input, cloneSelection)
+}
+
+func cloneSelection(selection Selection) Selection {
+	selection.arguments = cloneExpressions(selection.arguments)
+	selection.directives = cloneDirectives(selection.directives)
+	selection.children = cloneSelections(selection.children)
+	selection.stages = cloneSelections(selection.stages)
+	selection.at = cloneInteger(selection.at)
+	selection.start = cloneInteger(selection.start)
+	selection.end = cloneInteger(selection.end)
+	selection.first = cloneInteger(selection.first)
+	selection.last = cloneInteger(selection.last)
+	selection.after = cloneExpressionPointer(selection.after)
+	selection.before = cloneExpressionPointer(selection.before)
+	return selection
+}
+
+func cloneExpressions(input map[string]Expression) map[string]Expression {
+	result := make(map[string]Expression, len(input))
+	for name, expression := range input {
+		expression.literal = cloneRaw(expression.literal)
+		result[name] = expression
+	}
+	return result
+}
+
+func cloneDirectives(input []Directive) []Directive {
+	return cloneSliceWith(input, cloneDirective)
+}
+
+func cloneVariables(input []VariableDefinition) []VariableDefinition {
+	return cloneSliceWith(input, cloneVariable)
+}
+
+func cloneDirective(directive Directive) Directive {
+	directive.arguments = cloneExpressions(directive.arguments)
+	return directive
+}
+
+func cloneVariable(variable VariableDefinition) VariableDefinition {
+	variable.defaultRaw = cloneRaw(variable.defaultRaw)
+	return variable
+}
+
+func cloneOperations(input []Operation) []Operation {
+	return cloneSliceWith(input, cloneOperation)
+}
+
+func cloneFragments(input []Fragment) []Fragment {
+	return cloneSliceWith(input, cloneFragment)
+}
+
+func cloneOperation(operation Operation) Operation {
+	operation.variables = cloneVariables(operation.variables)
+	operation.selections = cloneSelections(operation.selections)
+	return operation
+}
+
+func cloneFragment(fragment Fragment) Fragment {
+	fragment.selections = cloneSelections(fragment.selections)
+	return fragment
+}
+
+func cloneExpressionPointer(input *Expression) *Expression {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	result.literal = cloneRaw(input.literal)
+	return &result
+}
+
+func cloneRaw(input json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), input...)
+}
+
+func cloneInteger(input *big.Int) *big.Int {
+	if input == nil {
+		return nil
+	}
+	return new(big.Int).Set(input)
 }
 
 func cloneRawLookup(input map[string]json.RawMessage, key string) (json.RawMessage, bool) {
-	raw, ok := input[key]
-	return append(json.RawMessage(nil), raw...), ok
+	raw, exists := input[key]
+	if !exists {
+		return nil, false
+	}
+	return cloneRaw(raw), true
 }
 
 func cloneSlice[T any](input []T) []T {

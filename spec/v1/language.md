@@ -4,9 +4,8 @@ This document defines the Naatre v1 operation language. The machine-readable
 grammar is [language.schema.json](language.schema.json), and portable semantic
 examples are in [language.json](../../conformance/v1/language.json). An
 implementation claiming `core.language-1` MUST preserve every represented
-construct in its typed AST. The bootstrap Go decoder does not yet claim that
-profile: it explicitly rejects unimplemented forms rather than discarding
-them. Issue #6 owns the complete decoder and AST implementation.
+construct in its typed AST. The reference Go decoder implements this complete,
+closed grammar and rejects malformed or unrecognized forms before validation.
 
 ## Document grammar
 
@@ -166,7 +165,9 @@ Example pipeline:
 - **LANG-123:** `$slice` is half-open `[start,end)`. Omitted `start` is zero;
   omitted `end` is the collection length. Bounds larger than the length clamp
   to the length. `start > end` is a validation error when statically knowable
-  and otherwise a path error; no handler is called to repair it.
+  and otherwise a path error; no handler is called to repair it. Every numeric
+  `$index`, `$slice`, and `$page` bound is at most `9007199254740991`, the
+  largest exact integer permitted by CANON-005's JSON number model.
 - **LANG-124:** `$page` requires `collection.page-1`. Forward pagination uses
   `first` with optional `after`; backward pagination uses `last` with optional
   `before`. Counts are positive bounded integers, cursors are opaque typed

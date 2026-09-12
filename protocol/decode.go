@@ -70,7 +70,7 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 		return nil, newDiagnostic(input, code, "PROTO-004", "decode", message, "", root.start)
 	}
 	if hasDocument {
-		document, decodeErr := decodeDocument(input, documentNode)
+		document, decodeErr := decodeDocument(input, documentNode, options.Limits.withDefaults())
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -123,133 +123,8 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 	return request, nil
 }
 
-func decodeDocument(input []byte, value node) (Document, error) {
-	if err := expectKindPhase(input, value, nodeObject, "/document", "document object", "LANG-001", "validate"); err != nil {
-		return Document{}, err
-	}
-	if err := rejectUnknown(input, value, map[string]bool{"operations": true}, "LANG-001", "validate", "/document"); err != nil {
-		return Document{}, err
-	}
-	operationsNode, exists := value.member("operations")
-	if !exists {
-		return Document{}, newDiagnostic(input, "MISSING_FIELD", "LANG-001", "validate", "document requires operations", "/document/operations", value.start)
-	}
-	if err := expectKindPhase(input, operationsNode, nodeArray, "/document/operations", "operations array", "LANG-001", "validate"); err != nil {
-		return Document{}, err
-	}
-	document := Document{operations: make([]Operation, 0, len(operationsNode.array))}
-	for index, operationNode := range operationsNode.array {
-		operation, err := decodeOperation(input, operationNode, joinPointer("/document/operations", intString(index)))
-		if err != nil {
-			return Document{}, err
-		}
-		document.operations = append(document.operations, operation)
-	}
-	return document, nil
-}
-
-func decodeOperation(input []byte, value node, pointer string) (Operation, error) {
-	if err := expectKindPhase(input, value, nodeObject, pointer, "operation object", "LANG-002", "validate"); err != nil {
-		return Operation{}, err
-	}
-	allowed := map[string]bool{"name": true, "kind": true, "select": true}
-	if err := rejectUnknown(input, value, allowed, "LANG-002", "validate", pointer); err != nil {
-		return Operation{}, err
-	}
-	name, hasName := value.member("name")
-	kind, hasKind := value.member("kind")
-	selectNode, hasSelect := value.member("select")
-	if !hasName || name.kind != nodeString || !identifierPattern.MatchString(name.text) {
-		return Operation{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "operation requires a portable name", joinPointer(pointer, "name"), value.start)
-	}
-	if !hasKind || kind.kind != nodeString || (kind.text != string(Query) && kind.text != string(Mutation) && kind.text != string(Subscription)) {
-		return Operation{}, newDiagnostic(input, "INVALID_OPERATION_KIND", "CORE-003", "validate", "operation kind must be query, mutation, or subscription", joinPointer(pointer, "kind"), value.start)
-	}
-	if !hasSelect || selectNode.kind != nodeArray {
-		return Operation{}, newDiagnostic(input, "INVALID_SELECTIONS", "LANG-002", "validate", "operation requires a selection array", joinPointer(pointer, "select"), value.start)
-	}
-	selections, err := decodeSelections(input, selectNode, joinPointer(pointer, "select"))
-	if err != nil {
-		return Operation{}, err
-	}
-	return Operation{name: name.text, kind: OperationKind(kind.text), selections: selections, source: sourceAt(input, pointer, value)}, nil
-}
-
-func decodeSelections(input []byte, value node, pointer string) ([]Selection, error) {
-	result := make([]Selection, 0, len(value.array))
-	for index, selectionNode := range value.array {
-		selection, err := decodeSelection(input, selectionNode, joinPointer(pointer, intString(index)))
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, selection)
-	}
-	return result, nil
-}
-
-func decodeSelection(input []byte, value node, pointer string) (Selection, error) {
-	if value.kind != nodeObject || len(value.object) != 1 {
-		return Selection{}, newDiagnostic(input, "INVALID_SELECTION", "LANG-003", "validate", "selection must be a one-key tagged object", pointer, value.start)
-	}
-	tag := value.object[0].name
-	payload := value.object[0].value
-	kinds := map[string]SelectionKind{
-		"$field": FieldSelection, "$call": CallSelection, "$pipeline": PipelineSelection,
-		"$map": MapSelection, "$index": IndexSelection, "$slice": SliceSelection,
-		"$page": PageSelection, "$meta": MetaSelection, "$parallel": ParallelSelection,
-		"$fragment": FragmentSelection, "$current": CurrentSelection,
-		"$nest": NestSelection, "$unnest": UnnestSelection,
-	}
-	kind, ok := kinds[tag]
-	if !ok {
-		return Selection{}, newDiagnostic(input, "UNKNOWN_SELECTION", "LANG-003", "validate", "unknown selection tag", joinPointer(pointer, tag), value.object[0].start)
-	}
-	payloadPointer := joinPointer(pointer, tag)
-	if kind != FieldSelection && kind != CallSelection {
-		return Selection{}, newDiagnostic(input, "UNSUPPORTED_SELECTION", "LANG-003", "validate", "selection tag is specified but not implemented by this decoder", payloadPointer, payload.start)
-	}
-	if err := expectKindPhase(input, payload, nodeObject, payloadPointer, "selection payload object", "LANG-003", "validate"); err != nil {
-		return Selection{}, err
-	}
-	allowed := map[string]bool{"name": true, "as": true}
-	if kind == FieldSelection {
-		allowed["select"] = true
-	}
-	if err := rejectUnknown(input, payload, allowed, "LANG-004", "validate", payloadPointer); err != nil {
-		return Selection{}, err
-	}
-	selection := Selection{kind: kind, source: sourceAt(input, pointer, value)}
-	name, exists := payload.member("name")
-	if !exists {
-		return Selection{}, newDiagnostic(input, "MISSING_FIELD", "LANG-100", "validate", "selection requires name", joinPointer(payloadPointer, "name"), payload.start)
-	}
-	if err := expectKindPhase(input, name, nodeString, joinPointer(payloadPointer, "name"), "selection name string", "LANG-100", "validate"); err != nil {
-		return Selection{}, err
-	}
-	selection.name = name.text
-	if alias, aliasExists := payload.member("as"); aliasExists {
-		if err := expectKindPhase(input, alias, nodeString, joinPointer(payloadPointer, "as"), "response alias string", "LANG-002", "validate"); err != nil {
-			return Selection{}, err
-		}
-		selection.alias = alias.text
-	}
-	if children, childExists := payload.member("select"); childExists {
-		if err := expectKindPhase(input, children, nodeArray, joinPointer(payloadPointer, "select"), "child selection array", "LANG-002", "validate"); err != nil {
-			return Selection{}, err
-		}
-		decoded, err := decodeSelections(input, children, joinPointer(payloadPointer, "select"))
-		if err != nil {
-			return Selection{}, err
-		}
-		selection.children = decoded
-	}
-	if !identifierPattern.MatchString(selection.name) {
-		return Selection{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "selection requires a portable name", joinPointer(payloadPointer, "name"), name.start)
-	}
-	if selection.alias != "" && !identifierPattern.MatchString(selection.alias) {
-		return Selection{}, newDiagnostic(input, "INVALID_IDENTIFIER", "LANG-002", "validate", "invalid response alias", joinPointer(joinPointer(pointer, tag), "as"), payload.start)
-	}
-	return selection, nil
+func decodeDocument(input []byte, value node, limits Limits) (Document, error) {
+	return (languageDecoder{input: input, limits: limits}).document(value, "/document")
 }
 
 func decodePersisted(input []byte, value node) (PersistedReference, error) {

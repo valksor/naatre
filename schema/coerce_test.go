@@ -26,7 +26,7 @@ func TestCoerceInputPreservesMissingNullAndCompositeBoundaries(t *testing.T) {
 	}
 
 	object, err := schema.CoerceInput(types, "ProfileInput", json.RawMessage(`{"nickname":null}`), false)
-	if err != nil {
+	if err != nil || object.Type() != "ProfileInput" {
 		t.Fatalf("CoerceInput(ProfileInput): %v", err)
 	}
 	members, ok := object.Object()

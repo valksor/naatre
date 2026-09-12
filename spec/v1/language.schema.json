@@ -280,7 +280,7 @@
       "additionalProperties": false,
       "properties": {
         "as": { "$ref": "#/$defs/identifier" },
-        "at": { "type": "integer", "minimum": 0 },
+        "at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "bind": { "$ref": "#/$defs/identifier" },
         "directives": { "$ref": "#/$defs/directives" },
         "select": { "$ref": "#/$defs/selections" }
@@ -292,8 +292,8 @@
       "additionalProperties": false,
       "properties": {
         "as": { "$ref": "#/$defs/identifier" },
-        "start": { "type": "integer", "minimum": 0 },
-        "end": { "type": "integer", "minimum": 0 },
+        "start": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "end": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "bind": { "$ref": "#/$defs/identifier" },
         "directives": { "$ref": "#/$defs/directives" },
         "select": { "$ref": "#/$defs/selections" }
@@ -305,9 +305,9 @@
       "additionalProperties": false,
       "properties": {
         "as": { "$ref": "#/$defs/identifier" },
-        "first": { "type": "integer", "minimum": 1 },
+        "first": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "after": { "$ref": "#/$defs/expression" },
-        "last": { "type": "integer", "minimum": 1 },
+        "last": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "before": { "$ref": "#/$defs/expression" },
         "bind": { "$ref": "#/$defs/identifier" },
         "directives": { "$ref": "#/$defs/directives" },
@@ -492,7 +492,7 @@
       "required": ["at"],
       "additionalProperties": false,
       "properties": {
-        "at": { "type": "integer", "minimum": 0 },
+        "at": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "bind": { "$ref": "#/$defs/identifier" },
         "directives": { "$ref": "#/$defs/directives" },
         "select": { "$ref": "#/$defs/selections" }
@@ -502,8 +502,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "start": { "type": "integer", "minimum": 0 },
-        "end": { "type": "integer", "minimum": 0 },
+        "start": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "end": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "bind": { "$ref": "#/$defs/identifier" },
         "directives": { "$ref": "#/$defs/directives" },
         "select": { "$ref": "#/$defs/selections" }
@@ -513,9 +513,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "first": { "type": "integer", "minimum": 1 },
+        "first": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "after": { "$ref": "#/$defs/expression" },
-        "last": { "type": "integer", "minimum": 1 },
+        "last": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "before": { "$ref": "#/$defs/expression" },
         "bind": { "$ref": "#/$defs/identifier" },
         "directives": { "$ref": "#/$defs/directives" },
