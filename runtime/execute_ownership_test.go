@@ -127,5 +127,100 @@ func TestExecuteJoinsCooperativeHandlerWithoutWaitingForGrace(t *testing.T) {
 	}
 }
 
-var _ = protocol.Query
-var _ = schema.String
+// A parent that held its execution permit while its children ran would
+// deadlock as soon as nesting exceeded the permit count. Width-one parallel
+// groups nested deeper than the bound must still terminate.
+func TestExecuteNestedWidthOneParallelGroupsDoNotDeadlock(t *testing.T) {
+	t.Parallel()
+	// Deeper than the runtime's concurrency bound, so a permit held across a
+	// child selection exhausts the pool before the innermost field is reached.
+	const depth = 12
+	types := freezeCompositionTypes(t, schema.TypeDescriptor{
+		ID: "Node", Kind: schema.ObjectType, Output: true, MaxDepth: depth + 8,
+		Fields: map[string]schema.FieldDescriptor{
+			"next": {Type: "Node"},
+			"id":   {Type: schema.TypeID(schema.String)},
+		},
+	})
+	registry := naatreruntime.NewRegistry(types)
+	registerComposition(t, registry, naatreruntime.BindInvocation[map[string]any](naatreruntime.Descriptor{
+		Name: "root", Scope: naatreruntime.RootScope, Kind: protocol.Query, Member: naatreruntime.CallMember,
+		Input: schema.TypeID(schema.String), Output: "Node", Metadata: completeMetadata(naatreruntime.ReadEffect),
+	}, func(context.Context, naatreruntime.Invocation) (map[string]any, error) {
+		return map[string]any{"next": map[string]any{}}, nil
+	}))
+	registerComposition(t, registry, naatreruntime.BindField[map[string]any, map[string]any](naatreruntime.Descriptor{
+		Name: "next", Scope: naatreruntime.ObjectScope, Owner: "Node", Member: naatreruntime.FieldMember,
+		Output: "Node", Metadata: completeMetadata(naatreruntime.ReadEffect),
+	}, func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"next": map[string]any{}}, nil
+	}))
+	registerComposition(t, registry, naatreruntime.BindField[map[string]any, string](naatreruntime.Descriptor{
+		Name: "id", Scope: naatreruntime.ObjectScope, Owner: "Node", Member: naatreruntime.FieldMember,
+		Output: schema.TypeID(schema.String), Metadata: completeMetadata(naatreruntime.ReadEffect),
+	}, func(context.Context, map[string]any) (string, error) {
+		return "leaf", nil
+	}))
+	snapshot, err := registry.Freeze()
+	if err != nil {
+		t.Fatalf("freeze registry: %v", err)
+	}
+	// Each level is a width-one parallel group wrapping the next field, with a
+	// scalar leaf at the bottom so every composite selection is complete.
+	selection := `{"$field":{"name":"id"}}`
+	for range depth {
+		selection = `{"$parallel":{"select":[{"$field":{"name":"next","select":[` + selection + `]}}]}}`
+	}
+	document := `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"root","select":[` + selection + `]}}]}]}}`
+	// Each level costs several JSON levels, so this document needs more than
+	// the default nesting allowance to express a bound-exceeding depth.
+	request, err := protocol.DecodeRequest([]byte(document), protocol.DecodeOptions{
+		Limits: protocol.Limits{MaxDepth: 256},
+	})
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	plan, err := naatreruntime.Prepare(snapshot, request)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	done := make(chan naatreruntime.Outcome, 1)
+	go func() { done <- plan.Execute(context.Background()) }()
+	select {
+	case outcome := <-done:
+		if len(outcome.Errors) != 0 {
+			t.Fatalf("Execute errors = %#v", outcome.Errors)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("nested width-one parallel groups deadlocked on the execution bound")
+	}
+}
+
+// A saturated pool plus queued branches must still terminate once the request
+// is cancelled, rather than waiting out every queued admission.
+func TestExecuteSaturatedPoolTerminatesOnCancellation(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 1)
+	snapshot := rootStringCallSnapshot(t, "saturate", func(ctx context.Context, _ naatreruntime.Invocation) (string, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	// Far more branches than permits, so most are still queued at cancellation.
+	plan := prepareParallelBranches(t, snapshot, "collect", repeatName("saturate", 256), indexAlias("s"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan naatreruntime.Outcome, 1)
+	go func() { done <- plan.ExecuteWith(ctx, naatreruntime.ExecuteOptions{AbandonGrace: time.Second}) }()
+	<-entered
+	cancel()
+	select {
+	case outcome := <-done:
+		assertEveryErrorCancelled(t, outcome)
+	case <-time.After(30 * time.Second):
+		t.Fatal("saturated pool did not terminate after cancellation")
+	}
+}
