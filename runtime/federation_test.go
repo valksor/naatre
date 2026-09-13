@@ -522,6 +522,43 @@ func TestReferenceFederationCoordinatorIsolatesInputsRetriesAndRemoteResults(t *
 	if outcome.Data["first"].(map[string]any)["nested"].(map[string]any)["value"] != "remote-original" {
 		t.Fatalf("outcome retained invoker-owned data: %#v", outcome.Data["first"])
 	}
+
+	typedNilInput := map[string]any{
+		"map":   map[string]any(nil),
+		"slice": []any(nil),
+	}
+	typedNilInvoker := runtime.FederationInvokerFunc(func(_ context.Context, invocation runtime.FederationInvocation) (runtime.FederationRemoteResult, error) {
+		input := invocation.Input.(map[string]any)
+		if value, ok := input["map"].(map[string]any); !ok || value != nil {
+			t.Fatalf("typed nil map input = %#v", input["map"])
+		}
+		if value, ok := input["slice"].([]any); !ok || value != nil {
+			t.Fatalf("typed nil slice input = %#v", input["slice"])
+		}
+		return runtime.FederationRemoteResult{
+			Data: map[string]any{"map": map[string]any(nil), "slice": []any(nil)}, SchemaRevision: "users-r1",
+		}, nil
+	})
+	typedNilCoordinator := newFederationCoordinator(t, composition, federationIssuer(t), typedNilInvoker, runtime.FederationLimits{
+		MaxCalls: 1, MaxCost: 10, MaxConcurrency: 1, MaxAttempts: 1,
+	})
+	typedNilPlan := runtime.FederationPlan{
+		SchemaRevision: composition.Schema().Revision(),
+		Calls: []runtime.FederationCall{{
+			ResponseKey: "nil", ServiceID: "users", OperationID: "query.user", Input: typedNilInput, Path: []any{"nil"}, MaxAttempts: 1,
+		}},
+	}
+	typedNilOutcome := typedNilCoordinator.Execute(ctx, "request-nil", typedNilPlan)
+	if len(typedNilOutcome.Errors) != 0 {
+		t.Fatalf("typed nil outcome errors = %#v", typedNilOutcome.Errors)
+	}
+	typedNilData := typedNilOutcome.Data["nil"].(map[string]any)
+	if value, ok := typedNilData["map"].(map[string]any); !ok || value != nil {
+		t.Fatalf("typed nil map output = %#v", typedNilData["map"])
+	}
+	if value, ok := typedNilData["slice"].([]any); !ok || value != nil {
+		t.Fatalf("typed nil slice output = %#v", typedNilData["slice"])
+	}
 }
 
 func TestReferenceFederationCoordinatorRejectsUnsafePlansBeforeInvocation(t *testing.T) {

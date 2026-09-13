@@ -668,6 +668,9 @@ func (s *federationValueCloneState) clone(value any, depth int) (any, error) {
 		}
 		return current, nil
 	case map[string]any:
+		if current == nil {
+			return map[string]any(nil), nil
+		}
 		reference, err := s.beginReference(current)
 		if err != nil {
 			return nil, err
@@ -686,6 +689,9 @@ func (s *federationValueCloneState) clone(value any, depth int) (any, error) {
 		}
 		return cloned, nil
 	case []any:
+		if current == nil {
+			return []any(nil), nil
+		}
 		reference, err := s.beginReference(current)
 		if err != nil {
 			return nil, err
