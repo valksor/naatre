@@ -556,8 +556,21 @@ func TestNamedMutationGroupRetriesWhileHoldingItsClaim(t *testing.T) {
 			return "written", nil
 		})
 	budget := runtime.NewRetryBudget(2)
+	var retryEvents, handlerStarts, transactionEvents []runtime.TelemetryEvent
 	options := runtime.ExecuteOptions{
 		Retry: runtime.RetryPolicy{MaxAttempts: 2, Budget: budget},
+		Telemetry: runtime.TelemetryOptions{Hooks: runtime.TelemetryHooks{Trace: func(event runtime.TelemetryEvent) error {
+			if event.Kind == runtime.TelemetryRetry {
+				retryEvents = append(retryEvents, event)
+			}
+			if event.Kind == runtime.TelemetryHandler && event.Stage == runtime.TelemetryStarted {
+				handlerStarts = append(handlerStarts, event)
+			}
+			if event.Kind == runtime.TelemetryTransaction {
+				transactionEvents = append(transactionEvents, event)
+			}
+			return nil
+		}}},
 		Idempotency: runtime.IdempotencyOptions{
 			Store: runtime.NewMemoryIdempotencyStore(), GroupKeys: map[string]string{"only": "key"},
 			LeaseDuration: time.Minute, Retention: time.Hour,
@@ -572,6 +585,25 @@ func TestNamedMutationGroupRetriesWhileHoldingItsClaim(t *testing.T) {
 	if len(events) != 2 || events[0].Group != "only" || events[0].Attempt != 2 || events[0].State != runtime.IdempotencyRunning ||
 		events[1].Group != "" || events[1].Attempt != 2 || events[1].State != "" {
 		t.Fatalf("events = %#v", events)
+	}
+	if len(retryEvents) != 4 || retryEvents[0].Attempt != 1 || retryEvents[0].Stage != runtime.TelemetryStarted ||
+		retryEvents[1].Attempt != 1 || retryEvents[1].Stage != runtime.TelemetryFailed ||
+		retryEvents[2].Attempt != 2 || retryEvents[2].Stage != runtime.TelemetryStarted ||
+		retryEvents[3].Attempt != 2 || retryEvents[3].Stage != runtime.TelemetryCompleted {
+		t.Fatalf("retry telemetry = %#v", retryEvents)
+	}
+	if len(handlerStarts) != 2 || handlerStarts[0].ParentID != retryEvents[0].ID || handlerStarts[1].ParentID != retryEvents[2].ID {
+		t.Fatalf("group handlers are not linked to retries: retries=%#v handlers=%#v", retryEvents, handlerStarts)
+	}
+	assertTransactionAttemptsLinkedToRetries(t, retryEvents, transactionEvents)
+}
+
+func assertTransactionAttemptsLinkedToRetries(t testing.TB, retries, transactions []runtime.TelemetryEvent) {
+	t.Helper()
+	if len(transactions) != 4 || transactions[0].ID != transactions[1].ID ||
+		transactions[2].ID != transactions[3].ID || transactions[0].ID == transactions[2].ID ||
+		transactions[0].ParentID != retries[0].ID || transactions[2].ParentID != retries[2].ID {
+		t.Fatalf("group transactions are not independently linked to retry attempts: retries=%#v transactions=%#v", retries, transactions)
 	}
 }
 

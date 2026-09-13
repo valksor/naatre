@@ -170,8 +170,9 @@ func TestOperationAtomicityRunsHooksAndPublishesOnlyAfterCommit(t *testing.T) {
 		}
 		return context.WithValue(ctx, transactionContextKey{}, "transaction-state"), tx, nil
 	}}
-	audit := func(_ context.Context, event runtime.MutationAuditEvent) {
+	audit := func(_ context.Context, event runtime.MutationAuditEvent) error {
 		events = append(events, "audit:"+string(event.Stage))
+		return nil
 	}
 	plan := transactionPlan(t, provider, audit, `{"operations":[{"name":"M","kind":"mutation","atomicity":"operation","select":[{"$call":{"name":"write"}}]}]}`, func(ctx context.Context) (string, error) {
 		events = append(events, "handler")
@@ -204,6 +205,7 @@ func TestOperationAtomicityRunsHooksAndPublishesOnlyAfterCommit(t *testing.T) {
 	if !slices.Equal(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
 	}
+	assertAuditStringsMatchFixture(t, "mutation-commit-audit", events)
 }
 
 func TestTransactionContextRejectsLateHookRegistration(t *testing.T) {
@@ -293,8 +295,9 @@ func TestOperationAtomicityRollsBackAndWithholdsTentativeOutput(t *testing.T) {
 			},
 		}, nil
 	}}
-	plan := transactionPlan(t, provider, func(_ context.Context, event runtime.MutationAuditEvent) {
+	plan := transactionPlan(t, provider, func(_ context.Context, event runtime.MutationAuditEvent) error {
 		events = append(events, "audit:"+string(event.Stage))
+		return nil
 	}, `{"operations":[{"name":"M","kind":"mutation","atomicity":"operation","select":[{"$call":{"name":"write"}}]}]}`, func(context.Context) (string, error) {
 		events = append(events, "handler")
 		return "tentative", errors.New("write failed")
@@ -310,6 +313,7 @@ func TestOperationAtomicityRollsBackAndWithholdsTentativeOutput(t *testing.T) {
 	if !slices.Equal(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
 	}
+	assertAuditStringsMatchFixture(t, "mutation-rollback-audit", events)
 }
 
 func TestOperationAtomicityReportsCommitAndRollbackFaultsTruthfully(t *testing.T) {
@@ -560,10 +564,11 @@ func TestExternalEffectsUseCompensationWithoutClaimingRollback(t *testing.T) {
 		wantEffect    runtime.EffectState
 		wantAudit     runtime.MutationAuditStage
 		wantAuditCode string
+		fixture       string
 	}{
-		{name: "compensated", compensate: func(context.Context) error { return nil }, wantCodes: []string{runtime.CodeHandlerFailed}, wantEffect: runtime.EffectCompensated, wantAudit: runtime.MutationCompensated},
-		{name: "uncoordinated", wantCodes: []string{runtime.CodeExternalEffectUncoordinated, runtime.CodeHandlerFailed}, wantEffect: runtime.EffectIndeterminate, wantAudit: runtime.MutationIndeterminate, wantAuditCode: runtime.CodeExternalEffectUncoordinated},
-		{name: "compensation failed", compensate: func(context.Context) error { return errors.New("remote compensation failed") }, wantCodes: []string{runtime.CodeCompensationFailed, runtime.CodeHandlerFailed}, wantEffect: runtime.EffectIndeterminate, wantAudit: runtime.MutationIndeterminate, wantAuditCode: runtime.CodeCompensationFailed},
+		{name: "compensated", compensate: func(context.Context) error { return nil }, wantCodes: []string{runtime.CodeHandlerFailed}, wantEffect: runtime.EffectCompensated, wantAudit: runtime.MutationCompensated, fixture: "mutation-compensation-audit"},
+		{name: "uncoordinated", wantCodes: []string{runtime.CodeExternalEffectUncoordinated, runtime.CodeHandlerFailed}, wantEffect: runtime.EffectIndeterminate, wantAudit: runtime.MutationIndeterminate, wantAuditCode: runtime.CodeExternalEffectUncoordinated, fixture: "mutation-indeterminate-audit"},
+		{name: "compensation failed", compensate: func(context.Context) error { return errors.New("remote compensation failed") }, wantCodes: []string{runtime.CodeCompensationFailed, runtime.CodeHandlerFailed}, wantEffect: runtime.EffectIndeterminate, wantAudit: runtime.MutationIndeterminate, wantAuditCode: runtime.CodeCompensationFailed, fixture: "mutation-indeterminate-audit"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -574,8 +579,9 @@ func TestExternalEffectsUseCompensationWithoutClaimingRollback(t *testing.T) {
 					rollback: func(context.Context) error { return nil },
 				}, nil
 			}}
-			plan := transactionPlan(t, provider, func(_ context.Context, event runtime.MutationAuditEvent) {
+			plan := transactionPlan(t, provider, func(_ context.Context, event runtime.MutationAuditEvent) error {
 				audit = append(audit, event)
+				return nil
 			}, operationAtomicDocument(), func(ctx context.Context) (string, error) {
 				if err := runtime.RegisterExternalEffect(ctx, tt.compensate); err != nil {
 					return "", err
@@ -590,6 +596,11 @@ func TestExternalEffectsUseCompensationWithoutClaimingRollback(t *testing.T) {
 			if len(audit) != 2 || audit[0].Stage != runtime.MutationAttempted || audit[1].Stage != tt.wantAudit || audit[1].Code != tt.wantAuditCode {
 				t.Fatalf("audit = %#v, want attempted then %q/%q", audit, tt.wantAudit, tt.wantAuditCode)
 			}
+			auditEvents := make([]string, 0, len(audit))
+			for _, event := range audit {
+				auditEvents = append(auditEvents, "audit:"+string(event.Stage))
+			}
+			assertAuditStringsMatchFixture(t, tt.fixture, auditEvents)
 		})
 	}
 }

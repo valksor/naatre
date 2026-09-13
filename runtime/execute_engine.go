@@ -121,6 +121,7 @@ type executionScope struct {
 	batches       *batchRuntime
 	cache         *executionCache
 	batchObserver func(BatchEvent)
+	telemetry     *executionTelemetry
 }
 
 type scopedVariable struct {
@@ -239,6 +240,7 @@ func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outc
 		batches:       newBatchRuntime(),
 		cache:         requestCache,
 		batchObserver: options.Batch.Observe,
+		telemetry:     options.telemetry,
 	}
 	// Cancellation observed before any selection runs is operation-level: no
 	// field is responsible, so it carries the empty root path.
@@ -397,7 +399,32 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 	}
 }
 
-func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, directives []evaluatedDirective, scope executionScope, path []any) nodeResult {
+func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, directives []evaluatedDirective, scope executionScope, path []any) (result nodeResult) {
+	started := time.Now()
+	spanID, parentID := "", ""
+	if scope.telemetry != nil {
+		spanID = scope.telemetry.nextID("handler", registrationKey(node.definition.descriptor), fmt.Sprint(path))
+		parentID = scope.telemetry.parentID()
+		event := scope.telemetry.baseEvent(TelemetryHandler, TelemetryStarted)
+		event.ID, event.ParentID, event.Handler, event.MemberKind = spanID, parentID, registrationKey(node.definition.descriptor), node.definition.descriptor.Member
+		emitTelemetry(scope.telemetry.options, event)
+		defer func() {
+			stage, outcome, code := TelemetryCompleted, TelemetrySucceeded, ""
+			if result.failed || len(result.errors) != 0 {
+				stage, outcome = TelemetryFailed, TelemetryFailedOutcome
+				if len(result.errors) != 0 {
+					code = result.errors[0].Code
+					if code == CodeCancelled {
+						stage, outcome = TelemetryCancelled, TelemetryCancelledOutcome
+					}
+				}
+			}
+			event := scope.telemetry.baseEvent(TelemetryHandler, stage)
+			event.ID, event.ParentID, event.Handler, event.MemberKind = spanID, parentID, registrationKey(node.definition.descriptor), node.definition.descriptor.Member
+			event.Duration, event.Outcome, event.ErrorCode = time.Since(started), outcome, code
+			emitTelemetry(scope.telemetry.options, event)
+		}()
+	}
 	prepared, terminal := p.prepareHandlerNode(ctx, node, scope, path)
 	if terminal != nil {
 		return *terminal

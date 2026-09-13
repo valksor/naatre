@@ -23,7 +23,8 @@ evidence must be described as planned.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `schema`: portable types, values, and scalar codecs.
 - `runtime`: explicit registration, persisted admission, bounded cursor
-  pagination, request-scoped batch/cache coordination, planning, and execution;
+  pagination, request-scoped batch/cache coordination, dependency-free
+  observability hooks, planning, and execution;
   see the [Go registry contract](docs/registry.md).
 - `transport/http`: the planned Go adapter for the normative
   [`core.http-1` binding](spec/v1/http.md).

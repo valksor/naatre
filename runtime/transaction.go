@@ -53,6 +53,7 @@ type MutationAuditStage string
 
 const (
 	MutationAttempted     MutationAuditStage = "attempted"
+	MutationDenied        MutationAuditStage = "denied"
 	MutationCommitted     MutationAuditStage = "committed"
 	MutationRolledBack    MutationAuditStage = "rolled-back"
 	MutationCompensated   MutationAuditStage = "compensated"
@@ -60,13 +61,16 @@ const (
 )
 
 type MutationAuditEvent struct {
-	Stage     MutationAuditStage
-	Operation string
-	Group     string
-	Code      string
+	Stage              MutationAuditStage `json:"stage"`
+	Operation          string             `json:"operation"`
+	Group              string             `json:"group,omitempty"`
+	Code               string             `json:"code,omitempty"`
+	RequestID          string             `json:"requestId,omitempty"`
+	OperationID        string             `json:"operationId,omitempty"`
+	PrincipalReference string             `json:"principalReference,omitempty"`
 }
 
-type MutationAuditHook func(context.Context, MutationAuditEvent)
+type MutationAuditHook func(context.Context, MutationAuditEvent) error
 
 type TransactionConfig struct {
 	Provider     TransactionProvider
@@ -101,6 +105,7 @@ var ErrNoTransactionContext = errors.New("mutation hook registration requires a 
 var ErrTransactionClosed = errors.New("transaction context is no longer active")
 
 type mutationHooksKey struct{}
+type transactionGroupKey struct{}
 
 type mutationHooks struct {
 	mu          sync.Mutex
@@ -193,6 +198,7 @@ func (p *Plan) executeOperationTransaction(ctx context.Context, scope executionS
 }
 
 func (p *Plan) executeRootTransaction(ctx context.Context, scope executionScope, group string, nodes []planNode) sequenceResult {
+	ctx = context.WithValue(ctx, transactionGroupKey{}, group)
 	p.auditMutation(ctx, MutationAuditEvent{Stage: MutationAttempted, Operation: p.operationName, Group: group})
 	txCtx, tx, err := p.transactions.Provider.Begin(ctx, TransactionRequest{Operation: p.operationName, Group: group})
 	if err != nil || txCtx == nil || tx == nil {
@@ -204,6 +210,7 @@ func (p *Plan) executeRootTransaction(ctx context.Context, scope executionScope,
 		return sequenceResult{data: map[string]any{}, errors: []ExecutionError{failure}, failed: true}
 	}
 	hooks := &mutationHooks{active: true}
+	txCtx = context.WithValue(txCtx, transactionGroupKey{}, group)
 	txCtx = context.WithValue(txCtx, mutationHooksKey{}, hooks)
 	scope.transaction = tx
 	result := p.executeSequence(txCtx, nodes, scope, nil)
@@ -250,6 +257,11 @@ func (p *Plan) executeRootTransaction(ctx context.Context, scope executionScope,
 		p.auditMutation(commitContext, MutationAuditEvent{Stage: MutationIndeterminate, Operation: p.operationName, Group: group, Code: failure.Code})
 		return result
 	}
+}
+
+func transactionGroupFromContext(ctx context.Context) string {
+	group, _ := ctx.Value(transactionGroupKey{}).(string)
+	return group
 }
 
 func (p *Plan) rollbackTransaction(baseCtx, txCtx context.Context, tx Transaction, hooks *mutationHooks, scope executionScope, group string, result sequenceResult) sequenceResult {
@@ -341,9 +353,54 @@ func (p *Plan) transactionFailure(code, message string, cause error) ExecutionEr
 }
 
 func (p *Plan) auditMutation(ctx context.Context, event MutationAuditEvent) {
+	var failureHook TelemetryFailureHook
+	if telemetryContext, ok := telemetryContextFromContext(ctx); ok {
+		options := telemetryContext.options
+		failureHook = options.Hooks.Failure
+		event.RequestID = options.RequestID
+		event.OperationID = options.OperationID
+		event.PrincipalReference = options.PrincipalReference
+		telemetry := telemetryContext.execution
+		if telemetry != nil {
+			observed := telemetry.baseEvent(TelemetryTransaction, TelemetryStage(event.Stage))
+			parentID := telemetry.parentID()
+			observed.ID = telemetryID("transaction", parentID, event.Group)
+			observed.ParentID, observed.ErrorCode = parentID, event.Code
+			switch event.Stage {
+			case MutationAttempted:
+				observed.Outcome = TelemetryActive
+			case MutationCommitted:
+				observed.Outcome = TelemetrySucceeded
+			case MutationDenied:
+				observed.Outcome = TelemetryDeniedOutcome
+			case MutationRolledBack, MutationCompensated, MutationIndeterminate:
+				observed.Outcome = TelemetryFailedOutcome
+			}
+			emitTelemetry(telemetry.options, observed)
+		}
+	}
 	if p.transactions.Audit == nil {
 		return
 	}
-	defer func() { _ = recover() }()
-	p.transactions.Audit(context.WithoutCancel(ctx), event)
+	runMutationAuditHook(context.WithoutCancel(ctx), p.transactions.Audit, event, failureHook)
+}
+
+func runMutationAuditHook(ctx context.Context, hook MutationAuditHook, event MutationAuditEvent, failureHook TelemetryFailureHook) {
+	report := func(panicked bool) {
+		message := "audit hook failed"
+		if panicked {
+			message = "audit hook panicked"
+		}
+		observeSafely(failureHook, TelemetryFailure{
+			Pillar: "audit", Kind: TelemetryTransaction, Stage: TelemetryStage(event.Stage), Message: message, Panicked: panicked,
+		})
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			report(true)
+		}
+	}()
+	if err := hook(ctx, event); err != nil {
+		report(false)
+	}
 }

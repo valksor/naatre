@@ -305,8 +305,7 @@ func (p *Plan) authorizeNodeDecision(ctx context.Context, node planNode, object 
 			Path: slices.Clone(path), Object: policyObject,
 		})
 		if err != nil {
-			failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, err)
-			return AuthorizationDecision{}, &failure
+			return p.denyAuthorization(ctx, node, path, err)
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			failure := nodeExecutionError(CodeCancelled, "request cancelled", node, path, contextErr)
@@ -314,16 +313,24 @@ func (p *Plan) authorizeNodeDecision(ctx context.Context, node planNode, object 
 		}
 		now, clockErr := authorizationNow(p.authorization)
 		if clockErr != nil {
-			failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, clockErr)
-			return AuthorizationDecision{}, &failure
+			return p.denyAuthorization(ctx, node, path, clockErr)
 		}
 		allowed = authorizationDecisionAllows(decision, principal, now)
 	}
 	if !allowed {
-		failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, errors.New("authorization denied"))
-		return AuthorizationDecision{}, &failure
+		return p.denyAuthorization(ctx, node, path, errors.New("authorization denied"))
 	}
 	return decision, nil
+}
+
+func (p *Plan) denyAuthorization(ctx context.Context, node planNode, path []any, cause error) (AuthorizationDecision, *ExecutionError) {
+	failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, cause)
+	if p.kind == protocol.Mutation {
+		p.auditMutation(ctx, MutationAuditEvent{
+			Stage: MutationDenied, Operation: p.operationName, Group: transactionGroupFromContext(ctx), Code: failure.Code,
+		})
+	}
+	return AuthorizationDecision{}, &failure
 }
 
 func callPlanningAuthorizer(authorizer PlanningAuthorizer, request PlanningAuthorizationRequest) (decision AuthorizationDecision, err error) {

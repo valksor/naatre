@@ -1,0 +1,213 @@
+{
+  "profile": "operations.observability-1",
+  "eventKinds": [
+    "request",
+    "planning",
+    "operation",
+    "handler",
+    "batch",
+    "retry",
+    "transaction",
+    "subscription"
+  ],
+  "auditStages": [
+    "attempted",
+    "denied",
+    "committed",
+    "rolled-back",
+    "compensated",
+    "indeterminate"
+  ],
+  "outcomes": [
+    "active",
+    "completed",
+    "failed",
+    "cancelled",
+    "denied",
+    "history-unavailable",
+    "authorization-expired",
+    "slow-consumer",
+    "broker-failure",
+    "forced-drain"
+  ],
+  "prohibitedFields": [
+    "variables",
+    "arguments",
+    "result",
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "apiKey",
+    "token",
+    "session",
+    "principal",
+    "cursor",
+    "topic",
+    "handle"
+  ],
+  "metricLabels": ["kind", "stage", "operationKind", "outcome", "errorCode"],
+  "metricMeasurements": ["duration", "cost", "batchSize", "attempt", "connectionAttempt", "replayAttempt", "activeStreams", "replayEvents", "replayBytes", "scannedCandidates", "drainRemaining"],
+  "vectors": [
+    {
+      "name": "planning-lifecycle",
+      "events": ["planning.started", "planning.completed"],
+      "identities": ["planning", "planning"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "completed",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "serial-operation-lifecycle",
+      "events": ["request.started", "operation.started", "handler.started", "handler.completed", "operation.completed", "request.completed"],
+      "identities": ["request", "operation", "handler", "handler", "operation", "request"],
+      "links": [{"from": 0, "to": 1}, {"from": 1, "to": 2}, {"from": 2, "to": 3}, {"from": 3, "to": 4}, {"from": 4, "to": 5}],
+      "causal": true,
+      "terminal": "completed",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "parallel-causal-links",
+      "events": ["operation.started", "handler.started", "handler.started", "handler.completed", "handler.completed", "operation.completed"],
+      "identities": ["operation", "handler-a", "handler-b", "handler-b", "handler-a", "operation"],
+      "links": [{"from": 0, "to": 1}, {"from": 0, "to": 2}, {"from": 1, "to": 4}, {"from": 2, "to": 3}, {"from": 3, "to": 5}, {"from": 4, "to": 5}],
+      "causal": true,
+      "terminal": "completed",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "batched-handler-lifecycle",
+      "events": ["batch.started", "batch.completed"],
+      "identities": ["batch", "batch"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "completed",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "retried-attempt-lifecycle",
+      "events": ["retry.started", "handler.started", "handler.failed", "retry.failed", "retry.started", "handler.started", "handler.completed", "retry.completed"],
+      "identities": ["retry-1", "handler-1", "handler-1", "retry-1", "retry-2", "handler-2", "handler-2", "retry-2"],
+      "links": [{"from": 0, "to": 1}, {"from": 1, "to": 2}, {"from": 2, "to": 3}, {"from": 3, "to": 4}, {"from": 4, "to": 5}, {"from": 5, "to": 6}, {"from": 6, "to": 7}],
+      "causal": true,
+      "terminal": "completed",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "mutation-commit-audit",
+      "events": ["transaction.attempted", "transaction.committed"],
+      "identities": ["transaction", "transaction"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "committed",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "mutation-denied-audit",
+      "events": ["transaction.attempted", "transaction.denied", "transaction.rolled-back"],
+      "identities": ["transaction", "transaction", "transaction"],
+      "links": [{"from": 0, "to": 1}, {"from": 1, "to": 2}],
+      "causal": true,
+      "terminal": "rolled-back",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "mutation-rollback-audit",
+      "events": ["transaction.attempted", "transaction.rolled-back"],
+      "identities": ["transaction", "transaction"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "rolled-back",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "mutation-compensation-audit",
+      "events": ["transaction.attempted", "transaction.compensated"],
+      "identities": ["transaction", "transaction"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "compensated",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "mutation-indeterminate-audit",
+      "events": ["transaction.attempted", "transaction.indeterminate"],
+      "identities": ["transaction", "transaction"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "indeterminate",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "normal-reconnect",
+      "events": ["subscription.established", "subscription.reconnected", "subscription.resumed"],
+      "identities": ["established", "reconnected", "resumed"],
+      "links": [{"from": 0, "to": 1}, {"from": 1, "to": 2}],
+      "causal": true,
+      "terminal": "active",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "replay-gap",
+      "events": ["subscription.replay-started", "subscription.history-lost", "subscription.refetch-required"],
+      "identities": ["replay", "history-lost", "refetch"],
+      "links": [{"from": 0, "to": 1}, {"from": 1, "to": 2}],
+      "causal": true,
+      "terminal": "history-unavailable",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "authorization-closure",
+      "events": ["subscription.reauthorized", "subscription.closed"],
+      "identities": ["reauthorized", "closed"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "authorization-expired",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "slow-consumer-closure",
+      "events": ["subscription.backpressure", "subscription.closed"],
+      "identities": ["backpressure", "closed"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "slow-consumer",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "broker-failure",
+      "events": ["subscription.delivery-failed", "subscription.closed"],
+      "identities": ["delivery-failed", "closed"],
+      "links": [{"from": 0, "to": 1}],
+      "causal": true,
+      "terminal": "broker-failure",
+      "redacted": true,
+      "cardinality": "bounded"
+    },
+    {
+      "name": "forced-drain",
+      "events": ["subscription.drain-started", "subscription.drain-forced", "subscription.closed"],
+      "identities": ["drain", "forced", "closed"],
+      "links": [{"from": 0, "to": 1}, {"from": 1, "to": 2}],
+      "causal": true,
+      "terminal": "forced-drain",
+      "redacted": true,
+      "cardinality": "bounded"
+    }
+  ]
+}

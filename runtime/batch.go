@@ -93,6 +93,7 @@ const (
 // BatchEvent is tracing-safe dispatch telemetry. It intentionally excludes
 // typed inputs, principal claims, and backend errors.
 type BatchEvent struct {
+	ID        string
 	Stage     BatchEventStage
 	Operation string
 	Handler   string
@@ -564,10 +565,14 @@ func batchAuthorizationIdentity(principal Principal, decision AuthorizationDecis
 }
 
 func (p *Plan) dispatchBatch(ctx context.Context, definition *batchDefinition, calls []batchCall, scope executionScope) []batchCallResult {
-	p.observeBatch(scope, BatchEvent{Stage: BatchDispatchStarted, Operation: p.operationName, Handler: definition.handler, Size: len(calls)})
+	batchID := ""
+	if scope.telemetry != nil {
+		batchID = scope.telemetry.nextID("batch", definition.handler)
+	}
+	p.observeBatch(scope, BatchEvent{ID: batchID, Stage: BatchDispatchStarted, Operation: p.operationName, Handler: definition.handler, Size: len(calls)})
 	release, err := acquireExecutionSlot(ctx, scope)
 	if err != nil {
-		p.observeBatch(scope, BatchEvent{Stage: BatchDispatchCompleted, Operation: p.operationName, Handler: definition.handler, Size: len(calls), Failed: true, Cancelled: true})
+		p.observeBatch(scope, BatchEvent{ID: batchID, Stage: BatchDispatchCompleted, Operation: p.operationName, Handler: definition.handler, Size: len(calls), Failed: true, Cancelled: true})
 		return batchFailureResults(calls, err)
 	}
 	var results []batchCallResult
@@ -576,19 +581,36 @@ func (p *Plan) dispatchBatch(ctx context.Context, definition *batchDefinition, c
 		return nil, nil
 	})
 	if err != nil {
-		p.observeBatch(scope, BatchEvent{Stage: BatchDispatchCompleted, Operation: p.operationName, Handler: definition.handler, Size: len(calls), Failed: true, Cancelled: errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)})
+		p.observeBatch(scope, BatchEvent{ID: batchID, Stage: BatchDispatchCompleted, Operation: p.operationName, Handler: definition.handler, Size: len(calls), Failed: true, Cancelled: errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)})
 		return batchFailureResults(calls, err)
 	}
 	failed := false
 	for _, result := range results {
 		failed = failed || result.err != nil
 	}
-	p.observeBatch(scope, BatchEvent{Stage: BatchDispatchCompleted, Operation: p.operationName, Handler: definition.handler, Size: len(calls), Failed: failed})
+	p.observeBatch(scope, BatchEvent{ID: batchID, Stage: BatchDispatchCompleted, Operation: p.operationName, Handler: definition.handler, Size: len(calls), Failed: failed})
 	return results
 }
 
 func (p *Plan) observeBatch(scope executionScope, event BatchEvent) {
 	observeSafely(scope.batchObserver, event)
+	if scope.telemetry == nil {
+		return
+	}
+	stage, outcome := TelemetryStarted, TelemetryOutcome("")
+	if event.Stage == BatchDispatchCompleted {
+		stage, outcome = TelemetryCompleted, TelemetrySucceeded
+		if event.Failed {
+			stage, outcome = TelemetryFailed, TelemetryFailedOutcome
+		}
+		if event.Cancelled {
+			stage, outcome = TelemetryCancelled, TelemetryCancelledOutcome
+		}
+	}
+	observed := scope.telemetry.baseEvent(TelemetryBatch, stage)
+	observed.ID = event.ID
+	observed.ParentID, observed.Handler, observed.BatchSize, observed.Outcome = scope.telemetry.parentID(), event.Handler, event.Size, outcome
+	emitTelemetry(scope.telemetry.options, observed)
 }
 
 type parallelBatchTarget struct {

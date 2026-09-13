@@ -107,12 +107,19 @@ transaction spans unrelated stores, workers, or remote services.
 
 ## MUT-008 — audit lifecycle
 
-The runtime invokes ordered audit hooks for `attempted`, `committed`,
-`rolled-back`, `compensated`, and `indeterminate` facts. Events identify the
-operation and optional root group and include the terminal error code when
-indeterminate. An audit hook receives a cancellation-detached context and MUST
-be concurrency-safe. Panics in application audit code are contained and never
-change the provider's already-established transaction truth.
+The runtime invokes ordered audit hooks for `attempted`, `denied`, `committed`,
+`rolled-back`, `compensated`, and `indeterminate` facts. `denied` is emitted
+when runtime authorization rejects a mutation before its handler runs. Events
+identify the operation and optional root group, MAY include application-
+supplied request, operation, and opaque principal references, and include the
+terminal safe error code when denied or indeterminate. They never include raw
+principal data or mutation payloads. An audit hook receives a cancellation-
+detached context and MUST be concurrency-safe. It returns an error when the
+fact could not be delivered. Errors and panics in application audit code are
+contained, reported through the safe observability failure hook when present,
+and never change the provider's already-established transaction truth. Durable
+pre-write audit follows OBS-006 rather than relying on this best-effort
+callback.
 
 ## MUT-009 — produced runtime values
 

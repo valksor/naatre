@@ -241,10 +241,12 @@ func (p *Plan) executeGroupAttempts(ctx context.Context, node planNode, scope ex
 		groupScope := scope
 		groupScope.effects = &effectRecorder{}
 		groupScope.annotations = &directiveAnnotationRecorder{}
+		retry := startRetryTelemetry(scope.telemetry, maxAttempts, attempt)
 		result := p.executeRootTransaction(ctx, groupScope, node.name, node.children)
 		effect := groupScope.effects.state(protocol.Mutation, result.failed)
 		annotations := groupScope.annotations.annotations()
 		outcome := Outcome{Data: result.data, Errors: result.errors, Effects: effect, Annotations: annotations}
+		retry.finish(outcome)
 		if !retryableOutcome(outcome) || attempt == maxAttempts {
 			return result, effect, annotations, attempt
 		}
@@ -285,6 +287,36 @@ func idempotencyNodeFailure(code, message string, cause error) nodeResult {
 	return nodeResult{failed: true, errors: []ExecutionError{{Code: code, Message: message, Path: []any{}, internal: cause}}}
 }
 
+type retryTelemetry struct {
+	execution     *executionTelemetry
+	id            string
+	attempt       uint32
+	restoreParent func()
+}
+
+func startRetryTelemetry(execution *executionTelemetry, maxAttempts, attempt uint32) *retryTelemetry {
+	if execution == nil || maxAttempts <= 1 {
+		return nil
+	}
+	id := execution.nextID("retry", fmt.Sprint(attempt))
+	event := execution.baseEvent(TelemetryRetry, TelemetryStarted)
+	event.ID, event.ParentID, event.Attempt = id, execution.operationSpan, attempt
+	emitTelemetry(execution.options, event)
+	return &retryTelemetry{execution: execution, id: id, attempt: attempt, restoreParent: execution.pushParent(id)}
+}
+
+func (r *retryTelemetry) finish(outcome Outcome) {
+	if r == nil {
+		return
+	}
+	r.restoreParent()
+	stage, result, code := outcomeTelemetry(outcome)
+	event := r.execution.baseEvent(TelemetryRetry, stage)
+	event.ID, event.ParentID, event.Attempt = r.id, r.execution.operationSpan, r.attempt
+	event.Outcome, event.ErrorCode = result, code
+	emitTelemetry(r.execution.options, event)
+}
+
 func (p *Plan) executeAttempts(ctx context.Context, options ExecuteOptions) Outcome {
 	if len(options.Idempotency.GroupKeys) != 0 {
 		return p.executeComposed(ctx, options)
@@ -298,7 +330,9 @@ func (p *Plan) executeAttempts(ctx context.Context, options ExecuteOptions) Outc
 		if !options.Retry.Budget.claim() {
 			return retryBudgetExhaustedOutcome(p.kind, attempt-1)
 		}
+		retry := startRetryTelemetry(options.telemetry, maxAttempts, attempt)
 		outcome = p.executeComposed(ctx, options)
+		retry.finish(outcome)
 		outcome.Reliability.Attempts = attempt
 		if !retryableOutcome(outcome) || attempt == maxAttempts {
 			return outcome

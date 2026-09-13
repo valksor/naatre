@@ -47,7 +47,8 @@ type ResourceLimits struct {
 
 // PrepareOptions configures resource enforcement while building a plan.
 type PrepareOptions struct {
-	Limits ResourceLimits
+	Limits    ResourceLimits
+	Telemetry TelemetryOptions
 }
 
 // DefaultResourceLimits returns the finite reference defaults used by Prepare.

@@ -52,6 +52,15 @@ identity, error/null policy, application ownership, and read-write-read
 invalidation. The Go runtime executes each named behavior directly and reports
 representative handler-invocation benchmarks.
 
+`v1/observability.json` fixes the `operations.observability-1` event kinds,
+mutation-audit stages, bounded outcomes, prohibited sensitive fields, metric
+labels and measurements, lifecycle identities, and indexed causal links for
+serial, parallel, batched, retried, transactional, and streamed lifecycles.
+The Go runtime consumes these sequences directly and proves dependency-free
+hook ordering, redaction, cardinality, failure containment, and mutation
+correlation. #70 owns broker-backed stream/replay integration and #107 owns
+optional exporter and durable-audit adapters.
+
 `v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
 complete, filtered, recursive, extended-trait, evolving, open-union, and
 deprecation snapshots. The Go consumer strict-parses each document, imports it

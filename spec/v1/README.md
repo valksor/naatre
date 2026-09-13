@@ -23,6 +23,7 @@ Documents:
 10. [Mutations and transaction boundaries](mutations.md)
 11. [Reliability, idempotency, and retries](reliability.md)
 12. [Request-scoped batching and caching](batching.md)
+13. [Observability and mutation audit](observability.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

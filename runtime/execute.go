@@ -168,7 +168,9 @@ func Prepare(registry Snapshot, request *protocol.Request) (*Plan, error) {
 
 // PrepareWithOptions resolves and validates the complete selected operation
 // under explicit request-wide resource limits without invoking handlers.
-func PrepareWithOptions(registry Snapshot, request *protocol.Request, options PrepareOptions) (*Plan, error) {
+func PrepareWithOptions(registry Snapshot, request *protocol.Request, options PrepareOptions) (plan *Plan, err error) {
+	planning := startPlanningTelemetry(options.Telemetry)
+	defer func() { planning.finish(err) }()
 	if request == nil || request.Document() == nil {
 		return nil, errors.New("runtime preparation requires an inline document")
 	}
@@ -181,6 +183,7 @@ func PrepareWithOptions(registry Snapshot, request *protocol.Request, options Pr
 	if err != nil {
 		return nil, err
 	}
+	planning.setOperation(operation.Name(), operation.Kind())
 	planner := newPlanValidator(registry, request, operation, limits)
 	nodes, executable := planner.validate()
 	if len(planner.issues) == 0 {
@@ -195,6 +198,7 @@ func PrepareWithOptions(registry Snapshot, request *protocol.Request, options Pr
 	if len(planner.issues) != 0 {
 		return nil, &ValidationErrors{issues: planner.issues}
 	}
+	planning.setCost(planner.staticCost)
 	return &Plan{
 		operationName: operation.Name(), kind: operation.Kind(), atomicity: operation.Atomicity(), operationSource: operation.Source(), requirements: request.Document().Requires(),
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
@@ -229,6 +233,10 @@ type ExecuteOptions struct {
 	Cache CacheOptions
 	// Batch configures tracing-safe request batch telemetry.
 	Batch BatchRuntimeOptions
+	// Telemetry installs dependency-free trace, metric, and structured-log
+	// hooks plus safe correlation metadata.
+	Telemetry TelemetryOptions
+	telemetry *executionTelemetry
 }
 
 func (o ExecuteOptions) abandonGrace() time.Duration {
@@ -247,7 +255,30 @@ func (p *Plan) Execute(ctx context.Context) Outcome {
 
 // ExecuteWith runs a prepared operation under an explicit policy.
 func (p *Plan) ExecuteWith(ctx context.Context, options ExecuteOptions) Outcome {
-	return p.executeReliably(ctx, options)
+	telemetry := newExecutionTelemetry(options.Telemetry, p.operationName, p.kind, p.staticCost)
+	options.telemetry = telemetry
+	ctx = context.WithValue(ctx, telemetryContextKey{}, executionTelemetryContext{options: options.Telemetry, execution: telemetry})
+	started := time.Now()
+	if telemetry != nil {
+		request := telemetry.baseEvent(TelemetryRequest, TelemetryStarted)
+		request.ID = telemetry.requestSpan
+		emitTelemetry(telemetry.options, request)
+		operation := telemetry.baseEvent(TelemetryOperation, TelemetryStarted)
+		operation.ID, operation.ParentID = telemetry.operationSpan, telemetry.requestSpan
+		emitTelemetry(telemetry.options, operation)
+	}
+	outcome := p.executeReliably(ctx, options)
+	if telemetry != nil {
+		stage, result, code := outcomeTelemetry(outcome)
+		operation := telemetry.baseEvent(TelemetryOperation, stage)
+		operation.ID, operation.ParentID = telemetry.operationSpan, telemetry.requestSpan
+		operation.Duration, operation.Outcome, operation.ErrorCode = time.Since(started), result, code
+		emitTelemetry(telemetry.options, operation)
+		request := telemetry.baseEvent(TelemetryRequest, stage)
+		request.ID, request.Duration, request.Outcome, request.ErrorCode = telemetry.requestSpan, time.Since(started), result, code
+		emitTelemetry(telemetry.options, request)
+	}
+	return outcome
 }
 
 func captureVariableValues(request *protocol.Request, definitions []protocol.VariableDefinition) map[string]json.RawMessage {

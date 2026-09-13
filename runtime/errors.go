@@ -22,6 +22,9 @@ const (
 	// CodeInternal reports a contained runtime or host failure, including a
 	// handler panic.
 	CodeInternal = "INTERNAL"
+	// CodeValidationFailed reports that an operation was rejected before
+	// execution because it does not satisfy the runtime contract.
+	CodeValidationFailed = "VALIDATION_FAILED"
 	// CodeOutputCompletion reports output that did not satisfy its declared
 	// schema type.
 	CodeOutputCompletion = "OUTPUT_COMPLETION"
