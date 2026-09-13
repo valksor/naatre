@@ -24,11 +24,13 @@ evidence must be described as planned.
 - `schema`: portable types, values, and scalar codecs.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
-  observability hooks, process-wide admission/lifecycle control, planning, and
-  execution; see the [Go registry contract](docs/registry.md) and
+  observability hooks, process-wide admission/lifecycle control, bounded
+  stream replay and source ownership, planning, and execution; see the
+  [Go registry contract](docs/registry.md) and
   [process-hosting guide](docs/process-hosting.md).
-- `transport/http`: the planned Go adapter for the normative
-  [`core.http-1` binding](spec/v1/http.md).
+- `transport/http`: strict reusable SSE framing for
+  [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
+  streaming and general `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk` (planned): official and compatibility-certified client implementations.

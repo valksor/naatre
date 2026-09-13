@@ -373,6 +373,11 @@ func TestPrepareMatchesPortableValidationCodes(t *testing.T) {
 			code: "EFFECT_NOT_ALLOWED", pointer: "/document/operations/0/select/0/$call/name",
 		},
 		{
+			name: "subscription transitively reaches write",
+			body: `{"operations":[{"name":"S","kind":"subscription","select":[{"$call":{"name":"watch","select":[{"$field":{"name":"mutateName"}}]}}]}]}`,
+			code: "EFFECT_NOT_ALLOWED", pointer: "/document/operations/0/select/0/$call/select/0/$field/name",
+		},
+		{
 			name: "cross parallel result reference",
 			body: `{"operations":[{"name":"Q","kind":"query","select":[{"$parallel":{"select":[{"$call":{"name":"text","bind":"branchValue"}},{"$call":{"name":"consume","args":{"value":{"$result":"branchValue"}}}}]}}]}]}`,
 			code: "RESULT_SCOPE", pointer: "/document/operations/0/select/0/$parallel/select/1/$call/args/value/$result",

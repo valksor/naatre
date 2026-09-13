@@ -491,16 +491,18 @@ func TestDirectivePlannerCannotHideInvalidStructureEffectsOrExcessCost(t *testin
 		})
 	}
 
-	writeDescriptor := descriptor
-	writeDescriptor.ID, writeDescriptor.Name, writeDescriptor.Capability = "vendor.writeGate", "writeGate", "vendor.write-gate-1"
-	writeDescriptor.Effect = string(runtime.WriteEffect)
-	writeDescriptor.Phases = append(writeDescriptor.Phases, schema.DirectiveExecution)
-	writeSnapshot := directiveTestSnapshot(t, runtime.DirectiveDefinition{
-		Descriptor: writeDescriptor, Planner: planner, Wrapper: runtime.DirectiveExecutionWrapperFunc(passthroughDirective),
-	})
-	writeRequest := decodeRuntimeRequestWithOptions(t, `{"version":"1","capabilities":["vendor.write-gate-1"],"document":{"requires":["vendor.write-gate-1"],"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"text","directives":[{"name":"writeGate","arguments":{"level":{"$literal":1}}}]}}]}]}}`, protocol.DecodeOptions{Capabilities: map[string]bool{"vendor.write-gate-1": true}})
-	if codes := validationCodes(t, prepareError(writeSnapshot, writeRequest)); !slices.Contains(codes, "EFFECT_NOT_ALLOWED") {
-		t.Fatalf("write directive codes = %v", codes)
+	writeSnapshot := writeDirectiveTestSnapshot(t, planner)
+	for _, operation := range []struct {
+		name string
+		kind protocol.OperationKind
+		root string
+	}{{"query write directive", protocol.Query, "text"}, {"subscription write directive", protocol.Subscription, "watch"}} {
+		t.Run(operation.name, func(t *testing.T) {
+			request := decodeRuntimeRequestWithOptions(t, fmt.Sprintf(`{"version":"1","capabilities":["vendor.write-gate-1"],"document":{"requires":["vendor.write-gate-1"],"operations":[{"name":"Read","kind":%q,"select":[{"$call":{"name":%q,"directives":[{"name":"writeGate","arguments":{"level":{"$literal":1}}}],"select":[{"$field":{"name":"name"}}]}}]}]}}`, operation.kind, operation.root), protocol.DecodeOptions{Capabilities: map[string]bool{"vendor.write-gate-1": true}})
+			if codes := validationCodes(t, prepareError(writeSnapshot, request)); !slices.Contains(codes, "EFFECT_NOT_ALLOWED") {
+				t.Fatalf("write directive codes = %v", codes)
+			}
+		})
 	}
 
 	costDescriptor := testDirectiveDescriptor("costly", "vendor.costly-1")
@@ -705,19 +707,37 @@ func testDirectiveDescriptor(name, capability string) schema.DirectiveDescriptor
 	}
 }
 
+func writeDirectiveTestSnapshot(t *testing.T, planner runtime.DirectivePlanner) runtime.Snapshot {
+	t.Helper()
+	descriptor := testDirectiveDescriptor("writeGate", "vendor.write-gate-1")
+	if planner != nil {
+		descriptor.Phases = append(descriptor.Phases, schema.DirectivePlanning)
+	}
+	descriptor.Effect = string(runtime.WriteEffect)
+	descriptor.Phases = append(descriptor.Phases, schema.DirectiveExecution)
+	return directiveTestSnapshot(t, runtime.DirectiveDefinition{
+		Descriptor: descriptor, Planner: planner, Wrapper: runtime.DirectiveExecutionWrapperFunc(passthroughDirective),
+	})
+}
+
 func directiveTestSnapshot(t *testing.T, directive runtime.DirectiveDefinition) runtime.Snapshot {
 	t.Helper()
 	registry := runtime.NewRegistry(compositionTypes(t))
 	if err := registry.RegisterDirective(directive); err != nil {
 		t.Fatalf("RegisterDirective: %v", err)
 	}
-	if err := registry.Register(runtime.BindInvocation[map[string]any](runtime.Descriptor{
-		Name: "text", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
-		Input: schema.TypeID(schema.String), Output: "User", Metadata: completeMetadata(runtime.ReadEffect),
-	}, func(context.Context, runtime.Invocation) (map[string]any, error) {
-		return map[string]any{"name": "ok"}, nil
-	})); err != nil {
-		t.Fatalf("Register: %v", err)
+	for _, root := range []struct {
+		name string
+		kind protocol.OperationKind
+	}{{"text", protocol.Query}, {"watch", protocol.Subscription}} {
+		if err := registry.Register(runtime.BindInvocation[map[string]any](runtime.Descriptor{
+			Name: root.name, Scope: runtime.RootScope, Kind: root.kind, Member: runtime.CallMember,
+			Input: schema.TypeID(schema.String), Output: "User", Metadata: completeMetadata(runtime.ReadEffect),
+		}, func(context.Context, runtime.Invocation) (map[string]any, error) {
+			return map[string]any{"name": "ok"}, nil
+		})); err != nil {
+			t.Fatalf("Register %s: %v", root.name, err)
+		}
 	}
 	if err := registry.Register(runtime.BindField[map[string]any, string](runtime.Descriptor{
 		Name: "name", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,

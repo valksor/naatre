@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"time"
 
@@ -106,32 +105,25 @@ type CursorCodecConfig struct {
 }
 
 type CursorCodec struct {
-	activeKeyID string
-	keys        map[string][]byte
-	ttl         time.Duration
-	now         func() time.Time
+	cursorSecrets
 	maxPageSize uint64
 }
 
 func NewCursorCodec(config CursorCodecConfig) (*CursorCodec, error) {
-	if config.ActiveKeyID == "" || config.TTL <= 0 || config.MaxPageSize == 0 || config.MaxPageSize > uint64(^uint(0)>>1) {
+	if config.MaxPageSize == 0 || config.MaxPageSize > uint64(^uint(0)>>1) {
 		return nil, errors.New("cursor codec requires an active key, positive TTL, and positive maximum page size")
 	}
-	keys := make(map[string][]byte, len(config.Keys))
-	for id, key := range config.Keys {
-		if id == "" || len(key) < 32 {
-			return nil, errors.New("cursor keys require an ID and at least 32 bytes")
-		}
-		keys[id] = slices.Clone(key)
-	}
-	if _, ok := keys[config.ActiveKeyID]; !ok {
+	secrets, status := newCursorSecrets(config.ActiveKeyID, config.Keys, config.TTL, config.Now)
+	switch status {
+	case cursorSecretsValid:
+	case cursorSecretsInvalidConfig:
+		return nil, errors.New("cursor codec requires an active key, positive TTL, and positive maximum page size")
+	case cursorSecretsInvalidKey:
+		return nil, errors.New("cursor keys require an ID and at least 32 bytes")
+	case cursorSecretsMissingActiveKey:
 		return nil, errors.New("active cursor key is not present")
 	}
-	now := config.Now
-	if now == nil {
-		now = time.Now
-	}
-	return &CursorCodec{activeKeyID: config.ActiveKeyID, keys: keys, ttl: config.TTL, now: now, maxPageSize: config.MaxPageSize}, nil
+	return &CursorCodec{cursorSecrets: secrets, maxPageSize: config.MaxPageSize}, nil
 }
 
 type cursorPayload struct {

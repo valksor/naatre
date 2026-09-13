@@ -71,6 +71,7 @@ func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 		}},
 		{ID: "User", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{
 			"name":       {Type: schema.TypeID(schema.String)},
+			"mutateName": {Type: schema.TypeID(schema.String)},
 			"id":         {Type: schema.TypeID(schema.ID)},
 			"externalID": {Type: schema.TypeID(schema.ID)},
 		}},
@@ -217,17 +218,19 @@ func registerValidationMembers(t testing.TB, registry *runtime.Registry, calls *
 		owner  schema.TypeID
 		name   string
 		output schema.TypeID
+		effect runtime.Effect
 	}{
-		{"User", "id", schema.TypeID(schema.ID)},
-		{"User", "externalID", schema.TypeID(schema.ID)},
-		{"GroupA", "name", schema.TypeID(schema.String)},
-		{"GroupB", "name", schema.TypeID(schema.String)},
-		{"Staff", "name", schema.TypeID(schema.String)},
-		{"Editor", "name", schema.TypeID(schema.String)},
+		{"User", "id", schema.TypeID(schema.ID), runtime.ReadEffect},
+		{"User", "externalID", schema.TypeID(schema.ID), runtime.ReadEffect},
+		{"User", "mutateName", schema.TypeID(schema.String), runtime.WriteEffect},
+		{"GroupA", "name", schema.TypeID(schema.String), runtime.ReadEffect},
+		{"GroupB", "name", schema.TypeID(schema.String), runtime.ReadEffect},
+		{"Staff", "name", schema.TypeID(schema.String), runtime.ReadEffect},
+		{"Editor", "name", schema.TypeID(schema.String), runtime.ReadEffect},
 	} {
 		definition := runtime.BindField[map[string]any, string](runtime.Descriptor{
 			Name: member.name, Scope: runtime.ObjectScope, Owner: member.owner, Member: runtime.FieldMember,
-			Output: member.output, Metadata: completeMetadata(runtime.ReadEffect),
+			Output: member.output, Metadata: completeMetadata(member.effect),
 		}, func(context.Context, map[string]any) (string, error) {
 			calls.Add(1)
 			return "", nil
@@ -259,10 +262,16 @@ func registerValidationVectorRoots(t testing.TB, registry *runtime.Registry, cal
 	}
 	createUser := write("createUser")
 	createUser.Output = "User"
+	watch := rootDescriptor("watch", schema.TypeID(schema.String), "User")
+	watch.Kind = protocol.Subscription
 	definitions := []runtime.Definition{
 		text(rootDescriptor("load", schema.TypeID(schema.String), schema.TypeID(schema.String))),
 		text(rootDescriptor("requiresInt", "IntInput", schema.TypeID(schema.String))),
 		text(write("deleteUser")),
+		runtime.BindInvocation[map[string]any](watch, func(context.Context, runtime.Invocation) (map[string]any, error) {
+			calls.Add(1)
+			return nil, nil
+		}),
 		runtime.BindInvocation[map[string]any](createUser, func(context.Context, runtime.Invocation) (map[string]any, error) {
 			calls.Add(1)
 			return nil, nil

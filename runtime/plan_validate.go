@@ -692,8 +692,8 @@ func (v *planValidator) requiresExplicitSelection(output staticType) bool {
 
 func (v *planValidator) validateDefinition(definition Definition, source protocol.Source) {
 	descriptor := definition.descriptor
-	if v.operation.Kind() == protocol.Query && descriptor.Metadata.Effect != ReadEffect {
-		v.add("EFFECT_NOT_ALLOWED", "LANG-303", "query transitively reaches a write", source)
+	if (v.operation.Kind() == protocol.Query || v.operation.Kind() == protocol.Subscription) && descriptor.Metadata.Effect != ReadEffect {
+		v.add("EFFECT_NOT_ALLOWED", "LANG-303", "read operation transitively reaches a write", source)
 		return
 	}
 	if descriptor.Scope != RootScope {

@@ -178,8 +178,9 @@ func (v *planValidator) validateDirectiveUse(definition registeredDirective, inv
 	if !definition.standard && !v.directiveCapabilitiesPinned(definition.Descriptor, invocation.Source()) {
 		valid = false
 	}
-	if v.operation.Kind() == protocol.Query && definition.Descriptor.Effect != string(ReadEffect) {
-		v.add("EFFECT_NOT_ALLOWED", "LANG-243", "query transitively reaches a write directive", invocation.Source())
+	if (v.operation.Kind() == protocol.Query || v.operation.Kind() == protocol.Subscription) &&
+		definition.Descriptor.Effect != string(ReadEffect) {
+		v.add("EFFECT_NOT_ALLOWED", "LANG-243", "read operation transitively reaches a write directive", invocation.Source())
 		valid = false
 	}
 	return valid

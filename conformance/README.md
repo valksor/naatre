@@ -125,3 +125,14 @@ boundaries. The Go runtime consumes the fixture directly and benchmarks
 admission, overload, drain, and connection rotation. Concrete supervisor,
 transport, stream, worker, and durable-operation integration remains owned by
 their independently shippable profiles.
+
+`v1/streaming.json` fixes the `core.streaming-1` logical event vocabulary,
+required terminal state machine, cursor bindings, replay capability classes,
+safe unavailable-history outcome, required Fetch POST SSE capability, and
+explicitly unsupported optional WebSocket outcome. Its executable vectors
+cover duplicate/gap/patch ordering, response-path errors, final-frame loss,
+version skew, split UTF-8 and multiline SSE framing, atomic replay-to-live
+handoff, indistinguishable cursor failures, cancellation, disconnect, server
+shutdown, authentication expiry, authorization revocation, schema retirement,
+and consumer abandonment. The Go reference consumes every vector directly;
+#72 owns concrete SSE/WebSocket transport adapters.

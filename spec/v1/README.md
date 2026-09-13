@@ -25,6 +25,7 @@ Documents:
 12. [Request-scoped batching and caching](batching.md)
 13. [Observability and mutation audit](observability.md)
 14. [Process admission and lifecycle](operations.md)
+15. [Streaming and incremental delivery](streaming.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

@@ -221,10 +221,10 @@ or cacheability part of a Naatre operation's semantic identity.
   or arbitrary `Authorization` header and is not a conforming substitute.
   A separate subscription-handle flow requires its own negotiated profile.
 - **HTTP-505:** An SSE response is UTF-8 `text/event-stream` with identity
-  content encoding. Each `data` event contains one complete compact JSON
-  Naatre response envelope; comment heartbeats carry no semantics. Proxy
-  buffering and transformation MUST be disabled so cancellation, limits, and
-  event delivery remain observable.
+  content encoding. Under `core.streaming-1`, each SSE event structurally maps
+  one complete logical frame as specified by STR-701; comment heartbeats carry
+  no semantics. Proxy buffering and transformation MUST be disabled so
+  cancellation, limits, and event delivery remain observable.
 
 ## Client decoding, proxies, and HTTP versions
 

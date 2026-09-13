@@ -1,0 +1,211 @@
+{
+  "profile": "core.streaming-1",
+  "protocolVersion": "1",
+  "logicalEvents": ["open", "data", "patch", "error", "complete", "keepalive", "resume", "history-unavailable"],
+  "terminalOutcomes": ["complete", "error"],
+  "cursorBindings": ["stream", "tenant", "principal", "authorizationRevision", "schemaRevision", "keyId", "version", "expiry"],
+  "replayCapabilities": ["none", "bounded", "durable"],
+  "safeHistoryOutcome": "history-unavailable",
+  "handoffInvariant": "lock-atomic-snapshot-registration",
+  "repairActions": ["restart", "refetch"],
+  "transports": [
+    {"name": "sse-post-fetch", "required": true, "advertised": false, "outcome": "adapter-required"},
+    {"name": "websocket", "required": false, "advertised": false, "outcome": "unsupported"}
+  ],
+  "negotiationCases": [
+    {"name": "1", "expected": "ok"},
+    {"name": "2", "expected": "unsupported-version"}
+  ],
+  "advertisementCases": [
+    {
+      "name": "no-replay-live",
+      "advertisement": {"profileVersion":"1","replay":"none","consistency":"live-best-effort","retentionPolicy":"none","maxReplayEvents":0,"maxReplayBytes":0,"disclosesEarliestPosition":false,"historyRecovery":"restart"},
+      "expected": "ok"
+    },
+    {
+      "name": "bounded-snapshot",
+      "advertisement": {"profileVersion":"1","replay":"bounded","consistency":"snapshot-stable","retentionPolicy":"process-memory-ttl","maxReplayEvents":128,"maxReplayBytes":1048576,"disclosesEarliestPosition":false,"historyRecovery":"refetch"},
+      "expected": "ok"
+    },
+    {
+      "name": "invalid-consistency",
+      "advertisement": {"profileVersion":"1","replay":"none","consistency":"eventual","retentionPolicy":"none","maxReplayEvents":0,"maxReplayBytes":0,"disclosesEarliestPosition":false,"historyRecovery":"restart"},
+      "expected": "invalid-advertisement"
+    }
+  ],
+  "frameCases": [
+    {
+      "name": "duplicate-idempotent",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "position": 1, "data": {"user": {"name": "Liiv"}}},
+        {"type": "data", "stream": "s", "sequence": 2, "position": 1, "data": {"user": {"name": "Liiv"}}},
+        {"type": "complete", "stream": "s", "sequence": 3}
+      ],
+      "expected": "ok",
+      "expectedState": {"user":{"name":"Liiv"}}
+    },
+    {
+      "name": "duplicate-conflict",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "data": true},
+        {"type": "data", "stream": "s", "sequence": 2, "data": false}
+      ],
+      "expected": "duplicate-conflict"
+    },
+    {
+      "name": "sequence-gap",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 3, "data": true}
+      ],
+      "expected": "sequence-gap"
+    },
+    {
+      "name": "position-order",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "position": 2, "data": {"field": false}},
+        {"type": "patch", "stream": "s", "sequence": 3, "position": 1, "path": ["field"], "data": true}
+      ],
+      "expected": "position-order"
+    },
+    {
+      "name": "patch-before-parent",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "patch", "stream": "s", "sequence": 2, "position": 1, "path": ["missing", "child"], "data": true}
+      ],
+      "expected": "patch-order"
+    },
+    {
+      "name": "patch-cannot-append-list-position",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "data": [true]},
+        {"type": "patch", "stream": "s", "sequence": 3, "position": 1, "path": [1], "data": false}
+      ],
+      "expected": "patch-order",
+      "expectedState": [true]
+    },
+    {
+      "name": "midstream-path-error",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "data": {"user": {"name": "Liiv"}}},
+        {"type": "error", "stream": "s", "sequence": 3, "path": ["user", "email"], "error": {"code": "SOURCE_UNAVAILABLE", "message": "email unavailable"}},
+        {"type": "complete", "stream": "s", "sequence": 4}
+      ],
+      "expected": "ok",
+      "expectedIssues": 1
+    },
+    {
+      "name": "final-error-path",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "error", "stream": "s", "sequence": 2, "path": ["user","email"], "final": true, "error": {"code": "FAILED", "message": "stream failed"}}
+      ],
+      "expected": "ok",
+      "expectedTerminal": "error",
+      "expectedTerminalPath": ["user","email"]
+    },
+    {
+      "name": "history-unavailable-recovery",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "history-unavailable", "stream": "s", "sequence": 2, "recovery": "refetch"}
+      ],
+      "expected": "ok",
+      "expectedRecovery": "refetch"
+    },
+    {
+      "name": "final-frame-lost",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "data": true}
+      ],
+      "expected": "truncated"
+    },
+    {
+      "name": "unknown-frame-type",
+      "frames": [
+        {"type": "open-v2", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"}
+      ],
+      "expected": "invalid-frame"
+    },
+    {
+      "name": "open-sequence-not-one",
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 2, "schemaRevision": "schema-r1"}
+      ],
+      "expected": "invalid-frame"
+    },
+    {
+      "name": "duplicate-expired",
+      "trackedSequences": 1,
+      "frames": [
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"},
+        {"type": "data", "stream": "s", "sequence": 2, "position": 1, "data": {"value": true}},
+        {"type": "patch", "stream": "s", "sequence": 3, "position": 2, "path": ["value"], "data": false},
+        {"type": "open", "stream": "s", "sequence": 1, "schemaRevision": "schema-r1"}
+      ],
+      "expected": "duplicate-expired"
+    }
+  ],
+  "sseCases": [
+    {
+      "name": "split-utf8-chunks",
+      "chunking": "octets",
+      "input": "event: naatre.data\nid: replay-cursor\ndata: {\"type\":\"data\",\"stream\":\"s\",\"sequence\":2,\"position\":1,\"cursor\":\"replay-cursor\",\"data\":{\"text\":\"tēriņš\"}}\n\n",
+      "expected": "ok",
+      "expectedFrames": [
+        {"type":"data","stream":"s","sequence":2,"position":1,"cursor":"replay-cursor","data":{"text":"tēriņš"}}
+      ]
+    },
+    {
+      "name": "comments-multiline-crlf",
+      "chunking": "whole",
+      "input": ": heartbeat\r\nevent: naatre.data\r\nid: replay-cursor\r\ndata: {\"type\":\"data\",\r\ndata: \"stream\":\"s\",\"sequence\":2,\"position\":1,\"cursor\":\"replay-cursor\",\"data\":true}\r\n\r\n",
+      "expected": "ok",
+      "expectedFrames": [
+        {"type":"data","stream":"s","sequence":2,"position":1,"cursor":"replay-cursor","data":true}
+      ]
+    },
+    {
+      "name": "control-field-injection",
+      "chunking": "whole",
+      "input": "event: naatre.data\nid: forged\u0000cursor\ndata: {}\n\n",
+      "expected": "invalid-sse"
+    },
+    {
+      "name": "reserved-frame-name",
+      "chunking": "whole",
+      "input": "event: forged.complete\ndata: {}\n\n",
+      "expected": "invalid-sse"
+    }
+  ],
+  "replayCases": [
+    {"name": "empty-history-concurrent-live", "history": [], "after": 0, "live": [1], "expected": [1], "concurrent": true},
+    {"name": "event-between-registration-and-history-read", "history": [1], "after": 0, "live": [2], "expected": [1, 2], "concurrent": true},
+    {"name": "event-at-high-water-mark", "history": [1, 2], "after": 1, "live": [3], "expected": [2, 3], "concurrent": true}
+  ],
+  "historyFailures": [
+    {"name": "unknown-cursor", "expected": "history-unavailable"},
+    {"name": "unauthorized-cursor", "expected": "history-unavailable"},
+    {"name": "revoked-cursor", "expected": "history-unavailable"},
+    {"name": "expired-cursor", "expected": "history-unavailable"},
+    {"name": "evicted-cursor", "expected": "history-unavailable"},
+    {"name": "over-budget-cursor", "expected": "history-unavailable"}
+  ],
+  "lifecycleCases": [
+    {"name": "client-cancellation", "trigger": "cancel", "expected": "source-closed"},
+    {"name": "client-disconnect", "trigger": "close", "expected": "source-closed"},
+    {"name": "server-shutdown", "trigger": "cancel", "expected": "source-closed"},
+    {"name": "consumer-abandonment", "trigger": "close", "expected": "source-closed"},
+    {"name": "network-interruption", "trigger": "eof-before-terminal", "expected": "truncated"},
+    {"name": "authentication-expiry", "trigger": "authentication-expired", "expected": "authentication-expired"},
+    {"name": "revoked-auth", "trigger": "authorization-revoked", "expected": "authorization-revoked"},
+    {"name": "schema-retirement", "trigger": "schema-retired", "expected": "schema-retired"}
+  ]
+}

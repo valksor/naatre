@@ -122,6 +122,78 @@ tenant scope. A completed write clears request entries and calls `Invalidate`
 before dependent work proceeds. In-flight fills from an older generation
 cannot republish after that barrier.
 
+## Streaming sources and replay
+
+`runtime.StreamSourceSession` owns a `runtime.StreamSource` after subscription
+establishment. A source's `Next` method must observe cancellation; `Close` must
+be concurrency-safe, idempotent at the source boundary, and unblock a pending
+read. `Next` transfers ownership of each returned frame, so the source cannot
+mutate it during or after return. The session closes the source on
+cancellation, EOF, protocol failure,
+authentication or authorization failure, schema retirement, terminal delivery,
+or explicit consumer abandonment. A clean EOF before a required terminal frame
+returns `protocol.ErrStreamTruncated`.
+
+Supply `Reauthorize` to check every protected data, patch, and error immediately
+before it leaves the runtime. Supply `ValidateSchema` to retain the immutable
+revision named by the opening frame; return `runtime.ErrStreamSchemaRetired`
+when it can no longer be served. The reference session deliberately exposes a
+pull API and never detaches a source read. Security and schema checks have a
+finite wait and fail the delivery when their deadline expires. Because Go
+cannot stop arbitrary application code, the process-shared
+`StreamCheckExecutor` retains its bounded slot for a callback that ignores
+cancellation until that callback actually exits. The same ownership rule
+applies to an uncooperative source read.
+
+`runtime.StreamCursorCodec` produces expiring HMAC-protected cursors bound to
+stream, tenant, principal, authorization revision, and schema revision. Every
+decode failure is the same external `ErrStreamHistoryUnavailable` result.
+`runtime.StreamReplayBuffer` is a bounded process-local reference store with
+finite aggregate stream, history-byte, and subscriber counts. Its
+`Subscribe(ctx, scope, opaqueCursor, options)` operation decodes the cursor
+through `options.CursorCodec`; callers cannot provide a divergent decoded
+position. It takes the store lock while it captures replay history and
+registers the live queue, which makes replay-to-live handoff gap-free. Retained
+frames are shared as immutable reference-counted values and each authorization
+or delivery gets its own clone. Per-frame retention expiry releases history
+without ending an active live subscription, while completed expired histories
+free aggregate stream slots. Aggregate pressure detaches only subscribers
+retaining the frames that prevent reclamation. Queue overflow detaches only the
+slow subscriber and returns `ErrStreamSlowConsumer`; full transport and broker
+adapters remain separate.
+
+Every source session supplies a validated `StreamSourceAdvertisement`; profile
+version, replay capability, consistency, retention, maximum replay work, and
+recovery action are therefore explicit rather than inferred. Establishment
+requires the exact negotiated profile, an absolute authentication expiry,
+per-frame `Reauthorize` and `ValidateSchema` checks, a shared bounded
+`StreamCheckExecutor`, and finite session duration, event, byte, and
+check-timeout limits. Replay establishment additionally requires
+`ReauthorizeSession`. The resume frame, when present, is the single frame
+immediately after `open`; replay and live frames follow it in one monotonic
+delivery sequence. Replay bytes and the resume control frame count toward the
+same session byte and event budgets as live delivery.
+
+Fresh-subscription configuration errors are returned as configuration or
+resource errors and are never disguised as missing history. Once a cursor is
+supplied, malformed, unknown, expired, evicted, over-budget, binding-mismatched,
+or reauthorization-denied establishment returns only
+`ErrStreamHistoryUnavailable`. The transport adapter owns the mechanical
+mapping of that result to one `history-unavailable` frame carrying the recovery
+action from the source advertisement, with no cursor or protected identity.
+The replay buffer's snapshot and live registration occur in the same critical
+section, a lock-atomic equivalent of register-then-capture that leaves no
+observable commit point between those steps. Adapters call `Finalize` after a
+logical stream completes to close abandoned subscribers, release retained
+history immediately, and reclaim the aggregate stream slot instead of waiting
+for retention expiry.
+
+`protocol.NewResumingStreamReceiver` starts from a validated prior snapshot and
+position. It still requires a fresh sequence-one `open` and a real `resume`
+frame before accepting replay; `Recovery` reports `history-unavailable`
+separately from `Terminal`, whose only successful shapes are `complete` and a
+final `error`.
+
 ## Request resource limits
 
 `runtime.PrepareWithOptions` accepts a `runtime.ResourceLimits` value and

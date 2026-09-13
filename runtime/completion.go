@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -369,7 +368,7 @@ func completeCustomScalar(value any, typeID schema.TypeID, path []any, types sch
 	if err != nil {
 		return nil, issue(path, "custom scalar output cannot be completed"), false
 	}
-	completed, err := decodeCanonicalJSON(canonical)
+	completed, err := protocol.DecodeJSONValue(canonical)
 	if err != nil {
 		return nil, issue(path, "canonical custom scalar output cannot be decoded"), false
 	}
@@ -399,7 +398,7 @@ func completeBuiltInScalar(value any, kind schema.ScalarKind, expected reflect.T
 	if err != nil {
 		return nil, issue(path, "scalar output cannot be completed"), false
 	}
-	completed, err := decodeCanonicalJSON(canonical)
+	completed, err := protocol.DecodeJSONValue(canonical)
 	if err != nil {
 		return nil, issue(path, "canonical scalar output cannot be decoded"), false
 	}
@@ -412,7 +411,7 @@ func completeOpaqueJSON(value any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeCanonicalJSON(canonical)
+		return protocol.DecodeJSONValue(canonical)
 	}
 	if err := validateOpaqueJSONValue(value); err != nil {
 		return nil, err
@@ -425,7 +424,7 @@ func completeOpaqueJSON(value any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decodeCanonicalJSON(canonical)
+	return protocol.DecodeJSONValue(canonical)
 }
 
 func validateOpaqueJSONValue(value any) error {
@@ -460,16 +459,6 @@ func validateOpaqueJSONValue(value any) error {
 	default:
 		return fmt.Errorf("unsupported JSON value type %T", value)
 	}
-}
-
-func decodeCanonicalJSON(canonical []byte) (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(canonical))
-	decoder.UseNumber()
-	var completed any
-	if err := decoder.Decode(&completed); err != nil {
-		return nil, err
-	}
-	return completed, nil
 }
 
 func issue(path []any, message string) []completionIssue {

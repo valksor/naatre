@@ -326,7 +326,8 @@ func TestExecutionDeadlineIsResourceExhaustion(t *testing.T) {
 		t.Fatalf("PrepareWithOptions: %v", err)
 	}
 	outcome := plan.Execute(context.Background())
-	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != runtime.CodeResourceExhausted || len(outcome.Errors[0].Path) == 0 {
+	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != runtime.CodeResourceExhausted ||
+		len(outcome.Errors[0].Path) != 1 || outcome.Errors[0].Path[0] != "wait" {
 		t.Fatalf("deadline outcome = %#v", outcome)
 	}
 }
@@ -360,8 +361,9 @@ func TestExecutionDeadlineDoesNotWaitForUncooperativeHandler(t *testing.T) {
 	case <-observedCancellation:
 	case outcome := <-returned:
 		close(release)
-		if !hasExecutionCode(outcome.Errors, runtime.CodeResourceExhausted) {
-			t.Fatalf("pre-admission deadline outcome = %#v", outcome)
+		if len(outcome.Errors) != 1 || outcome.Errors[0].Code != runtime.CodeResourceExhausted ||
+			(len(outcome.Errors[0].Path) != 0 && (len(outcome.Errors[0].Path) != 1 || outcome.Errors[0].Path[0] != "ignore")) {
+			t.Fatalf("early deadline outcome = %#v", outcome)
 		}
 		return
 	case <-time.After(time.Second):
