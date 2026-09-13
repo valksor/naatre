@@ -116,3 +116,12 @@ equivalence boundaries plus lookup-only, deploy-registration, controlled
 automatic-registration, approval/cache, tenant, revocation, expiry, migration,
 collision, and safe storage-failure semantics. The Go runtime consumes those
 vectors and supplies a race-safe in-memory reference store.
+
+`v1/operations.json` fixes the `operations.lifecycle-1` process states, work
+kinds, event vocabulary, public rejection codes, aggregate and queued
+accounting, tenant fairness, dependency health, graceful and forced drain,
+independent cleanup, atomic revision, connection-rotation, and metadata-safety
+boundaries. The Go runtime consumes the fixture directly and benchmarks
+admission, overload, drain, and connection rotation. Concrete supervisor,
+transport, stream, worker, and durable-operation integration remains owned by
+their independently shippable profiles.

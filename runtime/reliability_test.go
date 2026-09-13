@@ -431,14 +431,17 @@ func TestRetrySchedulingStopsOnCancellation(t *testing.T) {
 
 func TestRetrySchedulingStopsAtContextDeadline(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	deadline := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	var attempts atomic.Int32
 	plan := reliabilityQueryPlan(t, true, runtime.IdempotencyIdempotent, func(context.Context) (string, error) {
 		attempts.Add(1)
 		return "", &runtime.Error{Code: "TEMPORARY", Message: "try again", Retryable: true}
 	})
-	outcome := plan.ExecuteWith(ctx, runtime.ExecuteOptions{Retry: runtime.RetryPolicy{MaxAttempts: 3, BaseDelay: time.Hour}})
+	outcome := plan.ExecuteWith(ctx, runtime.ExecuteOptions{Retry: runtime.RetryPolicy{
+		MaxAttempts: 3, BaseDelay: time.Hour, Now: func() time.Time { return deadline },
+	}})
 	if attempts.Load() != 1 || outcome.Reliability.Attempts != 1 {
 		t.Fatalf("attempts = %d, outcome = %#v", attempts.Load(), outcome)
 	}
@@ -470,7 +473,7 @@ func TestRetryPolicyRespectsHandlerRetryAfter(t *testing.T) {
 		attempts++
 		if attempts == 1 {
 			return "", &runtime.Error{
-				Code: "OVERLOADED", Message: "try later", Retryable: true, RetryAfter: 40 * time.Millisecond,
+				Code: "BACKEND_OVERLOADED", Message: "try later", Retryable: true, RetryAfter: 40 * time.Millisecond,
 			}
 		}
 		return "ready", nil

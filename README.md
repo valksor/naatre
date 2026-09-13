@@ -24,16 +24,18 @@ evidence must be described as planned.
 - `schema`: portable types, values, and scalar codecs.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
-  observability hooks, planning, and execution;
-  see the [Go registry contract](docs/registry.md).
+  observability hooks, process-wide admission/lifecycle control, planning, and
+  execution; see the [Go registry contract](docs/registry.md) and
+  [process-hosting guide](docs/process-hosting.md).
 - `transport/http`: the planned Go adapter for the normative
   [`core.http-1` binding](spec/v1/http.md).
 - `internal/conformance`: Go-only conformance harness internals.
+- `examples/processhost`: executable minimal `net/http` process host.
 - `sdk` (planned): official and compatibility-certified client implementations.
 
-Dependencies point inward in that order: transport and SDK packages may use
-the public protocol/schema/runtime contracts; portable schema and protocol
-packages never depend on a transport or application runtime.
+Dependencies point inward in that order: transport, SDK, and example packages
+may use the public protocol/schema/runtime contracts; portable schema and
+protocol packages never depend on a transport or application runtime.
 
 ## Development
 

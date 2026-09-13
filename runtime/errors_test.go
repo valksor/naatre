@@ -98,6 +98,7 @@ func TestExecuteMapsDomainErrorsOntoTheCoreShape(t *testing.T) {
 func TestDomainErrorsCannotImpersonateReservedRuntimeCodes(t *testing.T) {
 	t.Parallel()
 	reserved := []string{
+		naatreruntime.CodeValidationFailed,
 		naatreruntime.CodeInvalidCursor,
 		"TRANSACTION_BEGIN_FAILED",
 		"TRANSACTION_COMMIT_FAILED",
@@ -110,6 +111,8 @@ func TestDomainErrorsCannotImpersonateReservedRuntimeCodes(t *testing.T) {
 		"AFTER_COMMIT_FAILED",
 		"EXTERNAL_EFFECT_UNCOORDINATED",
 		"COMPENSATION_FAILED",
+		naatreruntime.CodeOverloaded,
+		naatreruntime.CodeRateLimited,
 	}
 	for _, code := range reserved {
 		code := code

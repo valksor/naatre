@@ -1,0 +1,78 @@
+{
+  "profile": "operations.lifecycle-1",
+  "states": ["starting", "ready", "draining", "stopped", "forced"],
+  "workKinds": ["query", "mutation", "stream", "remote", "durable"],
+  "eventStages": [
+    "started",
+    "dependency-unavailable",
+    "dependency-recovered",
+    "admission-queued",
+    "admission-granted",
+    "admission-rejected",
+    "admission-cancelled",
+    "work-released",
+    "drain-started",
+    "drain-completed",
+    "drain-forced",
+    "revision-installed",
+    "revision-rolled-back"
+  ],
+  "publicCodes": ["OVERLOADED", "RATE_LIMITED", "CANCELLED", "RESOURCE_EXHAUSTED"],
+  "accounting": {
+    "active": ["inFlight", "reservedBytes", "resultBufferBytes", "streams", "remoteConnections"],
+    "queued": ["queued", "queuedBytes"],
+    "minimumRequestWeight": 1,
+    "partitionReferenceMaxBytes": 256,
+    "releaseOnCancellation": false
+  },
+  "fairnessVectors": [
+    {
+      "name": "tenant-round-robin",
+      "activeTenant": "tenant-a",
+      "queuedTenants": ["tenant-a", "tenant-a", "tenant-b"],
+      "nextTenant": "tenant-b"
+    }
+  ],
+  "healthVectors": [
+    {"name": "startup", "state": "starting", "ready": false, "live": true},
+    {"name": "ready", "state": "ready", "ready": true, "live": true},
+    {"name": "transient-dependency-failure", "state": "ready", "ready": false, "live": true},
+    {"name": "sustained-dependency-failure", "state": "ready", "ready": false, "live": false},
+    {"name": "draining", "state": "draining", "ready": false, "live": true},
+    {"name": "stopped", "state": "stopped", "ready": false, "live": false},
+    {"name": "forced", "state": "forced", "ready": false, "live": false}
+  ],
+  "drainVectors": [
+    {
+      "name": "default-drain",
+      "cancel": ["query", "stream", "remote"],
+      "finish": ["mutation-committing", "durable"],
+      "outcome": "completed",
+      "releaseOwnership": true
+    },
+    {
+      "name": "forced-drain",
+      "cancel": ["query", "mutation-committing", "stream", "remote", "durable"],
+      "finish": [],
+      "outcome": "forced",
+      "releaseOwnership": false
+    }
+  ],
+  "cleanupKinds": ["rollback", "lease-release", "source-close"],
+  "revisionSequence": ["r1", "r2", "r1"],
+  "connectionRotation": {
+    "finite": true,
+    "deterministicStagger": true,
+    "identityExpiryShortens": true,
+    "staggerStrictlyLessThanLifetime": true
+  },
+  "boundaries": {
+    "admissionBeforeBusinessExecution": true,
+    "activeRevisionImmutable": true,
+    "queuedCancellationReleasesAccounting": true,
+    "uncooperativeWorkRetainsSlot": true,
+    "partitionCapacityReserved": true,
+    "healthExposesProtectedMetadata": false,
+    "hookEventsExposePartitionReferences": false
+  }
+}

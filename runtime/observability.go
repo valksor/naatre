@@ -372,7 +372,7 @@ func boundedTelemetryCode(code string) string {
 		CodeSavepointRollbackFailed, CodeOutboxPersistFailed, CodeAfterCommitFailed,
 		CodeExternalEffectUncoordinated, CodeCompensationFailed, CodeRetryBudgetExhausted,
 		CodeIdempotencyConflict, CodeIdempotencyIndeterminate, CodeIdempotencyNotAllowed,
-		CodeIdempotencyStoreUnavailable, CodeCacheInvalidationFailed:
+		CodeIdempotencyStoreUnavailable, CodeCacheInvalidationFailed, CodeOverloaded, CodeRateLimited:
 		return code
 	default:
 		return CodeInternal

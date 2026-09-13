@@ -47,6 +47,7 @@ func TestBoundedTelemetryCodePreservesRuntimeVocabulary(t *testing.T) {
 		CodeAfterCommitFailed, CodeExternalEffectUncoordinated, CodeCompensationFailed,
 		CodeRetryBudgetExhausted, CodeIdempotencyConflict, CodeIdempotencyIndeterminate,
 		CodeIdempotencyNotAllowed, CodeIdempotencyStoreUnavailable, CodeCacheInvalidationFailed,
+		CodeOverloaded, CodeRateLimited,
 	}
 	for _, code := range codes {
 		if got := boundedTelemetryCode(code); got != code {
