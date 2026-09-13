@@ -1,0 +1,40 @@
+{
+  "profile": "core.execution-scenarios-1",
+  "vectors": [
+    {
+      "name": "pipeline-phase-order",
+      "request": {"version":"2","document":{"operations":[]}},
+      "failure": {"phase":"decode","code":"UNSUPPORTED_VERSION","source":{"pointer":"/version"}},
+      "schedule": ["decode","serialize"],
+      "forbiddenPhases": ["validate","plan","authorize","execute","complete"],
+      "expectedHandlerStarts": 0,
+      "expected": {"phase":"decode","code":"UNSUPPORTED_VERSION","source":{"pointer":"/version"},"path":[],"data":null,"errors":[]}
+    },
+    {
+      "name": "completion-snapshot-before-sibling",
+      "handlerOwnedValue": {"name":"Ada"},
+      "schedule": ["handler-return","copy-and-complete","handler-mutate:name=Eve","start-next-sibling"],
+      "expectedSiblingInput": {"name":"Ada"},
+      "expected": {"phase":"complete","code":"","source":{"pointer":"/operations/0/select/0"},"path":[],"data":{"profile":{"name":"Ada"},"observed":"Ada"},"errors":[]}
+    },
+    {
+      "name": "parallel-error-ordering",
+      "declarationOrder": ["alpha","beta"],
+      "completionOrder": ["beta","alpha"],
+      "failures": [{"source":{"pointer":"/operations/0/select/0"},"path":["alpha"],"code":"FIELD_FAILED"},{"source":{"pointer":"/operations/0/select/1"},"path":["beta"],"code":"FIELD_FAILED"}],
+      "expected": {"phase":"complete","code":"FIELD_FAILED","source":{"pointer":"/operations/0/select/0"},"path":["alpha"],"data":{},"errors":[{"code":"FIELD_FAILED","path":["alpha"]},{"code":"FIELD_FAILED","path":["beta"]}]}
+    },
+    {
+      "name": "panic-containment-redaction",
+      "handlerFailure": {"kind":"panic","privateMessage":"database password secret"},
+      "forbiddenPublicSubstrings": ["database","password","secret","stack"],
+      "expected": {"phase":"execute","code":"INTERNAL","source":{"pointer":"/operations/0/select/0"},"path":["profile"],"data":{},"errors":[{"code":"INTERNAL","message":"internal error","path":["profile"]}]}
+    },
+    {
+      "name": "context-data-stable-structure",
+      "executions": [{"context":"tenant-a","data":{"lookup":{"name":"Ada"}}},{"context":"tenant-b","data":{"lookup":{"name":"Grace"}}}],
+      "stableResponsePaths": [["lookup","name"]],
+      "expected": {"phase":"complete","code":"","source":{"pointer":"/operations/0"},"path":[],"data":{"responsePaths":[["lookup","name"]],"valuesMayDiffer":true},"errors":[]}
+    }
+  ]
+}

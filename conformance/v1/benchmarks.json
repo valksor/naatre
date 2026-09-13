@@ -1,0 +1,19 @@
+{
+  "profile": "suite.benchmarks-1",
+  "description": "Stable language-neutral workload definitions. Go harness execution and result publication are owned by issue 78.",
+  "environment": ["os", "architecture", "cpu", "logicalCpus", "memoryBytes", "goVersion", "implementationVersion", "fixtureVersion", "revision", "dirty"],
+  "metrics": ["ns/op", "B/op", "allocs/op", "p50", "p95", "p99", "upstreamCalls"],
+  "rules": {"minimumSamples": 30, "publishRawSamples": true, "reportAllocations": true, "inferNPlusOneFromElapsedTime": false},
+  "workloads": [
+    {"name": "parse-small-valid", "category": "parsing", "fixture": "v1/protocol.json#/requests/0", "cache": "none", "scale": {"bytes": 146, "operations": 1}},
+    {"name": "parse-adversarial-depth", "category": "parsing", "fixture": "v1/adversarial.json#/cases/0", "cache": "none", "scale": {"depth": 32}},
+    {"name": "plan-cold-fragments", "category": "planning", "fixture": "v1/language.json#/vectors", "cache": "cold", "scale": {"fragments": 8, "selections": 64}},
+    {"name": "plan-warm-fragments", "category": "planning", "fixture": "v1/language.json#/vectors", "cache": "warm", "scale": {"fragments": 8, "selections": 64}},
+    {"name": "execute-ordered-read", "category": "execution", "fixture": "v1/language.json#/vectors/0", "cache": "none", "scale": {"handlers": 16}},
+    {"name": "expand-collection-256", "category": "collection-expansion", "fixture": "v1/collections.json#/boundaryCases/0", "cache": "none", "scale": {"items": 256, "selectedFields": 8}},
+    {"name": "batch-duplicates-256", "category": "batching", "fixture": "v1/batching.json#/dispatchVectors/0", "cache": "request", "scale": {"inputs": 256, "uniqueInputs": 32}, "requiredMetrics": {"upstreamCalls": 1}},
+    {"name": "canonicalize-schema", "category": "canonicalization", "fixture": "v1/schema.json#/snapshots/0", "cache": "none", "scale": {"declarations": 128}},
+    {"name": "stream-frames-1024", "category": "streaming", "fixture": "v1/streaming.json#/frameCases", "cache": "none", "scale": {"frames": 1024, "payloadBytes": 256}},
+    {"name": "stream-replay-live-handoff", "category": "streaming", "fixture": "v1/streaming.json#/replayCases", "cache": "warm", "scale": {"historyEvents": 256, "liveEvents": 256}, "requiredMetrics": {"upstreamCalls": 2}}
+  ]
+}

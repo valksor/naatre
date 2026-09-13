@@ -28,6 +28,7 @@ var layers = []struct {
 	{"transport", 4},
 	{"examples", 5},
 	{"internal", 6},
+	{"cmd", 7},
 }
 
 func layerOf(t *testing.T, relative string) int {

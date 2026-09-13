@@ -1,0 +1,586 @@
+{
+  "profile": "suite.interactions-1",
+  "description": "Cross-feature and process-death outcomes. Steps are externally observable checkpoints, not Go callbacks.",
+  "scenarios": {
+    "authorization-plus-cache": {
+      "fixtureRefs": [{"path":"v1/security.json","pointer":"/executionVectors/0"},{"path":"v1/batching.json","pointer":"/cacheVectors/0"}],
+      "setup": {"clock":"manual","requestRef":"v1/security.json#/executionVectors/0","state":{"cacheEntry":"classified","authorizationRevision":"revoked"},"handlers":[{"name":"secret","result":"classified","maximumCalls":0}]},
+      "schedule": [{"sequence":1,"actor":"cache","action":"seed"},{"sequence":2,"actor":"policy","action":"revoke"},{"sequence":3,"actor":"client","action":"execute"}]
+    },
+    "conditionals-plus-fragments": {
+      "fixtureRefs": [{"path":"v1/language.json","pointer":"/vectors/3"}],
+      "setup": {"clock":"manual","requestRef":"v1/language.json#/vectors/3","state":{"includeIdentity":true},"handlers":[{"name":"users","result":[{"id":"u1","name":"Ada"}],"maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"bind-fragment-parameters"},{"sequence":2,"actor":"runtime","action":"evaluate-condition"},{"sequence":3,"actor":"runtime","action":"expand-fragment"}]
+    },
+    "sequential-writes-plus-loaders": {
+      "fixtureRefs": [{"path":"v1/mutations.json","pointer":"/vectors/0"},{"path":"v1/batching.json","pointer":"/cacheVectors/0"},{"path":"v1/batching.json","pointer":"/dispatchVectors/6"}],
+      "setup": {"clock":"manual","requestRef":"v1/batching.json#/dispatchVectors/6","state":{"value":1,"cache":"empty"},"handlers":[{"name":"read","results":[1,2],"maximumCalls":2},{"name":"write","result":2,"maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"read"},{"sequence":2,"actor":"runtime","action":"serial-write"},{"sequence":3,"actor":"cache","action":"invalidate"},{"sequence":4,"actor":"runtime","action":"read"}]
+    },
+    "partial-data-plus-generated-types": {
+      "fixtureRefs": [{"path":"v1/partial-results.json","pointer":"/vectors/3"},{"path":"v1/partial-results.json","pointer":"/vectors/9"}],
+      "setup": {"clock":"manual","requestRef":"v1/partial-results.json#/vectors/3","state":{"generatedType":"User","nullableFields":["email"]},"handlers":[{"name":"name","result":"Ada","maximumCalls":1},{"name":"email","error":"FIELD_FAILED","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"complete-sibling"},{"sequence":2,"actor":"runtime","action":"fail-nullable-member"},{"sequence":3,"actor":"client","action":"decode-generated-result"}]
+    },
+    "remote-workers-plus-cancellation": {
+      "fixtureRefs": [{"path":"v1/federation.json","pointer":"/executionCases/2"},{"path":"v1/streaming.json","pointer":"/lifecycleCases/0"}],
+      "setup": {"clock":"manual","requestRef":"v1/federation.json#/executionCases/2","state":{"worker":"admitted","slot":"held"},"handlers":[{"name":"remote-worker","waitFor":"cancellation","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"gateway","action":"dispatch"},{"sequence":2,"actor":"client","action":"cancel"},{"sequence":3,"actor":"worker","action":"exit"},{"sequence":4,"actor":"gateway","action":"release-slot"}]
+    },
+    "result-truncation-after-commit": {
+      "fixtureRefs": [{"path":"v1/resources.json","pointer":"/lateExhaustionVectors/0"},{"path":"v1/mutations.json","pointer":"/vectors/0"},{"path":"v1/reliability.json","pointer":"/vectors/6"}],
+      "setup": {"clock":"manual","requestRef":"v1/resources.json#/lateExhaustionVectors/0","state":{"transaction":"open","idempotency":"claimed"},"handlers":[{"name":"write","result":{"committed":true},"maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"transaction","action":"commit"},{"sequence":2,"actor":"idempotency","action":"persist-result"},{"sequence":3,"actor":"serializer","action":"exhaust-output-budget"}]
+    },
+    "stale-fencing-owner": {
+      "fixtureRefs": [{"path":"v1/reliability.json","pointer":"/vectors/7"}],
+      "setup": {"clock":"manual","requestRef":"v1/reliability.json#/vectors/7","state":{"oldOwner":"lease-1","newOwner":"lease-2"},"handlers":[{"name":"effect","result":"late","maximumCalls":0}]},
+      "schedule": [{"sequence":1,"actor":"clock","action":"expire-lease-1"},{"sequence":2,"actor":"store","action":"claim-lease-2"},{"sequence":3,"actor":"lease-1","action":"attempt-completion"}]
+    },
+    "crash-before-transaction-commit": {
+      "fixtureRefs": [{"path":"v1/mutations.json","pointer":"/vectors/0"},{"path":"v1/reliability.json","pointer":"/vectors/4"}],
+      "setup": {"clock":"manual","requestRef":"v1/mutations.json#/vectors/0","state":{"transaction":"open","idempotency":"running"},"handlers":[{"name":"write","result":"pending","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"transaction","action":"begin"},{"sequence":2,"actor":"handler","action":"write"},{"sequence":3,"actor":"process","action":"die"},{"sequence":4,"actor":"recovery","action":"inspect-running-claim"}]
+    },
+    "crash-after-outbox-before-delivery": {
+      "fixtureRefs": [{"path":"v1/mutations.json","pointer":"/vectors/6"},{"path":"v1/reliability.json","pointer":"/vectors/6"}],
+      "setup": {"clock":"manual","requestRef":"v1/mutations.json#/vectors/6","state":{"transaction":"open","outbox":"empty","delivery":"pending"},"handlers":[{"name":"write","result":{"eventId":"evt-1"},"maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"transaction","action":"persist-outbox"},{"sequence":2,"actor":"transaction","action":"commit"},{"sequence":3,"actor":"process","action":"die"},{"sequence":4,"actor":"recovery","action":"deliver-event","eventId":"evt-1"}]
+    },
+    "supervised-uncooperative-process": {
+      "fixtureRefs": [{"path":"v1/operations.json","pointer":"/drainVectors/1"},{"path":"v1/interactions.json","pointer":"/cases/9"}],
+      "setup": {"clock":"monotonic","requestRef":"v1/operations.json#/drainVectors/1","child":"independent/uncooperative-child.mjs","supervisor":"independent/supervise.mjs","state":{"work":"admitted"},"handlers":[{"name":"child","ignores":["SIGTERM"],"maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"supervisor","action":"spawn"},{"sequence":2,"actor":"child","action":"admit"},{"sequence":3,"actor":"supervisor","action":"send-SIGTERM"},{"sequence":4,"actor":"supervisor","action":"wait-grace"},{"sequence":5,"actor":"supervisor","action":"send-SIGKILL"},{"sequence":6,"actor":"supervisor","action":"join-exit"}]
+    },
+    "reconnect-during-catch-up": {
+      "fixtureRefs": [{"path":"v1/streaming.json","pointer":"/replayCases/1"},{"path":"v1/streaming.json","pointer":"/lifecycleCases/1"}],
+      "setup": {"clock":"manual","requestRef":"v1/streaming.json#/replayCases/1","state":{"history":[1,2],"live":[3],"resumeCursor":1},"handlers":[{"name":"source","results":[1,2,3],"maximumCalls":2}]},
+      "schedule": [{"sequence":1,"actor":"server","action":"capture-high-water"},{"sequence":2,"actor":"server","action":"read-history"},{"sequence":3,"actor":"client","action":"disconnect"},{"sequence":4,"actor":"client","action":"resume"},{"sequence":5,"actor":"server","action":"join-live"}]
+    },
+    "terminal-lost-after-application-completion": {
+      "fixtureRefs": [{"path":"v1/streaming.json","pointer":"/frameCases/9"}],
+      "setup": {"clock":"manual","requestRef":"v1/streaming.json#/frameCases/9","state":{"application":"complete","terminalFrame":"pending"},"handlers":[{"name":"source","result":"complete","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"application","action":"complete"},{"sequence":2,"actor":"transport","action":"drop-terminal-frame"},{"sequence":3,"actor":"client","action":"observe-eof"}]
+    },
+    "pipeline-phase-order": {
+      "fixtureRefs": [{"path":"v1/core.json","pointer":"/vectors/0"}],
+      "setup": {"clock":"manual","requestRef":"v1/core.json#/vectors/0","state":{"failurePhase":"decode"},"handlers":[{"name":"business","maximumCalls":0}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"decode"},{"sequence":2,"actor":"runtime","action":"stop-before-validate"},{"sequence":3,"actor":"runtime","action":"serialize-public-decode-error"}]
+    },
+    "completion-snapshot-before-sibling": {
+      "fixtureRefs": [{"path":"v1/core.json","pointer":"/vectors/1"}],
+      "setup": {"clock":"manual","requestRef":"v1/core.json#/vectors/1","state":{"handlerOwned":{"name":"Ada"},"completedSnapshot":null},"handlers":[{"name":"profile","result":{"name":"Ada"},"maximumCalls":1},{"name":"observer","result":"Ada","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"handler","action":"return-owned-map"},{"sequence":2,"actor":"runtime","action":"copy-and-complete"},{"sequence":3,"actor":"handler","action":"mutate-owned-map"},{"sequence":4,"actor":"runtime","action":"start-next-sibling"}]
+    },
+    "parallel-error-ordering": {
+      "fixtureRefs": [{"path":"v1/core.json","pointer":"/vectors/2"}],
+      "setup": {"clock":"manual","requestRef":"v1/core.json#/vectors/2","state":{"declarationOrder":["alpha","beta"],"completionOrder":["beta","alpha"]},"handlers":[{"name":"alpha","error":"FIELD_FAILED","maximumCalls":1},{"name":"beta","error":"FIELD_FAILED","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"admit-alpha"},{"sequence":2,"actor":"runtime","action":"admit-beta"},{"sequence":3,"actor":"beta","action":"fail"},{"sequence":4,"actor":"alpha","action":"fail"},{"sequence":5,"actor":"runtime","action":"assemble-by-response-path"}]
+    },
+    "panic-containment-redaction": {
+      "fixtureRefs": [{"path":"v1/core.json","pointer":"/vectors/3"}],
+      "setup": {"clock":"manual","requestRef":"v1/core.json#/vectors/3","state":{"panicText":"database password secret"},"handlers":[{"name":"profile","panic":"database password secret","maximumCalls":1}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"invoke-handler-boundary"},{"sequence":2,"actor":"handler","action":"panic"},{"sequence":3,"actor":"runtime","action":"recover-and-redact"}]
+    },
+    "context-data-stable-structure": {
+      "fixtureRefs": [{"path":"v1/core.json","pointer":"/vectors/4"}],
+      "setup": {"clock":"manual","requestRef":"v1/core.json#/vectors/4","state":{"executions":[{"context":"tenant-a","value":"Ada"},{"context":"tenant-b","value":"Grace"}]},"handlers":[{"name":"lookup","results":["Ada","Grace"],"maximumCalls":2}]},
+      "schedule": [{"sequence":1,"actor":"runtime","action":"execute-tenant-a"},{"sequence":2,"actor":"runtime","action":"execute-tenant-b"},{"sequence":3,"actor":"runtime","action":"compare-response-structure"}]
+    }
+  },
+  "cases": [
+    {
+      "name": "authorization-plus-cache",
+      "scenarioRef": "#/scenarios/authorization-plus-cache",
+      "issues": [
+        11,
+        22
+      ],
+      "clauses": [
+        "SEC-101",
+        "SEC-201",
+        "CACHE-102"
+      ],
+      "profiles": [
+        "core.security-1",
+        "core.batch-cache-1"
+      ],
+      "capabilities": [
+        "core.security-1",
+        "core.batch-cache-1"
+      ],
+      "steps": [
+        "cache-entry-present",
+        "authorization-revoked",
+        "lookup-requested"
+      ],
+      "expected": {
+        "phase": "execute",
+        "code": "UNAUTHORIZED",
+        "source": {
+          "pointer": "/operations/0/select/0"
+        },
+        "path": [
+          "secret"
+        ],
+        "data": null,
+        "effect": "not-applicable",
+        "upstreamCalls": 0,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "conditionals-plus-fragments",
+      "scenarioRef": "#/scenarios/conditionals-plus-fragments",
+      "issues": [
+        17,
+        18
+      ],
+      "clauses": [
+        "LANG-220",
+        "LANG-240",
+        "LANG-244"
+      ],
+      "profiles": [
+        "core.language-1"
+      ],
+      "capabilities": [
+        "core.language-1"
+      ],
+      "steps": [
+        "bind-fragment-parameters",
+        "evaluate-condition",
+        "expand-selected-fragment"
+      ],
+      "expected": {
+        "phase": "complete",
+        "code": "",
+        "source": {
+          "pointer": "/operations/0/select/0"
+        },
+        "path": [],
+        "data": {
+          "name": "Ada"
+        },
+        "effect": "not-applicable",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "sequential-writes-plus-loaders",
+      "scenarioRef": "#/scenarios/sequential-writes-plus-loaders",
+      "issues": [
+        20,
+        22
+      ],
+      "clauses": [
+        "MUT-001",
+        "BATCH-102",
+        "CACHE-104"
+      ],
+      "profiles": [
+        "core.mutation-1",
+        "core.batch-cache-1"
+      ],
+      "capabilities": [
+        "core.mutation-1",
+        "core.batch-cache-1"
+      ],
+      "steps": [
+        "read",
+        "serial-write",
+        "invalidate",
+        "read"
+      ],
+      "expected": {
+        "phase": "complete",
+        "code": "",
+        "source": {
+          "pointer": "/operations/0"
+        },
+        "path": [],
+        "data": {
+          "before": 1,
+          "after": 2
+        },
+        "effect": "applied",
+        "upstreamCalls": 3,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "partial-data-plus-generated-types",
+      "scenarioRef": "#/scenarios/partial-data-plus-generated-types",
+      "issues": [
+        10,
+        35
+      ],
+      "clauses": [
+        "CORE-301",
+        "CORE-507",
+        "TYPE-206"
+      ],
+      "profiles": [
+        "core.language-1",
+        "core.schema-1"
+      ],
+      "capabilities": [
+        "core.language-1",
+        "core.schema-1"
+      ],
+      "steps": [
+        "complete-sibling",
+        "fail-nullable-member",
+        "decode-generated-result"
+      ],
+      "expected": {
+        "phase": "complete",
+        "code": "FIELD_FAILED",
+        "source": {
+          "pointer": "/operations/0/select/1"
+        },
+        "path": [
+          "user",
+          "email"
+        ],
+        "data": {
+          "user": {
+            "name": "Ada"
+          }
+        },
+        "effect": "not-applicable",
+        "upstreamCalls": 2,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "remote-workers-plus-cancellation",
+      "scenarioRef": "#/scenarios/remote-workers-plus-cancellation",
+      "issues": [
+        9,
+        24,
+        51
+      ],
+      "clauses": [
+        "CORE-305",
+        "FED-201",
+        "FED-301"
+      ],
+      "profiles": [
+        "core.federation-1",
+        "remote.worker-1"
+      ],
+      "capabilities": [
+        "core.federation-1",
+        "remote.worker-1"
+      ],
+      "steps": [
+        "dispatch-worker",
+        "cancel-parent",
+        "retain-slot-until-exit"
+      ],
+      "downstreamOwner": 69,
+      "expected": {
+        "phase": "execute",
+        "code": "CANCELLED",
+        "source": {
+          "pointer": "/operations/0/select/0"
+        },
+        "path": [],
+        "data": null,
+        "effect": "not-applicable",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "result-truncation-after-commit",
+      "scenarioRef": "#/scenarios/result-truncation-after-commit",
+      "issues": [
+        12,
+        20,
+        21
+      ],
+      "clauses": [
+        "SEC-135",
+        "MUT-005",
+        "REL-006"
+      ],
+      "profiles": [
+        "core.resources-1",
+        "core.mutation-1",
+        "core.reliability-1"
+      ],
+      "capabilities": [
+        "core.resources-1",
+        "core.mutation-1",
+        "core.reliability-1"
+      ],
+      "steps": [
+        "commit-applied",
+        "persist-idempotency-result",
+        "truncate-response"
+      ],
+      "expected": {
+        "phase": "serialize",
+        "code": "RESOURCE_EXHAUSTED",
+        "source": {
+          "pointer": "/operations/0"
+        },
+        "path": [],
+        "data": null,
+        "effect": "applied",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "stale-fencing-owner",
+      "scenarioRef": "#/scenarios/stale-fencing-owner",
+      "issues": [
+        21
+      ],
+      "clauses": [
+        "REL-004",
+        "REL-006"
+      ],
+      "profiles": [
+        "core.reliability-1"
+      ],
+      "capabilities": [
+        "core.reliability-1"
+      ],
+      "steps": [
+        "lease-expires",
+        "new-owner-claims",
+        "old-owner-completes"
+      ],
+      "expected": {
+        "phase": "execute",
+        "code": "IDEMPOTENCY_INDETERMINATE",
+        "source": {
+          "pointer": "/operations/0"
+        },
+        "path": [],
+        "data": null,
+        "effect": "indeterminate",
+        "upstreamCalls": 0,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "crash-before-transaction-commit",
+      "scenarioRef": "#/scenarios/crash-before-transaction-commit",
+      "issues": [
+        20,
+        21
+      ],
+      "clauses": [
+        "MUT-004",
+        "REL-006"
+      ],
+      "profiles": [
+        "core.mutation-1",
+        "core.reliability-1"
+      ],
+      "capabilities": [
+        "core.mutation-1",
+        "core.reliability-1"
+      ],
+      "steps": [
+        "begin",
+        "write",
+        "process-death",
+        "recover-running-claim"
+      ],
+      "expected": {
+        "phase": "execute",
+        "code": "IDEMPOTENCY_INDETERMINATE",
+        "source": {
+          "pointer": "/operations/0"
+        },
+        "path": [],
+        "data": null,
+        "effect": "indeterminate",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "crash-after-outbox-before-delivery",
+      "scenarioRef": "#/scenarios/crash-after-outbox-before-delivery",
+      "issues": [
+        20,
+        21
+      ],
+      "clauses": [
+        "MUT-007",
+        "REL-006"
+      ],
+      "profiles": [
+        "core.mutation-1",
+        "core.reliability-1"
+      ],
+      "capabilities": [
+        "core.mutation-1",
+        "core.reliability-1"
+      ],
+      "steps": [
+        "persist-outbox",
+        "commit-applied",
+        "process-death",
+        "redeliver-stable-event"
+      ],
+      "expected": {
+        "phase": "execute",
+        "code": "",
+        "source": {
+          "pointer": "/operations/0"
+        },
+        "path": [],
+        "data": {
+          "recovered": true
+        },
+        "effect": "applied",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "supervised-uncooperative-process",
+      "scenarioRef": "#/scenarios/supervised-uncooperative-process",
+      "issues": [
+        9,
+        30
+      ],
+      "clauses": [
+        "CORE-305",
+        "OPS-203",
+        "OPS-603"
+      ],
+      "profiles": [
+        "operations.lifecycle-1"
+      ],
+      "capabilities": [
+        "operations.lifecycle-1"
+      ],
+      "steps": [
+        "spawn-fixture",
+        "admit-work",
+        "cancel",
+        "bounded-grace",
+        "terminate-child"
+      ],
+      "supervision": {
+        "mode": "subprocess",
+        "deadlineMs": 1000,
+        "killAfterMs": 250,
+        "requireExit": true
+      },
+      "expected": {
+        "phase": "execute",
+        "code": "CANCELLED",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "effect": "not-applicable",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "reconnect-during-catch-up",
+      "scenarioRef": "#/scenarios/reconnect-during-catch-up",
+      "issues": [
+        23
+      ],
+      "clauses": [
+        "STR-502",
+        "STR-702"
+      ],
+      "profiles": [
+        "core.streaming-1"
+      ],
+      "capabilities": [
+        "core.streaming-1"
+      ],
+      "steps": [
+        "snapshot-high-water",
+        "read-history",
+        "disconnect",
+        "resume-cursor",
+        "join-live"
+      ],
+      "expected": {
+        "phase": "execute",
+        "code": "",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": [
+          1,
+          2,
+          3
+        ],
+        "effect": "not-applicable",
+        "upstreamCalls": 2,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "terminal-lost-after-application-completion",
+      "scenarioRef": "#/scenarios/terminal-lost-after-application-completion",
+      "issues": [
+        23
+      ],
+      "clauses": [
+        "STR-200",
+        "STR-402"
+      ],
+      "profiles": [
+        "core.streaming-1"
+      ],
+      "capabilities": [
+        "core.streaming-1"
+      ],
+      "steps": [
+        "application-completes",
+        "terminal-write-lost",
+        "client-observes-eof"
+      ],
+      "expected": {
+        "phase": "execute",
+        "code": "TRUNCATED_STREAM",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "effect": "not-applicable",
+        "upstreamCalls": 1,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {"name":"pipeline-phase-order","scenarioRef":"#/scenarios/pipeline-phase-order","issues":[2,30],"clauses":["CORE-100","CORE-101","CORE-108"],"profiles":["core.execution-scenarios-1"],"capabilities":["core.execution-scenarios-1"],"steps":["decode","stop-before-later-phase","serialize-originating-error"],"expected":{"phase":"decode","code":"UNSUPPORTED_VERSION","source":{"pointer":"/version"},"path":[],"data":null,"effect":"not-applicable","upstreamCalls":0,"errors":[],"canonicalBytes":""}},
+    {"name":"completion-snapshot-before-sibling","scenarioRef":"#/scenarios/completion-snapshot-before-sibling","issues":[8,30],"clauses":["CORE-105"],"profiles":["core.language-1"],"capabilities":["core.language-1"],"steps":["return-owned-map","copy-and-complete","mutate-handler-map","start-next-sibling"],"expected":{"phase":"complete","code":"","source":{"pointer":"/operations/0/select/0"},"path":[],"data":{"profile":{"name":"Ada"},"observed":"Ada"},"effect":"not-applicable","upstreamCalls":2,"errors":[],"canonicalBytes":""}},
+    {"name":"parallel-error-ordering","scenarioRef":"#/scenarios/parallel-error-ordering","issues":[9,30],"clauses":["CORE-206","CORE-300","CORE-304"],"profiles":["core.language-1"],"capabilities":["core.language-1"],"steps":["admit-parallel","complete-reverse-order","assemble-by-path"],"expected":{"phase":"complete","code":"FIELD_FAILED","source":{"pointer":"/operations/0/select/0"},"path":["alpha"],"data":{},"effect":"not-applicable","upstreamCalls":2,"errors":[{"code":"FIELD_FAILED","path":["alpha"]},{"code":"FIELD_FAILED","path":["beta"]}],"canonicalBytes":""}},
+    {"name":"panic-containment-redaction","scenarioRef":"#/scenarios/panic-containment-redaction","issues":[9,30],"clauses":["CORE-306"],"profiles":["core.language-1"],"capabilities":["core.language-1"],"steps":["invoke-handler","panic","recover-and-redact"],"expected":{"phase":"execute","code":"INTERNAL","source":{"pointer":"/operations/0/select/0"},"path":["profile"],"data":{},"effect":"not-applicable","upstreamCalls":1,"errors":[{"code":"INTERNAL","message":"internal error","path":["profile"]}],"canonicalBytes":""}},
+    {"name":"context-data-stable-structure","scenarioRef":"#/scenarios/context-data-stable-structure","issues":[8,30],"clauses":["CORE-307"],"profiles":["core.language-1"],"capabilities":["core.language-1"],"steps":["execute-context-a","execute-context-b","compare-structure"],"expected":{"phase":"complete","code":"","source":{"pointer":"/operations/0"},"path":[],"data":{"responsePaths":[["lookup","name"],["lookup","name"]],"valuesMayDiffer":true},"effect":"not-applicable","upstreamCalls":2,"errors":[],"canonicalBytes":""}}
+  ]
+}

@@ -1,0 +1,1366 @@
+{
+  "profile": "suite.roadmap-1",
+  "description": "Explicit traceability records for repository issues whose executable feature fixtures are not yet part of suite 1.0.0. Deferred records are not conformance passes.",
+  "issues": {
+    "28": {
+      "issue": 28,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 28,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "29": {
+      "issue": 29,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 29,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "31": {
+      "issue": 31,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 31,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "32": {
+      "issue": 32,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 32,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "35": {
+      "issue": 35,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 35,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "36": {
+      "issue": 36,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 36,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "37": {
+      "issue": 37,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 37,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "38": {
+      "issue": 38,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 38,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "39": {
+      "issue": 39,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 39,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "40": {
+      "issue": 40,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 40,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "41": {
+      "issue": 41,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 41,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "42": {
+      "issue": 42,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 42,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "43": {
+      "issue": 43,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 43,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "44": {
+      "issue": 44,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 44,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "45": {
+      "issue": 45,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 45,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "46": {
+      "issue": 46,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 46,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "47": {
+      "issue": 47,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 47,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "48": {
+      "issue": 48,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 48,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "49": {
+      "issue": 49,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 49,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "50": {
+      "issue": 50,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 50,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "51": {
+      "issue": 51,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 51,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "52": {
+      "issue": 52,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 52,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "53": {
+      "issue": 53,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 53,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "54": {
+      "issue": 54,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 54,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "55": {
+      "issue": 55,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 55,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "56": {
+      "issue": 56,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 56,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "57": {
+      "issue": 57,
+      "state": "closed",
+      "coverage": "implemented-contract",
+      "ownerIssue": 57,
+      "execution": "not-applicable-or-covered-elsewhere",
+      "expected": {
+        "phase": "runner",
+        "code": "",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "58": {
+      "issue": 58,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 58,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "59": {
+      "issue": 59,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 59,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "60": {
+      "issue": 60,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 60,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "61": {
+      "issue": 61,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 61,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "62": {
+      "issue": 62,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 62,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "63": {
+      "issue": 63,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 63,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "64": {
+      "issue": 64,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 64,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "65": {
+      "issue": 65,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 65,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "66": {
+      "issue": 66,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 66,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "67": {
+      "issue": 67,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 67,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "68": {
+      "issue": 68,
+      "state": "closed",
+      "coverage": "implemented-contract",
+      "ownerIssue": 68,
+      "execution": "not-applicable-or-covered-elsewhere",
+      "expected": {
+        "phase": "runner",
+        "code": "",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "69": {
+      "issue": 69,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 69,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "70": {
+      "issue": 70,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 70,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "71": {
+      "issue": 71,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 71,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "72": {
+      "issue": 72,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 72,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "73": {
+      "issue": 73,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 73,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "74": {
+      "issue": 74,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 74,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "75": {
+      "issue": 75,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 75,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "76": {
+      "issue": 76,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 76,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "77": {
+      "issue": 77,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 77,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "78": {
+      "issue": 78,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 78,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "79": {
+      "issue": 79,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 79,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "80": {
+      "issue": 80,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 80,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "81": {
+      "issue": 81,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 81,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "82": {
+      "issue": 82,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 82,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "83": {
+      "issue": 83,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 83,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "84": {
+      "issue": 84,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 84,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "85": {
+      "issue": 85,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 85,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "86": {
+      "issue": 86,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 86,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "87": {
+      "issue": 87,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 87,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "88": {
+      "issue": 88,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 88,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "89": {
+      "issue": 89,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 89,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "90": {
+      "issue": 90,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 90,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "91": {
+      "issue": 91,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 91,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "92": {
+      "issue": 92,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 92,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "93": {
+      "issue": 93,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 93,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "94": {
+      "issue": 94,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 94,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "95": {
+      "issue": 95,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 95,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "96": {
+      "issue": 96,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 96,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "97": {
+      "issue": 97,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 97,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "98": {
+      "issue": 98,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 98,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "99": {
+      "issue": 99,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 99,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "100": {
+      "issue": 100,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 100,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "101": {
+      "issue": 101,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 101,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "102": {
+      "issue": 102,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 102,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "103": {
+      "issue": 103,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 103,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "104": {
+      "issue": 104,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 104,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "105": {
+      "issue": 105,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 105,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "106": {
+      "issue": 106,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 106,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "107": {
+      "issue": 107,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 107,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "108": {
+      "issue": 108,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 108,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "109": {
+      "issue": 109,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 109,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "110": {
+      "issue": 110,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 110,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    }
+  }
+}

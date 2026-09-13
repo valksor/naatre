@@ -1,0 +1,450 @@
+{
+  "profile": "suite.adversarial-1",
+  "resourcePolicy": {
+    "finite": true,
+    "preserveFailingSeeds": true,
+    "seedFormat": "sha256-name",
+    "downstreamHarnessIssue": 78
+  },
+  "cases": [
+    {
+      "name": "depth-exhaustion",
+      "issues": [
+        12
+      ],
+      "clauses": [
+        "SEC-130",
+        "SEC-131"
+      ],
+      "capabilities": [
+        "core.resources-1"
+      ],
+      "fixtureRef": "v1/resources.json#/limitVectors/2",
+      "budget": {
+        "kind": "depth",
+        "limit": 32
+      },
+      "expected": {
+        "phase": "decode",
+        "code": "LIMIT_DEPTH",
+        "source": {
+          "pointer": "/document"
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "alias-collision",
+      "issues": [
+        7,
+        33
+      ],
+      "clauses": [
+        "CORE-300",
+        "LANG-205"
+      ],
+      "capabilities": [
+        "core.language-1"
+      ],
+      "fixtureRef": "v1/language.json#/vectors/20",
+      "budget": {
+        "kind": "planNodes",
+        "limit": 128
+      },
+      "expected": {
+        "phase": "validate",
+        "code": "DUPLICATE_RESPONSE_NAME",
+        "source": {
+          "pointer": "/operations/0/select/1"
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "cost-overflow",
+      "issues": [
+        12
+      ],
+      "clauses": [
+        "SEC-131",
+        "FED-300"
+      ],
+      "capabilities": [
+        "core.resources-1"
+      ],
+      "fixtureRef": "v1/resources.json#/limitVectors/15",
+      "budget": {
+        "kind": "staticCost",
+        "limit": "18446744073709551615"
+      },
+      "expected": {
+        "phase": "validate",
+        "code": "LIMIT_STATIC_COST",
+        "source": {
+          "pointer": "/operations/0"
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "directive-abuse",
+      "issues": [
+        19,
+        26
+      ],
+      "clauses": [
+        "LANG-243",
+        "EXT-106"
+      ],
+      "capabilities": [
+        "core.language-1",
+        "core.extensions-1"
+      ],
+      "fixtureRef": "v1/extensions.json#/registryCases/3",
+      "budget": {
+        "kind": "directiveApplications",
+        "limit": 64
+      },
+      "expected": {
+        "phase": "validate",
+        "code": "UNKNOWN_DIRECTIVE",
+        "source": {
+          "pointer": "/operations/0/select/0/$hostile"
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "compression-bomb",
+      "issues": [
+        12,
+        13
+      ],
+      "clauses": [
+        "HTTP-200",
+        "HTTP-201",
+        "HTTP-202"
+      ],
+      "capabilities": [
+        "core.http-1"
+      ],
+      "fixtureRef": "v1/http.json#/encodingCases/2",
+      "budget": {
+        "kind": "decompressedBytes",
+        "limit": 1048576
+      },
+      "expected": {
+        "phase": "transport",
+        "code": "REQUEST_TOO_LARGE",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "federation-cycle",
+      "issues": [
+        24
+      ],
+      "clauses": [
+        "FED-103",
+        "FED-300"
+      ],
+      "capabilities": [
+        "core.federation-1"
+      ],
+      "fixtureRef": "v1/federation.json#/compositionCases/3",
+      "budget": {
+        "kind": "federationNodes",
+        "limit": 128
+      },
+      "expected": {
+        "phase": "validate",
+        "code": "FEDERATION_ENTITY_CYCLE",
+        "source": {
+          "pointer": "/services"
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "malformed-stream-frame",
+      "issues": [
+        23
+      ],
+      "clauses": [
+        "STR-200",
+        "STR-202",
+        "STR-400"
+      ],
+      "capabilities": [
+        "core.streaming-1"
+      ],
+      "fixtureRef": "v1/streaming.json#/frameCases/10",
+      "budget": {
+        "kind": "frameBytes",
+        "limit": 65536
+      },
+      "expected": {
+        "phase": "decode",
+        "code": "INVALID_STREAM_FRAME",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "ambiguous-literal-expression",
+      "issues": [
+        6,
+        33
+      ],
+      "clauses": [
+        "LANG-003",
+        "LANG-204"
+      ],
+      "capabilities": [
+        "core.language-1"
+      ],
+      "fixtureRef": "v1/adversarial.json#/cases/7",
+      "input": {"$var": "value", "$literal": 1},
+      "budget": {
+        "kind": "literalBytes",
+        "limit": 4096
+      },
+      "expected": {
+        "phase": "validate",
+        "code": "INVALID_EXPRESSION",
+        "source": {
+          "pointer": "/operations/0/select/0/args/value"
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "unicode-sort-difference",
+      "issues": [
+        4,
+        34
+      ],
+      "clauses": [
+        "CANON-002",
+        "CANON-003",
+        "TYPE-201"
+      ],
+      "capabilities": [
+        "core.interop.c14n-1"
+      ],
+      "fixtureRef": "v1/canonical.json#/jsonVectors/0",
+      "budget": {
+        "kind": "objectMembers",
+        "limit": 64
+      },
+      "expected": {
+        "phase": "canonicalize",
+        "code": "",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "{\"𐀀\":\"astral\",\"\":\"bmp\"}"
+      }
+    },
+    {
+      "name": "serial-loader-deadlock",
+      "issues": [
+        20,
+        22
+      ],
+      "clauses": [
+        "MUT-001",
+        "BATCH-102",
+        "BATCH-202"
+      ],
+      "capabilities": [
+        "core.mutation-1",
+        "core.batch-cache-1"
+      ],
+      "fixtureRef": "v1/batching.json#/dispatchVectors/4",
+      "budget": {
+        "kind": "executionDurationMs",
+        "limit": 1000
+      },
+      "expected": {
+        "phase": "complete",
+        "code": "",
+        "source": {
+          "pointer": "/operations/0/select/1"
+        },
+        "path": [],
+        "data": {
+          "terminated": true
+        },
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "sse-crlf-field-injection",
+      "issues": [
+        13,
+        23
+      ],
+      "clauses": [
+        "STR-701",
+        "HTTP-505"
+      ],
+      "capabilities": [
+        "core.streaming-1",
+        "core.http-1"
+      ],
+      "fixtureRef": "v1/adversarial.json#/cases/10",
+      "input": "event: naatre.data\rforged: true\ndata: {}\n\n",
+      "budget": {
+        "kind": "frameBytes",
+        "limit": 65536
+      },
+      "expected": {
+        "phase": "decode",
+        "code": "INVALID_SSE",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "sse-invalid-utf8",
+      "issues": [
+        13,
+        23
+      ],
+      "clauses": [
+        "STR-202",
+        "STR-701"
+      ],
+      "capabilities": [
+        "core.streaming-1"
+      ],
+      "fixtureRef": "v1/adversarial.json#/cases/11",
+      "inputBase64": "ZXZlbnQ6IG5hYXRyZS5kYXRhCmRhdGE6IP8KCg==",
+      "budget": {
+        "kind": "frameBytes",
+        "limit": 65536
+      },
+      "expected": {
+        "phase": "decode",
+        "code": "INVALID_UTF8",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "mixed-authorized-history-budget",
+      "issues": [
+        11,
+        12,
+        23
+      ],
+      "clauses": [
+        "SEC-402",
+        "SEC-404",
+        "STR-501"
+      ],
+      "capabilities": [
+        "core.security-1",
+        "core.streaming-1"
+      ],
+      "fixtureRef": "v1/security.json#/replayVectors/0",
+      "budget": {
+        "kind": "cursorCandidates",
+        "limit": 8
+      },
+      "expected": {
+        "phase": "execute",
+        "code": "HISTORY_UNAVAILABLE",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": {
+          "metadata": {}
+        },
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    },
+    {
+      "name": "bounded-rollout-reconnect",
+      "issues": [
+        23,
+        57
+      ],
+      "clauses": [
+        "OPS-401",
+        "OPS-702",
+        "STR-702"
+      ],
+      "capabilities": [
+        "core.streaming-1",
+        "operations.lifecycle-1"
+      ],
+      "fixtureRef": "v1/operations.json#/connectionRotation",
+      "budget": {
+        "kind": "reconnectsPerSecond",
+        "limit": 16
+      },
+      "expected": {
+        "phase": "execute",
+        "code": "",
+        "source": {
+          "pointer": ""
+        },
+        "path": [],
+        "data": {
+          "resumed": true,
+          "readiness": false,
+          "liveness": true
+        },
+        "errors": [],
+        "canonicalBytes": ""
+      }
+    }
+  ]
+}

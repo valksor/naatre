@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naatre.dev/conformance/runner-1.schema.json",
+  "title": "Naatre conformance runner protocol",
+  "oneOf": [
+    {"$ref": "#/$defs/request"},
+    {"$ref": "#/$defs/response"}
+  ],
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language"],
+      "properties": {
+        "kind": {"enum": ["sdk", "codec", "gateway", "worker", "http-server", "native-runtime"]},
+        "language": {"type": "string", "minLength": 1, "maxLength": 64},
+        "profile": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "destination"],
+      "properties": {
+        "source": {"$ref": "#/$defs/endpoint"},
+        "destination": {"$ref": "#/$defs/endpoint"}
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "id", "command"],
+      "properties": {
+        "protocol": {"const": "naatre.conformance.runner-1"},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "command": {"enum": ["discover", "run"]},
+        "path": {"$ref": "#/$defs/path"},
+        "profiles": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"command": {"const": "run"}}, "required": ["command"]},
+          "then": {"required": ["path", "profiles"]}
+        }
+      ]
+    },
+    "phase": {
+      "enum": ["runner", "transport", "decode", "validate", "plan", "authorize", "execute", "complete", "serialize", "canonicalize"]
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pointer": {"type": "string", "maxLength": 1024},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "line": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "column": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+      }
+    },
+    "responsePath": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"anyOf": [{"type": "string"}, {"type": "integer", "minimum": 0, "maximum": 9007199254740991}]}
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "code", "message", "source", "path"],
+      "properties": {
+        "phase": {"$ref": "#/$defs/phase"},
+        "code": {"$ref": "#/$defs/code"},
+        "message": {"type": "string", "maxLength": 1024},
+        "source": {"$ref": "#/$defs/source"},
+        "path": {"$ref": "#/$defs/responsePath"}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "status"],
+      "properties": {
+        "profile": {"type": "string", "minLength": 1, "maxLength": 128},
+        "status": {"enum": ["supported", "unsupported"]}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "status", "capabilities", "phase", "code", "source", "path", "data", "errors", "canonicalBytes", "diagnostics", "evidence"],
+      "properties": {
+        "profile": {"type": "string", "minLength": 1, "maxLength": 128},
+        "status": {"enum": ["passed", "failed", "unsupported", "error"]},
+        "capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "phase": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/phase"}]},
+        "code": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/code"}]},
+        "source": {"$ref": "#/$defs/source"},
+        "path": {"$ref": "#/$defs/responsePath"},
+        "data": true,
+        "errors": {"type": "array"},
+        "canonicalBytes": {"type": "string"},
+        "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fixture", "sha256"],
+            "properties": {
+              "fixture": {"type": "string"},
+              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        },
+        "reason": {"type": "string", "maxLength": 1024}
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "id", "fixtureVersion", "runner", "profiles", "results"],
+      "properties": {
+        "protocol": {"const": "naatre.conformance.runner-1"},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "fixtureVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"},
+        "runner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "language", "platform"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 128},
+            "version": {"type": "string", "minLength": 1, "maxLength": 64},
+            "language": {"type": "string", "minLength": 1, "maxLength": 64},
+            "platform": {"type": "string", "minLength": 1, "maxLength": 128}
+          }
+        },
+        "path": {"$ref": "#/$defs/path"},
+        "profiles": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/profile"}},
+        "results": {"type": "array", "items": {"$ref": "#/$defs/result"}}
+      }
+    }
+  }
+}

@@ -8,6 +8,39 @@ implementation version, platform, and claimed profile.
 Generated fixture changes must be reproducible byte-for-byte. Tests read the
 checked-in files rather than duplicating their expected values in Go source.
 
+`v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
+Its version is independent of Go module and implementation releases. The
+manifest binds every file by SHA-256, records the complete language matrix,
+maps all 459 stable normative clauses and all 110 repository issues to exact
+JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
+those deferred records are never counted as conformance passes. The manifest
+also declares downstream ownership for Go harnesses (#78) and complete profile
+execution (#69 and #70).
+
+`v1/interactions.json` fixes the authorization/cache, conditional/fragment,
+sequential-write/loader, partial-data/generated-type, remote-cancellation, and
+transaction/idempotency/outbox process-death boundaries. It also specifies a
+supervised-subprocess outcome for uncooperative work. `v1/adversarial.json`
+supplies finite budgets and seed-retention metadata for depth, alias, cost,
+directive, compression, federation, stream, literal, Unicode, loader, replay,
+and rollout inputs. `v1/benchmarks.json` fixes representative workloads and the
+environment, latency, allocation, and upstream-call measurements reports must
+publish; the Go benchmark implementations remain owned by #78.
+
+Fixture integers outside the interoperable JSON range of
+`-9007199254740991..9007199254740991` are decimal strings. Consumers must parse
+those strings with an exact-width integer or arbitrary-precision decimal type;
+converting them through a binary64 JSON number is non-conforming.
+
+The versioned runner/report protocol and both bindings are documented in
+[`RUNNER.md`](RUNNER.md). A dependency-free JavaScript runner and the Go
+reference runner consume the same manifest. Run them with:
+
+```sh
+printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"profiles","command":"discover"}' | node conformance/independent/runner.mjs
+printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"profiles","command":"discover"}' | go run ./cmd/naatre-conformance
+```
+
 The `core.scalar.c14n-1` and `core.interop.c14n-1` vectors are verified by both
 the Go reference implementation and dependency-free JavaScript implementations
 in `independent/scalars.mjs` and `independent/canonical.mjs`. Run the independent
@@ -16,6 +49,7 @@ checks with the CI-pinned Node 24.21.0 toolchain:
 ```sh
 node conformance/independent/scalars.mjs
 node conformance/independent/canonical.mjs
+node conformance/independent/reliability.mjs
 ```
 
 The `core.value-1` vectors cover schema-directed maps, lists, input objects,
