@@ -668,47 +668,55 @@ func (s *federationValueCloneState) clone(value any, depth int) (any, error) {
 		}
 		return current, nil
 	case map[string]any:
-		if current == nil {
-			return map[string]any(nil), nil
-		}
-		reference, err := s.beginReference(current)
-		if err != nil {
-			return nil, err
-		}
-		defer delete(s.active, reference)
-		cloned := make(map[string]any, len(current))
-		for key, child := range current {
-			if !utf8.ValidString(key) {
-				return nil, errors.New("federation value contains an invalid UTF-8 object key")
-			}
-			clonedChild, err := s.clone(child, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			cloned[key] = clonedChild
-		}
-		return cloned, nil
+		return s.cloneMap(current, depth)
 	case []any:
-		if current == nil {
-			return []any(nil), nil
-		}
-		reference, err := s.beginReference(current)
-		if err != nil {
-			return nil, err
-		}
-		defer delete(s.active, reference)
-		cloned := make([]any, len(current))
-		for index, child := range current {
-			clonedChild, err := s.clone(child, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			cloned[index] = clonedChild
-		}
-		return cloned, nil
+		return s.cloneSlice(current, depth)
 	default:
 		return nil, fmt.Errorf("unsupported federation value type %T", value)
 	}
+}
+
+func (s *federationValueCloneState) cloneMap(current map[string]any, depth int) (map[string]any, error) {
+	if current == nil {
+		return nil, nil
+	}
+	reference, err := s.beginReference(current)
+	if err != nil {
+		return nil, err
+	}
+	defer delete(s.active, reference)
+	cloned := make(map[string]any, len(current))
+	for key, child := range current {
+		if !utf8.ValidString(key) {
+			return nil, errors.New("federation value contains an invalid UTF-8 object key")
+		}
+		clonedChild, err := s.clone(child, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		cloned[key] = clonedChild
+	}
+	return cloned, nil
+}
+
+func (s *federationValueCloneState) cloneSlice(current []any, depth int) ([]any, error) {
+	if current == nil {
+		return nil, nil
+	}
+	reference, err := s.beginReference(current)
+	if err != nil {
+		return nil, err
+	}
+	defer delete(s.active, reference)
+	cloned := make([]any, len(current))
+	for index, child := range current {
+		clonedChild, err := s.clone(child, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		cloned[index] = clonedChild
+	}
+	return cloned, nil
 }
 
 func (s *federationValueCloneState) beginReference(value any) (federationValueReference, error) {
