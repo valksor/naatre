@@ -136,3 +136,11 @@ handoff, indistinguishable cursor failures, cancellation, disconnect, server
 shutdown, authentication expiry, authorization revocation, schema retirement,
 and consumer abandonment. The Go reference consumes every vector directly;
 #72 owns concrete SSE/WebSocket transport adapters.
+
+`v1/federation.json` fixes the `core.federation-1` service manifests, operator
+trust pins, exact composition bytes and federation-domain hash, deterministic
+Ed25519 delegation token, composition failures, and coordinator success,
+partial-failure, timeout, schema-drift, rolling-upgrade, and multiplicative
+fan-out outcomes. The Go bridge executes every vector against the real composer,
+public-key verifier, and bounded reference coordinator. Production discovery,
+distributed planning, and transport integration remain owned by #109.

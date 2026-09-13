@@ -1,0 +1,714 @@
+{
+  "profile": "core.federation-1",
+  "hashPurpose": "federation",
+  "signature": "ed25519",
+  "verifierAuthority": "public-key-only",
+  "requiredClaims": [
+    "issuer",
+    "audience",
+    "subject",
+    "authorizationRevision",
+    "requestId",
+    "operationId",
+    "schemaRevision",
+    "serviceSchemaRevision",
+    "serviceSchemaDigest",
+    "expiresUnixNano",
+    "cost",
+    "concurrency"
+  ],
+  "compositionErrorCodes": [
+    "FEDERATION_INVALID_MANIFEST",
+    "FEDERATION_UNTRUSTED_SERVICE",
+    "FEDERATION_OWNERSHIP_CONFLICT",
+    "FEDERATION_PROFILE_MISMATCH",
+    "FEDERATION_SCHEMA_MISMATCH",
+    "FEDERATION_TYPE_CONFLICT",
+    "FEDERATION_ENTITY_CYCLE"
+  ],
+  "executionErrorCodes": [
+    "FEDERATION_PLAN_INVALID",
+    "FEDERATION_SCHEMA_MISMATCH",
+    "FEDERATION_UNAVAILABLE",
+    "UNAUTHORIZED",
+    "RESOURCE_EXHAUSTED",
+    "CANCELLED"
+  ],
+  "services": [
+    {
+      "name": "users",
+      "id": "users",
+      "audience": "naatre:users",
+      "endpointReference": "users-api",
+      "schemaRevision": "users-r1",
+      "schemaDigest": "sha256:945b759b9f3ffe5206ed2ab3accc19c8c1b5e4dcbbe063b872a339bb4159ffb2",
+      "schema": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "users-r1",
+        "types": [
+          {
+            "id": "User",
+            "name": "User",
+            "kind": "object",
+            "output": true,
+            "entity": {
+              "keys": [
+                "id"
+              ]
+            },
+            "fields": [
+              {
+                "id": "User.id",
+                "name": "id",
+                "type": "ID"
+              },
+              {
+                "id": "User.value",
+                "name": "value",
+                "type": "String"
+              }
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.user",
+            "name": "user",
+            "kind": "query",
+            "output": "User",
+            "effect": "read",
+            "retrySafe": true,
+            "cost": 2
+          }
+        ],
+        "members": []
+      },
+      "ownedOperations": [
+        "query.user"
+      ],
+      "ownedMembers": [],
+      "entityFetches": [],
+      "federationProfile": "core.federation-1"
+    },
+    {
+      "name": "orders",
+      "id": "orders",
+      "audience": "naatre:orders",
+      "endpointReference": "orders-api",
+      "schemaRevision": "orders-r1",
+      "schemaDigest": "sha256:9dfdb46e2579fe6a84607e00dbe19388b46b1855ed3493030f7c1f40020b60c2",
+      "schema": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "orders-r1",
+        "types": [
+          {
+            "id": "Order",
+            "name": "Order",
+            "kind": "object",
+            "output": true,
+            "entity": {
+              "keys": [
+                "id"
+              ]
+            },
+            "fields": [
+              {
+                "id": "Order.id",
+                "name": "id",
+                "type": "ID"
+              }
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.order",
+            "name": "order",
+            "kind": "query",
+            "output": "Order",
+            "effect": "read",
+            "cost": 1
+          }
+        ],
+        "members": []
+      },
+      "ownedOperations": [
+        "query.order"
+      ],
+      "ownedMembers": [],
+      "entityFetches": [],
+      "federationProfile": "core.federation-1"
+    },
+    {
+      "name": "users-replica",
+      "id": "users-replica",
+      "audience": "naatre:users-replica",
+      "endpointReference": "users-replica-api",
+      "schemaRevision": "users-replica-r1",
+      "schemaDigest": "sha256:aa8ecea3d56aaccc944960e52565e20a71de1e9e37960c63f3068992b61f78db",
+      "schema": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "users-replica-r1",
+        "types": [
+          {
+            "id": "User",
+            "name": "User",
+            "kind": "object",
+            "output": true,
+            "entity": {
+              "keys": [
+                "id"
+              ]
+            },
+            "fields": [
+              {
+                "id": "User.id",
+                "name": "id",
+                "type": "ID"
+              },
+              {
+                "id": "User.value",
+                "name": "value",
+                "type": "String"
+              }
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.user",
+            "name": "user",
+            "kind": "query",
+            "output": "User",
+            "effect": "read",
+            "retrySafe": true,
+            "cost": 2
+          }
+        ],
+        "members": []
+      },
+      "ownedOperations": [
+        "query.user"
+      ],
+      "ownedMembers": [],
+      "entityFetches": [],
+      "federationProfile": "core.federation-1"
+    },
+    {
+      "name": "users-conflict",
+      "id": "users-conflict",
+      "audience": "naatre:users-conflict",
+      "endpointReference": "users-conflict-api",
+      "schemaRevision": "users-conflict-r1",
+      "schemaDigest": "sha256:bb23073a90ea60209aee16e3e30fb71741f393941f82ca6a982ddee8b5f56369",
+      "schema": {
+        "version": "1",
+        "canonicalVersion": "c14n-1",
+        "revision": "users-conflict-r1",
+        "types": [
+          {
+            "id": "User",
+            "name": "User",
+            "kind": "object",
+            "output": true,
+            "entity": {
+              "keys": [
+                "id"
+              ]
+            },
+            "fields": [
+              {
+                "id": "User.id",
+                "name": "id",
+                "type": "ID"
+              },
+              {
+                "id": "User.value",
+                "name": "value",
+                "type": "Int64"
+              }
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "id": "query.conflict",
+            "name": "conflict",
+            "kind": "query",
+            "output": "User",
+            "effect": "read"
+          }
+        ],
+        "members": []
+      },
+      "ownedOperations": [
+        "query.conflict"
+      ],
+      "ownedMembers": [],
+      "entityFetches": [],
+      "federationProfile": "core.federation-1"
+    }
+  ],
+  "trust": {
+    "users": {
+      "audience": "naatre:users",
+      "endpointReference": "users-api",
+      "federationProfile": "core.federation-1",
+      "schemaRevision": "users-r1",
+      "schemaDigest": "sha256:945b759b9f3ffe5206ed2ab3accc19c8c1b5e4dcbbe063b872a339bb4159ffb2"
+    },
+    "orders": {
+      "audience": "naatre:orders",
+      "endpointReference": "orders-api",
+      "federationProfile": "core.federation-1",
+      "schemaRevision": "orders-r1",
+      "schemaDigest": "sha256:9dfdb46e2579fe6a84607e00dbe19388b46b1855ed3493030f7c1f40020b60c2"
+    },
+    "users-replica": {
+      "audience": "naatre:users-replica",
+      "endpointReference": "users-replica-api",
+      "federationProfile": "core.federation-1",
+      "schemaRevision": "users-replica-r1",
+      "schemaDigest": "sha256:aa8ecea3d56aaccc944960e52565e20a71de1e9e37960c63f3068992b61f78db"
+    },
+    "users-conflict": {
+      "audience": "naatre:users-conflict",
+      "endpointReference": "users-conflict-api",
+      "federationProfile": "core.federation-1",
+      "schemaRevision": "users-conflict-r1",
+      "schemaDigest": "sha256:bb23073a90ea60209aee16e3e30fb71741f393941f82ca6a982ddee8b5f56369"
+    }
+  },
+  "composition": {
+    "manifests": [
+      "users",
+      "orders"
+    ],
+    "revision": "federation-r1",
+    "canonicalJson": "{\"entityRoutes\":[],\"memberOwners\":[],\"operationOwners\":[{\"id\":\"query.order\",\"service\":\"orders\"},{\"id\":\"query.user\",\"service\":\"users\"}],\"profile\":\"core.federation-1\",\"revision\":\"federation-r1\",\"schema\":{\"canonicalVersion\":\"c14n-1\",\"members\":[],\"operations\":[{\"cost\":1,\"effect\":\"read\",\"id\":\"query.order\",\"kind\":\"query\",\"name\":\"order\",\"output\":\"Order\"},{\"cost\":2,\"effect\":\"read\",\"id\":\"query.user\",\"kind\":\"query\",\"name\":\"user\",\"output\":\"User\",\"retrySafe\":true}],\"references\":[{\"digest\":\"sha256:9dfdb46e2579fe6a84607e00dbe19388b46b1855ed3493030f7c1f40020b60c2\",\"revision\":\"orders-r1\",\"uri\":\"service:orders\"},{\"digest\":\"sha256:945b759b9f3ffe5206ed2ab3accc19c8c1b5e4dcbbe063b872a339bb4159ffb2\",\"revision\":\"users-r1\",\"uri\":\"service:users\"}],\"revision\":\"federation-r1\",\"types\":[{\"entity\":{\"keys\":[\"id\"]},\"fields\":[{\"id\":\"Order.id\",\"name\":\"id\",\"type\":\"ID\"}],\"id\":\"Order\",\"kind\":\"object\",\"name\":\"Order\",\"output\":true},{\"entity\":{\"keys\":[\"id\"]},\"fields\":[{\"id\":\"User.id\",\"name\":\"id\",\"type\":\"ID\"},{\"id\":\"User.value\",\"name\":\"value\",\"type\":\"String\"}],\"id\":\"User\",\"kind\":\"object\",\"name\":\"User\",\"output\":true}],\"version\":\"1\"},\"services\":[{\"audience\":\"naatre:orders\",\"endpointReference\":\"orders-api\",\"federationProfile\":\"core.federation-1\",\"id\":\"orders\",\"schemaDigest\":\"sha256:9dfdb46e2579fe6a84607e00dbe19388b46b1855ed3493030f7c1f40020b60c2\",\"schemaRevision\":\"orders-r1\"},{\"audience\":\"naatre:users\",\"endpointReference\":\"users-api\",\"federationProfile\":\"core.federation-1\",\"id\":\"users\",\"schemaDigest\":\"sha256:945b759b9f3ffe5206ed2ab3accc19c8c1b5e4dcbbe063b872a339bb4159ffb2\",\"schemaRevision\":\"users-r1\"}]}",
+    "hash": "a45acdbe830ec7d369a018580ef5c50510c7482d175822abc565290758047280"
+  },
+  "compositionCases": [
+    {
+      "name": "malicious-endpoint-reference",
+      "manifests": [
+        "users"
+      ],
+      "endpointOverrides": {
+        "users": "https://attacker.invalid"
+      },
+      "expectedCode": "FEDERATION_UNTRUSTED_SERVICE"
+    },
+    {
+      "name": "untrusted-schema-provenance",
+      "manifests": [
+        "users"
+      ],
+      "trustOverrides": {
+        "users": {
+          "audience": "naatre:users",
+          "endpointReference": "users-api",
+          "federationProfile": "core.federation-1",
+          "schemaRevision": "users-r2",
+          "schemaDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "expectedCode": "FEDERATION_UNTRUSTED_SERVICE"
+    },
+    {
+      "name": "service-profile-version-skew",
+      "manifests": [
+        "users"
+      ],
+      "profileOverrides": {
+        "users": "core.federation-2"
+      },
+      "expectedCode": "FEDERATION_PROFILE_MISMATCH"
+    },
+    {
+      "name": "entity-fetch-cycle",
+      "manifests": [
+        "users",
+        "orders"
+      ],
+      "entityFetches": {
+        "users": [
+          {
+            "type": "User",
+            "operationId": "query.user",
+            "keys": [
+              "id"
+            ],
+            "requires": [
+              {
+                "serviceId": "orders",
+                "type": "Order"
+              }
+            ]
+          }
+        ],
+        "orders": [
+          {
+            "type": "Order",
+            "operationId": "query.order",
+            "keys": [
+              "id"
+            ],
+            "requires": [
+              {
+                "serviceId": "users",
+                "type": "User"
+              }
+            ]
+          }
+        ]
+      },
+      "expectedCode": "FEDERATION_ENTITY_CYCLE"
+    },
+    {
+      "name": "ownership-conflict",
+      "manifests": [
+        "users",
+        "users-replica"
+      ],
+      "expectedCode": "FEDERATION_OWNERSHIP_CONFLICT"
+    },
+    {
+      "name": "type-conflict",
+      "manifests": [
+        "users",
+        "users-conflict"
+      ],
+      "expectedCode": "FEDERATION_TYPE_CONFLICT"
+    }
+  ],
+  "delegation": {
+    "privateKeySeed": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY",
+    "issuer": "gateway",
+    "now": "2026-09-13T12:00:00Z",
+    "principal": {
+      "subject": "user-1",
+      "tenant": "tenant-1",
+      "claims": {
+        "private": "must-not-be-forwarded"
+      },
+      "authorizationRevision": "policy-r1"
+    },
+    "options": {
+      "audience": "naatre:users",
+      "requestId": "request-1",
+      "operationId": "query.user",
+      "schemaRevision": "federation-r1",
+      "serviceSchemaRevision": "users-r1",
+      "serviceSchemaDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "deadline": "2026-09-13T12:01:00Z",
+      "cost": 2,
+      "concurrency": 1
+    },
+    "expectation": {
+      "requestId": "request-1",
+      "operationId": "query.user",
+      "schemaRevision": "federation-r1",
+      "serviceSchemaRevision": "users-r1",
+      "serviceSchemaDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expectedToken": "eyJ2ZXJzaW9uIjoxLCJpc3N1ZXIiOiJnYXRld2F5IiwiYXVkaWVuY2UiOiJuYWF0cmU6dXNlcnMiLCJzdWJqZWN0IjoidXNlci0xIiwidGVuYW50IjoidGVuYW50LTEiLCJhdXRob3JpemF0aW9uUmV2aXNpb24iOiJwb2xpY3ktcjEiLCJyZXF1ZXN0SWQiOiJyZXF1ZXN0LTEiLCJvcGVyYXRpb25JZCI6InF1ZXJ5LnVzZXIiLCJzY2hlbWFSZXZpc2lvbiI6ImZlZGVyYXRpb24tcjEiLCJzZXJ2aWNlU2NoZW1hUmV2aXNpb24iOiJ1c2Vycy1yMSIsInNlcnZpY2VTY2hlbWFEaWdlc3QiOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsImV4cGlyZXNVbml4TmFubyI6MTc4OTMwMDg2MDAwMDAwMDAwMCwiY29zdCI6MiwiY29uY3VycmVuY3kiOjF9.OAQjSjUcwEu414x-lNvyIemopWWN4JLcIoqWDeAhg-lZ5E0YIaonqx3dgUvDe3rfuN74SxkUL6Q_bOzYul3wDw"
+  },
+  "delegationCases": [
+    {
+      "name": "valid-delegation",
+      "mutation": "none",
+      "verifierAudience": "naatre:users",
+      "expected": "ok"
+    },
+    {
+      "name": "forged-delegation",
+      "mutation": "signature",
+      "verifierAudience": "naatre:users",
+      "expected": "invalid-delegation"
+    },
+    {
+      "name": "wrong-audience",
+      "mutation": "none",
+      "verifierAudience": "naatre:orders",
+      "expected": "invalid-delegation"
+    }
+  ],
+  "executionCases": [
+    {
+      "name": "successful-multi-service-query",
+      "plan": {
+        "schemaRevision": "federation-r1",
+        "calls": [
+          {
+            "responseKey": "user",
+            "serviceId": "users",
+            "operationId": "query.user",
+            "path": [
+              "user"
+            ],
+            "maxAttempts": 1
+          },
+          {
+            "responseKey": "order",
+            "serviceId": "orders",
+            "operationId": "query.order",
+            "path": [
+              "order"
+            ],
+            "maxAttempts": 1
+          }
+        ]
+      },
+      "limits": {
+        "maxCalls": 2,
+        "maxCost": 3,
+        "maxConcurrency": 2,
+        "maxAttempts": 1
+      },
+      "maximumDurationMillis": 1000,
+      "remote": [
+        {
+          "serviceId": "users",
+          "data": {
+            "id": "u1"
+          },
+          "schemaRevision": "users-r1"
+        },
+        {
+          "serviceId": "orders",
+          "data": {
+            "id": "o1"
+          },
+          "schemaRevision": "orders-r1"
+        }
+      ],
+      "expectedData": {
+        "user": {
+          "id": "u1"
+        },
+        "order": {
+          "id": "o1"
+        }
+      },
+      "expectedErrors": [],
+      "expectedInvocations": 2
+    },
+    {
+      "name": "partial-failure-retains-sibling-data",
+      "plan": {
+        "schemaRevision": "federation-r1",
+        "calls": [
+          {
+            "responseKey": "user",
+            "serviceId": "users",
+            "operationId": "query.user",
+            "path": [
+              "viewer"
+            ],
+            "maxAttempts": 1
+          },
+          {
+            "responseKey": "order",
+            "serviceId": "orders",
+            "operationId": "query.order",
+            "path": [
+              "recentOrder"
+            ],
+            "maxAttempts": 1
+          }
+        ]
+      },
+      "limits": {
+        "maxCalls": 2,
+        "maxCost": 3,
+        "maxConcurrency": 2,
+        "maxAttempts": 1
+      },
+      "maximumDurationMillis": 1000,
+      "remote": [
+        {
+          "serviceId": "users",
+          "data": {
+            "id": "u1"
+          },
+          "schemaRevision": "users-r1"
+        },
+        {
+          "serviceId": "orders",
+          "schemaRevision": "orders-r1",
+          "transportError": true
+        }
+      ],
+      "expectedData": {
+        "user": {
+          "id": "u1"
+        }
+      },
+      "expectedErrors": [
+        {
+          "code": "FEDERATION_UNAVAILABLE",
+          "path": [
+            "recentOrder"
+          ]
+        }
+      ],
+      "expectedInvocations": 2
+    },
+    {
+      "name": "deadline-stops-scheduling",
+      "plan": {
+        "schemaRevision": "federation-r1",
+        "calls": [
+          {
+            "responseKey": "user",
+            "serviceId": "users",
+            "operationId": "query.user",
+            "path": [
+              "user"
+            ],
+            "maxAttempts": 1
+          }
+        ]
+      },
+      "limits": {
+        "maxCalls": 1,
+        "maxCost": 2,
+        "maxConcurrency": 1,
+        "maxAttempts": 1
+      },
+      "maximumDurationMillis": 5,
+      "remote": [
+        {
+          "serviceId": "users",
+          "schemaRevision": "users-r1",
+          "waitForCancel": true
+        }
+      ],
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "RESOURCE_EXHAUSTED",
+          "path": [
+            "user"
+          ]
+        }
+      ],
+      "expectedInvocations": 1
+    },
+    {
+      "name": "remote-schema-drift",
+      "plan": {
+        "schemaRevision": "federation-r1",
+        "calls": [
+          {
+            "responseKey": "user",
+            "serviceId": "users",
+            "operationId": "query.user",
+            "path": [
+              "user"
+            ],
+            "maxAttempts": 1
+          }
+        ]
+      },
+      "limits": {
+        "maxCalls": 1,
+        "maxCost": 2,
+        "maxConcurrency": 1,
+        "maxAttempts": 1
+      },
+      "maximumDurationMillis": 1000,
+      "remote": [
+        {
+          "serviceId": "users",
+          "data": {
+            "id": "u1"
+          },
+          "schemaRevision": "users-r2"
+        }
+      ],
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "FEDERATION_SCHEMA_MISMATCH",
+          "path": [
+            "user"
+          ]
+        }
+      ],
+      "expectedInvocations": 1
+    },
+    {
+      "name": "rolling-upgrade-version-skew",
+      "plan": {
+        "schemaRevision": "federation-r2",
+        "calls": [
+          {
+            "responseKey": "user",
+            "serviceId": "users",
+            "operationId": "query.user",
+            "path": [
+              "user"
+            ],
+            "maxAttempts": 1
+          }
+        ]
+      },
+      "limits": {
+        "maxCalls": 1,
+        "maxCost": 2,
+        "maxConcurrency": 1,
+        "maxAttempts": 1
+      },
+      "maximumDurationMillis": 1000,
+      "remote": [],
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "FEDERATION_SCHEMA_MISMATCH",
+          "path": null
+        }
+      ],
+      "expectedInvocations": 0
+    },
+    {
+      "name": "multiplicative-retry-cost-fanout",
+      "plan": {
+        "schemaRevision": "federation-r1",
+        "calls": [
+          {
+            "responseKey": "user",
+            "serviceId": "users",
+            "operationId": "query.user",
+            "path": [
+              "user"
+            ],
+            "maxAttempts": 3
+          }
+        ]
+      },
+      "limits": {
+        "maxCalls": 1,
+        "maxCost": 5,
+        "maxConcurrency": 1,
+        "maxAttempts": 3
+      },
+      "maximumDurationMillis": 1000,
+      "remote": [],
+      "expectedData": {},
+      "expectedErrors": [
+        {
+          "code": "RESOURCE_EXHAUSTED",
+          "path": [
+            "user"
+          ]
+        }
+      ],
+      "expectedInvocations": 0
+    }
+  ]
+}

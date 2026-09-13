@@ -132,6 +132,15 @@
       "digest": "bc9a9086bda6d88f30ff8504350052ccf12ed19da5974d5c1e0532e651066b0d"
     },
     {
+      "name": "same-payload-federation-domain",
+      "input": "{\"a\":1}",
+      "parsedType": "object",
+      "canonical": "{\"a\":1}",
+      "purpose": "federation",
+      "domainInput": "naatre:federation:c14n-1\n{\"a\":1}",
+      "digest": "e59de7dfe6d6ad7076bc9380d8a3b55ee48fdfeb4aa78528a538f0d8c3e4002d"
+    },
+    {
       "name": "document-payload",
       "input": "{\"operations\":[{\"select\":[{\"$field\":{\"name\":\"viewer\"}}],\"kind\":\"query\",\"name\":\"GetViewer\"}]}",
       "parsedType": "object",

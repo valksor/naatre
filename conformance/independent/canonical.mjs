@@ -63,8 +63,8 @@ function verifyHashVectors() {
       domainDigests.add(vector.digest);
     }
   }
-  require(domainPurposes.size === 6 &&
-    domainDigests.size === 6, "six-way domain separation is incomplete");
+  require(domainPurposes.size === 7 &&
+    domainDigests.size === 7, "seven-way domain separation is incomplete");
 }
 
 function verifyEquivalenceVectors() {
@@ -303,6 +303,7 @@ function semanticHash(purpose, canonical) {
     "result-cache",
     "idempotency",
     "signed-message",
+    "federation",
   ]);
   require(allowed.has(purpose), `unknown hash purpose ${purpose}`);
   return createHash("sha256")

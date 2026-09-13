@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"unicode/utf8"
@@ -338,12 +339,7 @@ func (s *completionState) completeVariantValue(tagged schema.TaggedValue, known 
 }
 
 func sortedStringKeys[V any](values map[string]V) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
+	return slices.Sorted(maps.Keys(values))
 }
 
 func completeScalar(value any, typeID schema.TypeID, nullable bool, path []any, types schema.Snapshot) (any, []completionIssue, bool) {

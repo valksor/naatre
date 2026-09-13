@@ -340,10 +340,14 @@ func (d Document) ExportOptions() ExportOptions {
 }
 
 func (d Document) CanonicalJSON() ([]byte, error) {
-	if err := d.requireInitialized(); err != nil {
+	return cloneCanonical(d.canonical, d.requireInitialized())
+}
+
+func cloneCanonical(canonical []byte, err error) ([]byte, error) {
+	if err != nil {
 		return nil, err
 	}
-	return bytes.Clone(d.canonical), nil
+	return bytes.Clone(canonical), nil
 }
 
 func (d Document) requireInitialized() error {
@@ -354,10 +358,14 @@ func (d Document) requireInitialized() error {
 }
 
 func (d Document) Hash() (protocol.Digest, error) {
-	if len(d.canonical) == 0 {
-		return protocol.Digest{}, errors.New("schema document is not initialized")
+	return hashCanonical(d.canonical, protocol.SchemaHash, d.requireInitialized())
+}
+
+func hashCanonical(canonical []byte, purpose protocol.HashPurpose, err error) (protocol.Digest, error) {
+	if err != nil {
+		return protocol.Digest{}, err
 	}
-	return protocol.SemanticHash(protocol.SchemaHash, d.canonical)
+	return protocol.SemanticHash(purpose, canonical)
 }
 
 func (d Document) Snapshot() (Snapshot, error) {
@@ -1156,13 +1164,14 @@ func cloneTraits(input []TraitDescriptor) []TraitDescriptor {
 }
 
 func cloneEnumMembers(input []EnumMemberDescriptor) []EnumMemberDescriptor {
-	result := slices.Clone(input)
-	for index := range result {
-		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
-		result[index].Traits = cloneTraits(result[index].Traits)
-		result[index].Source = cloneSource(result[index].Source)
-	}
-	return result
+	return mapSlice(input, cloneEnumMember)
+}
+
+func cloneEnumMember(input EnumMemberDescriptor) EnumMemberDescriptor {
+	input.Deprecation = cloneDeprecation(input.Deprecation)
+	input.Traits = cloneTraits(input.Traits)
+	input.Source = cloneSource(input.Source)
+	return input
 }
 
 func cloneVariantMembers(input []VariantMemberDescriptor) []VariantMemberDescriptor {

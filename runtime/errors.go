@@ -66,8 +66,11 @@ const (
 	CodeCacheInvalidationFailed     = "CACHE_INVALIDATION_FAILED"
 	// CodeOverloaded and CodeRateLimited are process-admission failures. The
 	// former reports aggregate capacity; the latter reports a caller partition.
-	CodeOverloaded  = "OVERLOADED"
-	CodeRateLimited = "RATE_LIMITED"
+	CodeOverloaded               = "OVERLOADED"
+	CodeRateLimited              = "RATE_LIMITED"
+	CodeFederationPlanInvalid    = "FEDERATION_PLAN_INVALID"
+	CodeFederationSchemaMismatch = "FEDERATION_SCHEMA_MISMATCH"
+	CodeFederationUnavailable    = "FEDERATION_UNAVAILABLE"
 )
 
 // reservedCodes are the codes only a runtime may produce. An application that
@@ -82,7 +85,7 @@ var reservedCodes = []string{
 	CodeExternalEffectUncoordinated, CodeCompensationFailed,
 	CodeRetryBudgetExhausted, CodeIdempotencyConflict, CodeIdempotencyIndeterminate,
 	CodeIdempotencyNotAllowed, CodeIdempotencyStoreUnavailable, CodeCacheInvalidationFailed,
-	CodeOverloaded, CodeRateLimited,
+	CodeOverloaded, CodeRateLimited, CodeFederationPlanInvalid, CodeFederationSchemaMismatch, CodeFederationUnavailable,
 }
 
 // applicationCodePattern constrains a domain code to a stable, wire-safe

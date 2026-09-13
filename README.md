@@ -21,13 +21,16 @@ evidence must be described as planned.
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
-- `schema`: portable types, values, and scalar codecs.
+- `schema`: portable types, values, scalar codecs, and deterministic federation
+  composition from operator-pinned service manifests.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, process-wide admission/lifecycle control, bounded
-  stream replay and source ownership, planning, and execution; see the
+  stream replay and source ownership, a bounded reference federation
+  coordinator, planning, and execution; see the
   [Go registry contract](docs/registry.md) and
-  [process-hosting guide](docs/process-hosting.md).
+  [process-hosting guide](docs/process-hosting.md). Production distributed
+  federation planning and transport integration remain owned by #109.
 - `transport/http`: strict reusable SSE framing for
   [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
   streaming and general `net/http` adapters.

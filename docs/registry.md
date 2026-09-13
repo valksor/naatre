@@ -194,6 +194,25 @@ frame before accepting replay; `Recovery` reports `history-unavailable`
 separately from `Terminal`, whose only successful shapes are `complete` and a
 final `error`.
 
+## Federation composition and reference execution
+
+`schema.ComposeFederation` accepts authenticated service manifests only when
+their `core.federation-1` profile, audience, opaque endpoint reference, schema
+revision, and schema digest exactly match operator-owned `ServiceTrust` pins.
+It deterministically rejects type, ownership, reference, entity-route, and
+dependency-cycle conflicts and returns detached immutable service, operation,
+and route views. The composed artifact has a dedicated `federation` semantic
+hash distinct from its public schema hash.
+
+`runtime.FederationDelegationIssuer` holds the gateway-private Ed25519 key;
+downstreams receive an audience-pinned `FederationDelegationVerifier` containing
+only the public key. `runtime.ReferenceFederationCoordinator` executes an
+already resolved read-only plan with schema-owned cost/retry metadata, shared
+request-wide concurrency and deadline accounting, safe partial results, and
+stable public errors. It preserves in-process context values into the invoker.
+Production entity planning, cross-process trace serialization, discovery, and
+transport integration remain explicitly owned by #109.
+
 ## Request resource limits
 
 `runtime.PrepareWithOptions` accepts a `runtime.ResourceLimits` value and

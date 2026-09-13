@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -946,9 +947,11 @@ func pathForNode(base []any, node planNode) []any {
 }
 
 func appendPathSegments(path []any, segments ...any) []any {
-	result := make([]any, 0, len(path)+len(segments))
-	result = append(result, path...)
-	return append(result, segments...)
+	return appendCloned(path, segments...)
+}
+
+func appendCloned[T any](prefix []T, suffix ...T) []T {
+	return append(slices.Clone(prefix), suffix...)
 }
 
 func nodeExecutionError(code, message string, node planNode, path []any, cause error) ExecutionError {

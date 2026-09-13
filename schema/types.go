@@ -212,12 +212,7 @@ func (s Snapshot) Lookup(id TypeID) (TypeDescriptor, bool) {
 
 // Descriptors returns all types sorted by identifier.
 func (s Snapshot) Descriptors() []TypeDescriptor {
-	identifiers := sortedKeys(s.types)
-	result := make([]TypeDescriptor, 0, len(identifiers))
-	for _, identifier := range identifiers {
-		result = append(result, cloneDescriptor(s.types[identifier]))
-	}
-	return result
+	return mapSlice(sortedValues(s.types), cloneDescriptor)
 }
 
 // ResolveVariant applies the open or closed compatibility rule for one union
@@ -443,12 +438,19 @@ func validateInterfaceVariant(contract, implementation TypeDescriptor) error {
 }
 
 func sortedKeys[K ~string, V any](values map[K]V) []K {
-	keys := make([]K, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+	return slices.Sorted(maps.Keys(values))
+}
+
+func sortedValues[K ~string, V any](values map[K]V) []V {
+	return mapSlice(sortedKeys(values), func(key K) V { return values[key] })
+}
+
+func mapSlice[S, D any](values []S, transform func(S) D) []D {
+	result := make([]D, len(values))
+	for index, value := range values {
+		result[index] = transform(value)
 	}
-	slices.Sort(keys)
-	return keys
+	return result
 }
 
 func cloneDescriptor(descriptor TypeDescriptor) TypeDescriptor {

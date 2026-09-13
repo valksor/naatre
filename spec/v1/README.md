@@ -26,6 +26,7 @@ Documents:
 13. [Observability and mutation audit](observability.md)
 14. [Process admission and lifecycle](operations.md)
 15. [Streaming and incremental delivery](streaming.md)
+16. [Federation composition and execution](federation.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

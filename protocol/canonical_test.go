@@ -169,6 +169,22 @@ func TestSemanticHashPinsDomainVersionAndDigest(t *testing.T) {
 	}
 }
 
+func TestFederationHashHasDedicatedDomain(t *testing.T) {
+	t.Parallel()
+	payload := []byte(`{"profile":"core.federation-1"}`)
+	federation, err := protocol.SemanticHash(protocol.FederationHash, payload)
+	if err != nil {
+		t.Fatalf("federation SemanticHash: %v", err)
+	}
+	signed, err := protocol.SemanticHash(protocol.SignedMessageHash, payload)
+	if err != nil {
+		t.Fatalf("signed-message SemanticHash: %v", err)
+	}
+	if federation == signed || federation.Hex == signed.Hex {
+		t.Fatal("federation and signed-message hashes share a domain")
+	}
+}
+
 func TestCanonicalizeJSONRejectsDuplicateAndInvalidInput(t *testing.T) {
 	t.Parallel()
 

@@ -177,8 +177,8 @@ func assertCanonicalHashVectors(t *testing.T, fixture canonicalFixture, seenName
 			domainDigests[vector.Digest] = true
 		}
 	}
-	if len(domainPurposes) != 6 || len(domainDigests) != 6 {
-		t.Fatalf("domain separation coverage = %d purposes and %d digests, want six", len(domainPurposes), len(domainDigests))
+	if len(domainPurposes) != 7 || len(domainDigests) != 7 {
+		t.Fatalf("domain separation coverage = %d purposes and %d digests, want seven", len(domainPurposes), len(domainDigests))
 	}
 }
 

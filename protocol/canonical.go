@@ -24,6 +24,7 @@ const (
 	ResultCacheHash   HashPurpose = "result-cache"
 	IdempotencyHash   HashPurpose = "idempotency"
 	SignedMessageHash HashPurpose = "signed-message"
+	FederationHash    HashPurpose = "federation"
 )
 
 // Digest records both the algorithm and canonicalization revision needed to
@@ -74,7 +75,7 @@ func CanonicalizeHashPayload(purpose HashPurpose, input []byte, limits Limits) (
 			return nil, err
 		}
 		return canonicalizeNode(root)
-	case IdempotencyHash, SignedMessageHash:
+	case IdempotencyHash, SignedMessageHash, FederationHash:
 		return CanonicalizeJSON(input, limits)
 	default:
 		return nil, fmt.Errorf("unknown semantic hash purpose %q", purpose)
@@ -451,7 +452,7 @@ func SemanticHash(purpose HashPurpose, canonicalPayload []byte) (Digest, error) 
 
 func validHashPurpose(purpose HashPurpose) bool {
 	switch purpose {
-	case DocumentHash, SchemaHash, ApprovalHash, ResultCacheHash, IdempotencyHash, SignedMessageHash:
+	case DocumentHash, SchemaHash, ApprovalHash, ResultCacheHash, IdempotencyHash, SignedMessageHash, FederationHash:
 		return true
 	default:
 		return false
