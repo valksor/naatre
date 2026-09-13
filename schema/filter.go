@@ -11,6 +11,7 @@ type Visibility struct {
 	Operations map[string]bool `json:"operations,omitempty"`
 	Members    map[string]bool `json:"members,omitempty"`
 	Directives map[string]bool `json:"directives,omitempty"`
+	Extensions map[string]bool `json:"extensions,omitempty"`
 	Retired    map[string]bool `json:"retired,omitempty"`
 }
 
@@ -31,10 +32,30 @@ func (d Document) Filter(visibility Visibility) (Document, error) {
 	wire.Operations = filterOperations(wire.Operations, visibility.Operations, available)
 	wire.Members = filterMembers(wire.Members, visibility.Members, available, fields)
 	wire.Directives = filterDirectives(wire.Directives, visibility.Directives, available)
+	wire.Extensions = filterExtensions(wire.Extensions, visibility.Extensions, wire.Directives)
 
 	return buildDocument(wire, ImportOptions{
 		SupportedTraits: collectTraitIDs(wire.Types, wire.Operations, wire.Members, wire.Directives, wire.Traits),
 	})
+}
+
+func filterExtensions(input []ExtensionDescriptor, visibility map[string]bool, directives []DirectiveDescriptor) []ExtensionDescriptor {
+	visibleDirectiveNames := make(map[string]bool, len(directives))
+	for _, directive := range directives {
+		visibleDirectiveNames[directive.Name] = true
+	}
+	result := make([]ExtensionDescriptor, 0, len(input))
+	for _, extension := range input {
+		if !visibility[extension.ID] {
+			continue
+		}
+		extension.Directives = filterVisible(extension.Directives, visibleDirectiveNames, func(value string) string { return value })
+		extension.Before = filterVisible(extension.Before, visibility, func(value string) string { return value })
+		extension.After = filterVisible(extension.After, visibility, func(value string) string { return value })
+		extension.Conflicts = filterVisible(extension.Conflicts, visibility, func(value string) string { return value })
+		result = append(result, extension)
+	}
+	return result
 }
 
 func filterDirectives(input []DirectiveDescriptor, visibility map[string]bool, available map[TypeID]bool) []DirectiveDescriptor {

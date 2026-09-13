@@ -168,9 +168,18 @@ function normalizeSchema(value) {
   normalizeSchemaTypes(value.types);
   normalizeSchemaCallables(value);
   normalizeSchemaDirectives(value);
+  normalizeSchemaExtensions(value);
   normalizeIDArray(value, "retired");
   normalizeIDArray(value, "traits");
   normalizeReferences(value);
+}
+
+function normalizeSchemaExtensions(value) {
+  for (const extension of normalizeIDArray(value, "extensions")) {
+    for (const member of ["points", "directives", "before", "after", "conflicts"]) {
+      normalizeStringSet(extension, member, false);
+    }
+  }
 }
 
 function normalizeSchemaDirectives(value) {

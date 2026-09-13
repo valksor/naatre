@@ -3,7 +3,9 @@ package protocol
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -17,6 +19,9 @@ var (
 // or invoking application behavior.
 func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 	if err := validateDocumentSourcePolicy(options.SourcePolicy); err != nil {
+		return nil, err
+	}
+	if err := validateExtensionOptions(options); err != nil {
 		return nil, err
 	}
 	root, err := parseJSON(input, options.Limits)
@@ -76,36 +81,118 @@ func DecodeRequest(input []byte, options DecodeOptions) (*Request, error) {
 			request.variables[variable.name] = append(json.RawMessage(nil), input[variable.value.start:variable.value.end]...)
 		}
 	}
-	if capabilities, exists := root.member("capabilities"); exists {
-		if err := expectKindPhase(input, capabilities, nodeArray, "/capabilities", "capability array", "PROTO-007", "decode"); err != nil {
-			return nil, err
-		}
-		seen := make(map[string]bool, len(capabilities.array))
-		for index, capability := range capabilities.array {
-			pointer := joinPointer("/capabilities", intString(index))
-			if capability.kind != nodeString || !capabilityPattern(capability.text) || seen[capability.text] {
-				return nil, newDiagnostic(input, "INVALID_CAPABILITY", "PROTO-007", "decode", "capabilities must be unique portable identifiers", pointer, capability.start)
-			}
-			if !options.Capabilities[capability.text] {
-				return nil, newDiagnostic(input, "UNSUPPORTED_CAPABILITY", "PROTO-007", "validate", "required capability is not supported", pointer, capability.start)
-			}
-			seen[capability.text] = true
-			request.capabilities = append(request.capabilities, capability.text)
-		}
+	request.capabilities, err = decodeRequestCapabilities(input, root, options)
+	if err != nil {
+		return nil, err
 	}
-	if extensions, exists := root.member("extensions"); exists {
-		if err := expectKindPhase(input, extensions, nodeObject, "/extensions", "extensions object", "PROTO-008", "decode"); err != nil {
-			return nil, err
-		}
-		for _, extension := range extensions.object {
-			pointer := joinPointer("/extensions", extension.name)
-			if !namespacePattern(extension.name) || !options.ExtensionNamespaces[extension.name] {
-				return nil, newDiagnostic(input, "UNSUPPORTED_EXTENSION", "PROTO-008", "validate", "extension namespace is not negotiated", pointer, extension.start)
-			}
-			request.extensions[extension.name] = append(json.RawMessage(nil), input[extension.value.start:extension.value.end]...)
-		}
+	request.negotiated = negotiatedExtensions(request.capabilities, options.Extensions)
+	if err := decodeRequestExtensions(input, root, options, request); err != nil {
+		return nil, err
 	}
 	return request, nil
+}
+
+func decodeRequestCapabilities(input []byte, root node, options DecodeOptions) ([]string, error) {
+	capabilities, exists := root.member("capabilities")
+	if !exists {
+		return nil, nil
+	}
+	if err := expectKindPhase(input, capabilities, nodeArray, "/capabilities", "capability array", "PROTO-007", "decode"); err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(capabilities.array))
+	seen := make(map[string]bool, len(capabilities.array))
+	for index, capability := range capabilities.array {
+		pointer := joinPointer("/capabilities", intString(index))
+		if capability.kind != nodeString || !capabilityPattern(capability.text) || seen[capability.text] {
+			return nil, newDiagnostic(input, "INVALID_CAPABILITY", "PROTO-007", "decode", "capabilities must be unique portable identifiers", pointer, capability.start)
+		}
+		if !options.Capabilities[capability.text] {
+			return nil, newDiagnostic(input, "UNSUPPORTED_CAPABILITY", "PROTO-007", "validate", "required capability is not supported", pointer, capability.start)
+		}
+		seen[capability.text] = true
+		result = append(result, capability.text)
+	}
+	return result, nil
+}
+
+func decodeRequestExtensions(input []byte, root node, options DecodeOptions, request *Request) error {
+	extensions, exists := root.member("extensions")
+	if !exists {
+		return nil
+	}
+	if err := expectKindPhase(input, extensions, nodeObject, "/extensions", "extensions object", "PROTO-008", "decode"); err != nil {
+		return err
+	}
+	for _, extension := range extensions.object {
+		pointer := joinPointer("/extensions", extension.name)
+		if !namespacePattern(extension.name) {
+			return newDiagnostic(input, "UNSUPPORTED_EXTENSION", "PROTO-008", "validate", "extension namespace is not negotiated", pointer, extension.start)
+		}
+		support, registered := options.Extensions[extension.name]
+		switch {
+		case registered && containsCapability(request.capabilities, support.Capability):
+			if request.document != nil && !containsCapability(request.document.Requires(), support.Capability) {
+				return newDiagnostic(input, "UNPINNED_EXTENSION", "EXT-100", "validate", "semantic extension payload capability is missing from document requirements", pointer, extension.start)
+			}
+			request.extensions[extension.name] = append(json.RawMessage(nil), input[extension.value.start:extension.value.end]...)
+		case registered && support.OptionalMetadata:
+		case options.IgnorableExtensionMetadata[extension.name]:
+		case options.ExtensionNamespaces[extension.name]:
+			request.extensions[extension.name] = append(json.RawMessage(nil), input[extension.value.start:extension.value.end]...)
+		default:
+			return newDiagnostic(input, "UNSUPPORTED_EXTENSION", "PROTO-008", "validate", "extension namespace is not negotiated", pointer, extension.start)
+		}
+	}
+	return nil
+}
+
+func validateExtensionOptions(options DecodeOptions) error {
+	capabilities := make(map[string]string, len(options.Extensions))
+	for id, support := range options.Extensions {
+		if !extensionNamespacePattern(id) || !ValidSemanticVersion(support.Version) || !capabilityPattern(support.Capability) ||
+			strings.HasPrefix(support.Capability, "core.") || strings.HasPrefix(support.Capability, "naatre.") {
+			return fmt.Errorf("invalid extension support for %q", id)
+		}
+		if prior, exists := capabilities[support.Capability]; exists {
+			return fmt.Errorf("extension capability %q is shared by %q and %q", support.Capability, prior, id)
+		}
+		if options.ExtensionNamespaces[id] || options.IgnorableExtensionMetadata[id] {
+			return fmt.Errorf("extension namespace %q has ambiguous decode policy", id)
+		}
+		capabilities[support.Capability] = id
+	}
+	for id, allowed := range options.IgnorableExtensionMetadata {
+		if allowed && (!policyExtensionNamespacePattern(id) || options.ExtensionNamespaces[id]) {
+			return fmt.Errorf("invalid or ambiguous ignorable extension namespace %q", id)
+		}
+	}
+	for id, allowed := range options.ExtensionNamespaces {
+		if allowed && !policyExtensionNamespacePattern(id) {
+			return fmt.Errorf("invalid legacy extension namespace %q", id)
+		}
+	}
+	return nil
+}
+
+func negotiatedExtensions(capabilities []string, supported map[string]ExtensionSupport) []NegotiatedExtension {
+	result := make([]NegotiatedExtension, 0, len(supported))
+	for id, support := range supported {
+		if containsCapability(capabilities, support.Capability) {
+			result = append(result, NegotiatedExtension{ID: id, Version: support.Version, Capability: support.Capability})
+		}
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].ID < result[right].ID })
+	return result
+}
+
+func containsCapability(capabilities []string, capability string) bool {
+	for _, candidate := range capabilities {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDocumentSourcePolicy(policy DocumentSourcePolicy) error {
@@ -197,6 +284,14 @@ func namespacePattern(value string) bool {
 		}
 	}
 	return true
+}
+
+func extensionNamespacePattern(value string) bool {
+	return ValidExtensionID(value)
+}
+
+func policyExtensionNamespacePattern(value string) bool {
+	return namespacePattern(value) && !strings.HasPrefix(value, "core.") && !strings.HasPrefix(value, "naatre.")
 }
 
 func intString(value int) string {

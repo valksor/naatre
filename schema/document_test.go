@@ -359,6 +359,52 @@ func TestSchemaDocumentFilteringRequiresExplicitDirectiveVisibility(t *testing.T
 	}
 }
 
+func TestSchemaDocumentFilteringRequiresExtensionVisibilityAndPrunesHiddenNames(t *testing.T) {
+	t.Parallel()
+	document := parseSchemaDocument(t, `{
+		"version":"1","canonicalVersion":"c14n-1","revision":"extension-filter-r1",
+		"types":[],"operations":[],"members":[],
+		"directives":[
+			{"id":"vendor.audit","name":"audit","version":"1","capability":"vendor.audit-1","locations":["call"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"},
+			{"id":"vendor.private","name":"privateHook","version":"1","capability":"vendor.private-1","locations":["call"],"phases":["validation"],"effect":"read","cost":1,"deterministic":true,"compatibility":"dangerous"}
+		],
+		"extensions":[
+			{"id":"com.example.public","version":"1.0.0","capability":"com.example.public-1","implementation":"com.example.public.impl-1","points":["validation"],"directives":["audit","privateHook"],"deterministic":true,"sideEffects":"none","costBehavior":"none","compatibility":"additive","security":"closed view","before":["org.example.private"]},
+			{"id":"org.example.private","version":"1.0.0","capability":"org.example.private-1","implementation":"org.example.private.impl-1","points":["validation"],"deterministic":true,"sideEffects":"none","costBehavior":"none","compatibility":"additive","security":"private view"}
+		]
+	}`)
+
+	denied, err := document.Filter(schema.Visibility{})
+	if err != nil {
+		t.Fatalf("Filter deny all: %v", err)
+	}
+	if len(denied.Extensions()) != 0 {
+		t.Fatalf("deny-all extensions = %#v", denied.Extensions())
+	}
+
+	filtered, err := document.Filter(schema.Visibility{
+		Extensions: map[string]bool{"com.example.public": true},
+		Directives: map[string]bool{"vendor.audit": true},
+	})
+	if err != nil {
+		t.Fatalf("Filter: %v", err)
+	}
+	extensions := filtered.Extensions()
+	if len(extensions) != 1 || extensions[0].ID != "com.example.public" || !slices.Equal(extensions[0].Directives, []string{"audit"}) ||
+		len(extensions[0].Before) != 0 {
+		t.Fatalf("extensions = %#v", extensions)
+	}
+	canonical, err := filtered.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hidden := range []string{"org.example.private", "privateHook", "vendor.private"} {
+		if bytes.Contains(canonical, []byte(hidden)) {
+			t.Fatalf("filtered discovery leaked %q: %s", hidden, canonical)
+		}
+	}
+}
+
 func TestSchemaDiffClassifiesLifecycleAndCompatibilityChanges(t *testing.T) {
 	t.Parallel()
 	before := parseSchemaDocument(t, `{

@@ -45,12 +45,36 @@ func DiffDocuments(before, after Document) SchemaDiff {
 	diffOperations(&diff, before.wire.Operations, after.wire.Operations)
 	diffMembers(&diff, before.wire.Members, after.wire.Members)
 	diffDirectives(&diff, before.wire.Directives, after.wire.Directives)
+	diffExtensions(&diff, before.wire.Extensions, after.wire.Extensions)
 	diffRetiredReuse(&diff, before.wire.Retired, after.wire)
 	for _, declaration := range before.wire.Types {
 		diffRetiredReuse(&diff, declaration.Retired, after.wire)
 	}
 	sort.Slice(diff.Changes, func(i, j int) bool { return diff.Changes[i].Path < diff.Changes[j].Path })
 	return diff
+}
+
+func diffExtensions(diff *SchemaDiff, before, after []ExtensionDescriptor) {
+	diffDescriptors(diff, "extension:", before, after,
+		func(value ExtensionDescriptor) string { return value.ID },
+		func(ExtensionDescriptor) ChangeClassification { return ChangeAdditive }, func(diff *SchemaDiff, left, right ExtensionDescriptor) {
+			prefix := "extension:" + left.ID
+			diff.scalar(prefix+"/version", ChangeBreaking, left.Version, right.Version)
+			diff.scalar(prefix+"/capability", ChangeBreaking, left.Capability, right.Capability)
+			diff.scalar(prefix+"/implementation", ChangeBreaking, left.Implementation, right.Implementation)
+			diff.scalar(prefix+"/points", ChangeDangerous, left.Points, right.Points)
+			diff.scalar(prefix+"/directives", ChangeDangerous, left.Directives, right.Directives)
+			diff.scalar(prefix+"/deterministic", ChangeDangerous, left.Deterministic, right.Deterministic)
+			diff.scalar(prefix+"/sideEffects", ChangeDangerous, left.SideEffects, right.SideEffects)
+			diff.scalar(prefix+"/costBehavior", ChangeDangerous, left.CostBehavior, right.CostBehavior)
+			diff.scalar(prefix+"/maxAdditionalCost", ChangeDangerous, left.MaxAdditionalCost, right.MaxAdditionalCost)
+			diff.scalar(prefix+"/compatibility", ChangeDangerous, left.Compatibility, right.Compatibility)
+			diff.scalar(prefix+"/security", ChangeDangerous, left.Security, right.Security)
+			diff.scalar(prefix+"/optionalMetadata", ChangeDangerous, left.OptionalMetadata, right.OptionalMetadata)
+			diff.scalar(prefix+"/before", ChangeDangerous, left.Before, right.Before)
+			diff.scalar(prefix+"/after", ChangeDangerous, left.After, right.After)
+			diff.scalar(prefix+"/conflicts", ChangeDangerous, left.Conflicts, right.Conflicts)
+		})
 }
 
 func diffDirectives(diff *SchemaDiff, before, after []DirectiveDescriptor) {

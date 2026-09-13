@@ -99,6 +99,7 @@ type planValidator struct {
 	fragmentSelections        int
 	fragmentExpansionExceeded bool
 	directiveCost             uint64
+	extensionCost             map[string]uint64
 	staticCost                uint64
 	nextCursorID              uint64
 	resourceLimits            ResourceLimits
@@ -108,6 +109,7 @@ func newPlanValidator(registry Snapshot, request *protocol.Request, operation pr
 	validator := &planValidator{
 		registry: registry, request: request, operation: operation,
 		fragments: make(map[string]protocol.Fragment), usedFragments: make(map[string]bool),
+		extensionCost:  make(map[string]uint64),
 		variables:      make(map[string]*plannedVariable),
 		allBindings:    make(map[string]bindingDeclaration),
 		resourceLimits: limits,
@@ -164,6 +166,27 @@ func (v *planValidator) validateCapabilities() {
 			continue
 		}
 		v.add("UNSUPPORTED_CAPABILITY", "PROTO-007", fmt.Sprintf("required capability %q was not negotiated", requirement), document.Source())
+	}
+	requestExtensions := v.request.NegotiatedExtensions()
+	reported := make(map[protocol.NegotiatedExtension]bool, len(requestExtensions))
+	for _, extension := range requestExtensions {
+		reported[extension] = true
+	}
+	for _, descriptor := range v.registry.extensions {
+		exact := protocol.NegotiatedExtension{ID: descriptor.ID, Version: descriptor.Version, Capability: descriptor.Capability}
+		if slices.Contains(negotiated, descriptor.Capability) && !reported[exact] {
+			v.add("UNSUPPORTED_EXTENSION", "EXT-100", fmt.Sprintf("requested extension capability %q is missing exact runtime tuple %q@%s", descriptor.Capability, descriptor.ID, descriptor.Version), document.Source())
+		}
+	}
+	for _, extension := range requestExtensions {
+		if !v.registry.supportsNegotiatedExtension(extension) {
+			v.add("UNSUPPORTED_EXTENSION", "EXT-100", fmt.Sprintf("negotiated extension %q does not match the frozen runtime", extension.ID), document.Source())
+			continue
+		}
+		if _, present := v.request.Extension(extension.ID); !present || slices.Contains(requirements, extension.Capability) {
+			continue
+		}
+		v.add("UNPINNED_EXTENSION", "EXT-100", fmt.Sprintf("semantic extension %q requires exact capability %q in the document", extension.ID, extension.Capability), document.Source())
 	}
 }
 

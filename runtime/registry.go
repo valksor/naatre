@@ -287,6 +287,7 @@ type Registry struct {
 	types         schema.Snapshot
 	definitions   map[string]Definition
 	directives    map[string]registeredDirective
+	extensions    map[string]schema.ExtensionDescriptor
 	authorization AuthorizationConfig
 	interceptors  []registeredInterceptor
 	transactions  TransactionConfig
@@ -298,13 +299,17 @@ type Snapshot struct {
 	types         schema.Snapshot
 	definitions   map[string]Definition
 	directives    map[string]registeredDirective
+	extensions    []schema.ExtensionDescriptor
 	authorization AuthorizationConfig
 	interceptors  []registeredInterceptor
 	transactions  TransactionConfig
 }
 
 func NewRegistry(types schema.Snapshot) *Registry {
-	return &Registry{types: types, definitions: make(map[string]Definition), directives: builtInDirectives()}
+	return &Registry{
+		types: types, definitions: make(map[string]Definition), directives: builtInDirectives(),
+		extensions: make(map[string]schema.ExtensionDescriptor),
+	}
 }
 
 // Register validates and records one explicit public definition.
@@ -357,6 +362,10 @@ func (r *Registry) RegisterDirective(definition DirectiveDefinition) error {
 func (r *Registry) Freeze() (Snapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	extensions, directives, err := freezeExtensions(r.extensions, r.directives)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	for _, registration := range r.interceptors {
 		if !interceptorHasRegisteredTarget(registration, r.definitions) {
 			return Snapshot{}, fmt.Errorf("%s interceptor has no registered target", registration.Level)
@@ -369,7 +378,7 @@ func (r *Registry) Freeze() (Snapshot, error) {
 	}
 	r.frozen = true
 	return Snapshot{
-		types: r.types, definitions: definitions, directives: cloneRegisteredDirectives(r.directives), authorization: r.authorization,
+		types: r.types, definitions: definitions, directives: directives, extensions: extensions, authorization: r.authorization,
 		interceptors: slices.Clone(r.interceptors),
 		transactions: r.transactions,
 	}, nil

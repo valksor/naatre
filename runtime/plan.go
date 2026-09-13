@@ -45,13 +45,14 @@ const (
 // It deliberately excludes handlers, correlation IDs, variable values, policy
 // identities, and other per-request state.
 type PlanDescription struct {
-	Operation           string                    `json:"operation"`
-	Kind                protocol.OperationKind    `json:"kind"`
-	Atomicity           protocol.AtomicityMode    `json:"atomicity"`
-	Requirements        []string                  `json:"requirements,omitempty"`
-	VariableDefinitions []PlanVariableDescription `json:"variableDefinitions,omitempty"`
-	Nodes               []PlanNodeDescription     `json:"nodes"`
-	Result              SelectedResultDescription `json:"result"`
+	Operation           string                         `json:"operation"`
+	Kind                protocol.OperationKind         `json:"kind"`
+	Atomicity           protocol.AtomicityMode         `json:"atomicity"`
+	Requirements        []string                       `json:"requirements,omitempty"`
+	Extensions          []protocol.NegotiatedExtension `json:"extensions,omitempty"`
+	VariableDefinitions []PlanVariableDescription      `json:"variableDefinitions,omitempty"`
+	Nodes               []PlanNodeDescription          `json:"nodes"`
+	Result              SelectedResultDescription      `json:"result"`
 }
 
 // PlanNodeDescription identifies one resolved language node without exposing
@@ -151,6 +152,7 @@ func (p *Plan) Description() PlanDescription {
 	return PlanDescription{
 		Operation: p.operationName, Kind: p.kind, Atomicity: p.atomicity,
 		Requirements:        append([]string(nil), p.requirements...),
+		Extensions:          append([]protocol.NegotiatedExtension(nil), p.extensions...),
 		VariableDefinitions: describeVariables(p.variables),
 		Nodes:               describePlanNodes(p.nodes), Result: selectedObject(p.nodes, p.types),
 	}

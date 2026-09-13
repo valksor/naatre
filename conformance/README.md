@@ -82,6 +82,13 @@ parallel branches, bindings, directives, and edge-state propagation. The core
 page vector exercises bounded paging without an input cursor and verifies the
 standard opaque-cursor page result.
 
+`v1/extensions.json` fixes the `core.extensions-1` descriptor, exact
+version/capability negotiation, optional-metadata, deterministic ordering,
+conflict, cycle, malicious ownership, and persisted-identity boundaries. The Go
+runtime consumes every vector directly; extension behavior is limited to the
+closed directive API, while arbitrary hostile in-process code still requires an
+external isolation boundary.
+
 `v1/collections.json` fixes the `collection.page-1` composite-position
 boundaries, scope bindings, safe failure code, live/snapshot modes, and static
 cost contract. The Go runtime supplies HMAC-protected versioned cursors,

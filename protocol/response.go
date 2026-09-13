@@ -66,6 +66,7 @@ type Response struct {
 	hasData      bool
 	errors       []ResponseError
 	capabilities []string
+	negotiated   []NegotiatedExtension
 	extensions   map[string]json.RawMessage
 }
 
@@ -84,12 +85,19 @@ func (r *Response) Capabilities() []string {
 	return cloneSlice(r.capabilities)
 }
 
+func (r *Response) NegotiatedExtensions() []NegotiatedExtension {
+	return cloneSlice(r.negotiated)
+}
+
 func (r *Response) Extension(namespace string) (json.RawMessage, bool) {
 	return cloneRawLookup(r.extensions, namespace)
 }
 
 // DecodeResponse strictly decodes one transport-independent response.
 func DecodeResponse(input []byte, options DecodeOptions) (*Response, error) {
+	if err := validateExtensionOptions(options); err != nil {
+		return nil, err
+	}
 	root, err := parseJSON(input, options.Limits)
 	if err != nil {
 		return nil, err
@@ -106,12 +114,13 @@ func DecodeResponse(input []byte, options DecodeOptions) (*Response, error) {
 		return nil, err
 	}
 	decodeResponseData(input, root, response)
-	if err := decodeResponseErrors(input, root, options, response); err != nil {
+	if err := decodeResponseErrors(input, root, options, response, candidateResponseCapabilities(root)); err != nil {
 		return nil, err
 	}
 	if err := decodeResponseCapabilities(input, root, options, response); err != nil {
 		return nil, err
 	}
+	response.negotiated = negotiatedExtensions(response.capabilities, options.Extensions)
 	if err := decodeResponseExtensions(input, root, options, response); err != nil {
 		return nil, err
 	}
@@ -146,13 +155,27 @@ func decodeResponseData(input []byte, root node, response *Response) {
 	}
 }
 
-func decodeResponseErrors(input []byte, root node, options DecodeOptions, response *Response) error {
+func candidateResponseCapabilities(root node) []string {
+	capabilities, exists := root.member("capabilities")
+	if !exists || capabilities.kind != nodeArray {
+		return nil
+	}
+	result := make([]string, 0, len(capabilities.array))
+	for _, capability := range capabilities.array {
+		if capability.kind == nodeString {
+			result = append(result, capability.text)
+		}
+	}
+	return result
+}
+
+func decodeResponseErrors(input []byte, root node, options DecodeOptions, response *Response, capabilities []string) error {
 	if errorNode, exists := root.member("errors"); exists {
 		if errorNode.kind != nodeArray || len(errorNode.array) == 0 {
 			return responseDiagnostic(input, "INVALID_ERRORS", "PROTO-103", "errors must be a non-empty array when present", "/errors", errorNode.start)
 		}
 		for index, current := range errorNode.array {
-			responseError, err := decodeResponseError(input, current, joinPointer("/errors", intString(index)), options)
+			responseError, err := decodeResponseError(input, current, joinPointer("/errors", intString(index)), options, capabilities)
 			if err != nil {
 				return err
 			}
@@ -190,7 +213,7 @@ func decodeResponseExtensions(input []byte, root node, options DecodeOptions, re
 	if !exists {
 		return responseDiagnostic(input, "MISSING_FIELD", "PROTO-100", "response requires extensions object", "/extensions", root.start)
 	}
-	decoded, err := decodeNamespacedValues(input, extensions, "/extensions", "PROTO-100", options)
+	decoded, err := decodeNamespacedValues(input, extensions, "/extensions", "PROTO-100", options, response.capabilities)
 	if err != nil {
 		return err
 	}
@@ -198,7 +221,7 @@ func decodeResponseExtensions(input []byte, root node, options DecodeOptions, re
 	return nil
 }
 
-func decodeResponseError(input []byte, value node, pointer string, options DecodeOptions) (ResponseError, error) {
+func decodeResponseError(input []byte, value node, pointer string, options DecodeOptions, capabilities []string) (ResponseError, error) {
 	if value.kind != nodeObject {
 		return ResponseError{}, responseDiagnostic(input, "TYPE_MISMATCH", "PROTO-103", "response error must be an object", pointer, value.start)
 	}
@@ -227,7 +250,7 @@ func decodeResponseError(input []byte, value node, pointer string, options Decod
 		result.source = &decoded
 	}
 	if details, exists := value.member("details"); exists {
-		decoded, err := decodeResponseDetails(input, details, pointer, options)
+		decoded, err := decodeResponseDetails(input, details, pointer, options, capabilities)
 		if err != nil {
 			return ResponseError{}, err
 		}
@@ -256,20 +279,30 @@ func decodeResponsePath(input []byte, path node, pointer string) ([]PathSegment,
 	return result, nil
 }
 
-func decodeResponseDetails(input []byte, details node, pointer string, options DecodeOptions) (map[string]json.RawMessage, error) {
-	return decodeNamespacedValues(input, details, joinPointer(pointer, "details"), "PROTO-103", options)
+func decodeResponseDetails(input []byte, details node, pointer string, options DecodeOptions, capabilities []string) (map[string]json.RawMessage, error) {
+	return decodeNamespacedValues(input, details, joinPointer(pointer, "details"), "PROTO-103", options, capabilities)
 }
 
-func decodeNamespacedValues(input []byte, value node, pointer, clause string, options DecodeOptions) (map[string]json.RawMessage, error) {
+func decodeNamespacedValues(input []byte, value node, pointer, clause string, options DecodeOptions, capabilities []string) (map[string]json.RawMessage, error) {
 	if value.kind != nodeObject {
 		return nil, responseDiagnostic(input, "TYPE_MISMATCH", clause, "namespaced values must be an object", pointer, value.start)
 	}
 	result := make(map[string]json.RawMessage, len(value.object))
 	for _, member := range value.object {
-		if !namespacePattern(member.name) || !options.ExtensionNamespaces[member.name] {
+		if !namespacePattern(member.name) {
 			return nil, responseDiagnostic(input, "UNNEGOTIATED_EXTENSION", clause, "response namespace was not negotiated", joinPointer(pointer, member.name), member.start)
 		}
-		result[member.name] = append(json.RawMessage(nil), input[member.value.start:member.value.end]...)
+		support, registered := options.Extensions[member.name]
+		switch {
+		case registered && containsCapability(capabilities, support.Capability):
+			result[member.name] = append(json.RawMessage(nil), input[member.value.start:member.value.end]...)
+		case registered && support.OptionalMetadata:
+		case options.IgnorableExtensionMetadata[member.name]:
+		case options.ExtensionNamespaces[member.name]:
+			result[member.name] = append(json.RawMessage(nil), input[member.value.start:member.value.end]...)
+		default:
+			return nil, responseDiagnostic(input, "UNNEGOTIATED_EXTENSION", clause, "response namespace was not negotiated", joinPointer(pointer, member.name), member.start)
+		}
 	}
 	return result, nil
 }

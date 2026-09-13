@@ -1,0 +1,198 @@
+{
+  "profile": "core.extensions-1",
+  "descriptors": [
+    {
+      "id": "com.example.alpha",
+      "version": "1.0.0",
+      "capability": "com.example.alpha-1",
+      "implementation": "com.example.alpha.impl-1",
+      "points": ["validation"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "additive",
+      "security": "closed validation view only"
+    },
+    {
+      "id": "org.example.beta",
+      "version": "2.1.0",
+      "capability": "org.example.beta-2",
+      "implementation": "org.example.beta.impl-2",
+      "points": ["validation"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "additive",
+      "security": "closed validation view only",
+      "before": ["com.example.alpha"]
+    },
+    {
+      "id": "com.example.conflict-a",
+      "version": "1.0.0",
+      "capability": "com.example.conflict-a-1",
+      "implementation": "com.example.conflict-a.impl-1",
+      "points": ["validation"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "dangerous",
+      "security": "closed validation view only",
+      "conflicts": ["org.example.conflict-b"]
+    },
+    {
+      "id": "org.example.conflict-b",
+      "version": "1.0.0",
+      "capability": "org.example.conflict-b-1",
+      "implementation": "org.example.conflict-b.impl-1",
+      "points": ["validation"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "dangerous",
+      "security": "closed validation view only"
+    },
+    {
+      "id": "com.example.cycle-a",
+      "version": "1.0.0",
+      "capability": "com.example.cycle-a-1",
+      "implementation": "com.example.cycle-a.impl-1",
+      "points": ["validation"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "dangerous",
+      "security": "closed validation view only",
+      "before": ["org.example.cycle-b"]
+    },
+    {
+      "id": "org.example.cycle-b",
+      "version": "1.0.0",
+      "capability": "org.example.cycle-b-1",
+      "implementation": "org.example.cycle-b.impl-1",
+      "points": ["validation"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "dangerous",
+      "security": "closed validation view only",
+      "before": ["com.example.cycle-a"]
+    },
+    {
+      "id": "com.example.malicious",
+      "version": "1.0.0",
+      "capability": "com.example.malicious-1",
+      "implementation": "com.example.malicious.impl-1",
+      "points": ["validation"],
+      "directives": ["hiddenWrite"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "dangerous",
+      "security": "attempts to claim an unregistered directive"
+    },
+    {
+      "id": "net.example.hint",
+      "version": "1.0.0",
+      "capability": "net.example.hint-1",
+      "implementation": "net.example.hint.impl-1",
+      "points": ["schema"],
+      "deterministic": true,
+      "sideEffects": "none",
+      "costBehavior": "none",
+      "compatibility": "additive",
+      "security": "inert schema metadata",
+      "optionalMetadata": true
+    }
+  ],
+  "registryCases": [
+    {
+      "name": "deterministic-before-order",
+      "extensions": ["com.example.alpha", "org.example.beta"],
+      "order": ["org.example.beta", "com.example.alpha"]
+    },
+    {
+      "name": "declared-conflict",
+      "extensions": ["com.example.conflict-a", "org.example.conflict-b"],
+      "errorContains": "conflict"
+    },
+    {
+      "name": "ordering-cycle",
+      "extensions": ["com.example.cycle-a", "org.example.cycle-b"],
+      "errorContains": "cycle"
+    },
+    {
+      "name": "malicious-unregistered-directive",
+      "extensions": ["com.example.malicious"],
+      "errorContains": "unregistered custom directive"
+    }
+  ],
+  "protocolCases": [
+    {
+      "name": "exact-required-version",
+      "direction": "request",
+      "supports": ["com.example.alpha"],
+      "input": "{\"version\":\"1\",\"capabilities\":[\"com.example.alpha-1\"],\"extensions\":{\"com.example.alpha\":{\"level\":1}},\"document\":{\"requires\":[\"com.example.alpha-1\"],\"operations\":[]}}",
+      "negotiated": ["com.example.alpha@1.0.0"]
+    },
+    {
+      "name": "required-version-skew",
+      "direction": "request",
+      "supports": ["com.example.alpha"],
+      "input": "{\"version\":\"1\",\"capabilities\":[\"com.example.alpha-2\"],\"document\":{\"requires\":[\"com.example.alpha-2\"],\"operations\":[]}}",
+      "errorCode": "UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "name": "unknown-required",
+      "direction": "request",
+      "supports": ["com.example.alpha"],
+      "input": "{\"version\":\"1\",\"capabilities\":[\"org.unknown.semantic-1\"],\"document\":{\"requires\":[\"org.unknown.semantic-1\"],\"operations\":[]}}",
+      "errorCode": "UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "name": "required-payload-without-capability",
+      "direction": "request",
+      "supports": ["com.example.alpha"],
+      "input": "{\"version\":\"1\",\"extensions\":{\"com.example.alpha\":{}},\"document\":{\"operations\":[]}}",
+      "errorCode": "UNSUPPORTED_EXTENSION"
+    },
+    {
+      "name": "semantic-payload-without-document-requirement",
+      "direction": "request",
+      "supports": ["com.example.alpha"],
+      "input": "{\"version\":\"1\",\"capabilities\":[\"com.example.alpha-1\"],\"extensions\":{\"com.example.alpha\":{}},\"document\":{\"operations\":[]}}",
+      "errorCode": "UNPINNED_EXTENSION"
+    },
+    {
+      "name": "unknown-optional-explicitly-ignorable",
+      "direction": "request",
+      "ignorable": ["org.unknown.trace"],
+      "input": "{\"version\":\"1\",\"extensions\":{\"org.unknown.trace\":{\"value\":\"discard\"}},\"document\":{\"operations\":[]}}",
+      "negotiated": []
+    },
+    {
+      "name": "unknown-optional-not-allowlisted",
+      "direction": "request",
+      "input": "{\"version\":\"1\",\"extensions\":{\"org.unknown.trace\":{}},\"document\":{\"operations\":[]}}",
+      "errorCode": "UNSUPPORTED_EXTENSION"
+    },
+    {
+      "name": "known-inert-metadata-without-capability",
+      "direction": "request",
+      "supports": ["net.example.hint"],
+      "input": "{\"version\":\"1\",\"extensions\":{\"net.example.hint\":{\"value\":\"discard\"}},\"document\":{\"operations\":[]}}",
+      "negotiated": []
+    },
+    {
+      "name": "response-reports-exact-version",
+      "direction": "response",
+      "supports": ["com.example.alpha"],
+      "input": "{\"requestId\":\"s-1\",\"data\":{},\"capabilities\":[\"com.example.alpha-1\"],\"extensions\":{\"com.example.alpha\":{\"ok\":true}}}",
+      "negotiated": ["com.example.alpha@1.0.0"]
+    }
+  ],
+  "persistedIdentity": {
+    "left": "{\"requires\":[\"com.example.alpha-1\"],\"operations\":[]}",
+    "right": "{\"requires\":[\"com.example.alpha-2\"],\"operations\":[]}",
+    "equal": false
+  }
+}

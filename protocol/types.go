@@ -63,10 +63,33 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
+// ExtensionSupport pins one reverse-DNS namespace to the exact semantics a
+// decoder supports. OptionalMetadata may be ignored only when the payload is
+// inert: it cannot affect execution, identity, authorization, or result
+// interpretation.
+type ExtensionSupport struct {
+	Version          string
+	Capability       string
+	OptionalMetadata bool
+}
+
+// NegotiatedExtension is the request-neutral extension identity selected by
+// exact capability negotiation. It never contains the extension payload.
+type NegotiatedExtension struct {
+	ID         string `json:"id"`
+	Version    string `json:"version"`
+	Capability string `json:"capability"`
+}
+
 // DecodeOptions configures supported capabilities and extension namespaces.
 type DecodeOptions struct {
-	Limits              Limits
-	Capabilities        map[string]bool
+	Limits                     Limits
+	Capabilities               map[string]bool
+	Extensions                 map[string]ExtensionSupport
+	IgnorableExtensionMetadata map[string]bool
+	// ExtensionNamespaces is the legacy exact allowlist for raw namespaced
+	// values. It does not imply a version or capability and cannot activate
+	// runtime semantics.
 	ExtensionNamespaces map[string]bool
 	SourcePolicy        DocumentSourcePolicy
 }
@@ -350,6 +373,7 @@ type Request struct {
 	persisted    *PersistedReference
 	variables    map[string]json.RawMessage
 	capabilities []string
+	negotiated   []NegotiatedExtension
 	extensions   map[string]json.RawMessage
 }
 
@@ -410,6 +434,10 @@ func (r *Request) Extension(namespace string) (json.RawMessage, bool) {
 
 func (r *Request) Capabilities() []string {
 	return cloneSlice(r.capabilities)
+}
+
+func (r *Request) NegotiatedExtensions() []NegotiatedExtension {
+	return cloneSlice(r.negotiated)
 }
 
 func cloneSelections(input []Selection) []Selection {

@@ -205,6 +205,11 @@ Invalid: canonicalization uses the machine locale or current timezone.
   language names use the same invocable identifier grammar as document syntax.
   Runtime callbacks are host behavior bound to the descriptor and are never
   serialized or hashed as code.
+- **TYPE-413:** An extension descriptor is the portable contract defined by
+  EXT-001 through EXT-003. Extension arrays sort by stable ID. Their `points`,
+  `directives`, `before`, `after`, and `conflicts` members are duplicate-free
+  sets sorted by canonical spelling. Duplicate IDs or capabilities are invalid
+  within one schema document.
 
 ### Lifecycle and compatibility
 
@@ -252,8 +257,9 @@ Invalid: canonicalization uses the machine locale or current timezone.
   metadata is returned. #106 owns the HTTP adapter, stable failure codes,
   migration reports, and rolling-revision integration for this contract.
 - **TYPE-431:** Visibility is a deny-by-default allow-list of stable type,
-  field, enum-member, variant, operation, object-member, directive, and retired IDs. A
-  filtered document MUST contain no hidden declaration or retired name and MUST
+  field, enum-member, variant, operation, object-member, directive, extension,
+  and retired IDs. A filtered document MUST contain no hidden declaration,
+  extension relationship, directive ownership name, or retired name and MUST
   pass the same import and reference validation as a complete document.
 - **TYPE-432:** Filtering may prune output fields and open enum/union members.
   It MUST remove a selected declaration whose referenced type is hidden and
@@ -264,7 +270,10 @@ Invalid: canonicalization uses the machine locale or current timezone.
 - **TYPE-434:** A visible directive is retained only when every argument type
   remains visible or is a built-in scalar. Hiding a directive never removes its
   capability from an already approved revision implicitly; capability policy is
-  evaluated independently by the discovery consumer.
+  evaluated independently by the discovery consumer. A visible extension is
+  retained as a reference-only descriptor when one of its owned directives is
+  hidden; hidden directive names and relationships to hidden extensions are
+  pruned from that descriptor.
 - **TYPE-433:** One discovery response is derived from exactly one immutable
   revision and one authorization decision. Types, operations, members, hash,
   ETag, or diff metadata from different revisions MUST NOT be combined. Cache

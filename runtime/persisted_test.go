@@ -53,6 +53,40 @@ func TestPersistedResolverRegistersResolvesAndPreparesApprovedDocument(t *testin
 	}
 }
 
+func TestPersistedResolverRejectsSemanticExtensionPayloadMissingFromDocumentRequirements(t *testing.T) {
+	t.Parallel()
+	document := decodePersistedDocument(t, `{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"text"}}]}]}`)
+	record := persistedRecord(t, "tenant-a", document)
+	store := runtime.NewMemoryPersistedStore()
+
+	registry := runtime.NewRegistry(coreTypes(t))
+	registerExtensionRoot(t, registry)
+	mustRegisterExtension(t, registry, runtimeExtension("com.example.audit", "1.0.0", "com.example.audit-1", "com.example.audit.impl-1"))
+	snapshot := frozenRegistry(t, registry)
+	decode, err := snapshot.DecodeOptions(protocol.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("DecodeOptions: %v", err)
+	}
+	resolver, err := runtime.NewPersistedResolver(store, runtime.PersistedResolverOptions{
+		Mode: runtime.PersistedRegisterAtDeploy, SchemaRevision: "schema-1", AuthorizationPolicyRevision: "policy-1", Decode: decode,
+	})
+	if err != nil {
+		t.Fatalf("NewPersistedResolver: %v", err)
+	}
+	if err := resolver.RegisterDeploy(context.Background(), record); err != nil {
+		t.Fatalf("RegisterDeploy: %v", err)
+	}
+
+	input := []byte(fmt.Sprintf(`{"version":"1","operation":"Q","capabilities":["com.example.audit-1"],"extensions":{"com.example.audit":{"level":2}},"persisted":{"algorithm":"%s","canonicalVersion":"%s","digest":"%s"}}`,
+		record.Reference.Algorithm, record.Reference.CanonicalVersion, record.Reference.Digest))
+	ctx := runtime.WithPrincipal(context.Background(), runtime.Principal{Subject: "user-a", Tenant: "tenant-a"})
+	_, _, err = resolver.Admit(ctx, snapshot, input, runtime.PrepareOptions{})
+	var validation *runtime.ValidationErrors
+	if !errors.As(err, &validation) || len(validation.Issues()) == 0 || validation.Issues()[0].Diagnostic.Code != "UNPINNED_EXTENSION" {
+		t.Fatalf("Admit error = %#v", err)
+	}
+}
+
 func TestPersistedLifecycleRevokesNewAdmissionMigratesAndEvicts(t *testing.T) {
 	t.Parallel()
 

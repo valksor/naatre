@@ -139,7 +139,8 @@ func (v *planValidator) planDirectives(nodes []planNode) {
 		for directiveIndex := range node.directives {
 			directive := &node.directives[directiveIndex]
 			decision, ok := v.planDirective(directive.definition, directive.invocation, node)
-			if !ok || !v.addDirectiveCost(0, decision.AdditionalCost, directive.invocation.Source()) ||
+			if !ok || !v.addExtensionDirectiveCost(directive.definition, decision.AdditionalCost, directive.invocation.Source()) ||
+				!v.addDirectiveCost(0, decision.AdditionalCost, directive.invocation.Source()) ||
 				!v.addPlannedResourceCost(decision.AdditionalCost, directive.invocation.Source()) {
 				continue
 			}
@@ -150,6 +151,20 @@ func (v *planValidator) planDirectives(nodes []planNode) {
 		}
 		v.planDirectives(node.children)
 	}
+}
+
+func (v *planValidator) addExtensionDirectiveCost(definition registeredDirective, additional uint64, source protocol.Source) bool {
+	if definition.extensionID == "" || additional == 0 {
+		return true
+	}
+	current := v.extensionCost[definition.extensionID]
+	maximum := definition.extensionMaxAdditionalCost
+	if additional > maximum || current > maximum-additional {
+		v.add("EXTENSION_COST_EXCEEDED", "EXT-105", fmt.Sprintf("extension %q exceeded its additional cost bound", definition.extensionID), source)
+		return false
+	}
+	v.extensionCost[definition.extensionID] = current + additional
+	return true
 }
 
 func (v *planValidator) applyDirectiveEffects(directives []protocol.Directive, node *planNode) {

@@ -27,6 +27,7 @@ Documents:
 14. [Process admission and lifecycle](operations.md)
 15. [Streaming and incremental delivery](streaming.md)
 16. [Federation composition and execution](federation.md)
+17. [Namespaced protocol and runtime extensions](extensions.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

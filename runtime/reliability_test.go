@@ -161,7 +161,14 @@ func TestMemoryIdempotencyStoreRejectsMismatchesExpiresResultsAndClonesReplays(t
 	if _, err := store.Claim(context.Background(), mismatch); !errors.Is(err, runtime.ErrIdempotencyConflict) {
 		t.Fatalf("mismatched Claim error = %v", err)
 	}
-	want := runtime.Outcome{Data: map[string]any{"nested": map[string]any{"value": "original"}}, Effects: runtime.EffectApplied}
+	want := runtime.Outcome{
+		Data:         map[string]any{"nested": map[string]any{"value": "original"}},
+		Capabilities: []string{"com.example.audit-1"},
+		Extensions: []protocol.NegotiatedExtension{{
+			ID: "com.example.audit", Version: "1.0.0", Capability: "com.example.audit-1",
+		}},
+		Effects: runtime.EffectApplied,
+	}
 	if err := store.Complete(context.Background(), runtime.IdempotencyCompletion{
 		Scope: request.Scope, Operation: request.Operation, Key: request.Key, Fingerprint: request.Fingerprint,
 		Fence: owner.Fence, Outcome: want, Now: now, Retention: time.Hour,
@@ -169,13 +176,19 @@ func TestMemoryIdempotencyStoreRejectsMismatchesExpiresResultsAndClonesReplays(t
 		t.Fatalf("Complete: %v", err)
 	}
 	want.Data["nested"].(map[string]any)["value"] = "mutated"
+	want.Capabilities[0] = "mutated"
+	want.Extensions[0].Version = "mutated"
 	replay, err := store.Claim(context.Background(), request)
-	if err != nil || replay.Outcome.Data["nested"].(map[string]any)["value"] != "original" {
+	if err != nil || replay.Outcome.Data["nested"].(map[string]any)["value"] != "original" ||
+		replay.Outcome.Capabilities[0] != "com.example.audit-1" || replay.Outcome.Extensions[0].Version != "1.0.0" {
 		t.Fatalf("replay = %#v, %v", replay, err)
 	}
 	replay.Outcome.Data["nested"].(map[string]any)["value"] = "mutated-again"
+	replay.Outcome.Capabilities[0] = "mutated-again"
+	replay.Outcome.Extensions[0].Version = "mutated-again"
 	secondReplay, err := store.Claim(context.Background(), request)
-	if err != nil || secondReplay.Outcome.Data["nested"].(map[string]any)["value"] != "original" {
+	if err != nil || secondReplay.Outcome.Data["nested"].(map[string]any)["value"] != "original" ||
+		secondReplay.Outcome.Capabilities[0] != "com.example.audit-1" || secondReplay.Outcome.Extensions[0].Version != "1.0.0" {
 		t.Fatalf("second replay = %#v, %v", secondReplay, err)
 	}
 	expired := request

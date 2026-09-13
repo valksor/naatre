@@ -235,6 +235,7 @@ type ExportOptions struct {
 	Revision     string
 	Capabilities []string
 	Directives   []DirectiveDescriptor
+	Extensions   []ExtensionDescriptor
 	Retired      []RetiredIdentity
 	References   []SchemaReference
 	Traits       []TraitDescriptor
@@ -253,6 +254,7 @@ type documentWire struct {
 	Operations       []OperationDescriptor `json:"operations"`
 	Members          []MemberDescriptor    `json:"members"`
 	Directives       []DirectiveDescriptor `json:"directives,omitempty"`
+	Extensions       []ExtensionDescriptor `json:"extensions,omitempty"`
 	Retired          []RetiredIdentity     `json:"retired,omitempty"`
 	References       []SchemaReference     `json:"references,omitempty"`
 	Traits           []TraitDescriptor     `json:"traits,omitempty"`
@@ -278,7 +280,7 @@ func ExportDocument(snapshot Snapshot, operations []OperationDescriptor, members
 	return buildDocument(documentWire{
 		Version: SchemaDocumentVersion, CanonicalVersion: SchemaCanonicalVersion,
 		Revision: options.Revision, Capabilities: slices.Clone(options.Capabilities), Types: types,
-		Operations: cloneOperations(operations), Members: cloneMembers(members), Directives: directives, Retired: slices.Clone(options.Retired),
+		Operations: cloneOperations(operations), Members: cloneMembers(members), Directives: directives, Extensions: cloneExtensionDescriptors(options.Extensions), Retired: slices.Clone(options.Retired),
 		References: slices.Clone(options.References), Traits: cloneTraits(options.Traits),
 	}, ImportOptions{SupportedTraits: collectTraitIDs(types, operations, members, directives, options.Traits)})
 }
@@ -326,6 +328,9 @@ func (d Document) Types() []TypeDeclaration          { return cloneTypeDeclarati
 func (d Document) Operations() []OperationDescriptor { return cloneOperations(d.wire.Operations) }
 func (d Document) Members() []MemberDescriptor       { return cloneMembers(d.wire.Members) }
 func (d Document) Directives() []DirectiveDescriptor { return cloneDirectives(d.wire.Directives) }
+func (d Document) Extensions() []ExtensionDescriptor {
+	return cloneExtensionDescriptors(d.wire.Extensions)
+}
 
 // ExportOptions returns a detached copy of the document-level lifecycle and
 // extension metadata needed to reproduce this document from a registry.
@@ -333,6 +338,7 @@ func (d Document) ExportOptions() ExportOptions {
 	options := ExportOptions{Revision: d.wire.Revision}
 	options.Capabilities = slices.Clone(d.wire.Capabilities)
 	options.Directives = cloneDirectives(d.wire.Directives)
+	options.Extensions = cloneExtensionDescriptors(d.wire.Extensions)
 	options.Retired = slices.Clone(d.wire.Retired)
 	options.References = slices.Clone(d.wire.References)
 	options.Traits = cloneTraits(d.wire.Traits)
@@ -425,10 +431,14 @@ func normalizeDocument(wire *documentWire) {
 	for index := range wire.Directives {
 		normalizeDirective(&wire.Directives[index])
 	}
+	for index := range wire.Extensions {
+		normalizeExtension(&wire.Extensions[index])
+	}
 	sort.Slice(wire.Types, func(i, j int) bool { return wire.Types[i].ID < wire.Types[j].ID })
 	sort.Slice(wire.Operations, func(i, j int) bool { return wire.Operations[i].ID < wire.Operations[j].ID })
 	sort.Slice(wire.Members, func(i, j int) bool { return wire.Members[i].ID < wire.Members[j].ID })
 	sort.Slice(wire.Directives, func(i, j int) bool { return wire.Directives[i].ID < wire.Directives[j].ID })
+	sort.Slice(wire.Extensions, func(i, j int) bool { return wire.Extensions[i].ID < wire.Extensions[j].ID })
 	sort.Slice(wire.Retired, func(i, j int) bool { return wire.Retired[i].ID < wire.Retired[j].ID })
 	sort.Slice(wire.References, func(i, j int) bool {
 		if wire.References[i].URI == wire.References[j].URI {
@@ -530,6 +540,14 @@ func normalizeDirective(directive *DirectiveDescriptor) {
 	}
 }
 
+func normalizeExtension(extension *ExtensionDescriptor) {
+	slices.Sort(extension.Points)
+	slices.Sort(extension.Directives)
+	slices.Sort(extension.Before)
+	slices.Sort(extension.After)
+	slices.Sort(extension.Conflicts)
+}
+
 func validateDocument(wire documentWire, options ImportOptions) error {
 	if err := validateDocumentHeader(wire); err != nil {
 		return err
@@ -586,7 +604,26 @@ func validateActiveDeclarations(wire documentWire, options ImportOptions) (map[s
 			return nil, nil, err
 		}
 	}
+	if err := validateExtensionDeclarations(wire.Extensions); err != nil {
+		return nil, nil, err
+	}
 	return activeIDs, activeNames, nil
+}
+
+func validateExtensionDeclarations(extensions []ExtensionDescriptor) error {
+	seenIDs := make(map[string]bool, len(extensions))
+	seenCapabilities := make(map[string]bool, len(extensions))
+	for _, extension := range extensions {
+		if err := ValidateExtensionDescriptor(extension); err != nil {
+			return err
+		}
+		if seenIDs[extension.ID] || seenCapabilities[extension.Capability] {
+			return fmt.Errorf("duplicate extension identity or capability %q", extension.ID)
+		}
+		seenIDs[extension.ID] = true
+		seenCapabilities[extension.Capability] = true
+	}
+	return nil
 }
 
 func validateDirectiveDescriptor(directive DirectiveDescriptor, activeIDs, activeNames map[string]bool, options ImportOptions) error {
@@ -1072,8 +1109,16 @@ func cloneDocumentWire(input documentWire) documentWire {
 		Version: input.Version, CanonicalVersion: input.CanonicalVersion, Revision: input.Revision,
 		Capabilities: slices.Clone(input.Capabilities), Types: cloneTypeDeclarations(input.Types),
 		Operations: cloneOperations(input.Operations), Members: cloneMembers(input.Members), Retired: slices.Clone(input.Retired),
-		Directives: cloneDirectives(input.Directives), References: slices.Clone(input.References), Traits: cloneTraits(input.Traits),
+		Directives: cloneDirectives(input.Directives), Extensions: cloneExtensionDescriptors(input.Extensions), References: slices.Clone(input.References), Traits: cloneTraits(input.Traits),
 	}
+}
+
+func cloneExtensionDescriptors(input []ExtensionDescriptor) []ExtensionDescriptor {
+	result := make([]ExtensionDescriptor, len(input))
+	for index := range input {
+		result[index] = CloneExtensionDescriptor(input[index])
+	}
+	return result
 }
 
 func cloneTypeDeclarations(input []TypeDeclaration) []TypeDeclaration {

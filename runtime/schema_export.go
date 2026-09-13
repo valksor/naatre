@@ -13,6 +13,7 @@ import (
 // canonical, language-neutral schema authority.
 func (s Snapshot) ExportSchema(options schema.ExportOptions) (schema.Document, error) {
 	options.Directives = s.DirectiveDescriptors()
+	options.Extensions = s.ExtensionDescriptors()
 	descriptors := s.Descriptors()
 	operations := make([]schema.OperationDescriptor, 0, len(descriptors))
 	members := make([]schema.MemberDescriptor, 0, len(descriptors))

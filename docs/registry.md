@@ -64,6 +64,31 @@ wrapper, and keeps in-flight work accounted. Response annotators receive no
 mutable output and return canonical JSON metadata ordered by response path and
 directive source position; they remain cancellation- and admission-bounded.
 
+## Extensions
+
+`Registry.RegisterExtension` binds a reverse-DNS ID and Semantic Version to an
+exact capability, implementation identity, declared extension points, effects,
+cost behavior, security statement, directive ownership, ordering, and
+conflicts. `Registry.Freeze` rejects conflicts, ordering cycles, missing or
+multiply owned directives, capability mismatches, undeclared points/effects,
+and undeclared cost. Available topological-order ties use lexical IDs, while
+directive calls retain their authored source order.
+
+`Snapshot.ExtensionDescriptors` returns detached descriptors in resolved
+registry order. `Snapshot.ExportSchema` includes them in canonical discovery.
+`Snapshot.DecodeOptions` adds exact extension versions and capabilities to a
+detached protocol policy and rejects conflicting legacy or ignorable namespace
+rules. Required payloads are retained only after exact capability negotiation;
+explicitly inert optional metadata is discarded. Plan descriptions and
+execution outcomes report negotiated ID/version/capability tuples without
+retaining extension payloads.
+
+Behavioral extensions use only the bounded directive callbacks above. They do
+not receive a mutable AST, plan, registry, authorization decision, resource
+limit, handler, or response value. This preserves core structural, effect,
+authorization, cost, and completion checks without claiming that arbitrary
+in-process Go code is sandboxed.
+
 ## Authorization and interceptors
 
 `Registry.ConfigureAuthorization` selects allow-by-default compatibility mode

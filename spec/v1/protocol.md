@@ -27,6 +27,8 @@
   validation.
 - **PROTO-008:** `extensions` keys MUST be registered reverse-DNS namespaces.
   Unknown normative fields and unnegotiated extension namespaces are rejected.
+  Exact version/capability negotiation, inert optional metadata, and legacy raw
+  namespace policy follow EXT-100 through EXT-103.
 - **PROTO-009:** Duplicate members after JSON unescaping, trailing data, BOMs,
   invalid UTF-8, and unpaired UTF-16 surrogate escapes are decoding failures.
 - **PROTO-010:** The single-operation envelope MUST NOT be used as a batch.
@@ -57,7 +59,8 @@ Invalid (conflicting sources):
   `retryable`, and negotiated namespaced `details`.
 - **PROTO-104:** Internal causes and stack traces MUST NOT appear by default.
 - **PROTO-105:** `capabilities` contains only server-negotiated capabilities;
-  it MUST NOT echo unsupported client assertions.
+  it MUST NOT echo unsupported client assertions. Extension response values and
+  namespaced error details require the corresponding exact selected capability.
 - **PROTO-106:** The `core.protocol-1` conformance profile MUST publish
   language-neutral request and response vectors covering success, simultaneous
   data and errors, validation failure, unsupported version, malformed input,

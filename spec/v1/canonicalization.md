@@ -88,11 +88,12 @@ Invalid: accept `user name`, normalize `É` into an identifier, or resolve
 - **CANON-104:** Schema identity is formed from its portable public descriptor,
   never host reflection or registration order. Type, field, enum-member,
   variant-member, operation, object-member, directive, directive-argument,
-  retired-identity, and trait arrays
+  extension, retired-identity, and trait arrays
   sort by stable `id`; pinned references sort by URI then revision. Entity keys,
   legacy type-reference/enum-value lists, accepted-wire-shape lists, and
-  capability, directive-location, and directive-phase lists sort by their
-  canonical spelling and reject duplicates.
+  capability, directive-location, directive-phase, extension-point,
+  extension-directive, extension-ordering, and extension-conflict lists sort by
+  their canonical spelling and reject duplicates.
   Ordered custom-scalar conformance vectors retain order. Absent optional
   descriptor fields are omitted; explicit defaults are canonical scalar JSON.
   A schema construction API MUST coerce and store defaults in that canonical

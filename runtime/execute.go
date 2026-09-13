@@ -84,9 +84,11 @@ const (
 
 // Outcome contains deterministic partial data and ordered public errors.
 type Outcome struct {
-	Data        map[string]any
-	Errors      []ExecutionError
-	Annotations []DirectiveAnnotation
+	Data         map[string]any
+	Errors       []ExecutionError
+	Annotations  []DirectiveAnnotation
+	Capabilities []string                       `json:"Capabilities,omitempty"`
+	Extensions   []protocol.NegotiatedExtension `json:"Extensions,omitempty"`
 	// Effects describes the operation's effect state. It is safe outcome
 	// metadata, not an error, and never implies permission to replay a write.
 	Effects EffectState
@@ -143,6 +145,8 @@ type Plan struct {
 	atomicity       protocol.AtomicityMode
 	operationSource protocol.Source
 	requirements    []string
+	capabilities    []string
+	extensions      []protocol.NegotiatedExtension
 	variables       []protocol.VariableDefinition
 	selections      []plannedSelection
 	nodes           []planNode
@@ -199,8 +203,11 @@ func PrepareWithOptions(registry Snapshot, request *protocol.Request, options Pr
 		return nil, &ValidationErrors{issues: planner.issues}
 	}
 	planning.setCost(planner.staticCost)
+	capabilities := request.Capabilities()
+	slices.Sort(capabilities)
 	return &Plan{
 		operationName: operation.Name(), kind: operation.Kind(), atomicity: operation.Atomicity(), operationSource: operation.Source(), requirements: request.Document().Requires(),
+		capabilities: capabilities, extensions: request.NegotiatedExtensions(),
 		variables: operation.Variables(), selections: executable, nodes: nodes, types: registry.types,
 		variableValues: captureVariableValues(request, operation.Variables()),
 		authorization:  registry.authorization, interceptors: slices.Clone(registry.interceptors),
@@ -250,7 +257,7 @@ func (o ExecuteOptions) abandonGrace() time.Duration {
 // policy. Query failures preserve independent sibling data; mutation failures
 // stop later mutation scheduling.
 func (p *Plan) Execute(ctx context.Context) Outcome {
-	return p.executeComposed(ctx, ExecuteOptions{})
+	return p.attachNegotiation(p.executeComposed(ctx, ExecuteOptions{}))
 }
 
 // ExecuteWith runs a prepared operation under an explicit policy.
@@ -267,7 +274,7 @@ func (p *Plan) ExecuteWith(ctx context.Context, options ExecuteOptions) Outcome 
 		operation.ID, operation.ParentID = telemetry.operationSpan, telemetry.requestSpan
 		emitTelemetry(telemetry.options, operation)
 	}
-	outcome := p.executeReliably(ctx, options)
+	outcome := p.attachNegotiation(p.executeReliably(ctx, options))
 	if telemetry != nil {
 		stage, result, code := outcomeTelemetry(outcome)
 		operation := telemetry.baseEvent(TelemetryOperation, stage)
@@ -278,6 +285,12 @@ func (p *Plan) ExecuteWith(ctx context.Context, options ExecuteOptions) Outcome 
 		request.ID, request.Duration, request.Outcome, request.ErrorCode = telemetry.requestSpan, time.Since(started), result, code
 		emitTelemetry(telemetry.options, request)
 	}
+	return outcome
+}
+
+func (p *Plan) attachNegotiation(outcome Outcome) Outcome {
+	outcome.Capabilities = slices.Clone(p.capabilities)
+	outcome.Extensions = slices.Clone(p.extensions)
 	return outcome
 }
 

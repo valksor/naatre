@@ -151,7 +151,9 @@ type DirectiveDefinition struct {
 
 type registeredDirective struct {
 	DirectiveDefinition
-	standard bool
+	standard                   bool
+	extensionID                string
+	extensionMaxAdditionalCost uint64
 }
 
 type plannedDirective struct {

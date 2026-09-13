@@ -197,12 +197,31 @@ func normalizeSchema(input []byte, root *node) error {
 	if err := normalizeSchemaDirectives(input, root); err != nil {
 		return err
 	}
+	if err := normalizeSchemaExtensions(input, root); err != nil {
+		return err
+	}
 	for _, member := range []string{"retired", "traits"} {
 		if _, err := normalizeSchemaIDArrayMember(input, root, member, "/"+member); err != nil {
 			return err
 		}
 	}
 	return normalizeSchemaReferences(input, root)
+}
+
+func normalizeSchemaExtensions(input []byte, root *node) error {
+	values, err := normalizeSchemaIDArrayMember(input, root, "extensions", "/extensions")
+	if err != nil || values == nil {
+		return err
+	}
+	for index := range values.array {
+		pointer := fmt.Sprintf("/extensions/%d", index)
+		for _, member := range []string{"points", "directives", "before", "after", "conflicts"} {
+			if err := normalizeStringSetMember(input, &values.array[index], member, pointer+"/"+member, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func normalizeSchemaTypes(input []byte, root *node) error {

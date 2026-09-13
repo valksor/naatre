@@ -225,6 +225,8 @@ func cloneOutcome(input Outcome) Outcome {
 	output := input
 	output.Data = cloneStoredValue(input.Data)
 	output.Errors = slices.Clone(input.Errors)
+	output.Capabilities = slices.Clone(input.Capabilities)
+	output.Extensions = slices.Clone(input.Extensions)
 	for index := range output.Errors {
 		output.Errors[index].Path = cloneStoredValue(input.Errors[index].Path)
 		output.Errors[index].Details = cloneStoredValue(input.Errors[index].Details)

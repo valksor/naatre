@@ -71,6 +71,19 @@ func TestCanonicalizeDocumentRejectsInvalidRequiredCapabilities(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeSchemaSortsExtensionDescriptorsAndSets(t *testing.T) {
+	t.Parallel()
+	input := []byte(`{"revision":"schema-r1","types":[],"operations":[],"members":[],"extensions":[{"id":"org.example.zeta","points":["response","validation"],"directives":["zeta","alpha"]},{"id":"com.example.alpha","points":["validation"]}]}`)
+	canonical, err := protocol.CanonicalizeSchema(input, protocol.Limits{})
+	if err != nil {
+		t.Fatalf("CanonicalizeSchema: %v", err)
+	}
+	want := `{"extensions":[{"id":"com.example.alpha","points":["validation"]},{"directives":["alpha","zeta"],"id":"org.example.zeta","points":["response","validation"]}],"members":[],"operations":[],"revision":"schema-r1","types":[]}`
+	if string(canonical) != want {
+		t.Fatalf("canonical = %s, want %s", canonical, want)
+	}
+}
+
 func TestCanonicalizeSchemaNormalizesRegistrationAndSetOrder(t *testing.T) {
 	t.Parallel()
 
