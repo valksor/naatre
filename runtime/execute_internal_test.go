@@ -1,6 +1,9 @@
 package runtime
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestCompleteRecoveringContainsPanics(t *testing.T) {
 	completed, issues, available, err := completeRecovering(func() (any, []completionIssue, bool, error) {
@@ -30,5 +33,36 @@ func TestTransactionStatePreservesExplicitAggregateStates(t *testing.T) {
 				t.Fatalf("transactionState = %q, %v; want %q, true", got, ok, tt.want)
 			}
 		})
+	}
+}
+
+func TestAcquireHandlerExecutionSlotAbandonsCacheReservationOnCancellation(t *testing.T) {
+	cache := &executionCache{entries: make(map[string]*cacheRecord)}
+	record := &cacheRecord{ready: make(chan struct{})}
+	const localKey = "0:reserved"
+	cache.entries[localKey] = record
+	reservation := &cacheReservation{
+		cache: cache, key: CacheKey{Generation: 0}, localKey: localKey, record: record,
+	}
+	limiter := make(chan struct{}, 1)
+	limiter <- struct{}{}
+	scope := executionScope{parallel: true, limiter: limiter}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	release, err := acquireHandlerExecutionSlot(ctx, scope, reservation)
+	if err == nil || release != nil {
+		t.Fatalf("acquireHandlerExecutionSlot returned release=%t err=%v, want nil release and cancellation", release != nil, err)
+	}
+	select {
+	case <-record.ready:
+	default:
+		t.Fatal("abandoned cache reservation did not wake waiters")
+	}
+	cache.mu.Lock()
+	_, retained := cache.entries[localKey]
+	cache.mu.Unlock()
+	if retained {
+		t.Fatal("abandoned cache reservation remained in request cache")
 	}
 }

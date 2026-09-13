@@ -1,0 +1,90 @@
+{
+  "profile": "core.batch-cache-1",
+  "dispatchVectors": [
+    {
+      "name": "mapped-duplicates-out-of-order",
+      "window": "read-safe-map",
+      "inputs": ["ada", "grace", "ada"],
+      "maximumSize": 16,
+      "backendResultIndexes": [1, 0],
+      "expectedDispatches": 1,
+      "expectedUniqueInputs": 2,
+      "expectedOutput": ["ada", "grace", "ada"]
+    },
+    {
+      "name": "missing-result-keeps-item-path",
+      "window": "read-safe-map",
+      "inputs": ["ada", "grace", "lin"],
+      "backendResultIndexes": [2, 0],
+      "expectedOutput": ["ada", null, "lin"],
+      "expectedErrors": [{"code": "HANDLER_FAILED", "path": ["users", "items", 1, "name"]}]
+    },
+    {
+      "name": "parallel-distinct-inputs",
+      "window": "parallel",
+      "inputs": ["u-1", "u-2"],
+      "expectedDispatches": 1,
+      "expectedOutput": ["u-1", "u-2"]
+    },
+    {
+      "name": "width-one-terminates",
+      "window": "read-safe-map",
+      "inputs": ["ada", "grace"],
+      "maximumConcurrency": 1,
+      "expectedDispatches": 1,
+      "mustTerminate": true
+    },
+    {
+      "name": "nested-loaders-terminate",
+      "window": "nested-read-safe-maps",
+      "inputs": ["pioneers", "systems"],
+      "expectedOuterDispatches": 1,
+      "expectedInnerDispatches": 2,
+      "mustTerminate": true
+    },
+    {
+      "name": "cancelled-waiters-terminate",
+      "window": "parallel",
+      "inputs": ["same", "same"],
+      "expectedHandlerStarts": 1,
+      "expectedCode": "CANCELLED",
+      "mustTerminate": true
+    },
+    {
+      "name": "serial-write-barrier",
+      "window": "serial-map",
+      "inputs": ["ada", "grace"],
+      "events": ["read:ada", "write:ada", "read:grace", "write:grace"],
+      "expectedDispatches": 2
+    }
+  ],
+  "cacheVectors": [
+    {
+      "name": "read-write-read-invalidates",
+      "events": ["read:before", "write:after", "read:after"],
+      "expectedReadHandlerStarts": 2,
+      "expectedInvalidations": 1
+    },
+    {
+      "name": "complete-key-partition",
+      "dimensions": ["operationKind", "operation", "handler", "documentDigest", "schemaDigest", "schemaRevision", "variablesDigest", "authorizationIdentity", "typedInputDigest", "context"]
+    },
+    {
+      "name": "explicit-error-null-policy",
+      "defaultCachedErrors": false,
+      "defaultCachedNulls": false,
+      "independentlyConfigurable": true
+    },
+    {
+      "name": "no-store-disables-reuse",
+      "authorizationScope": "no-store",
+      "expectedCacheHits": 0
+    },
+    {
+      "name": "core-retains-no-cross-request-entry",
+      "applicationHook": false,
+      "executions": 2,
+      "expectedHandlerStarts": 2
+    }
+  ]
+}

@@ -535,10 +535,7 @@ func (p *Plan) authorizeReplayNodes(ctx context.Context, nodes []planNode) *Exec
 }
 
 func (p *Plan) observeReliability(options ExecuteOptions, event ReliabilityEvent) {
-	if options.Idempotency.Observe == nil {
-		return
-	}
-	containPanic(func() { options.Idempotency.Observe(event) }, func() {})
+	observeSafely(options.Idempotency.Observe, event)
 }
 
 func retryBudgetExhaustedOutcome(kind protocol.OperationKind, attempts uint32) Outcome {

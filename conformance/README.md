@@ -41,8 +41,16 @@ rules, and equivalent decisions for planned, cached, batched, streamed, and
 remote placement. Its executable vectors cover aliases, fragments, parallel
 groups, nested calls, whole-collection denial, mixed replay history, and cursor
 binding across principal, tenant, schema, and authorization revisions. The Go
-reference runtime executes the core handler and lifecycle vectors directly;
-#70 owns downstream cache, batch, stream, replay, and remote adapters.
+reference runtime executes the core handler and lifecycle vectors directly. The
+`core.batch-cache-1` fixture and runtime suite own request-local cache and batch
+placement; #70 owns downstream stream, replay, and remote adapters.
+
+`v1/batching.json` fixes bounded map/parallel windows, authorization-before-
+grouping, indexed out-of-order and missing results, duplicate inputs,
+width-one/nested/cancelled termination, serial write barriers, complete cache
+identity, error/null policy, application ownership, and read-write-read
+invalidation. The Go runtime executes each named behavior directly and reports
+representative handler-invocation benchmarks.
 
 `v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
 complete, filtered, recursive, extended-trait, evolving, open-union, and

@@ -147,6 +147,7 @@ const (
 type Definition struct {
 	descriptor Descriptor
 	invoke     func(context.Context, any, any) (any, error)
+	batch      *batchDefinition
 	nilHandler bool
 	serial     chan struct{}
 	sourceType reflect.Type
@@ -448,6 +449,9 @@ func (s Snapshot) invokeMember(ctx context.Context, owner schema.TypeID, member 
 }
 
 func validateRegistration(types schema.Snapshot, definition Definition) error {
+	if err := validateBatchRegistration(definition); err != nil {
+		return err
+	}
 	descriptor := definition.descriptor
 	if !namePattern.MatchString(descriptor.Name) {
 		return fmt.Errorf("invalid public name %q", descriptor.Name)
@@ -469,6 +473,23 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 		return fmt.Errorf("registration %q: %w", descriptor.Name, err)
 	}
 	return validateMetadata(descriptor)
+}
+
+func validateBatchRegistration(definition Definition) error {
+	if definition.batch == nil {
+		return nil
+	}
+	if definition.batch.key == nil {
+		return fmt.Errorf("batch registration %q requires a key function", definition.descriptor.Name)
+	}
+	if definition.batch.maxSize < 1 || definition.batch.maxSize > maxPortableConcurrency {
+		return fmt.Errorf("batch registration %q has invalid maximum size %d", definition.descriptor.Name, definition.batch.maxSize)
+	}
+	metadata := definition.descriptor.Metadata
+	if metadata.Batching != BatchEligible || metadata.Effect != ReadEffect || metadata.ThreadSafety != ThreadSafe {
+		return fmt.Errorf("batch registration %q requires batch-eligible, thread-safe read metadata", definition.descriptor.Name)
+	}
+	return nil
 }
 
 func validateCollectionMetadata(output schema.TypeDescriptor, metadata *CollectionMetadata) error {

@@ -60,6 +60,7 @@ const (
 	CodeIdempotencyIndeterminate    = "IDEMPOTENCY_INDETERMINATE"
 	CodeIdempotencyNotAllowed       = "IDEMPOTENCY_NOT_ALLOWED"
 	CodeIdempotencyStoreUnavailable = "IDEMPOTENCY_STORE_UNAVAILABLE"
+	CodeCacheInvalidationFailed     = "CACHE_INVALIDATION_FAILED"
 )
 
 // reservedCodes are the codes only a runtime may produce. An application that
@@ -73,7 +74,7 @@ var reservedCodes = []string{
 	CodeSavepointRollbackFailed, CodeOutboxPersistFailed, CodeAfterCommitFailed,
 	CodeExternalEffectUncoordinated, CodeCompensationFailed,
 	CodeRetryBudgetExhausted, CodeIdempotencyConflict, CodeIdempotencyIndeterminate,
-	CodeIdempotencyNotAllowed, CodeIdempotencyStoreUnavailable,
+	CodeIdempotencyNotAllowed, CodeIdempotencyStoreUnavailable, CodeCacheInvalidationFailed,
 }
 
 // applicationCodePattern constrains a domain code to a stable, wire-safe

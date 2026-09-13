@@ -238,8 +238,8 @@ func TestExecutePreservesNullableCollectionItemsWithoutMemberErrors(t *testing.T
 		"mapped": []any{nil, map[string]any{"name": "Ada"}},
 		"window": []any{nil, map[string]any{"name": "Ada"}},
 	}})
-	if memberCalls.Load() != 2 {
-		t.Fatalf("member handler calls = %d, want 2", memberCalls.Load())
+	if memberCalls.Load() != 1 {
+		t.Fatalf("member handler calls = %d, want 1 after request-scoped memoization", memberCalls.Load())
 	}
 }
 

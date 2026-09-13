@@ -172,8 +172,8 @@ func TestExecuteDeepQueryGoldenShapesCollectionOperationsWithoutImplicitMapping(
 		},
 	}})
 	assertGoldenData(t, "deep_query.golden.json", outcome.Data)
-	if rootCalls.Load() != 1 || fieldCalls.Load() != 8 {
-		t.Fatalf("handler calls = root %d field %d, want 1 and 8", rootCalls.Load(), fieldCalls.Load())
+	if rootCalls.Load() != 1 || fieldCalls.Load() != 3 {
+		t.Fatalf("handler calls = root %d field %d, want 1 and 3 after request-scoped memoization", rootCalls.Load(), fieldCalls.Load())
 	}
 }
 

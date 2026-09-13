@@ -22,6 +22,7 @@ Documents:
 9. [Cursor pagination and collection metadata](collections.md)
 10. [Mutations and transaction boundaries](mutations.md)
 11. [Reliability, idempotency, and retries](reliability.md)
+12. [Request-scoped batching and caching](batching.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

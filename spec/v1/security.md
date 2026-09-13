@@ -133,6 +133,10 @@ forbidden collection length appears in the response.
 - **SEC-203 Async references:** Blob references, job handles, result receipts,
   and terminal retrieval each require current authorization. Their public
   not-found or denied shapes MUST NOT reveal whether protected work exists.
+- **SEC-204 Cache identity:** Handler-cache identity includes current operation,
+  principal or tenant scope, authorization revision, schema revision, canonical
+  variables, typed input semantics, and declared application context. Raw
+  claims, inputs, and variables MUST NOT be exposed to cache or trace keys.
 
 Valid: two principals request the same provider row and receive independently
 authorized results without sharing a principal-scoped cache entry.

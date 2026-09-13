@@ -88,6 +88,40 @@ Untrusted requests must enter through `Prepare` and `Plan.Execute`; a trusted
 callback that captures and uses a raw snapshot remains inside the in-process
 trust boundary described by SEC-303.
 
+## Request-scoped batching and caching
+
+`BindBatch`, `BindBatchInvocation`, `BindBatchField`, and `BindBatchCall` bind
+typed batch handlers. Each registration supplies a `BatchOptions` key function
+and finite maximum size. Inputs carry stable indexes, so a backend may return
+`BatchResult` values out of order; omitted, duplicate, and unknown indexes are
+reported deterministically. The executor forms windows only across explicit
+parallel branches and wholly read-safe mapped collection work. Writes,
+serial-only handlers, transaction-required work, execution wrappers, and
+interceptors remain barriers. A serial map legitimately invokes a batch handler
+once per item.
+
+Every logical item is authorized and charged before grouping, including
+duplicates. Batch and in-flight-cache waiters do not hold handler concurrency
+permits. `ExecuteOptions.Batch.Observe` receives tracing-safe start/completion
+events with operation, handler, size, and status but no keys, inputs, claims, or
+backend errors.
+
+Handlers marked `Cacheable` use an execution-local memo only after current
+authorization. Dynamic `no-store` decisions, wrappers, and interceptors disable
+reuse. Errors and null results are not retained unless `CacheErrors` or
+`CacheNulls` is explicitly set; `DisableRequest` disables the local memo.
+`CacheKey` binds operation kind/name, handler, document/schema digests, schema
+revision, canonical variables, typed input, authorization identity, and the
+application-provided context. These are digests rather than raw sensitive
+values.
+
+`ExecuteOptions.Cache.External` is an application-owned `ResultCache`; core has
+no package-global or snapshot-owned entry store. Cross-request hooks run only
+with a schema revision and an authorization decision permitting principal or
+tenant scope. A completed write clears request entries and calls `Invalidate`
+before dependent work proceeds. In-flight fills from an older generation
+cannot republish after that barrier.
+
 ## Request resource limits
 
 `runtime.PrepareWithOptions` accepts a `runtime.ResourceLimits` value and

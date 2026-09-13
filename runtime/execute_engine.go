@@ -104,20 +104,23 @@ func (t *unavailableTree) merge(other *unavailableTree) {
 }
 
 type executionScope struct {
-	current      executionValue
-	parent       executionValue
-	bindings     map[string]executionValue
-	variables    map[string]scopedVariable
-	limiter      chan struct{}
-	parallel     bool
-	grace        time.Duration
-	effects      *effectRecorder
-	annotations  *directiveAnnotationRecorder
-	resources    *resourceMeter
-	cursorScopes map[uint64]CursorScope
-	transaction  Transaction
-	idempotency  *executionIdempotency
-	reliability  *executionReliabilityState
+	current       executionValue
+	parent        executionValue
+	bindings      map[string]executionValue
+	variables     map[string]scopedVariable
+	limiter       chan struct{}
+	parallel      bool
+	grace         time.Duration
+	effects       *effectRecorder
+	annotations   *directiveAnnotationRecorder
+	resources     *resourceMeter
+	cursorScopes  map[uint64]CursorScope
+	transaction   Transaction
+	idempotency   *executionIdempotency
+	reliability   *executionReliabilityState
+	batches       *batchRuntime
+	cache         *executionCache
+	batchObserver func(BatchEvent)
 }
 
 type scopedVariable struct {
@@ -220,18 +223,22 @@ type sequenceResult struct {
 }
 
 func (p *Plan) executeComposed(ctx context.Context, options ExecuteOptions) Outcome {
+	requestCache := newExecutionCache(p, options.Cache)
 	executionCtx, cancel := context.WithTimeoutCause(ctx, p.resourceLimits.MaxExecutionDuration, errExecutionResourceDeadline)
 	defer cancel()
 	scope := executionScope{
-		bindings:     make(map[string]executionValue),
-		limiter:      make(chan struct{}, p.resourceLimits.MaxConcurrency),
-		grace:        options.abandonGrace(),
-		effects:      &effectRecorder{},
-		annotations:  &directiveAnnotationRecorder{},
-		resources:    &resourceMeter{limits: p.resourceLimits},
-		cursorScopes: make(map[uint64]CursorScope),
-		idempotency:  newExecutionIdempotency(ctx, options),
-		reliability:  &executionReliabilityState{},
+		bindings:      make(map[string]executionValue),
+		limiter:       make(chan struct{}, p.resourceLimits.MaxConcurrency),
+		grace:         options.abandonGrace(),
+		effects:       &effectRecorder{},
+		annotations:   &directiveAnnotationRecorder{},
+		resources:     &resourceMeter{limits: p.resourceLimits},
+		cursorScopes:  make(map[uint64]CursorScope),
+		idempotency:   newExecutionIdempotency(ctx, options),
+		reliability:   &executionReliabilityState{},
+		batches:       newBatchRuntime(),
+		cache:         requestCache,
+		batchObserver: options.Batch.Observe,
 	}
 	// Cancellation observed before any selection runs is operation-level: no
 	// field is responsible, so it carries the empty root path.
@@ -336,7 +343,7 @@ func containsExecutionCode(failures []ExecutionError, code string) bool {
 
 func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
 	nodePath := pathForNode(path, node)
-	if !scope.resources.chargeWork(nodeRuntimeWork(node)) {
+	if !scope.batches.consumePrecharged(node, nodePath) && !scope.resources.chargeWork(nodeRuntimeWork(node)) {
 		return resourceExhaustedResult(node, nodePath, "runtime work budget exhausted")
 	}
 	if !p.matchesTypeConditions(node, scope.current) {
@@ -391,48 +398,154 @@ func (p *Plan) executeNode(ctx context.Context, node planNode, scope executionSc
 }
 
 func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, directives []evaluatedDirective, scope executionScope, path []any) nodeResult {
+	prepared, terminal := p.prepareHandlerNode(ctx, node, scope, path)
+	if terminal != nil {
+		return *terminal
+	}
+	output, terminal, err := p.invokePreparedHandler(ctx, node, directives, scope, path, prepared)
+	if terminal != nil {
+		return *terminal
+	}
+	if err != nil {
+		prepared.reservation.publish(CacheEntry{Error: err}, cacheStoreable(scope.cache.options, nil, err))
+		failure := handlerFailure(node, path, err)
+		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
+	}
+	return p.completeHandlerNode(ctx, node, directives, scope, path, prepared, output)
+}
+
+type preparedHandlerNode struct {
+	inherited   *unavailableTree
+	source      any
+	input       any
+	loaded      batchCallResult
+	preloaded   bool
+	principal   Principal
+	reservation *cacheReservation
+	cacheHit    bool
+	cached      CacheEntry
+}
+
+func (p *Plan) prepareHandlerNode(ctx context.Context, node planNode, scope executionScope, path []any) (preparedHandlerNode, *nodeResult) {
+	prepared := preparedHandlerNode{}
 	// A member whose completion failed stays unavailable however deep the
 	// selection reaches it; its surviving nested marks descend with it.
-	var inherited *unavailableTree
 	if node.kind == protocol.FieldSelection {
 		nested, unavailable := scope.current.unavailable.member(node.name)
 		if unavailable {
-			return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}}
+			result := nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}}
+			return prepared, &result
 		}
-		inherited = nested
+		prepared.inherited = nested
 	}
 
 	source, sourceErr := memberSource(node, scope, path)
 	if sourceErr != nil {
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*sourceErr}}
+		result := nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*sourceErr}}
+		return prepared, &result
 	}
-	if authorizationErr := p.authorizeNode(ctx, node, source, path); authorizationErr != nil {
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*authorizationErr}}
+	prepared.source = source
+	loaded, preloaded := scope.batches.take(node, path)
+	prepared.loaded, prepared.preloaded = loaded, preloaded
+	decision := loaded.decision
+	if !preloaded || !loaded.authorized {
+		var authorizationErr *ExecutionError
+		decision, authorizationErr = p.authorizeNodeDecision(ctx, node, source, path)
+		if authorizationErr != nil {
+			result := nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{*authorizationErr}}
+			return prepared, &result
+		}
 	}
 
 	input, status, inputErr := p.handlerInput(node, scope)
 	if inputErr != nil {
 		code := executionStatusCode(status)
 		err := nodeExecutionError(code, "handler input is unavailable", node, path, inputErr)
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
+		result := nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{err}}
+		return prepared, &result
 	}
+	prepared.input = input
 
-	release, err := acquireExecutionSlot(ctx, scope)
-	if err != nil {
-		failure := nodeExecutionError("CANCELLED", "request cancelled", node, path, err)
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
+	prepared.principal, _ = PrincipalFromContext(ctx)
+	if key, eligible, external := scope.cache.key(p, node, source, input, prepared.principal, decision); eligible {
+		entry, hit, reserved, cacheErr := scope.cache.load(ctx, key, external)
+		if cacheErr != nil {
+			failure := handlerFailure(node, path, cacheErr)
+			result := nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
+			return prepared, &result
+		}
+		if hit {
+			prepared.cached, prepared.cacheHit = entry, true
+		} else {
+			prepared.reservation = reserved
+		}
+	}
+	return prepared, nil
+}
+
+func (p *Plan) invokePreparedHandler(ctx context.Context, node planNode, directives []evaluatedDirective, scope executionScope, path []any, prepared preparedHandlerNode) (any, *nodeResult, error) {
+	if prepared.cacheHit {
+		// Authorization has been evaluated for this exact logical input before
+		// any request-local or application-owned entry is reused.
+		return prepared.cached.Value, nil, prepared.cached.Error
+	}
+	if prepared.preloaded {
+		// The batch handler has already started; record every logical item so
+		// effect accounting remains per selected handler.
+		scope.recordEffect(node, &scope.effects.started)
+		return prepared.loaded.value, nil, prepared.loaded.err
+	}
+	release, acquireErr := acquireHandlerExecutionSlot(ctx, scope, prepared.reservation)
+	if acquireErr != nil {
+		failure := nodeExecutionError("CANCELLED", "request cancelled", node, path, acquireErr)
+		result := nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
+		return nil, &result, nil
 	}
 	// Recorded before the call, so an effect that started and then failed is
 	// never reported as though it never happened.
 	scope.recordEffect(node, &scope.effects.started)
 	output, err := callWithinGrace(ctx, release, scope.grace, func() (any, error) {
-		return p.invokeDirectiveWrappers(ctx, directives, directiveHandlerCall{node: node, source: source, input: input, path: path})
+		return p.invokeDirectiveWrappers(ctx, directives, directiveHandlerCall{node: node, source: prepared.source, input: prepared.input, path: path})
 	})
-	if err != nil {
-		failure := handlerFailure(node, path, err)
-		return nodeResult{value: executionValue{typeInfo: node.output, status: valueUnavailable}, failed: true, errors: []ExecutionError{failure}}
+	return output, nil, err
+}
+
+func (p *Plan) completeHandlerNode(ctx context.Context, node planNode, directives []evaluatedDirective, scope executionScope, path []any, prepared preparedHandlerNode, output any) nodeResult {
+	completed, result, failures, available := p.completeHandlerOutput(node, path, prepared.inherited, output)
+	if prepared.reservation != nil {
+		cached := output
+		if available {
+			cached = completed
+		}
+		prepared.reservation.publish(CacheEntry{Value: cached}, available && cacheStoreable(scope.cache.options, cached, nil))
 	}
 
+	if available {
+		scope.recordEffect(node, &scope.effects.completed)
+		if node.definition.descriptor.Metadata.Effect == WriteEffect {
+			if invalidationErr := scope.cache.invalidate(ctx, p, node, prepared.principal); invalidationErr != nil {
+				failures = append(failures, nodeExecutionError(CodeCacheInvalidationFailed, "application cache invalidation failed", node, path, invalidationErr))
+				available = false
+				result.status = valueUnavailable
+			}
+		}
+		if annotationErr := p.recordDirectiveAnnotations(ctx, scope, node, directives, path); annotationErr != nil {
+			failures = append(failures, directiveAnnotationFailure(node, path, annotationErr))
+			available = false
+			result.status = valueUnavailable
+		}
+	}
+	presentation := completed
+	if available && len(node.children) != 0 {
+		childScope := childExecutionScope(scope, result, scope.current)
+		children := p.executeSequence(ctx, node.children, childScope, path)
+		failures = append(failures, children.errors...)
+		presentation = children.data
+	}
+	return nodeResult{value: result, data: presentation, emit: node.outputName != "" && available, failed: len(failures) != 0, errors: failures}
+}
+
+func (p *Plan) completeHandlerOutput(node planNode, path []any, inherited *unavailableTree, output any) (any, executionValue, []ExecutionError, bool) {
 	completed, issues, available, completionErr := completeSafely(output, node.definition.descriptor.Output, node.definition.descriptor.OutputNullable, p.types, p.resourceLimits)
 	result := executionValue{value: completed, typeInfo: node.output, status: valueAvailable, actualType: runtimeActualType(node.output.id, completed)}
 	if completed == nil && available {
@@ -451,23 +564,7 @@ func (p *Plan) executeHandlerNode(ctx context.Context, node planNode, directives
 	} else {
 		result.unavailable = unavailableMembers(issues, inherited)
 	}
-
-	if available {
-		scope.recordEffect(node, &scope.effects.completed)
-		if annotationErr := p.recordDirectiveAnnotations(ctx, scope, node, directives, path); annotationErr != nil {
-			failures = append(failures, directiveAnnotationFailure(node, path, annotationErr))
-			available = false
-			result.status = valueUnavailable
-		}
-	}
-	presentation := completed
-	if available && len(node.children) != 0 {
-		childScope := childExecutionScope(scope, result, scope.current)
-		children := p.executeSequence(ctx, node.children, childScope, path)
-		failures = append(failures, children.errors...)
-		presentation = children.data
-	}
-	return nodeResult{value: result, data: presentation, emit: node.outputName != "" && available, failed: len(failures) != 0, errors: failures}
+	return completed, result, failures, available
 }
 
 func directiveAnnotationFailure(node planNode, path []any, err error) ExecutionError {
@@ -541,6 +638,7 @@ func (p *Plan) executePipeline(ctx context.Context, node planNode, scope executi
 }
 
 func (p *Plan) executeParallel(ctx context.Context, node planNode, scope executionScope, path []any) nodeResult {
+	p.prefetchParallelBatches(ctx, node.children, scope, path)
 	results := make([]nodeResult, len(node.children))
 	workers := min(int(p.resourceLimits.MaxConcurrency), len(node.children))
 	if workers == 0 {
@@ -723,14 +821,13 @@ func completeRecovering(complete func() (any, []completionIssue, bool, error)) (
 }
 
 func cloneExecutionScope(scope executionScope) executionScope {
-	return executionScope{
-		current: scope.current, parent: scope.parent, bindings: cloneBindings(scope.bindings),
-		variables: maps.Clone(scope.variables),
-		limiter:   scope.limiter, parallel: scope.parallel, grace: scope.grace,
-		effects: scope.effects, annotations: scope.annotations, resources: scope.resources,
-		cursorScopes: scope.cursorScopes,
-		transaction:  scope.transaction,
+	if scope.bindings != nil {
+		scope.bindings = cloneBindings(scope.bindings)
 	}
+	if scope.variables != nil {
+		scope.variables = maps.Clone(scope.variables)
+	}
+	return scope
 }
 
 func childExecutionScope(scope executionScope, current, parent executionValue) executionScope {
@@ -749,6 +846,14 @@ func acquireExecutionSlot(ctx context.Context, scope executionScope) (func(), er
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func acquireHandlerExecutionSlot(ctx context.Context, scope executionScope, reservation *cacheReservation) (func(), error) {
+	release, err := acquireExecutionSlot(ctx, scope)
+	if err != nil {
+		reservation.publish(CacheEntry{Error: err}, false)
+	}
+	return release, err
 }
 
 // handlerOutcome carries one handler return across the abandonment boundary.

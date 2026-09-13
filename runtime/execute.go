@@ -25,7 +25,10 @@ type Invocation struct {
 // invocation context. Applications may continue to use Bind for their own
 // typed direct adapters.
 func BindInvocation[Output any](descriptor Descriptor, handler Handler[Invocation, Output]) Definition {
-	definition := Bind(descriptor, handler)
+	return invocationDefinition(Bind(descriptor, handler))
+}
+
+func invocationDefinition(definition Definition) Definition {
 	definition.adapter = true
 	return definition
 }
@@ -221,6 +224,11 @@ type ExecuteOptions struct {
 	Retry RetryPolicy
 	// Idempotency protects a request or named mutation groups with caller keys.
 	Idempotency IdempotencyOptions
+	// Cache controls request-local memoization and optional application-owned
+	// cross-request hooks for handlers explicitly marked cacheable.
+	Cache CacheOptions
+	// Batch configures tracing-safe request batch telemetry.
+	Batch BatchRuntimeOptions
 }
 
 func (o ExecuteOptions) abandonGrace() time.Duration {

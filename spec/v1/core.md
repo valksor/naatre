@@ -109,6 +109,9 @@ rejects an unrelated alias collision.
   profile permission. Result and error assembly remains declaration ordered.
 - **CORE-207:** Optimizers, loaders, and caches MUST NOT cross an effect,
   dependency, authorization, transaction, or completion barrier.
+- **CORE-208:** Request batching and memoization conform to
+  `core.batch-cache-1`. Dispatch windows are explicit, bounded scheduler
+  regions; goroutine timing and host event-loop ticks never define them.
 
 Valid: a mutation writes a value and its next selection reads the completed
 state.
@@ -126,6 +129,7 @@ directive, even when the request variable currently skips the fragment.
 | CORE-205 | A selected list is fully completed before its next sibling starts. | The next sibling starts while list elements are still being completed. |
 | CORE-206 | Independent thread-safe reads run within a negotiated bound and assemble by declaration. | An unmarked mutation is admitted to a parallel group. |
 | CORE-207 | A loader dispatches before a following serial write barrier. | A cache or loader reorders work across authorization or transaction boundaries. |
+| CORE-208 | A read-safe mapped region batches by typed key and restores item order. | A timer decides which logical inputs share a portable dispatch. |
 
 ## Determinism, failure, and cancellation
 

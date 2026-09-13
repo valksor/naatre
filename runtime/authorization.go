@@ -277,12 +277,19 @@ func authorizePlannedNodes(config AuthorizationConfig, operation protocol.Operat
 }
 
 func (p *Plan) authorizeNode(ctx context.Context, node planNode, object any, path []any) *ExecutionError {
+	_, failure := p.authorizeNodeDecision(ctx, node, object, path)
+	return failure
+}
+
+func (p *Plan) authorizeNodeDecision(ctx context.Context, node planNode, object any, path []any) (AuthorizationDecision, *ExecutionError) {
 	if err := ctx.Err(); err != nil {
 		failure := nodeExecutionError(CodeCancelled, "request cancelled", node, path, err)
-		return &failure
+		return AuthorizationDecision{}, &failure
 	}
 	allowed := p.authorization.Mode != AuthorizationDenyByDefault
+	decision := AuthorizationDecision{Allowed: allowed, CacheScope: AuthorizationCacheNoStore}
 	if p.authorization.Authorizer != nil {
+		var err error
 		policyObject, copyErr := isolateAuthorizationObject(object, p.resourceLimits)
 		if copyErr != nil {
 			code, message := CodeInternal, "internal execution error"
@@ -290,33 +297,33 @@ func (p *Plan) authorizeNode(ctx context.Context, node planNode, object any, pat
 				code, message = CodeResourceExhausted, "authorization object budget exhausted"
 			}
 			failure := nodeExecutionError(code, message, node, path, copyErr)
-			return &failure
+			return AuthorizationDecision{}, &failure
 		}
 		principal, _ := PrincipalFromContext(ctx)
-		decision, err := callAuthorizer(ctx, p.authorization.Authorizer, AuthorizationRequest{
+		decision, err = callAuthorizer(ctx, p.authorization.Authorizer, AuthorizationRequest{
 			Principal: principal, Operation: p.kind, Descriptor: node.definition.descriptor,
 			Path: slices.Clone(path), Object: policyObject,
 		})
 		if err != nil {
 			failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, err)
-			return &failure
+			return AuthorizationDecision{}, &failure
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			failure := nodeExecutionError(CodeCancelled, "request cancelled", node, path, contextErr)
-			return &failure
+			return AuthorizationDecision{}, &failure
 		}
 		now, clockErr := authorizationNow(p.authorization)
 		if clockErr != nil {
 			failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, clockErr)
-			return &failure
+			return AuthorizationDecision{}, &failure
 		}
 		allowed = authorizationDecisionAllows(decision, principal, now)
 	}
 	if !allowed {
 		failure := nodeExecutionError(CodeUnauthorized, "access denied", node, path, errors.New("authorization denied"))
-		return &failure
+		return AuthorizationDecision{}, &failure
 	}
-	return nil
+	return decision, nil
 }
 
 func callPlanningAuthorizer(authorizer PlanningAuthorizer, request PlanningAuthorizationRequest) (decision AuthorizationDecision, err error) {
@@ -360,6 +367,13 @@ func containPanic(run, onPanic func()) {
 		}
 	}()
 	run()
+}
+
+func observeSafely[Event any](observer func(Event), event Event) {
+	if observer == nil {
+		return
+	}
+	containPanic(func() { observer(event) }, func() {})
 }
 
 func authorizationDecisionAllows(decision AuthorizationDecision, principal Principal, now time.Time) bool {

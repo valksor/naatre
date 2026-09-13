@@ -281,6 +281,13 @@ type collectionExecution struct {
 }
 
 func (p *Plan) executeCollectionItems(ctx context.Context, node planNode, scope executionScope, execution collectionExecution) ([]any, []ExecutionError, bool) {
+	if p.hasBatchCollectionChild(node.children) {
+		return p.executeBatchedCollectionItems(ctx, node, scope, execution)
+	}
+	return p.executeCollectionItemsSequential(ctx, node, scope, execution)
+}
+
+func (p *Plan) executeCollectionItemsSequential(ctx context.Context, node planNode, scope executionScope, execution collectionExecution) ([]any, []ExecutionError, bool) {
 	output := make([]any, len(execution.items))
 	var failures []ExecutionError
 	failed := false

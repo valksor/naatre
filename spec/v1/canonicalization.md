@@ -171,6 +171,12 @@ are embedded as objects, not as untagged hex strings.
   Coerced-variable changes do change `result-cache` and `idempotency` identity;
   policy, capability, schema, or approval-metadata changes do change `approval`
   identity. The isolation vectors test both halves of these rules.
+- **CANON-226:** A handler-level cache identity extends the CANON-222 digest
+  with canonical operation and handler identity, schema revision, typed
+  source/input digest, authorization-scope digest, declared application context,
+  and request invalidation generation. Each extension is represented as a
+  canonical object member before `result-cache` hashing; raw sensitive values
+  are never concatenated into an external key.
 
 Valid: one payload hashed under all six purposes produces six different
 digests; two requests with the same document and different variables retain one
