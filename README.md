@@ -31,6 +31,10 @@ evidence must be described as planned.
   [Go registry contract](docs/registry.md) and
   [process-hosting guide](docs/process-hosting.md). Production distributed
   federation planning and transport integration remain owned by #109.
+- `reflectadapter`: optional startup-only compilation of explicitly tagged Go
+  fields and allowlisted methods into ordinary runtime definitions; explicit
+  runtime registration remains the production recommendation. See the
+  [reflection adapter guide](reflectadapter/README.md).
 - `transport/http`: strict reusable SSE framing for
   [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
   streaming and general `net/http` adapters.
@@ -38,9 +42,10 @@ evidence must be described as planned.
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk` (planned): official and compatibility-certified client implementations.
 
-Dependencies point inward in that order: transport, SDK, and example packages
-may use the public protocol/schema/runtime contracts; portable schema and
-protocol packages never depend on a transport or application runtime.
+Dependencies point inward in that order: reflection adapters, transports,
+SDKs, and example packages may use the public protocol/schema/runtime
+contracts; portable schema, protocol, and runtime packages never depend on the
+optional reflection adapter or an application transport.
 
 ## Development
 
