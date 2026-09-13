@@ -55,6 +55,35 @@ func TestFederationDelegationVerifierCannotIssueOrCrossAudience(t *testing.T) {
 	}
 }
 
+func TestFederationDelegationIssuerPreservesSentinelForContextFailures(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	issuer := federationDelegationIssuerAt(t, now)
+	active := runtime.WithPrincipal(context.Background(), runtime.Principal{Subject: "user-1", AuthorizationRevision: "policy-r1"})
+	cancelled, cancel := context.WithCancel(active)
+	cancel()
+	for _, test := range []struct {
+		name     string
+		ctx      context.Context
+		deadline time.Time
+		cause    error
+	}{
+		{name: "expired", ctx: active, deadline: now, cause: context.DeadlineExceeded},
+		{name: "cancelled", ctx: cancelled, deadline: now.Add(time.Minute), cause: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			token, err := issuer.Issue(test.ctx, runtime.FederationDelegationOptions{
+				Audience: "naatre:users", RequestID: "request-1", OperationID: "query.user",
+				SchemaRevision: "federation-r1", ServiceSchemaRevision: "users-r1",
+				ServiceSchemaDigest: "sha256:" + strings.Repeat("a", 64), Deadline: test.deadline, Cost: 1, Concurrency: 1,
+			})
+			if token != "" || !errors.Is(err, runtime.ErrFederationDelegation) || !errors.Is(err, test.cause) {
+				t.Fatalf("Issue = %q, %v; want empty token with delegation sentinel and %v", token, err, test.cause)
+			}
+		})
+	}
+}
+
 func TestFederationDelegationRejectsForgeryAndWrongAudience(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
@@ -371,12 +400,24 @@ func TestReferenceFederationCoordinatorPropagatesTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := runtime.WithPrincipal(context.Background(), runtime.Principal{Subject: "user-1", AuthorizationRevision: "policy-r1"})
-	outcome := coordinator.Execute(ctx, "request-1", runtime.FederationPlan{
+	plan := runtime.FederationPlan{
 		SchemaRevision: composition.Schema().Revision(),
 		Calls:          []runtime.FederationCall{{ResponseKey: "user", ServiceID: "users", OperationID: "query.user", Path: []any{"user"}, MaxAttempts: 1}},
-	})
+	}
+	outcome := coordinator.Execute(ctx, "request-1", plan)
 	if len(outcome.Errors) != 1 || outcome.Errors[0].Code != runtime.CodeResourceExhausted {
 		t.Fatalf("timeout outcome = %#v", outcome)
+	}
+
+	var invocations atomic.Int64
+	expiredIssuer := federationDelegationIssuer(t, func() time.Time { return time.Now().Add(time.Hour) })
+	expiredCoordinator := newFederationCoordinator(t, composition, expiredIssuer, runtime.FederationInvokerFunc(func(context.Context, runtime.FederationInvocation) (runtime.FederationRemoteResult, error) {
+		invocations.Add(1)
+		return runtime.FederationRemoteResult{Data: "unexpected", SchemaRevision: "users-r1"}, nil
+	}), runtime.FederationLimits{MaxCalls: 1, MaxCost: 1, MaxConcurrency: 1, MaxAttempts: 1})
+	expiredOutcome := expiredCoordinator.Execute(ctx, "request-expired-delegation", plan)
+	if len(expiredOutcome.Errors) != 1 || expiredOutcome.Errors[0].Code != runtime.CodeResourceExhausted || invocations.Load() != 0 {
+		t.Fatalf("expired delegation outcome=%#v invocations=%d", expiredOutcome, invocations.Load())
 	}
 }
 

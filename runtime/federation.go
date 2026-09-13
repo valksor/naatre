@@ -144,15 +144,21 @@ func (c *FederationDelegationIssuer) Issue(ctx context.Context, options Federati
 		options.Deadline.IsZero() || options.Cost == 0 || options.Concurrency == 0 {
 		return "", ErrFederationDelegation
 	}
+	if err := ctx.Err(); err != nil {
+		return "", errors.Join(ErrFederationDelegation, err)
+	}
 	now, err := callProcessClock(c.now)
-	if err != nil || !options.Deadline.After(now) {
+	if err != nil {
 		return "", ErrFederationDelegation
+	}
+	if !options.Deadline.After(now) {
+		return "", errors.Join(ErrFederationDelegation, context.DeadlineExceeded)
 	}
 	if parentDeadline, hasDeadline := ctx.Deadline(); hasDeadline && parentDeadline.Before(options.Deadline) {
 		options.Deadline = parentDeadline
 	}
 	if !options.Deadline.After(now) {
-		return "", ErrFederationDelegation
+		return "", errors.Join(ErrFederationDelegation, context.DeadlineExceeded)
 	}
 	payload := federationDelegationPayload{
 		Version: 1, Issuer: c.issuer, Audience: options.Audience, Subject: principal.Subject, Tenant: principal.Tenant,
@@ -504,6 +510,14 @@ func (c *ReferenceFederationCoordinator) invokeFederationCall(
 		Deadline: deadline, Cost: cost, Concurrency: 1,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			failure := federationContextFailure(call.Path, ctx)
+			return nil, &failure, nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			failure := makeExecutionError(CodeResourceExhausted, "federation execution deadline exhausted", clonePath(call.Path), protocol.Source{}, err)
+			return nil, &failure, nil
+		}
 		failure := makeExecutionError(CodeUnauthorized, "federation delegation could not be established", clonePath(call.Path), protocol.Source{}, err)
 		return nil, &failure, nil
 	}
