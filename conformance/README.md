@@ -85,6 +85,14 @@ TypeScript generator, checked artifacts, exact TypeScript compiler version,
 and strict compilation command. Transport and runtime-matrix evidence remains
 owned by `sdk.typescript.adapters-1` in issue #75.
 
+`v1/ruby-sdk.json` pins `sdk.ruby.core-1`: immutable generated Ruby operation
+and result shapes, RBS metadata, string/symbol key normalization, lossless
+numeric and temporal scalar adapters, partial-completion states, strict bounded
+decoding, persisted request identity, stream terminal validation, and a
+reproducible gem build. Its runtime matrix links the checked CRuby report and
+marks HTTP, Rails, SSE, WebSocket, retry/auth, and transport cancellation as
+unsupported until issue #83; issue #69 owns the combined official matrix.
+
 `v1/typescript-adapters.json` pins `sdk.typescript.adapters-1`: Fetch unary and
 POST-SSE adapters, the optional secure WebSocket adapter, strict ESM subpath
 exports, cancellation and body/socket cleanup, redirect credential policy,

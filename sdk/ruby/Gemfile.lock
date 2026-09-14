@@ -1,0 +1,17 @@
+PATH
+  remote: .
+  specs:
+    naatre (0.1.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  naatre!
+
+BUNDLED WITH
+   1.17.2

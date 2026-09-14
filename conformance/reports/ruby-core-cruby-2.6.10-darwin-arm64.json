@@ -1,0 +1,40 @@
+{
+  "profile": "sdk.ruby.core-1",
+  "fixtureSuite": "1.0.0",
+  "status": "passed",
+  "runtime": {
+    "name": "cruby",
+    "version": "2.6.10p210",
+    "platform": "universal.arm64e-darwin25"
+  },
+  "commands": [
+    {"command": "ruby sdk/ruby/sdkgen/cli.rb", "status": "passed"},
+    {"command": "ruby -Isdk/ruby/lib -Isdk/ruby/test -e Dir-tests", "status": "passed", "assertions": 63},
+    {"command": "gem build sdk/ruby/naatre.gemspec twice with SOURCE_DATE_EPOCH", "status": "passed", "comparison": "byte-identical"}
+  ],
+  "vectors": [
+    "key-normalization-and-collision",
+    "missing-null-pending-present-failed-skipped",
+    "partial-data-and-structured-errors",
+    "open-enum-unknown-value",
+    "lossless-bigdecimal-and-extended-integers",
+    "timezone-and-locale-independent-timestamp",
+    "generated-rbs-runtime-shapes",
+    "shared-persisted-hash-and-canonical-request",
+    "response-and-frame-limits",
+    "malformed-and-duplicate-key-response",
+    "stream-terminal-and-truncation",
+    "non-idempotent-write-replay-denial",
+    "typed-unsupported-capabilities"
+  ],
+  "unsupported": [
+    "http-transport-83",
+    "rails-integration-83",
+    "sse-transport-83",
+    "websocket-transport-83",
+    "automatic-auth-refresh-83",
+    "automatic-retry-83",
+    "transport-cancellation-83",
+    "complete-official-sdk-matrix-69"
+  ]
+}

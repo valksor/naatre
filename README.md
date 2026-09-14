@@ -28,6 +28,8 @@ evidence must be described as planned.
   for the `sdk.go.client-1` and `sdk.go.operations-1` profiles.
 - `sdk/typescript`: dependency-free ESM JavaScript runtime and deterministic
   strict TypeScript operation bindings for `sdk.typescript.core-1`.
+- `sdk/ruby/` contains the dependency-free Ruby core, deterministic generated
+  operation bindings, and RBS metadata for `sdk.ruby.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
