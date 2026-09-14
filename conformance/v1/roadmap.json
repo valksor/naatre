@@ -21,19 +21,19 @@
     },
     "29": {
       "issue": 29,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 29,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.typescript.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["sdk.typescript.core-1"]
       }
     },
     "31": {
@@ -684,19 +684,19 @@
     },
     "71": {
       "issue": 71,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 71,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.go.operations-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["sdk.go.operations-1"]
       }
     },
     "72": {

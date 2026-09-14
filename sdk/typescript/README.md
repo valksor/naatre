@@ -1,9 +1,41 @@
-# TypeScript collection-query mapping
+# JavaScript and TypeScript SDK
+
+This directory contains the dependency-free, ESM-only
+`sdk.typescript.core-1` reference client. The runtime is ordinary JavaScript;
+TypeScript is used for generated declarations and strict compile-time
+verification, not as a substitute for runtime validation.
+
+The core provides canonical persisted requests, strict manifests, selected
+result states, simultaneous partial data and errors, prototype-safe decoding,
+and lossless codecs for integers, decimal values, nanosecond timestamps, and
+bytes. `undefined`, sparse arrays, unsafe JSON integers, direct `BigInt`
+serialization, and `Date` timestamp coercion are rejected.
+
+Regenerate and verify the checked-in bindings with:
+
+```sh
+npm --prefix sdk/typescript run generate
+npm --prefix sdk/typescript test
+npm --prefix sdk/typescript run typecheck
+git diff --exit-code -- sdk/typescript/generated
+```
+
+The package pins TypeScript 7.0.2 and enables `strict`,
+`noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`. The generated
+source records `naatre.generator.typescript-sdk-1`; operation and manifest
+digests derive from the shared language-neutral model and canonical reference
+output.
+
+Transport adapters and the Browser, Node.js, Deno, Bun, and edge packaging
+matrix are intentionally separate and owned by issue #75. The core package
+does not claim Fetch, SSE, WebSocket, decompression, redirect, or credential
+forwarding support by itself.
+
+## Collection-query mapping
 
 This directory contains the first generated client mapping for
 `collection.query-1`. It is a fixture-backed integration slice, not yet the
-full JavaScript/TypeScript client or generator plugin host owned by issues #29,
-#35, #75, and #76.
+generator plugin host owned by issues #35 and #76.
 
 `generated/collection-query.ts` is produced from the authorized descriptor in
 `conformance/v1/collections.json` by the dependency-free JavaScript generator:

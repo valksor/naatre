@@ -78,6 +78,13 @@ artifacts. The Go runner regenerates both artifacts byte-for-byte and executes
 the shared generated request/result contract. The independent JavaScript runner
 advertises this Go-only profile as unsupported.
 
+`v1/typescript-sdk.json` pins `sdk.typescript.core-1`: the dependency-free
+plain-JavaScript runtime, exact scalar codecs, selected result states,
+prototype-safe decoding, persisted request/manifest behavior, deterministic
+TypeScript generator, checked artifacts, exact TypeScript compiler version,
+and strict compilation command. Transport and runtime-matrix evidence remains
+owned by `sdk.typescript.adapters-1` in issue #75.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,

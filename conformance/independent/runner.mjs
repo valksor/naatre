@@ -20,6 +20,7 @@ const implementations = new Map([
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
   ["core.validation-1", "validation.mjs"],
   ["sdk.generation-1", "verify-generator.mjs"],
+  ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
 ]);
 
 class ProtocolError extends Error {
