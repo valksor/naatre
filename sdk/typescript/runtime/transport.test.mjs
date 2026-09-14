@@ -119,14 +119,14 @@ test("Fetch unary enforces encoding, compressed declaration, decompressed bytes,
   await assert.rejects(pending, clientCode("CLIENT_CANCELED"));
 });
 
-test("POST SSE decodes bounded frames, ignores comments, and skips equivalent duplicates", async () => {
+test("POST SSE decodes split UTF-8 and multiline framing, ignores comments, and skips equivalent duplicates", async () => {
   const frames = [
     { type: "open", stream: "s", sequence: 1, schemaRevision: "r1" },
-    { type: "data", stream: "s", sequence: 2, position: 1, cursor: "cursor-1", data: { value: 1 } },
-    { type: "data", stream: "s", sequence: 2, position: 1, cursor: "cursor-1", data: { value: 1 } },
+    { type: "data", stream: "s", sequence: 2, position: 1, cursor: "cursor-1", data: { value: "tēriņš" } },
+    { type: "data", stream: "s", sequence: 2, position: 1, cursor: "cursor-1", data: { value: "tēriņš" } },
     { type: "complete", stream: "s", sequence: 3 },
   ];
-  const body = `: heartbeat\n\n${sse(frames[0])}${sse(frames[1])}${sse(frames[2])}${sse(frames[3])}`;
+  const body = `: heartbeat\r\n\r\n${sse(frames[0])}${sseMultiline(frames[1])}${sse(frames[2])}${sse(frames[3])}`;
   let headers;
   const adapter = createFetchAdapter({
     endpoint: "https://api.example/v1/execute",
@@ -141,6 +141,76 @@ test("POST SSE decodes bounded frames, ignores comments, and skips equivalent du
   assert.deepEqual(received.map((frame) => frame.type), ["open", "data", "complete"]);
   assert.equal(headers.get("accept"), "text/event-stream");
   assert.equal(headers.get("accept-encoding"), "identity");
+});
+
+test("POST SSE reconnect sends bounded resume metadata through authentication and transport", async () => {
+  let authenticationContext;
+  let headers;
+  const body = [
+    { type: "open", stream: "s", sequence: 1, schemaRevision: "r1" },
+    { type: "resume", stream: "s", sequence: 2, cursor: "cursor-1" },
+    { type: "data", stream: "s", sequence: 3, position: 2, cursor: "cursor-2", data: { value: 2 } },
+    { type: "complete", stream: "s", sequence: 4 },
+  ].map(sse).join("");
+  const adapter = createFetchAdapter({
+    endpoint: "https://api.example/v1/execute",
+    authenticate: (context) => {
+      authenticationContext = context;
+      return { Authorization: "Bearer reconnect-secret" };
+    },
+    fetch: async (_url, init) => {
+      headers = init.headers;
+      return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  const received = await collect(await adapter.stream(operation("subscription"), { lastEventId: "cursor-1" }));
+  assert.deepEqual(received.map((frame) => frame.type), ["open", "resume", "data", "complete"]);
+  assert.equal(authenticationContext.lastEventId, "cursor-1");
+  assert.equal(headers.get("last-event-id"), "cursor-1");
+
+  await assert.rejects(adapter.stream(operation("subscription"), { lastEventId: "forged\nmetadata" }), clientCode("CLIENT_STREAM_INVALID"));
+});
+
+test("POST SSE strips protected resume metadata on an untrusted cross-origin redirect", async () => {
+  const calls = [];
+  const body = `${sse({ type: "open", stream: "s", sequence: 1, schemaRevision: "r1" })}${sse({ type: "history-unavailable", stream: "s", sequence: 2, recovery: "refetch" })}`;
+  const adapter = createFetchAdapter({
+    endpoint: "https://api.example/v1/execute",
+    redirectOrigins: ["https://other.example"],
+    authenticate: () => ({ Authorization: "Bearer reconnect-secret" }),
+    fetch: async (url, init) => {
+      calls.push({ url, authorization: init.headers.get("authorization"), lastEventId: init.headers.get("last-event-id") });
+      return calls.length === 1
+        ? new Response(null, { status: 307, headers: { Location: "https://other.example/v1/execute" } })
+        : new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  await collect(await adapter.stream(operation("subscription"), { lastEventId: "protected-cursor" }));
+  assert.deepEqual(calls, [
+    { url: "https://api.example/v1/execute", authorization: "Bearer reconnect-secret", lastEventId: "protected-cursor" },
+    { url: "https://other.example/v1/execute", authorization: null, lastEventId: null },
+  ]);
+});
+
+test("POST SSE applies pull backpressure before reading the next frame", async () => {
+  const encoded = [
+    new TextEncoder().encode(sse({ type: "open", stream: "s", sequence: 1, schemaRevision: "r1" })),
+    new TextEncoder().encode(sse({ type: "complete", stream: "s", sequence: 2 })),
+  ];
+  let pulls = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(encoded.shift());
+      if (encoded.length === 0) controller.close();
+    },
+  }, { highWaterMark: 0 });
+  const adapter = createFetchAdapter({ endpoint: "https://api.example/v1/execute", fetch: async () => new Response(body, { headers: { "Content-Type": "text/event-stream" } }) });
+  const iterator = (await adapter.stream(operation("subscription")))[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).value.type, "open");
+  assert.equal(pulls, 1);
+  assert.equal((await iterator.next()).value.type, "complete");
+  assert.equal(pulls, 2);
 });
 
 test("POST SSE rejects truncation and cancellation actively closes the body", async () => {
@@ -173,6 +243,9 @@ test("POST SSE normalizes reader acquisition failures and closes the body", asyn
   };
   await assert.rejects(collect(decodeSSEStream(body)), clientCode("CLIENT_STREAM_INVALID"));
   assert.equal(canceled, true);
+
+  const injected = { getReader() { throw new NaatreClientError("PRIVATE_READER_CODE"); }, async cancel() {} };
+  await assert.rejects(collect(decodeSSEStream(injected)), clientCode("CLIENT_STREAM_INVALID"));
 });
 
 test("POST SSE closes a history-unavailable recovery attempt and rejects malformed or oversized frames", async () => {
@@ -233,7 +306,7 @@ test("WebSocket rejects binary, malformed, and oversized frames with bounded clo
   assert.deepEqual(FakeWebSocket.last.closeCalls[0], [1003, "text required"]);
 
   FakeWebSocket.frames = ["{"];
-  await assert.rejects(collect(adapter.stream(operation("subscription"))), clientCode("CLIENT_PROTOCOL_INVALID"));
+  await assert.rejects(collect(adapter.stream(operation("subscription"))), (error) => clientCode("CLIENT_PROTOCOL_INVALID")(error) && error.cause === undefined);
   assert.deepEqual(FakeWebSocket.last.closeCalls[0], [1001, "client closed"]);
 
   FakeWebSocket.frames = ["x".repeat(65)];
@@ -277,6 +350,13 @@ function jsonResponse(body, headers = {}) {
 function sse(frame) {
   const cursor = frame.cursor === undefined ? "" : `id: ${frame.cursor}\n`;
   return `event: naatre.${frame.type}\n${cursor}data: ${JSON.stringify(frame)}\n\n`;
+}
+
+function sseMultiline(frame) {
+  const cursor = frame.cursor === undefined ? "" : `id: ${frame.cursor}\n`;
+  const payload = JSON.stringify(frame);
+  const split = payload.indexOf('"data"');
+  return `event: naatre.${frame.type}\n${cursor}data: ${payload.slice(0, split)}\ndata: ${payload.slice(split)}\n\n`;
 }
 
 function chunked(value, size) {

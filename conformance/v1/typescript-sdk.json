@@ -23,7 +23,7 @@
     {"path": "sdk/typescript/runtime/scalars.mjs", "sha256": "783edfb181d7dcbce5d786c508918c3f1de67d2024d687a890b81e9242ab7e33"},
     {"path": "sdk/typescript/runtime/result.mjs", "sha256": "3e046e34af27180d34e06531a24859b2af723caec2b5c611b761cba5880b7672"},
     {"path": "sdk/typescript/runtime/operation.mjs", "sha256": "479969bf7fad1842f84c008fb320d7e7b5bc0f903ed04f474c1d140ab404d3e5"},
-    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "26c1a4107e314f0a9ccbdd973dfc4ee43f8e16ef028a435043ba97ed022c4e1d"},
+    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "c4f007dabd8a96894f7c694cb728f6b78e7a042611087d7c6ebc39e61ea4eb90"},
     {"path": "sdk/typescript/runtime/index.test.mjs", "sha256": "8d0c1d51e697c5dd657f44443d34d8ed7b258962b30b5025d5b1d2e69dfd6068"},
     {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "df6eb6a63e978b2d04e3bc3f51e4ad9d799659a4c2f3c5755296b447d57fa2f7"},
     {"path": "sdk/typescript/sdkgen/cli.mjs", "sha256": "62fbc2a1fbbd1970b7049567b60e33f08a4e9270ce1c65754ccda79a29aab4c0"},

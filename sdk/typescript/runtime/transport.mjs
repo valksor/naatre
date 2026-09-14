@@ -3,7 +3,7 @@ import { decodeSSEStream } from "./stream.mjs";
 
 const requestMediaType = "application/vnd.naatre.request+json;version=1";
 const responseMediaType = "application/vnd.naatre.response+json";
-const sensitiveHeaders = new Set(["authorization", "cookie", "proxy-authorization", "x-csrf-token", "naatre-tenant", "naatre-principal"]);
+const sensitiveHeaders = new Set(["authorization", "cookie", "last-event-id", "proxy-authorization", "x-csrf-token", "naatre-tenant", "naatre-principal"]);
 const redirectStatuses = new Set([307, 308]);
 const rejectedRedirectStatuses = new Set([301, 302, 303]);
 const credentialModes = new Set(["omit", "same-origin"]);
@@ -50,7 +50,8 @@ async function executeUnary(configuration, operation, options) {
 
 async function executeSSE(configuration, operation, options) {
   if (operation?.kind !== "subscription") transportFail("CLIENT_OPERATION_INVALID");
-  const response = await fetchOperation(configuration, operation, options.signal, "text/event-stream");
+  const lastEventId = optionalStreamIdentifier(options.lastEventId);
+  const response = await fetchOperation(configuration, operation, options.signal, "text/event-stream", lastEventId);
   try {
     const mediaType = parseMediaType(response.headers.get("content-type"));
     if (mediaType.name !== "text/event-stream" || mediaType.parameters.charset && mediaType.parameters.charset !== "utf-8") transportFail("CLIENT_UNSUPPORTED_MEDIA_TYPE", response.status);
@@ -64,17 +65,19 @@ async function executeSSE(configuration, operation, options) {
   return decodeSSEStream(response.body, { maximumFrameBytes: configuration.limits.frameBytes, maximumResponseBytes: configuration.limits.decompressedBytes, signal: options.signal });
 }
 
-async function fetchOperation(configuration, operation, signal, accept) {
+async function fetchOperation(configuration, operation, signal, accept, lastEventId) {
   if (!operation || typeof operation.canonicalRequest !== "function") transportFail("CLIENT_OPERATION_INVALID");
   if (signal?.aborted) transportFail("CLIENT_CANCELED");
   const body = operation.canonicalRequest();
-  const authenticated = await authenticationHeaders(configuration.authenticate, configuration.endpoint, operation, signal);
+  const authenticated = await authenticationHeaders(configuration.authenticate, configuration.endpoint, operation, signal, lastEventId);
   let headers;
   try {
     headers = new Headers(authenticated);
     headers.set("accept", accept);
     headers.set("accept-encoding", accept === "text/event-stream" ? "identity" : "gzip");
     headers.set("content-type", requestMediaType);
+    headers.delete("last-event-id");
+    if (lastEventId !== undefined) headers.set("last-event-id", lastEventId);
   } catch {
     transportFail("CLIENT_AUTHENTICATION_FAILED");
   }
@@ -108,10 +111,13 @@ async function fetchOperation(configuration, operation, signal, accept) {
   }
 }
 
-async function authenticationHeaders(authenticate, endpoint, operation, signal) {
+async function authenticationHeaders(authenticate, endpoint, operation, signal, lastEventId) {
   if (!authenticate) return undefined;
   try {
-    const headers = await authenticate(Object.freeze({ url: endpoint.href, operation, signal }));
+    const context = lastEventId === undefined
+      ? Object.freeze({ url: endpoint.href, operation, signal })
+      : Object.freeze({ url: endpoint.href, operation, signal, lastEventId });
+    const headers = await authenticate(context);
     return headers ?? undefined;
   } catch {
     transportFail("CLIENT_AUTHENTICATION_FAILED");
@@ -240,6 +246,14 @@ function positiveLimit(value, fallback) {
 function nonNegativeLimit(value, fallback) {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < 0) transportFail("CLIENT_CONFIG_INVALID");
+  return value;
+}
+
+function optionalStreamIdentifier(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value === "" || new TextEncoder().encode(value).byteLength > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    transportFail("CLIENT_STREAM_INVALID");
+  }
   return value;
 }
 
