@@ -28,6 +28,7 @@ const implementations = new Map([
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
+  ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
 ]);
 const profileTimeouts = new Map([["sdk.jvm.core-1", 240_000]]);
 

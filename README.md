@@ -41,6 +41,10 @@ evidence must be described as planned.
 - `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,
   F# consumption proof, and cancellable HTTP/SSE reference client for
   `sdk.dotnet.core-1`.
+- `sdk/swift`: reflection-free Swift Package Manager client core, lossless
+  canonical scalar wrappers, async transport/cancellation contract, and
+  deterministic Codable operation bindings for `sdk.swift.core-1`; concrete
+  Apple transport adapters remain owned by #86.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
