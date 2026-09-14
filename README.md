@@ -49,8 +49,10 @@ evidence must be described as planned.
   runtime registration remains the production recommendation. See the
   [reflection adapter guide](reflectadapter/README.md).
 - `transport/http`: strict reusable SSE framing for
-  [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
-  streaming and general `net/http` adapters.
+  [`core.streaming-1`](spec/v1/streaming.md) and opt-in authenticated,
+  filtered schema discovery for `schema.discovery.http-1`; see the
+  [discovery profile](docs/schema-discovery.md). #72 and #73 own the concrete
+  streaming and general operation `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
