@@ -22,6 +22,7 @@ const implementations = new Map([
   ["core.validation-1", "validation.mjs"],
   ["sdk.generation-1", "verify-generator.mjs"],
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
+  ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
 ]);
@@ -147,7 +148,8 @@ function runProfile(profile) {
   }
   if (profile === "suite.contract-1") return verifySuite();
   const script = implementations.get(profile);
-  const executed = spawnSync(process.execPath, [fileURLToPath(new URL(script, import.meta.url))], {
+  const executable = script.endsWith(".py") ? (process.env.PYTHON ?? "python3") : process.execPath;
+  const executed = spawnSync(executable, [fileURLToPath(new URL(script, import.meta.url))], {
     encoding: "utf8",
     timeout: 30_000,
   });

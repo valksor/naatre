@@ -1,0 +1,1 @@
+{"canonicalVersion":"c14n-1","operations":[{"kind":"query","name":"GetAccount","persisted":{"algorithm":"sha-256","canonicalVersion":"c14n-1","digest":"cc863005080edcb85ec0345a50593dc58111896bbbe7ff86475ef2412fc5cb90"}}],"profile":"sdk.python.core-1","protocolVersion":"1","version":"1"}

@@ -11,4 +11,10 @@ dist/
 node_modules/
 vendor/
 .tmp/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
 *.test

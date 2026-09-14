@@ -31,6 +31,9 @@ evidence must be described as planned.
 - `sdk/php`: framework-neutral PSR-18 unary client, lossless PHP value model,
   serializer-neutral attributes, and deterministic bindings for
   `sdk.php.core-1`; framework integrations remain owned by #79.
+- `sdk/python`: dependency-free typed Python 3.11-3.14 client core, sync and
+  async transport protocols, lossless scalar wrappers, SSE lifecycle, and
+  deterministic dataclass bindings for `sdk.python.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
