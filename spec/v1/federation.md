@@ -17,7 +17,9 @@ application member's logical `owner` metadata.
 Production entity planning, routing optimization, discovery, and transport
 integration are separate capabilities. The Go reference coordinator accepts an
 already resolved read-only call plan solely to make this profile's delegation,
-resource, error, and version rules executable.
+resource, error, and version rules executable. A separately evidenced Go
+coordinator may plan admitted entity routes and bind operator-provided transport
+adapters; it does not add wire or schema authority to this profile.
 
 ## FED-100 — authenticated manifests and service trust
 
@@ -120,8 +122,9 @@ deadline. It MUST NOT replace a caller deadline with a later one. If an
 authorization context is missing or cannot be delegated, no downstream invoker
 may run and the public request fails closed.
 
-The in-process reference API preserves context values into its invoker. Concrete
-cross-process trace serialization and transport propagation are owned by #109.
+The in-process reference API preserves context values into its invoker. A
+concrete coordinator MAY propagate a separately approved, bounded trace carrier;
+that carrier MUST NOT grant additional identity or authorization authority.
 
 ## FED-202 — schema pins and rolling upgrades
 

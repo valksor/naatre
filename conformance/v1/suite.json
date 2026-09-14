@@ -21,6 +21,7 @@
     {"path": "v1/collections.json", "profile": "collection.page-1", "category": "execution", "sha256": "f5da9ca478e63cd763ef5189693a8ba9a83936d074613a769a5eab90b0190349"},
     {"path": "v1/collection-query-generation.json", "profile": "collection.query.codegen-1", "category": "schema", "sha256": "bc25b56f735aeac41ee0bc7cc635055131edfdd2283dc575ee7ffb7c3fa3c872"},
     {"path": "v1/extensions.json", "profile": "core.extensions-1", "category": "evolution", "sha256": "2c300bf4304ca5c20b05727a23ee3654710eef085255432aa6824d0ea71243d8"},
+    {"path": "v1/federation-coordinator.json", "profile": "runtime.go.federation-coordinator-1", "category": "execution", "sha256": "2127ed8971157930eb3556707c1a8114d8c387462ac35e143647e7a462ca8edf"},
     {"path": "v1/federation.json", "profile": "core.federation-1", "category": "execution", "sha256": "3e2e99f07612f5f8520b8e3d81be02b18c1f3dde657adc5463f94cee8900488a"},
     {"path": "v1/generation.json", "profile": "sdk.generation-1", "category": "canonical", "sha256": "bbf36816b917db6617e54a061ed255c81619bf9ea3887f0da087e2b6bb7946b0"},
     {"path": "v1/generator-model.json", "profile": "sdk.generation-1", "category": "schema", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
@@ -40,7 +41,7 @@
     {"path": "v1/protocol.json", "profile": "core.protocol-1", "category": "wire", "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"},
     {"path": "v1/reliability.json", "profile": "core.reliability-1", "category": "execution", "sha256": "24a0eb39c1094957b41a90b2cf6ce73ea26a233e7252344f23d25a98448cba68"},
     {"path": "v1/resources.json", "profile": "core.resources-1", "category": "security", "sha256": "00e2d7ad6fb2bb168b5556847c08a35293c19f0bcdbc6462ac5124c5f3f3d1c4"},
-    {"path": "v1/roadmap.json", "profile": "suite.roadmap-1", "category": "evolution", "sha256": "6d864ecb35a19a3fdd7921fcec67f32ffdc69e98a256fca613826facf148eda6"},
+    {"path": "v1/roadmap.json", "profile": "suite.roadmap-1", "category": "evolution", "sha256": "ca9133df173b2cbd920444b92569de4c62d997a958ac6812454c9be32bf0f437"},
     {"path": "v1/scalars.json", "profile": "core.scalar.c14n-1", "category": "wire", "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"},
     {"path": "v1/schema-discovery.json", "profile": "schema.discovery.http-1", "category": "transport", "sha256": "a90572986acc8f3a976e067b3e30703c9d26e2d1c890738b4933c53c8af0cd67"},
     {"path": "v1/schema.json", "profile": "core.schema-1", "category": "schema", "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"},
@@ -390,7 +391,7 @@
     {"caseId": "issue.106", "issue": 106, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/106", "polarity": "mixed"}]},
     {"caseId": "issue.107", "issue": 107, "fixtureRefs": [{"path": "v1/observability-integrations.json", "pointer": "", "polarity": "mixed"}, {"path": "v1/roadmap.json", "pointer": "/issues/107", "polarity": "mixed"}]},
     {"caseId": "issue.108", "issue": 108, "fixtureRefs": [{"path": "v1/collection-query-generation.json", "pointer": "", "polarity": "mixed"}, {"path": "v1/roadmap.json", "pointer": "/issues/108", "polarity": "mixed"}]},
-    {"caseId": "issue.109", "issue": 109, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/109", "polarity": "mixed"}]},
+    {"caseId": "issue.109", "issue": 109, "fixtureRefs": [{"path": "v1/federation-coordinator.json", "pointer": "/planningCases", "polarity": "mixed"}, {"path": "v1/federation-coordinator.json", "pointer": "/executionEvidence", "polarity": "mixed"}]},
     {"caseId": "issue.110", "issue": 110, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/110", "polarity": "mixed"}]}
   ]
 }
