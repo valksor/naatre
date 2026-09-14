@@ -1,0 +1,72 @@
+{
+  "profile": "core.http-1",
+  "fixtureSuite": "1.0.0",
+  "implementation": {
+    "module": "github.com/valksor/naatre/transport/http",
+    "minimumGo": "1.27",
+    "evidenceRuntime": {
+      "go": "go1.27.1",
+      "os": "darwin",
+      "arch": "arm64"
+    },
+    "dependencies": [
+      {"path":"go.mod","sha256":"ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"},
+      {"path":"spec/v1/http.md","sha256":"b7d21b883a34989c89aa9f79eec100b91734b722b8fa2b1a79c4bb5df8eae7b0"},
+      {"path":"conformance/v1/http.json","sha256":"f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"}
+    ],
+    "files": [
+      {"path":"transport/http/handler.go","sha256":"fd3c75d8c13747fe22b1c67404e570c08711b77d9655443f38de65ae6ef9c501"},
+      {"path":"transport/http/doc.go","sha256":"7b5d4d5f6764415601c86f024f837e004c47f49228fabc6223d89daf9f1efa6a"},
+      {"path":"transport/http/README.md","sha256":"a719ef96b61a55f829d7cfa09b434ae0b91ddbbdb351a0545a5def0e258e38eb"},
+      {"path":"transport/http/handler_test.go","sha256":"fd942f5ef17cc9138cd865c9b80a109ac1c1dc2676b50bcf1474de77d2067b71"}
+    ]
+  },
+  "binding": {
+    "handler": "net/http.Handler",
+    "path": "/v1/execute",
+    "method": "POST",
+    "requestMediaType": "application/vnd.naatre.request+json;version=1",
+    "responseMediaType": "application/vnd.naatre.response+json;version=1",
+    "problemMediaType": "application/problem+json",
+    "requestCompressedBytes": 8388608,
+    "requestDecompressedBytes": 16777216,
+    "responseBytes": 16777216,
+    "responseCompressedBytes": 8388608,
+    "cancellation": "active-context-and-body-close",
+    "cacheDefault": "no-store",
+    "redirects": "never"
+  },
+  "vectors": [
+    "status-media-encoding",
+    "compressed-size",
+    "slow-client",
+    "disconnect",
+    "deadline",
+    "cache-isolation",
+    "cors",
+    "redirect",
+    "shutdown",
+    "problem-redaction",
+    "http-1.1-semantics",
+    "http-2-semantics",
+    "http-3-semantics"
+  ],
+  "commands": {
+    "package": "go test ./transport/http -count=1",
+    "race": "go test -race ./transport/http -count=1",
+    "profile": "printf '%s\\n' '{\"protocol\":\"naatre.conformance.runner-1\",\"id\":\"http\",\"command\":\"run\",\"path\":{\"source\":{\"kind\":\"sdk\",\"language\":\"go\"},\"destination\":{\"kind\":\"native-runtime\",\"language\":\"go\"}},\"profiles\":[\"core.http-1\"]}' | go run ./cmd/naatre-conformance --require-pass"
+  },
+  "unsupported": [
+    "persisted-operation-get",
+    "private-response-cache-storage",
+    "shared-response-cache-storage",
+    "conditional-get-etag-generation",
+    "redirect-responses",
+    "cookie-authentication-csrf-policy",
+    "listener-tls-quic-configuration",
+    "response-trailers",
+    "server-push",
+    "stream-endpoint-lifecycle",
+    "retry-after-generation"
+  ]
+}

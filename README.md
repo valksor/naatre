@@ -48,9 +48,10 @@ evidence must be described as planned.
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the
   [reflection adapter guide](reflectadapter/README.md).
-- `transport/http`: strict reusable SSE framing for
-  [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
-  streaming and general `net/http` adapters.
+- `transport/http`: router-free Go `net/http` unary execution with bounded
+  negotiation, cancellation, safe failures, cache-safe defaults, exact-origin
+  CORS, and strict reusable SSE framing; see the
+  [adapter runtime and capability matrix](transport/http/README.md).
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`

@@ -136,6 +136,7 @@ func New(suitePath string) (*Runner, error) {
 	root := filepath.Dir(filepath.Dir(suitePath))
 	runner := &Runner{manifest: suite, conformanceRoot: root, handlers: make(map[string]Handler)}
 	runner.handlers["suite.contract-1"] = runner.verifySuite
+	runner.handlers[coreHTTPProfile] = runner.verifyGoHTTP
 	runner.handlers[goClientProfile] = runner.verifyGoClient
 	runner.handlers[goSDKProfile] = runner.verifyGoSDK
 	return runner, nil
