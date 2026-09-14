@@ -10,4 +10,9 @@
 // without establishing an HTTP endpoint. Issue #72 owns the concrete streaming
 // adapters; issue #73 owns the general net/http handler; issue #104 owns digest
 // middleware and SDK integration.
+// Package http provides the router-free standard-library adapter for unary
+// core.http-1 execution and transport codecs shared by streaming adapters.
+// The handler owns negotiation, carrier limits, cancellation, safe response
+// mapping, cache-safe defaults, and deployment-configured CORS. Applications
+// retain listener, TLS, authentication policy, and process-supervisor ownership.
 package http

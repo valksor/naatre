@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -504,6 +503,7 @@ func TestGoRunnerProtocol(t *testing.T) {
 		t.Fatalf("Go runner response = %#v", response)
 	}
 	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "passed" || response.Results[4].Status != "unsupported" {
+	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "passed" {
 		t.Fatalf("Go runner results = %#v", response.Results)
 	}
 
@@ -593,7 +593,7 @@ func TestGoRunnerProtocol(t *testing.T) {
 	requiredInput := `{"protocol":"naatre.conformance.runner-1","id":"required","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["core.http-1"]}` + "\n"
 	options := conformancerunner.NDJSONOptions{RequirePass: true}
 	err = runner.ServeNDJSONWithOptions(context.Background(), strings.NewReader(requiredInput), &output, options)
-	if !errors.Is(err, conformancerunner.ErrRequiredProfileFailed) {
+	if err != nil {
 		t.Fatalf("Go runner require-pass error = %v: %s", err, output.String())
 	}
 	var requiredResponse struct {
@@ -605,7 +605,7 @@ func TestGoRunnerProtocol(t *testing.T) {
 	if decodeErr := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &requiredResponse); decodeErr != nil {
 		t.Fatalf("decode Go require-pass response: %v: %s", decodeErr, output.String())
 	}
-	if len(requiredResponse.Results) != 1 || requiredResponse.Results[0].Profile != "core.http-1" || requiredResponse.Results[0].Status != "unsupported" {
+	if len(requiredResponse.Results) != 1 || requiredResponse.Results[0].Profile != "core.http-1" || requiredResponse.Results[0].Status != "passed" {
 		t.Fatalf("Go runner require-pass result = %#v", requiredResponse.Results)
 	}
 }

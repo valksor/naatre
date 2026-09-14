@@ -94,6 +94,14 @@ credential policy, partial-result behavior, and unsupported higher-level
 capabilities. The Go runner executes this profile; the independent JavaScript
 runner advertises it as unsupported.
 
+`v1/go-http.json` pins the executable `core.http-1` Go adapter profile to the
+normative HTTP fixture, specification, module revision, handler sources, and
+tests. The Go runner executes media/status, bounded gzip, cache-safe defaults,
+CORS, redirect denial, redaction, and HTTP/1.1 through HTTP/3 semantic parity;
+the recorded package and race commands reproduce the slow-client, disconnect,
+deadline, and shutdown cancellation fixtures. Listener TLS and QUIC setup are
+host-owned and are not implied by this handler-level profile.
+
 `v1/go-sdk.json` pins `sdk.go.operations-1`, including the typed builder,
 selected-result decoder, manifest, retry, batching, pagination, POST-SSE, and
 stream lifecycle sources plus the deterministic Go generator and checked-in

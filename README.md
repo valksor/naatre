@@ -100,6 +100,10 @@ evidence must be described as planned.
   finite request-batch envelope, aggregate admission, item correlation,
   independent/fail-fast/atomic policies, and the HTTP-versus-streaming
   multiplexing boundary. It does not turn connection sharing into atomic work.
+- `transport/http`: router-free Go `net/http` unary execution with bounded
+  negotiation, cancellation, safe failures, cache-safe defaults, exact-origin
+  CORS, and strict reusable SSE framing; see the
+  [adapter runtime and capability matrix](transport/http/README.md).
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`,

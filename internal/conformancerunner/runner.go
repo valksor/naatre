@@ -144,6 +144,7 @@ func New(suitePath string) (*Runner, error) {
 	runner := &Runner{manifest: suite, conformanceRoot: root, handlers: make(map[string]Handler)}
 	runner.handlers["suite.contract-1"] = runner.verifySuite
 	runner.handlers["suite.profiles-1"] = runner.verifyProfileRegistry
+	runner.handlers[coreHTTPProfile] = runner.verifyGoHTTP
 	runner.handlers[goClientProfile] = runner.verifyGoClient
 	runner.handlers[goSDKProfile] = runner.verifyGoSDK
 	runner.handlers[toolingProfile] = runner.verifyTooling
