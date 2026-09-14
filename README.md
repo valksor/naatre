@@ -112,6 +112,9 @@ evidence must be described as planned.
   CORS, and strict reusable SSE framing; see the
   [adapter runtime and capability matrix](transport/http/README.md).
 - `internal/conformance`: Go-only conformance harness internals.
+- `internal/qualityharness`: Go-only fuzz, repeated-race, owned-resource leak,
+  fault-injection, and benchmark instrumentation for `quality.go.harness-1`;
+  see the [Go quality harness](docs/go-quality-harness.md).
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`,
   `sdk/typescript/generated`, and `sdk/dotnet/Naatre.Core/Generated` contain

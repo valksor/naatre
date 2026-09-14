@@ -162,6 +162,7 @@ func New(suitePath string) (*Runner, error) {
 	runner.handlers[toolingProfile] = runner.verifyTooling
 	runner.handlers[planCacheProfile] = runner.verifyPlanCache
 	runner.handlers[generatorPluginHostProfile] = runner.verifyGeneratorPluginHost
+	runner.handlers[goQualityProfile] = runner.verifyGoQuality
 	return runner, nil
 }
 

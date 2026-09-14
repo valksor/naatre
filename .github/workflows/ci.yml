@@ -69,6 +69,9 @@ jobs:
         run: go test -race ./internal/conformance -run 'TestGoRunnerParallelCancellationProfile' -count=1
       - name: Race tests
         run: go test -race ./...
+        run: printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.contract-1","quality.go.harness-1"]}' | go run ./cmd/naatre-conformance --require-pass
+      - name: Go quality harnesses
+        run: bash conformance/run-go-quality-ci.sh
       - name: Vet
         run: go vet ./...
       - name: Static analysis

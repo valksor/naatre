@@ -47,7 +47,10 @@ supplies finite budgets and seed-retention metadata for depth, alias, cost,
 directive, compression, federation, stream, literal, Unicode, loader, replay,
 and rollout inputs. `v1/benchmarks.json` fixes representative workloads and the
 environment, latency, allocation, and upstream-call measurements reports must
-publish; the Go benchmark implementations remain owned by #78.
+publish. `v1/go-quality.json` binds the Go fuzz, repeated-race, owned-resource
+leak, deterministic fault-injection, and benchmark execution surface to those
+authoritative fixtures. See [`docs/go-quality-harness.md`](../docs/go-quality-harness.md)
+for reproducible commands and explicit unsupported capabilities.
 
 Fixture integers outside the interoperable JSON range of
 `-9007199254740991..9007199254740991` are decimal strings. Consumers must parse
