@@ -115,6 +115,13 @@ handling, redirect credential stripping, and non-replay of mutations. The
 independent runner executes the .NET verifier when both SDK lines are present.
 WebSocket, ASP.NET dependency injection, trimming/AOT, and broader runtime
 certification remain explicitly unsupported and owned by issue #85.
+`v1/ruby-sdk.json` pins `sdk.ruby.core-1`: immutable generated Ruby operation
+and result shapes, RBS metadata, string/symbol key normalization, lossless
+numeric and temporal scalar adapters, partial-completion states, strict bounded
+decoding, persisted request identity, stream terminal validation, and a
+reproducible gem build. Its runtime matrix links the checked CRuby report and
+marks HTTP, Rails, SSE, WebSocket, retry/auth, and transport cancellation as
+unsupported until issue #83; issue #69 owns the combined official matrix.
 
 `v1/typescript-adapters.json` pins `sdk.typescript.adapters-1`: Fetch unary and
 POST-SSE adapters, the optional secure WebSocket adapter, strict ESM subpath

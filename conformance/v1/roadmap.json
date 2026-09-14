@@ -229,19 +229,19 @@
     },
     "44": {
       "issue": 44,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 44,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.ruby.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["sdk.ruby.core-1"]
       }
     },
     "45": {

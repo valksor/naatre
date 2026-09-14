@@ -27,6 +27,7 @@ const implementations = new Map([
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
+  ["sdk.ruby.core-1", "verify-ruby-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
   ["sdk.swift.core-1", "verify-swift-sdk.mjs"],

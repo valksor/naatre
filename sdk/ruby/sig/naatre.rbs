@@ -1,0 +1,122 @@
+module Naatre
+  VERSION: String
+  MAX_RESPONSE_BYTES: Integer
+  MAX_DECOMPRESSED_BYTES: Integer
+  MAX_FRAME_BYTES: Integer
+  MAX_REDIRECTS: Integer
+
+  class ClientError < StandardError
+    attr_reader code: String
+    def initialize: (String code) -> void
+  end
+
+  class Timestamp
+    attr_reader wire: String
+    def initialize: ((String | Time) value) -> void
+    def to_s: () -> String
+  end
+
+  class Duration
+    attr_reader nanoseconds: Integer
+    def initialize: ((String | Integer) value) -> void
+    def to_s: () -> String
+  end
+
+  class UUID
+    attr_reader wire: String
+    def initialize: (String value) -> void
+    def to_s: () -> String
+  end
+
+  class Bytes
+    attr_reader value: String
+    def initialize: (String value) -> void
+    def wire: () -> String
+    def self.decode: (String value) -> Bytes
+  end
+
+  class UnknownVariant
+    attr_reader raw: String
+    attr_reader value: untyped
+    def initialize: (String raw, ?untyped value) -> void
+  end
+
+  class OpenUnion
+    attr_reader name: String
+    attr_reader members: Array[String]
+    def initialize: (String name, Array[String] members) -> void
+    def decode: (String discriminator, untyped value) -> (Selected | UnknownVariant)
+  end
+
+  class SchemaMetadata
+    attr_reader name: String
+    attr_reader kind: String
+    attr_reader descriptor: Hash[String, untyped]
+    def initialize: (String name, String kind, Hash[(String | Symbol), untyped] descriptor) -> void
+  end
+
+  class OpenEnum
+    attr_reader name: String
+    attr_reader members: Array[String]
+    def initialize: (String name, Array[String] members) -> void
+    def decode: (String value) -> (String | UnknownVariant)
+  end
+
+  class Selected
+    attr_reader state: String
+    attr_reader value: untyped
+    attr_reader errors: Array[ErrorDetail]?
+    attr_reader reason: String?
+    def self.present: (untyped value) -> Selected
+    def self.failed: (Array[ErrorDetail] errors) -> Selected
+    def self.skipped: (String reason) -> Selected
+  end
+
+  class ErrorDetail
+    attr_reader code: String?
+    attr_reader message: String?
+    attr_reader path: Array[untyped]?
+    attr_reader retryable: bool?
+    attr_reader raw: Hash[String, untyped]
+    def initialize: (Hash[(String | Symbol), untyped] value) -> void
+  end
+
+  class OperationResult
+    attr_reader data: untyped
+    attr_reader errors: Array[ErrorDetail]
+    attr_reader complete: bool
+  end
+
+  class GeneratedValue
+    def self.decode: (Hash[(String | Symbol), untyped] value, ?Hash[(String | Symbol), untyped] codecs) -> GeneratedValue
+    def to_h: () -> Hash[String, Selected]
+  end
+
+  class Variables
+    def initialize: (Hash[(String | Symbol), untyped] values) -> void
+    def to_h: () -> Hash[String, untyped]
+  end
+
+  class Operation
+    attr_reader kind: String
+    attr_reader request: Hash[String, untyped]
+    def canonical_request: () -> String
+    def decode_result: ((String | Hash[(String | Symbol), untyped]) input, ?Integer maximum_bytes) -> OperationResult
+    def replayable?: () -> bool
+  end
+
+  class StreamState
+    attr_reader terminal: bool
+    attr_reader position: Integer
+    def initialize: (?Integer maximum_frame_bytes) -> void
+    def accept: ((String | Hash[(String | Symbol), untyped]) input) -> Hash[String, untyped]
+    def finish: () -> bool
+  end
+
+
+  module Pagination
+    def self.collect: (Integer maximum_pages, ?String? initial_cursor) { (String? cursor) -> Hash[(String | Symbol), untyped] } -> Array[untyped]
+  end
+
+  def self.unsupported!: (String capability) -> bot
+end

@@ -48,6 +48,8 @@ evidence must be described as planned.
 - `sdk/dart`: dependency-free null-safe Dart client core, lossless scalar and
   partial-result models, pluggable transport contracts, and deterministic
   operation bindings for `sdk.dart.core-1`.
+- `sdk/ruby/` contains the dependency-free Ruby core, deterministic generated
+  operation bindings, and RBS metadata for `sdk.ruby.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
