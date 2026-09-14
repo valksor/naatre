@@ -1,7 +1,9 @@
 # Mutations and transaction boundaries
 
 This document defines the `core.mutation-1` profile. Portable vectors are in
-[`mutations.json`](../../conformance/v1/mutations.json).
+[`mutations.json`](../../conformance/v1/mutations.json). Conditional update and
+read-consistency vectors are in
+[`mutation-updates.json`](../../conformance/v1/mutation-updates.json).
 
 ## MUT-001 — deterministic mutation order
 
@@ -127,3 +129,132 @@ Static request arguments are validated before execution. A value produced by
 an earlier call is type-, constraint-, and precondition-validated immediately
 before its consumer. Failure follows the active operation/group boundary and
 cannot expose tentative data.
+
+## MUT-100 — revisions and atomic preconditions
+
+`mutation.update-1` defines opaque application revision tokens. A token is an
+equality-only value scoped to the registered mutation, entity, authorization
+domain, and representation declared by the application. Clients MUST NOT parse,
+order, increment, or synthesize one. A conditional mutation carries its expected
+revision as a typed input precondition.
+
+The application provider MUST compare the expected revision and perform the
+protected write in one atomic storage boundary. Planning-time lookup, serial
+handler execution, and a separate `SELECT` followed by `UPDATE` are not that
+boundary. Two concurrent writes using one revision therefore produce at most
+one successful conditional commit. A successful commit returns the new
+committed revision; failures never return a tentative revision.
+
+## MUT-101 — precondition outcomes and authorization
+
+The stable conditional outcomes are `PRECONDITION_REQUIRED` when a registered
+mutation requires but omits an expected revision, `REVISION_CONFLICT` when it
+does not match, `ENTITY_NOT_FOUND` for an authorized lookup of a nonexistent
+entity, `PRECONDITION_UNSUPPORTED` when the requested guarantee is not declared,
+and `UNAUTHORIZED` when entity or field policy denies access. Authorization MUST
+run before an entity lookup or revision comparison whose result could disclose
+protected existence. A precondition failure invokes no protected write.
+
+Messages and details for these outcomes MUST NOT contain the current value,
+current revision, provider key, authorization reason, or existence fact hidden
+by policy. Error paths identify only locations in caller-supplied input.
+
+## MUT-102 — closed typed updates
+
+A registered typed-update descriptor is the complete writable allowlist. Each
+field has a stable identity, exact public path, schema type, required and
+nullable flags, immutability, field authorization, and optional one-of identity.
+The four states are distinct: no edit means unchanged; `set(value)` stores a
+coerced non-null value; `set(null)` stores null only for a nullable field; and
+`remove` makes an optional field absent. Removing a required field, changing an
+immutable field, selecting multiple alternatives in one one-of input, or
+writing a field not in the descriptor fails before the provider write.
+
+Implementations MUST coerce values through the declared schema type and apply
+field authorization. They MUST NOT populate a language object and then reflect
+over all of its properties: that turns new SDK or application properties into
+mass-assignment targets.
+
+## MUT-103 — JSON Patch and merge patch
+
+RFC 6902 JSON Patch is a separately advertised `mutation.json-patch-1`
+capability. Its operations execute in input order and `test` is an additional
+write precondition. Every path MUST exactly match a registered writable public
+path and pass its type, mutability, and authorization checks; arbitrary pointer
+segments are never mapped to provider fields. An unsupported operation or path
+fails the entire patch. Repeated JSON Patch paths retain RFC 6902 sequential
+meaning and are not rewritten into a typed update.
+
+RFC 7396 JSON Merge Patch is not a portable Naatre update representation. Its
+`null` means removal, so it cannot express both `set(null)` and `remove` for a
+nullable field while preserving Naatre's missing/null distinction.
+
+## MUT-104 — list and map edits
+
+Typed list edits are `list-append`, `list-insert`, `list-replace`, and
+`list-remove`; typed map edits are `map-set` and `map-remove`. Operations execute
+in input order against a staged clone. A duplicate typed target is
+`DUPLICATE_EDIT`. Positional list edits require an expected entity revision;
+an absent or out-of-range position is `LIST_INDEX_CONFLICT`. Map keys are
+application data, not field paths, and cannot escape the registered map field.
+
+Every operation, value, target, one-of rule, and authorization decision is
+validated before the staged clone is committed. Any failure discards every edit
+and reports the failing input operation in its safe error path.
+
+## MUT-105 — read consistency
+
+The default `best-effort` mode promises no application snapshot across
+selections or requests. Serial handler execution alone does not create a
+consistent database snapshot. Applications may separately advertise `snapshot`
+and `read-your-writes` modes. Snapshot reads bind every participating read to
+one opaque provider snapshot identity; read-your-writes accepts a committed
+mutation revision and MUST observe that write or a later state. A requested mode
+that the provider cannot honor fails with `READ_CONSISTENCY_UNSUPPORTED`; it is
+never silently downgraded.
+
+Snapshot resources are provider-owned, bounded, and finite. An expired or
+wrongly scoped snapshot fails explicitly rather than falling back to live data.
+
+## MUT-106 — cursors, results, and caches
+
+An application revision describes conditional-write state. A cursor snapshot
+describes a collection read boundary. They may carry the same provider snapshot
+identity only when the application explicitly binds them; neither token is
+interchangeable with the other. Mutation results publish only a committed
+revision. Normalized caches store that revision with the entity and invalidate
+or generation-fence older entries after commit. Rollback leaves the prior
+committed revision cacheable. Stream frames and incremental response patches
+MUST NOT present tentative mutation data or a tentative revision as committed.
+Response-stream patch semantics are not application-write patch semantics.
+
+## MUT-107 — idempotency and HTTP bindings
+
+The expected revision and update representation participate in the REL-003
+idempotency fingerprint. After a successful conditional mutation, replay of the
+same protected request returns the recorded result and committed revision after
+REL-007 reauthorization; it MUST NOT compare the recorded precondition with the
+entity's now-newer revision or invoke the write again.
+
+HTTP `If-Match` may bind to the typed expected revision only when that HTTP
+binding identifies the same single resource and representation. Multiple
+objects, mixed representations, or provider-specific revision domains use
+typed preconditions in the operation input instead.
+
+## MUT-108 — multiple resources and external effects
+
+A mutation touching multiple application objects declares every expected
+revision in a closed typed precondition set. The #20 transaction provider checks
+those preconditions and performs all protected writes inside its application
+transaction boundary. Failure is all-or-nothing for that boundary. Remote
+services and other external effects use MUT-007 outbox, after-commit, or
+compensation semantics; Naatre does not claim distributed ACID.
+
+## MUT-109 — committed-result boundary
+
+Rollback, output-completion failure, cache invalidation failure, disconnect,
+and streamed-result truncation do not rewrite transaction truth. A confirmed
+rollback preserves the prior committed revision and publishes no tentative
+value. A confirmed commit keeps its returned revision even when after-commit
+cache invalidation or result delivery fails. Unknown commit remains
+`indeterminate` and withholds both tentative data and revision.

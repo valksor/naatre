@@ -26,6 +26,7 @@ var layers = []struct {
 	{"schema", 1},
 	{"client", 2},
 	{"collectionquery", 2},
+	{"mutation", 2},
 	{"generator", 2},
 	{"runtime", 2},
 	{"sdk", 3},
