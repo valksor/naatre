@@ -292,7 +292,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "8444581aae34913340cb1fcfd175faec3b9c46ef86273b33d91c78e6541db858"
+      "sha256": "dfb466ace6e8fd12f779a6c4879efd00da12607f47c76d7d94b2fb0b7c6a4693"
     },
     {
       "path": "v1/php-sdk.json",
@@ -400,7 +400,7 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "41acaf0ce979bcd686d5b2880d2070a6dab67012ab4cd55c697a0466bfe748f9"
+      "sha256": "b9ef9ab778de270ce28e4d3502c6b397b70a34ee1df54fb3cf4879f6e6c3d8c1"
     },
     {
       "path": "v1/go-quality.json",

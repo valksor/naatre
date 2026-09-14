@@ -1827,7 +1827,7 @@
         {
           "path": "v1/generator-plugin-host.json",
           "profile": "sdk.generator-plugin-host-1",
-          "sha256": "41acaf0ce979bcd686d5b2880d2070a6dab67012ab4cd55c697a0466bfe748f9"
+          "sha256": "b9ef9ab778de270ce28e4d3502c6b397b70a34ee1df54fb3cf4879f6e6c3d8c1"
         },
         {
           "path": "v1/language.json",
