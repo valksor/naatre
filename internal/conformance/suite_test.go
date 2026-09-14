@@ -84,7 +84,7 @@ func TestConformanceSuiteContract(t *testing.T) {
 		t.Fatalf("suite versions = spec %q, runner %q", manifest.SpecVersion, manifest.RunnerProtocol)
 	}
 
-	requiredCategories := []string{"wire", "document", "schema", "execution", "transport", "canonical", "stream", "security", "evolution", "interaction", "adversarial", "benchmark"}
+	requiredCategories := []string{"wire", "document", "schema", "execution", "transport", "integration", "canonical", "stream", "security", "evolution", "interaction", "adversarial", "benchmark"}
 	for _, category := range requiredCategories {
 		if !slices.Contains(manifest.Categories, category) {
 			t.Errorf("suite does not declare %q fixture category", category)

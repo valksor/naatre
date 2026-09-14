@@ -142,6 +142,13 @@ hook ordering, redaction, cardinality, failure containment, and mutation
 correlation. #70 owns broker-backed stream/replay integration and #107 owns
 optional exporter and durable-audit adapters.
 
+`v1/observability-integrations.json` fixes the optional Go OpenTelemetry and
+durable-audit integration boundary owned by #107. It pins exact dependency
+revisions, supported and unsupported capabilities, retained-state and audit
+limits, reproducible commands, and positive, negative, boundary,
+cancellation, and resource-limit test evidence. It adds no normative event or
+storage schema; `operations.observability-1` remains authoritative.
+
 `v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
 complete, filtered, recursive, extended-trait, evolving, open-union, and
 deprecation snapshots. The Go consumer strict-parses each document, imports it

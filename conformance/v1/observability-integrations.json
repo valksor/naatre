@@ -1,0 +1,134 @@
+{
+  "profile": "operations.observability-integrations-go-1",
+  "owner": {
+    "issue": 107,
+    "coreContractIssue": 27,
+    "normativeProfile": "operations.observability-1"
+  },
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "goVersion": "1.27.0",
+    "packages": [
+      "github.com/valksor/naatre/observability/audit",
+      "github.com/valksor/naatre/observability/otel"
+    ],
+    "dependencies": [
+      {"module": "go.opentelemetry.io/otel", "version": "v1.46.0"},
+      {"module": "go.opentelemetry.io/otel/log", "version": "v0.22.0"},
+      {"module": "go.opentelemetry.io/otel/metric", "version": "v1.46.0"},
+      {"module": "go.opentelemetry.io/otel/sdk", "version": "v1.46.0"},
+      {"module": "go.opentelemetry.io/otel/sdk/log", "version": "v0.22.0"},
+      {"module": "go.opentelemetry.io/otel/sdk/metric", "version": "v1.46.0"},
+      {"module": "go.opentelemetry.io/otel/trace", "version": "v1.46.0"}
+    ]
+  },
+  "runtime": {
+    "language": "go",
+    "minimum": "1.27.0",
+    "platformProfile": "portable-go",
+    "certifiedOperatingSystems": []
+  },
+  "limits": {
+    "defaultActiveSpans": 1024,
+    "defaultCausalReferences": 4096,
+    "defaultLinksPerEvent": 32,
+    "defaultAuditBatch": 16,
+    "defaultAuditFieldBytes": 256
+  },
+  "fixtures": [
+    {
+      "name": "otel-redacted-causal-lifecycle",
+      "polarity": "positive",
+      "boundary": "trace-log",
+      "tests": ["TestAdapterExportsRedactedCausalTracesAndLogs"]
+    },
+    {
+      "name": "otel-async-replay-links",
+      "polarity": "positive",
+      "boundary": "async-stream-replay",
+      "tests": ["TestAdapterPreservesCompletedParentAndReplayLinks"]
+    },
+    {
+      "name": "otel-bounded-metric-cardinality",
+      "polarity": "negative",
+      "boundary": "metric-input",
+      "tests": ["TestAdapterMetricsHaveOnlyBoundedLabels", "TestPublicTelemetryNormalizationBoundsEveryDimension"]
+    },
+    {
+      "name": "otel-resource-limits",
+      "polarity": "boundary",
+      "boundary": "retained-state",
+      "tests": ["TestAdapterLimitsActiveStateAndCausalInputs"]
+    },
+    {
+      "name": "otel-safe-failures",
+      "polarity": "negative",
+      "boundary": "public-errors",
+      "tests": ["TestAdapterRejectsInvalidConfigurationAndEvent", "TestAdapterContainsProviderPanicAsStableFailure", "TestCommittedMutationSurvivesTelemetryAndAuditHookFailures"]
+    },
+    {
+      "name": "audit-transactional-admission",
+      "polarity": "positive",
+      "boundary": "pre-commit-outbox",
+      "tests": ["TestAdmitPersistsBeforeCommitUsingTransactionContext"]
+    },
+    {
+      "name": "audit-persistence-rollback",
+      "polarity": "negative",
+      "boundary": "persistence-failure",
+      "tests": ["TestPersistenceFailureIsSafeAndRollsBack"]
+    },
+    {
+      "name": "audit-cancellation",
+      "polarity": "cancellation",
+      "boundary": "transaction-context",
+      "tests": ["TestCancellationSkipsWriterAndCannotCommit"]
+    },
+    {
+      "name": "audit-input-and-resource-boundaries",
+      "polarity": "boundary",
+      "boundary": "admission-input",
+      "tests": ["TestAdmissionAndHookBoundaries", "TestNewRejectsInvalidConfiguration"]
+    }
+  ],
+  "capabilities": {
+    "supported": [
+      "otel-traces",
+      "otel-metrics",
+      "otel-logs",
+      "hashed-causal-references",
+      "bounded-metric-labels",
+      "bounded-adapter-state",
+      "transactional-audit-admission",
+      "best-effort-runtime-audit-hook"
+    ],
+    "unsupported": [
+      "otel-provider-ownership",
+      "otel-exporter-configuration",
+      "otel-sampling-configuration",
+      "otel-resource-configuration",
+      "otel-propagator-configuration",
+      "otel-baggage",
+      "otel-force-flush",
+      "otel-shutdown",
+      "audit-storage-driver",
+      "audit-schema-migrations",
+      "audit-relay",
+      "audit-delivery-retry",
+      "audit-retention-policy",
+      "audit-encryption",
+      "audit-signatures",
+      "audit-worm-certification",
+      "native-runtime-adapters",
+      "transport-adapters",
+      "framework-adapters",
+      "operating-system-certification"
+    ]
+  },
+  "commands": [
+    "GOWORK=off go test ./observability/... -count=1",
+    "GOWORK=off go test ./runtime -run 'TestCommittedMutationSurvivesTelemetryAndAuditHookFailures|TestPublicTelemetryNormalizationBoundsEveryDimension' -count=1",
+    "GOWORK=off go test ./internal/conformance -run TestObservabilityIntegrationProfile -count=1",
+    "GOWORK=off go test -race ./observability/... ./runtime ./internal/conformance -count=1"
+  ]
+}

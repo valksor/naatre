@@ -29,6 +29,7 @@ var layers = []struct {
 	{"generator", 2},
 	{"runtime", 2},
 	{"sdk", 3},
+	{"observability", 3},
 	{"reflectadapter", 3},
 	{"transport", 4},
 	{"examples", 5},
@@ -63,8 +64,8 @@ func TestPackageDependenciesFollowTheDocumentedDirection(t *testing.T) {
 	for _, relative := range packages {
 		t.Run(relative, func(t *testing.T) {
 			imported := build.Default
-			// The module has no external dependencies to resolve, so importing
-			// the directory is enough to read its declared imports.
+			// Importing the directory is enough to read its declared imports;
+			// this check does not need to resolve external dependencies.
 			pkg, err := imported.ImportDir(filepath.Join(root, relative), 0)
 			if err != nil {
 				t.Fatalf("read package %s: %v", relative, err)

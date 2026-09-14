@@ -281,16 +281,59 @@ func cloneTelemetryEvent(event TelemetryEvent) TelemetryEvent {
 	return event
 }
 
+// NormalizeTelemetryEvent returns a detached event whose dimensions use the
+// portable closed vocabularies. Optional adapters should call this at their
+// public boundary so direct hook invocation cannot create unbounded labels.
+func NormalizeTelemetryEvent(event TelemetryEvent) TelemetryEvent {
+	return normalizeTelemetryEvent(cloneTelemetryEvent(event))
+}
+
+// NormalizeMetricEvent returns metric dimensions from the portable closed
+// vocabularies without changing any numeric measurement.
+func NormalizeMetricEvent(event MetricEvent) MetricEvent {
+	normalized := normalizeTelemetryEvent(TelemetryEvent{
+		Kind: event.Kind, Stage: event.Stage, OperationKind: event.OperationKind,
+		Outcome: event.Outcome, ErrorCode: event.ErrorCode,
+	})
+	event.Kind = normalized.Kind
+	event.Stage = normalized.Stage
+	event.OperationKind = normalized.OperationKind
+	event.Outcome = normalized.Outcome
+	event.ErrorCode = normalized.ErrorCode
+	return event
+}
+
 func normalizeTelemetryEvent(event TelemetryEvent) TelemetryEvent {
+	kind, validKind := boundedTelemetryKind(event.Kind)
 	stage, validStage := boundedTelemetryStage(event.Kind, event.Stage)
 	outcome, validOutcome := boundedTelemetryOutcome(event.Outcome)
-	event.Stage, event.Outcome = stage, outcome
-	if !validStage || !validOutcome {
+	operationKind, validOperationKind := boundedTelemetryOperationKind(event.OperationKind)
+	event.Kind, event.Stage, event.Outcome, event.OperationKind = kind, stage, outcome, operationKind
+	if !validKind || !validStage || !validOutcome || !validOperationKind {
 		event.ErrorCode = CodeInternal
 	} else {
 		event.ErrorCode = boundedTelemetryCode(event.ErrorCode)
 	}
 	return event
+}
+
+func boundedTelemetryKind(kind TelemetryKind) (TelemetryKind, bool) {
+	valid := kind == TelemetryRequest || kind == TelemetryPlanning || kind == TelemetryOperation ||
+		kind == TelemetryHandler || kind == TelemetryBatch || kind == TelemetryRetry ||
+		kind == TelemetryTransaction || kind == TelemetrySubscription
+	if valid {
+		return kind, true
+	}
+	return TelemetryRequest, false
+}
+
+func boundedTelemetryOperationKind(kind protocol.OperationKind) (protocol.OperationKind, bool) {
+	switch kind {
+	case "", protocol.Query, protocol.Mutation, protocol.Subscription:
+		return kind, true
+	default:
+		return "", false
+	}
 }
 
 func boundedTelemetryStage(kind TelemetryKind, stage TelemetryStage) (TelemetryStage, bool) {

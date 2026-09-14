@@ -115,6 +115,14 @@ type mutationHooks struct {
 	external    []TransactionHook
 }
 
+type transactionHookPhase uint8
+
+const (
+	transactionOutbox transactionHookPhase = iota + 1
+	transactionAfterCommit
+	transactionExternal
+)
+
 // RegisterOutbox registers persistence inside the transaction before commit.
 func RegisterOutbox(ctx context.Context, hook TransactionHook) error {
 	return registerTransactionHook(ctx, hook, true)
@@ -163,19 +171,19 @@ func registerTransactionHook(ctx context.Context, hook TransactionHook, outbox b
 	return nil
 }
 
-func (h *mutationHooks) snapshot(outbox bool) []TransactionHook {
+func (h *mutationHooks) snapshot(phase transactionHookPhase) []TransactionHook {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if outbox {
-		return append([]TransactionHook(nil), h.outbox...)
+	var hooks []TransactionHook
+	switch phase {
+	case transactionOutbox:
+		hooks = h.outbox
+	case transactionAfterCommit:
+		hooks = h.afterCommit
+	case transactionExternal:
+		hooks = h.external
 	}
-	return append([]TransactionHook(nil), h.afterCommit...)
-}
-
-func (h *mutationHooks) externalSnapshot() []TransactionHook {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]TransactionHook(nil), h.external...)
+	return append([]TransactionHook(nil), hooks...)
 }
 
 func (h *mutationHooks) close() {
@@ -215,7 +223,7 @@ func (p *Plan) executeRootTransaction(ctx context.Context, scope executionScope,
 	scope.transaction = tx
 	result := p.executeSequence(txCtx, nodes, scope, nil)
 	if !result.failed {
-		if err := runTransactionHooks(txCtx, hooks.snapshot(true)); err != nil {
+		if err := runTransactionHooks(txCtx, hooks.snapshot(transactionOutbox)); err != nil {
 			result.errors = append(result.errors, p.transactionFailure(CodeOutboxPersistFailed, "transactional outbox persistence failed", err))
 			result.failed = true
 		}
@@ -231,7 +239,7 @@ func (p *Plan) executeRootTransaction(ctx context.Context, scope executionScope,
 		scope.effects.recordTransactionState(EffectApplied)
 		deliveryContext := context.WithoutCancel(ctx)
 		p.auditMutation(deliveryContext, MutationAuditEvent{Stage: MutationCommitted, Operation: p.operationName, Group: group})
-		if err := runTransactionHooks(deliveryContext, hooks.snapshot(false)); err != nil {
+		if err := runTransactionHooks(deliveryContext, hooks.snapshot(transactionAfterCommit)); err != nil {
 			result.errors = append(result.errors, p.transactionFailure(CodeAfterCommitFailed, "after-commit delivery failed", err))
 			result.failed = true
 		}
@@ -275,7 +283,7 @@ func (p *Plan) rollbackTransaction(baseCtx, txCtx context.Context, tx Transactio
 		result.errors = append(result.errors, failure)
 		result.failed = true
 	}
-	external := hooks.externalSnapshot()
+	external := hooks.snapshot(transactionExternal)
 	compensated := len(external) != 0
 	for _, compensation := range external {
 		if compensation == nil {
