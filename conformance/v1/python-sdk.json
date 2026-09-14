@@ -1,0 +1,93 @@
+{
+  "profile": "sdk.python.core-1",
+  "fixtureSuite": "1.0.0",
+  "generatorVersion": "naatre.generator.python-sdk-1",
+  "runtimeVersion": "0.1.0",
+  "package": {
+    "name": "naatre-sdk",
+    "requiresPython": ">=3.11,<3.15",
+    "supportedPython": ["3.11", "3.12", "3.13", "3.14"],
+    "coreDependencies": [],
+    "typedMetadata": "src/naatre/py.typed",
+    "buildBackend": "hatchling==1.32.0",
+    "sourceDateEpoch": 0
+  },
+  "sources": {
+    "model": {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
+  },
+  "generated": {
+    "source": {"path": "sdk/python/src/naatre/generated/operations.py", "sha256": "9ab789141dadb83b25dc18ba6b329f2a678b7469f713ecfca27db35d32d9fc69"},
+    "manifest": {"path": "sdk/python/src/naatre/generated/operations.json", "sha256": "9bc5f1ef963157940ca225cebdd6f270be1a6111f793455d7bfae334be495438"}
+  },
+  "evidence": [
+    {"path": "sdk/python/README.md", "sha256": "e14ac502cd2094a7ca17f7969fd4b433f3d126b162c8e7908e0c1c9af4c30d71"},
+    {"path": "sdk/python/pyproject.toml", "sha256": "086ef18b7d069f46750592a0eb6a6ca9ba66b1ee68d41b2f4ec1e6df07c8fc92"},
+    {"path": "sdk/python/uv.lock", "sha256": "8766d46fa76c215273bee63c5115240fdd0912d516fe2bc61e36e2493253085d"},
+    {"path": "sdk/python/src/naatre/__init__.py", "sha256": "e5ceeae59a04566c75857ff24dc4a30372831ab9b576d3a40ccf9cfcaa1ada65"},
+    {"path": "sdk/python/src/naatre/asgi.py", "sha256": "48252cb334e099cb4f193f6dce6ad9ce2d4c5f18ec995bf20366061e5bf60cea"},
+    {"path": "sdk/python/src/naatre/client.py", "sha256": "b188132fe498a91a1c91e9168d5aee8c54fe4d93f80d48a2ac230448ee87a72b"},
+    {"path": "sdk/python/src/naatre/errors.py", "sha256": "07022daa73373441178b696e058614be75637ccc49bbd67fde8a78d7ab78b5af"},
+    {"path": "sdk/python/src/naatre/generated/__init__.py", "sha256": "a63876d1cb984d0306267ea549063e8585c9017a98afc63ccf555ce6c89fc2e0"},
+    {"path": "sdk/python/src/naatre/json.py", "sha256": "efc21cdff26d1079940fc1e90e2a740aad7ec820571328f903fb72afa2f04e91"},
+    {"path": "sdk/python/src/naatre/operation.py", "sha256": "9521cb83d7944c0ecc97e32bad697a678020dde0eb6de3020258932a889c6573"},
+    {"path": "sdk/python/src/naatre/sdkgen.py", "sha256": "1537b7d1b64eddd85bbb7e0a35ca4f83f2d1ac41e49cbe76a3d722ad67880457"},
+    {"path": "sdk/python/src/naatre/stream.py", "sha256": "b36e4bb402922b7b342932a664386dc37699f4a11baf031d80fec2cdd227636f"},
+    {"path": "sdk/python/src/naatre/values.py", "sha256": "5a638414128102dcb0a60a617979b4a0d0dfe5e5c3a0c1e27e66960a5961cae8"},
+    {"path": "sdk/python/src/naatre/py.typed", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"},
+    {"path": "sdk/python/tests/test_client_features.py", "sha256": "9a7cabe0cb734dd88644daa12caaac804875b63f28f9571e3e9020f63affc858"},
+    {"path": "sdk/python/tests/test_operation.py", "sha256": "cb72494ef1b2cab08aaa3529c0a90df86057a56e01f6950ba3785cea7ef13017"},
+    {"path": "sdk/python/tests/test_sdkgen.py", "sha256": "8431e48928bfe9b0e3821291f7712372556550e7818c506d1d6221d62a9115c4"},
+    {"path": "sdk/python/tests/test_stream.py", "sha256": "74404028020630a8cd20a8a7420eb7e95d1d30ec98b3d8ba56a9ce4fd3927ace"},
+    {"path": "sdk/python/tests/test_values.py", "sha256": "7e1545e7019262b5954e3e3d39b09a73b6be8ffd4021b82f525e097e85fa7349"},
+    {"path": "conformance/independent/verify-python-sdk.py", "sha256": "839cf24d4b15293e88e7d3054255d6637f0657ae259e50aff2dffe19244dc723"}
+  ],
+  "vectors": [
+    "sync-async-canonical-parity",
+    "cancellation-propagation",
+    "async-generator-abandonment-cleanup",
+    "missing-null-distinction",
+    "partial-data-and-typed-errors",
+    "open-enum-and-union-wrappers",
+    "decimal-exponent-and-scale",
+    "arbitrary-integer-without-float",
+    "sub-microsecond-timestamp-wrapper",
+    "bytes-round-trip",
+    "bool-int-rejection",
+    "non-finite-json-rejection",
+    "persisted-shared-hash",
+    "bounded-query-only-retry",
+    "pagination-primitives",
+    "sse-stream-lifecycle",
+    "sync-timeout-backend-ownership",
+    "byte-identical-generation",
+    "strict-versioned-type-checking",
+    "reproducible-wheel-and-sdist"
+  ],
+  "commands": [
+    "uv sync --frozen",
+    "pytest",
+    "ruff check src tests",
+    "mypy --python-version 3.11 src tests",
+    "mypy --python-version 3.12 src tests",
+    "mypy --python-version 3.13 src tests",
+    "mypy --python-version 3.14 src tests",
+    "SOURCE_DATE_EPOCH=0 uv build"
+  ],
+  "strictness": {
+    "jsonOutput": "allow_nan-false",
+    "jsonInputConstants": "reject",
+    "boolAsInteger": "reject",
+    "decimal": "preserve-decimal-tuple",
+    "timestamp": "retain-rfc3339-spelling",
+    "syncTimeout": "backend-owned-no-active-cancellation-claim",
+    "asyncCancellation": "propagate-cancelled-error-and-close-owned-stream"
+  },
+  "unsupported": [
+    "pydantic-integration-owned-by-81",
+    "concrete-async-http-transport-owned-by-81",
+    "asgi-server-handler-owned-by-59",
+    "websocket-adapter",
+    "official-sdk-matrix-certification-owned-by-69"
+  ]
+}

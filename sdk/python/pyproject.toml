@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling==1.32.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "naatre-sdk"
+version = "0.1.0"
+description = "Dependency-free Python client core for the Naatre protocol"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11,<3.15"
+dependencies = []
+
+[project.scripts]
+naatre-sdkgen = "naatre.sdkgen:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/naatre"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["ASYNC109"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/naatre/generated/*.py" = ["E501", "F401", "I001"]
+"src/naatre/sdkgen.py" = ["E501"]

@@ -1,0 +1,461 @@
+from __future__ import annotations
+
+import hashlib
+import keyword
+import re
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import NoReturn, TypeAlias, cast
+
+from .errors import NaatreClientError
+from .json import JSONValue, canonical_json, strict_json_loads
+
+GENERATOR_VERSION = "naatre.generator.python-sdk-1"
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
+_MAXIMUM_INPUT_BYTES = 4 << 20
+_ProfileField: TypeAlias = tuple[str, str, str, bool, str]
+
+
+class PythonGeneratorError(NaatreClientError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Artifacts:
+    source: bytes
+    manifest: bytes
+
+
+def generate(model_bytes: bytes, reference_bytes: bytes) -> Artifacts:
+    if (
+        not model_bytes
+        or not reference_bytes
+        or max(len(model_bytes), len(reference_bytes)) > _MAXIMUM_INPUT_BYTES
+    ):
+        _reject("PYTHON_SDK_GENERATOR_INPUT_LIMIT")
+    try:
+        model = _object(strict_json_loads(model_bytes, maximum_bytes=_MAXIMUM_INPUT_BYTES))
+        reference = _object(strict_json_loads(reference_bytes, maximum_bytes=_MAXIMUM_INPUT_BYTES))
+    except NaatreClientError as error:
+        raise PythonGeneratorError("PYTHON_SDK_GENERATOR_INVALID_INPUT") from error
+    _validate_versions(model, reference)
+    operations = _array(model.get("operations"))
+    reference_operations = _array(reference.get("operations"))
+    if len(operations) != len(reference_operations):
+        _reject("PYTHON_SDK_GENERATOR_REFERENCE_DRIFT")
+    references = {
+        _string(_object(entry).get("name")): _object(entry) for entry in reference_operations
+    }
+    bindings = [_binding(_object(entry), references) for entry in operations]
+    bindings.sort(key=lambda entry: _string(entry["name"]))
+    source = _generate_source(model, bindings)
+    manifest = {
+        "profile": "sdk.python.core-1",
+        "version": "1",
+        "protocolVersion": "1",
+        "canonicalVersion": "c14n-1",
+        "operations": [
+            {
+                "name": binding["name"],
+                "kind": binding["kind"],
+                "persisted": binding["persisted"],
+            }
+            for binding in bindings
+        ],
+    }
+    return Artifacts(source=(source + "\n").encode(), manifest=canonical_json(manifest) + b"\n")
+
+
+def _validate_versions(model: Mapping[str, JSONValue], reference: Mapping[str, JSONValue]) -> None:
+    expected = (
+        model.get("profile") == "sdk.generation-1"
+        and model.get("version") == "naatre.generator-model-1"
+        and model.get("protocolVersion") == "1"
+        and model.get("canonicalVersion") == "c14n-1"
+        and reference.get("generatorVersion") == "naatre.generator.reference-json-1"
+        and reference.get("modelVersion") == model.get("version")
+        and reference.get("protocolVersion") == model.get("protocolVersion")
+        and reference.get("canonicalVersion") == model.get("canonicalVersion")
+    )
+    if not expected:
+        _reject("PYTHON_SDK_GENERATOR_VERSION_SKEW")
+
+
+def _binding(
+    operation: Mapping[str, JSONValue],
+    references: Mapping[str, Mapping[str, JSONValue]],
+) -> dict[str, JSONValue]:
+    name = _string(operation.get("name"))
+    reference = references.get(name)
+    if reference is None or reference.get("name") != name:
+        _reject("PYTHON_SDK_GENERATOR_REFERENCE_DRIFT")
+    symbol = _identifier(reference.get("symbol"))
+    persisted = _object(reference.get("persisted"))
+    document = _object(operation.get("document"))
+    document_operations = _array(document.get("operations"))
+    matches = [entry for entry in document_operations if _object(entry).get("name") == name]
+    if len(matches) != 1:
+        _reject("PYTHON_SDK_GENERATOR_INVALID_OPERATION")
+    kind = _string(_object(matches[0]).get("kind"))
+    if kind not in {"query", "mutation", "subscription"}:
+        _reject("PYTHON_SDK_GENERATOR_INVALID_OPERATION")
+    expected_digest = _semantic_digest("document", document)
+    if (
+        persisted.get("algorithm") != "sha-256"
+        or persisted.get("canonicalVersion") != "c14n-1"
+        or persisted.get("digest") != expected_digest
+    ):
+        _reject("PYTHON_SDK_GENERATOR_REFERENCE_DRIFT")
+    if canonical_json(operation.get("variables")) != canonical_json(reference.get("variables")):
+        _reject("PYTHON_SDK_GENERATOR_REFERENCE_DRIFT")
+    if canonical_json(operation.get("result")) != canonical_json(
+        _object(reference.get("result")).get("data")
+    ):
+        _reject("PYTHON_SDK_GENERATOR_REFERENCE_DRIFT")
+    return {
+        "name": name,
+        "symbol": symbol,
+        "kind": kind,
+        "persisted": dict(persisted),
+        "variables": operation.get("variables"),
+        "result": operation.get("result"),
+    }
+
+
+def _generate_source(
+    model: Mapping[str, JSONValue],
+    bindings: Sequence[Mapping[str, JSONValue]],
+) -> str:
+    lines = [
+        "# Code generated by the Naatre Python SDK generator; DO NOT EDIT.",
+        "from __future__ import annotations",
+        "",
+        "from dataclasses import dataclass",
+        "from decimal import Decimal",
+        "from typing import Literal, TypeAlias, cast",
+        "",
+        "from naatre import (",
+        "    MISSING, Error, JSONValue, MissingType, NaatreClientError, OpenEnum,",
+        "    OpenVariant, Operation, PersistedReference, Selected, decode_selected,",
+        "    encode_decimal, omit_missing,",
+        ")",
+        "",
+        f"GENERATOR_VERSION = {GENERATOR_VERSION!r}",
+        "",
+    ]
+    schema = _object(model.get("schema"))
+    for descriptor_value in sorted(
+        _array(schema.get("types")), key=lambda value: _string(_object(value).get("id"))
+    ):
+        lines.extend(_render_schema(_object(descriptor_value)))
+        lines.append("")
+    for binding in bindings:
+        lines.extend(_render_operation(binding))
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _render_schema(descriptor: Mapping[str, JSONValue]) -> list[str]:
+    name = _identifier(descriptor.get("name", descriptor.get("id")))
+    kind = _string(descriptor.get("kind"))
+    if kind == "scalar":
+        return [f"{name}: TypeAlias = Decimal"]
+    if kind == "enum":
+        members = [
+            _string(_object(member).get("name")) for member in _array(descriptor.get("enumMembers"))
+        ]
+        literals = ", ".join(repr(member) for member in members)
+        return [
+            f"{name}Known: TypeAlias = Literal[{literals}]",
+            f"{name}: TypeAlias = {name}Known | OpenEnum",
+        ]
+    if kind == "union":
+        members = [
+            _identifier(_object(member).get("type"))
+            for member in _array(descriptor.get("variantMembers"))
+        ]
+        members.append("OpenVariant")
+        return [f"{name}: TypeAlias = {' | '.join(members)}"]
+    if kind in {"object", "input", "input-object"}:
+        lines = ["@dataclass(frozen=True, slots=True)", f"class {name}:"]
+        fields = _array(descriptor.get("fields"))
+        if not fields:
+            lines.append("    pass")
+        for field_value in fields:
+            field = _object(field_value)
+            field_name = _python_name(_string(field.get("name")))
+            field_type = _python_type(_string(field.get("type")))
+            if field.get("nullable") is True:
+                field_type += " | None"
+            if field.get("required") is True:
+                lines.append(f"    {field_name}: {field_type}")
+            else:
+                lines.append(f"    {field_name}: {field_type} | MissingType = MISSING")
+        return lines
+    _reject("PYTHON_SDK_GENERATOR_UNSUPPORTED_TYPE")
+
+
+def _render_operation(binding: Mapping[str, JSONValue]) -> list[str]:
+    symbol = _identifier(binding.get("symbol"))
+    variables = [_object(value) for value in _array(binding.get("variables"))]
+    result = _object(binding.get("result"))
+    result_fields = [_object(value) for value in _array(result.get("fields"))]
+    profile_fields = _profile_fields(result)
+    lower = _python_name(symbol)
+    lines = _render_operation_models(symbol, variables, result_fields, profile_fields)
+    lines.extend(_render_operation_factory(binding, symbol, lower, variables))
+    lines.extend(_render_result_decoder(symbol, lower, result_fields))
+    lines.extend(_render_profile_decoder(symbol, lower, profile_fields))
+    lines.extend(_render_decode_helpers())
+    return lines
+
+
+def _render_operation_models(
+    symbol: str,
+    variables: Sequence[Mapping[str, JSONValue]],
+    result_fields: Sequence[Mapping[str, JSONValue]],
+    profile_fields: Sequence[_ProfileField],
+) -> list[str]:
+    lines = ["@dataclass(frozen=True, slots=True)", f"class {symbol}Variables:"]
+    lines.extend(_variable_declaration(variable) for variable in variables)
+    if not variables:
+        lines.append("    pass")
+    lines.extend(["", "@dataclass(frozen=True, slots=True)", f"class {symbol}Profile:"])
+    lines.extend(f"    {name}: Selected[{annotation}]" for name, annotation, *_ in profile_fields)
+    if not profile_fields:
+        lines.append("    pass")
+    lines.extend(["", "@dataclass(frozen=True, slots=True)", f"class {symbol}Result:"])
+    lines.extend(_result_declaration(symbol, field) for field in result_fields)
+    if not result_fields:
+        lines.append("    pass")
+    lines.extend(["", f"{symbol}Error: TypeAlias = Error"])
+    return lines
+
+
+def _variable_declaration(variable: Mapping[str, JSONValue]) -> str:
+    name = _python_name(_string(variable.get("name")))
+    annotation = _python_type(_string(variable.get("type")))
+    if variable.get("nullable") is True:
+        annotation += " | None"
+    if variable.get("required") is not True:
+        annotation += " | MissingType = MISSING"
+    return f"    {name}: {annotation}"
+
+
+def _result_declaration(symbol: str, result_field: Mapping[str, JSONValue]) -> str:
+    name = _python_name(_string(result_field.get("name")))
+    node = _object(result_field.get("result"))
+    annotation = (
+        f"{symbol}Profile"
+        if node.get("kind") == "object"
+        else _python_type(_string(node.get("type")))
+    )
+    return f"    {name}: Selected[{annotation}]"
+
+
+def _render_operation_factory(
+    binding: Mapping[str, JSONValue],
+    symbol: str,
+    lower: str,
+    variables: Sequence[Mapping[str, JSONValue]],
+) -> list[str]:
+    digest = _string(_object(binding.get("persisted")).get("digest"))
+    lines = [
+        "",
+        f"def create_{lower}(variables: {symbol}Variables) -> Operation[{symbol}Variables, {symbol}Result]:",
+        "    wire = omit_missing({",
+    ]
+    lines.extend(_wire_variable(variable) for variable in variables)
+    lines.extend(
+        [
+            "    })",
+            "    return Operation(",
+            f"        name={_string(binding.get('name'))!r},",
+            f"        kind={_string(binding.get('kind'))!r},",
+            f"        persisted=PersistedReference('sha-256', 'c14n-1', {digest!r}),",
+            "        variables=variables,",
+            "        _wire_variables=wire,",
+            f"        _decode_data=_decode_{lower},",
+            "    )",
+        ]
+    )
+    return lines
+
+
+def _wire_variable(variable: Mapping[str, JSONValue]) -> str:
+    name = _python_name(_string(variable.get("name")))
+    encoder = (
+        "encode_decimal" if _string(variable.get("type")) in {"Decimal", "Money"} else "_identity"
+    )
+    expression = f"{encoder}(variables.{name})"
+    if variable.get("required") is not True:
+        expression = f"MISSING if variables.{name} is MISSING else {expression}"
+    return f"        {name!r}: {expression},"
+
+
+def _render_result_decoder(
+    symbol: str,
+    lower: str,
+    result_fields: Sequence[Mapping[str, JSONValue]],
+) -> list[str]:
+    lines = [
+        "",
+        f"def _decode_{lower}(value: object) -> {symbol}Result:",
+        "    if not isinstance(value, dict):",
+        "        raise NaatreClientError('CLIENT_PROTOCOL_INVALID')",
+    ]
+    lines.extend(_result_decode_line(lower, field) for field in result_fields)
+    arguments = ", ".join(
+        f"{name}={name}"
+        for name in (_python_name(_string(field.get("name"))) for field in result_fields)
+    )
+    lines.append(f"    return {symbol}Result({arguments})")
+    return lines
+
+
+def _result_decode_line(lower: str, result_field: Mapping[str, JSONValue]) -> str:
+    wire_name = _string(result_field.get("name"))
+    name = _python_name(wire_name)
+    node = _object(result_field.get("result"))
+    decoder = f"_decode_{lower}_profile" if node.get("kind") == "object" else "_decode_string"
+    pending = result_field.get("presence") == "pending"
+    return (
+        f"    {name} = decode_selected(value, {wire_name!r}, "
+        f"pending_when_missing={pending!r}, decode={decoder})"
+    )
+
+
+def _render_profile_decoder(
+    symbol: str,
+    lower: str,
+    profile_fields: Sequence[_ProfileField],
+) -> list[str]:
+    lines = [
+        "",
+        f"def _decode_{lower}_profile(value: object) -> {symbol}Profile:",
+        "    if not isinstance(value, dict):",
+        "        raise NaatreClientError('CLIENT_PROTOCOL_INVALID')",
+    ]
+    lines.extend(
+        f"    {name} = decode_selected(value, {wire_name!r}, "
+        f"pending_when_missing={pending!r}, decode={decoder})"
+        for name, _annotation, wire_name, pending, decoder in profile_fields
+    )
+    profile_args = ", ".join(f"{name}={name}" for name, *_ in profile_fields)
+    lines.append(f"    return {symbol}Profile({profile_args})")
+    return lines
+
+
+def _render_decode_helpers() -> list[str]:
+    return [
+        "",
+        "def _decode_string(value: object) -> str:",
+        "    if not isinstance(value, str):",
+        "        raise NaatreClientError('CLIENT_PROTOCOL_INVALID')",
+        "    return value",
+        "",
+        "def _identity(value: object) -> JSONValue:",
+        "    return cast(JSONValue, value)",
+    ]
+
+
+def _profile_fields(result: Mapping[str, JSONValue]) -> list[_ProfileField]:
+    for field_value in _array(result.get("fields")):
+        field = _object(field_value)
+        node = _object(field.get("result"))
+        if node.get("kind") != "object":
+            continue
+        fields: list[_ProfileField] = []
+        for nested_value in _array(node.get("fields")):
+            nested = _object(nested_value)
+            nested_node = _object(nested.get("result"))
+            fields.append(
+                (
+                    _python_name(_string(nested.get("name"))),
+                    _python_type(_string(nested_node.get("type"))),
+                    _string(nested.get("name")),
+                    nested.get("presence") == "pending",
+                    "_decode_string",
+                )
+            )
+        return fields
+    return []
+
+
+def _python_type(value: str) -> str:
+    return {
+        "Boolean": "bool",
+        "Int32": "int",
+        "Float64": "float",
+        "Int64": "int",
+        "UInt64": "int",
+        "BigInt": "int",
+        "Decimal": "Decimal",
+        "Timestamp": "str",
+        "Duration": "str",
+        "UUID": "str",
+        "Bytes": "bytes",
+        "String": "str",
+        "ID": "str",
+        "StringList": "tuple[str, ...]",
+        "StringMap": "dict[str, str]",
+        "Money": "Decimal",
+    }.get(value, _identifier(value))
+
+
+def _python_name(value: str) -> str:
+    converted = re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+    if keyword.iskeyword(converted):
+        converted += "_"
+    return _identifier(converted)
+
+
+def _semantic_digest(purpose: str, value: object) -> str:
+    domain = f"naatre:{purpose}:c14n-1\n".encode()
+    return hashlib.sha256(domain + canonical_json(value)).hexdigest()
+
+
+def _object(value: object) -> Mapping[str, JSONValue]:
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        _reject("PYTHON_SDK_GENERATOR_INVALID_MODEL")
+    return cast(Mapping[str, JSONValue], value)
+
+
+def _array(value: object) -> list[JSONValue]:
+    if not isinstance(value, list):
+        _reject("PYTHON_SDK_GENERATOR_INVALID_MODEL")
+    return cast(list[JSONValue], value)
+
+
+def _string(value: object) -> str:
+    if not isinstance(value, str):
+        _reject("PYTHON_SDK_GENERATOR_INVALID_MODEL")
+    return value
+
+
+def _identifier(value: object) -> str:
+    result = _string(value)
+    if _IDENTIFIER.fullmatch(result) is None or keyword.iskeyword(result):
+        _reject("PYTHON_SDK_GENERATOR_INVALID_IDENTIFIER")
+    return result
+
+
+def _reject(code: str) -> NoReturn:
+    raise PythonGeneratorError(code)
+
+
+def main() -> None:
+    if len(sys.argv) != 4:
+        raise SystemExit("usage: naatre-sdkgen MODEL REFERENCE OUTPUT_ROOT")
+    model_path, reference_path, output_root = map(Path, sys.argv[1:])
+    artifacts = generate(model_path.read_bytes(), reference_path.read_bytes())
+    root = output_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "operations.py").write_bytes(artifacts.source)
+    (root / "operations.json").write_bytes(artifacts.manifest)
+
+
+if __name__ == "__main__":
+    main()

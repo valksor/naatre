@@ -93,6 +93,14 @@ and workerd revisions executed by the portable runtime matrix. The independent
 runner rechecks source digests, Node behavior, and package-export boundaries;
 the recorded commands reproduce the other selected runtimes.
 
+`v1/python-sdk.json` pins `sdk.python.core-1`: dependency-free Python 3.11-3.14
+transport protocols, identical sync/async canonical behavior, frozen generated
+dataclasses, exact Decimal/arbitrary-integer/timestamp/bytes mappings,
+missing/null preservation, strict JSON, persisted hashes, pagination, bounded
+retry, SSE cleanup, `py.typed`, and reproducible package metadata. Concrete
+async HTTP and optional Pydantic integration remain owned by #81; ASGI server
+handling remains owned by #59 and the complete official SDK matrix by #69.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,

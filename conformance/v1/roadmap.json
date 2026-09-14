@@ -123,19 +123,19 @@
     },
     "38": {
       "issue": 38,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 38,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.python.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["sdk.python.core-1"]
       }
     },
     "39": {
