@@ -107,6 +107,14 @@ PHP generation, canonical persisted requests, the deadline-only PSR-18 unary
 profile, and exact stream-resource ownership. Symfony, Laravel, active-abort,
 SSE, and WebSocket adapters remain explicitly unsupported here and are owned by
 issue #79.
+`v1/dotnet-sdk.json` pins `sdk.dotnet.core-1`: deterministic C# selected-result
+bindings, nullable `net8.0` and `net10.0` builds, an F# consumer build, explicit
+presence and open-variant shapes, lossless extended scalars, persisted request
+bytes, bounded unary HTTP and POST-SSE cancellation, terminal/truncation
+handling, redirect credential stripping, and non-replay of mutations. The
+independent runner executes the .NET verifier when both SDK lines are present.
+WebSocket, ASP.NET dependency injection, trimming/AOT, and broader runtime
+certification remain explicitly unsupported and owned by issue #85.
 
 `v1/typescript-adapters.json` pins `sdk.typescript.adapters-1`: Fetch unary and
 POST-SSE adapters, the optional secure WebSocket adapter, strict ESM subpath

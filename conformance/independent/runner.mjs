@@ -25,6 +25,7 @@ const implementations = new Map([
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
+  ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
 ]);
@@ -155,6 +156,7 @@ function runProfile(profile) {
   const executed = spawnSync(executable, [fileURLToPath(new URL(script, import.meta.url))], {
     encoding: "utf8",
     timeout: profileTimeouts.get(profile) ?? 30_000,
+    timeout: profile === "sdk.dotnet.core-1" ? 120_000 : 30_000,
   });
   const evidence = evidenceForProfile(profile);
   if (executed.error || executed.status !== 0) {

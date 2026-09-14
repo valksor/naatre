@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+    <ProjectReference Include="../Naatre.Core/Naatre.Core.csproj" />
+  </ItemGroup>
+</Project>
