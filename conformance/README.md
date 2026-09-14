@@ -142,6 +142,14 @@ hook ordering, redaction, cardinality, failure containment, and mutation
 correlation. #70 owns broker-backed stream/replay integration and #107 owns
 optional exporter and durable-audit adapters.
 
+`v1/operations.json` fixes the `operations.lifecycle-1` state machine owned by
+#57 and the #96 Go integration evidence. It pins the exact dependency revision,
+runtime/host/runner source digests, supported runtime boundary, complete
+unsupported-capability inventory, and overload, dependency-failure, rolling-
+restart, reconnect-storm, drain-deadline, and forced-kill transitions. The Go
+runner publishes the pinned profile result; the independent Node supervisor
+executes the POSIX forced-kill boundary.
+
 `v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
 complete, filtered, recursive, extended-trait, evolving, open-union, and
 deprecation snapshots. The Go consumer strict-parses each document, imports it

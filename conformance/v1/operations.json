@@ -1,5 +1,56 @@
 {
   "profile": "operations.lifecycle-1",
+  "fixtureSuite": "1.0.0",
+  "integration": {
+    "module": "github.com/valksor/naatre",
+    "minimumGo": "1.27",
+    "runtime": "go-standard-library",
+    "dependencies": [
+      {"issue": 57, "revision": "81000002f89bac6a342036d4fd34c35506292b34", "profile": "operations.lifecycle-1"}
+    ],
+    "packages": [
+      {"path": "runtime", "role": "normative-contract-reference-implementation"},
+      {"path": "examples/processhost", "role": "net-http-health-admission-and-supervisor-integration"},
+      {"path": "internal/conformancerunner", "role": "go-machine-readable-profile-evidence"}
+    ],
+    "supported": [
+      "go1.27-runtime-controller",
+      "go1.27-net-http-context-supervisor",
+      "node24-posix-forced-kill-fixture"
+    ],
+    "failureCodes": ["OVERLOADED", "RATE_LIMITED", "CANCELLED", "RESOURCE_EXHAUSTED", "INTERNAL"],
+    "unsupported": [
+      "native-windows-service-control",
+      "systemd-launch-configuration",
+      "container-orchestrator-manifests",
+      "automatic-process-restart-policy",
+      "listener-handoff-between-processes",
+      "tls-http2-http3-configuration",
+      "naatre-protocol-decoding-and-authentication",
+      "dependency-probe-scheduling",
+      "metrics-exporter-and-durable-event-delivery",
+      "in-process-operating-system-forced-kill",
+      "upgraded-or-hijacked-connection-termination",
+      "connection-pool-implementation"
+    ],
+    "commands": [
+      "go test ./runtime ./examples/processhost ./internal/conformancerunner -count=1",
+      "go test -race ./runtime ./examples/processhost ./internal/conformancerunner -count=1",
+      "printf '%s\\n' '{\"protocol\":\"naatre.conformance.runner-1\",\"id\":\"operations\",\"command\":\"run\",\"path\":{\"source\":{\"kind\":\"http-server\",\"language\":\"go\"},\"destination\":{\"kind\":\"native-runtime\",\"language\":\"go\"}},\"profiles\":[\"operations.lifecycle-1\"]}' | go run ./cmd/naatre-conformance --require-pass",
+      "node conformance/independent/supervise.mjs"
+    ],
+    "evidence": [
+      {"path": "go.mod", "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"},
+      {"path": "runtime/process.go", "sha256": "de0f0f77d6a487a8d133d459682f5c2adec2fb053abfaca5e9ebe7592cbfa3b2"},
+      {"path": "runtime/process_admission.go", "sha256": "c9b86b06e9cee4fa60759ca49a35e159d68779df516285f25aea09cda14150eb"},
+      {"path": "runtime/process_lifecycle.go", "sha256": "2e44343941d4401268b518e5b66e23ab451ea24fb378f98278122fbfc9307e8a"},
+      {"path": "examples/processhost/host.go", "sha256": "8dc8b8faffc206a587ee455437c5b2457614bc7b21c5d9e670ea6e4bafa05333"},
+      {"path": "examples/processhost/supervisor.go", "sha256": "b04ba55fd4bbe2f80a91c0109dd16bb5a081eb0ffeb2cf4240430789a2b9b306"},
+      {"path": "internal/conformancerunner/operations.go", "sha256": "a9e75a106fad52e08101e41d7eef494a2ec5086348c81286c5271a8af202da2b"},
+      {"path": "conformance/independent/supervise.mjs", "sha256": "6fd3e412d48e03f28c6d5c8a7d476a77d3cf0c18126d8f517d669bad56eb4d14"},
+      {"path": "conformance/independent/uncooperative-child.mjs", "sha256": "572a65955ec736510452a921384cf3b59c47b9da75a4d963a2294a2f6863c064"}
+    ]
+  },
   "states": ["starting", "ready", "draining", "stopped", "forced"],
   "workKinds": ["query", "mutation", "stream", "remote", "durable"],
   "eventStages": [
@@ -66,6 +117,14 @@
     "identityExpiryShortens": true,
     "staggerStrictlyLessThanLifetime": true
   },
+  "integrationCases": [
+    {"name": "overload", "classifications": ["negative", "resource-limit"], "states": ["ready", "ready"], "health": [{"state": "ready", "ready": true, "live": true}, {"state": "ready", "ready": true, "live": true}], "code": "OVERLOADED", "protectedOutput": false},
+    {"name": "dependency-failure", "classifications": ["negative", "boundary"], "states": ["ready", "ready", "ready", "ready"], "health": [{"state": "ready", "ready": true, "live": true}, {"state": "ready", "ready": false, "live": true}, {"state": "ready", "ready": false, "live": false}, {"state": "ready", "ready": true, "live": true}], "code": "OVERLOADED", "protectedOutput": false},
+    {"name": "rolling-restart", "classifications": ["positive", "cancellation"], "states": ["ready", "draining", "stopped"], "health": [{"state": "ready", "ready": true, "live": true}, {"state": "draining", "ready": false, "live": true}, {"state": "stopped", "ready": false, "live": false}], "code": "", "protectedOutput": false},
+    {"name": "reconnect-storm", "classifications": ["positive", "resource-limit"], "states": ["ready", "ready"], "health": [{"state": "ready", "ready": true, "live": true}, {"state": "ready", "ready": true, "live": true}], "code": "", "protectedOutput": false},
+    {"name": "drain-deadline", "classifications": ["boundary", "cancellation", "resource-limit"], "states": ["ready", "draining", "forced"], "health": [{"state": "ready", "ready": true, "live": true}, {"state": "draining", "ready": false, "live": true}, {"state": "forced", "ready": false, "live": false}], "code": "RESOURCE_EXHAUSTED", "protectedOutput": false},
+    {"name": "forced-kill", "classifications": ["negative", "boundary", "cancellation"], "states": ["starting", "ready", "draining", "forced"], "health": [{"state": "starting", "ready": false, "live": true}, {"state": "ready", "ready": true, "live": true}, {"state": "draining", "ready": false, "live": true}, {"state": "forced", "ready": false, "live": false}], "code": "RESOURCE_EXHAUSTED", "protectedOutput": false}
+  ],
   "boundaries": {
     "admissionBeforeBusinessExecution": true,
     "activeRevisionImmutable": true,

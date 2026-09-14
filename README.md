@@ -52,7 +52,8 @@ evidence must be described as planned.
   [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
   streaming and general `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
-- `examples/processhost`: executable minimal `net/http` process host.
+- `examples/processhost`: bounded `net/http` health, admission, drain, and
+  context-driven supervisor integration for `operations.lifecycle-1`.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
   contains the checked-in `sdk.go.operations-1` result and operation bindings;
   full cross-language compatibility certification remains planned.

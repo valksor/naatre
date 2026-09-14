@@ -1,5 +1,6 @@
-// Package processhost is a minimal net/http example for the process lifecycle
-// contract. It is not the Naatre HTTP protocol adapter or a process supervisor.
+// Package processhost is a minimal net/http health, admission, and supervisor
+// integration for the process lifecycle contract. It is not the Naatre HTTP
+// protocol adapter or an operating-system service manager.
 package processhost
 
 import (

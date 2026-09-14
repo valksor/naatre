@@ -46,6 +46,8 @@ child.on("exit", (code, signal) => {
   process.stdout.write(JSON.stringify({
     profile: "suite.supervision-1",
     status: passed ? "passed" : "failed",
+    states: ["starting", "ready", "draining", "forced"],
+    code: passed ? "RESOURCE_EXHAUSTED" : "PROFILE_FAILED",
     admitted,
     gracefulSignal: "SIGTERM",
     forcedSignal: signal,
