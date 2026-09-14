@@ -1,0 +1,76 @@
+{
+  "profile": "sdk.generation-1",
+  "fixtureSuite": "1.0.0",
+  "model": {
+    "path": "v1/generator-model.json",
+    "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"
+  },
+  "referenceOutput": {
+    "path": "v1/generator-output.json",
+    "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"
+  },
+  "implementations": [
+    {
+      "language": "go",
+      "path": "generator/generator.go",
+      "sha256": "21fec45ae65b38b5834ebab05d618e6859f8508a778782216b428e80a362d80f"
+    },
+    {
+      "language": "javascript-typescript",
+      "path": "conformance/independent/generator.mjs",
+      "sha256": "dd7681234a65d48fc89b8a32ee088075ec6c29c6972080f49eb54834ed8ed8b2"
+    }
+  ],
+  "verifier": {
+    "path": "conformance/independent/verify-generator.mjs",
+    "sha256": "0ad9c56e232bb40f87870a476b343c1257a6106cebc5eb3a6d7524d415c687fc"
+  },
+  "sdkBehavior": {
+    "resultStates": ["present", "null", "missing", "failed", "skipped", "pending"],
+    "cancellation": {
+      "http": "active-abort",
+      "sse": "active-abort",
+      "websocket": "active-close"
+    },
+    "retry": "idempotent-only",
+    "authRefresh": "single-flight-no-non-idempotent-replay",
+    "redirectCredentials": "strip-on-cross-origin",
+    "responseBytes": 8388608,
+    "frameBytes": 1048576,
+    "decompressedBytes": 16777216,
+    "malformedResponse": "typed-protocol-error-no-success",
+    "unknownDomainVariant": "preserve-open-variant",
+    "unknownControlVariant": "reject"
+  },
+  "transportVectors": [
+    {
+      "name": "bounded-unary-http",
+      "transport": "http",
+      "authentication": "hook-strip-on-cross-origin",
+      "cancellation": "active-abort",
+      "terminal": "complete-envelope"
+    },
+    {
+      "name": "authenticated-post-sse",
+      "transport": "sse",
+      "authentication": "fetch-headers-and-post-body",
+      "cancellation": "active-abort",
+      "terminal": "explicit-terminal-frame"
+    },
+    {
+      "name": "optional-websocket-adapter",
+      "transport": "websocket",
+      "authentication": "explicit-adapter-hook",
+      "cancellation": "active-close",
+      "terminal": "close-after-terminal-frame"
+    }
+  ],
+  "hostileInputs": [
+    {"name": "malicious-description", "result": "accepted", "code": ""},
+    {"name": "path-traversal", "result": "rejected", "code": "GENERATOR_PATH_ESCAPE"},
+    {"name": "symbol-collision", "result": "rejected", "code": "GENERATOR_SYMBOL_COLLISION"},
+    {"name": "unmapped-scalar", "result": "rejected", "code": "GENERATOR_UNMAPPED_SCALAR"},
+    {"name": "oversized-response", "result": "rejected", "code": "CLIENT_RESPONSE_LIMIT"},
+    {"name": "truncated-stream", "result": "rejected", "code": "CLIENT_STREAM_TRUNCATED"}
+  ]
+}

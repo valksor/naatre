@@ -26,6 +26,9 @@ evidence must be described as planned.
   composition from operator-pinned service manifests.
 - `collectionquery`: optional provider-neutral typed filter evaluation, stable
   sorting, and parameterized SQLite translation for `collection.query-1`.
+- `generator`: versioned language-neutral generator-model validation,
+  deterministic reference output, semantic manifest hashing, and output-root
+  containment for `sdk.generation-1`.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, process-wide admission/lifecycle control, bounded

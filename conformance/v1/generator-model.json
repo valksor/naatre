@@ -1,0 +1,111 @@
+{
+  "profile": "sdk.generation-1",
+  "version": "naatre.generator-model-1",
+  "protocolVersion": "1",
+  "canonicalVersion": "c14n-1",
+  "schema": {
+    "revision": "schema-generator-r1",
+    "capabilities": ["core.validation-1", "core.language-1"],
+    "types": [
+      {
+        "id": "Status",
+        "name": "Status",
+        "kind": "enum",
+        "output": true,
+        "open": true,
+        "enumMembers": [
+          {"id": "Status.PENDING", "name": "PENDING"},
+          {"id": "Status.ACTIVE", "name": "ACTIVE"}
+        ]
+      },
+      {
+        "id": "Money",
+        "name": "Money",
+        "kind": "scalar",
+        "input": true,
+        "output": true,
+        "description": "Exact decimal amount"
+      },
+      {
+        "id": "Account",
+        "name": "Account",
+        "kind": "object",
+        "output": true,
+        "fields": [
+          {"id": "Account.status", "name": "status", "type": "Status"},
+          {"id": "Account.balance", "name": "balance", "type": "Money"},
+          {"id": "Account.displayName", "name": "displayName", "type": "String"}
+        ]
+      }
+    ]
+  },
+  "configuration": {
+    "scalarMappings": {
+      "Money": "lossless-decimal-string"
+    }
+  },
+  "operations": [
+    {
+      "name": "GetAccount",
+      "description": "Untrusted docs remain data: </script> ${process.env.SECRET}",
+      "document": {
+        "operations": [
+          {
+            "name": "GetAccount",
+            "kind": "query",
+            "variables": [
+              {"name": "id", "type": "ID", "required": true},
+              {"name": "nickname", "type": "String", "nullable": true},
+              {"name": "tags", "type": "StringList"},
+              {"name": "filter", "type": "StringMap"}
+            ],
+            "select": [
+              {
+                "$call": {
+                  "name": "account",
+                  "as": "profile",
+                  "args": {"id": {"$var": "id"}},
+                  "select": [
+                    {"$field": {"name": "displayName", "as": "display"}},
+                    {"$field": {"name": "nickname"}}
+                  ]
+                }
+              },
+              {"$call": {"name": "audit", "as": "later"}}
+            ]
+          }
+        ]
+      },
+      "variables": [
+        {"name": "id", "type": "ID", "required": true, "nullable": false},
+        {"name": "nickname", "type": "String", "required": false, "nullable": true},
+        {"name": "tags", "type": "StringList", "required": false, "nullable": false},
+        {"name": "filter", "type": "StringMap", "required": false, "nullable": false}
+      ],
+      "requestVariables": {
+        "id": "acct-1",
+        "nickname": null,
+        "tags": [],
+        "filter": {}
+      },
+      "result": {
+        "kind": "object",
+        "fields": [
+          {
+            "name": "profile",
+            "presence": "required",
+            "result": {
+              "kind": "object",
+              "type": "Account",
+              "fields": [
+                {"name": "display", "presence": "required", "result": {"kind": "scalar", "type": "String"}},
+                {"name": "nickname", "presence": "optional", "result": {"kind": "scalar", "type": "String", "nullable": true}}
+              ]
+            }
+          },
+          {"name": "later", "presence": "pending", "result": {"kind": "scalar", "type": "String"}}
+        ]
+      }
+    }
+  ]
+}

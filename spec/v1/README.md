@@ -27,8 +27,9 @@ Documents:
 14. [Process admission and lifecycle](operations.md)
 15. [Streaming and incremental delivery](streaming.md)
 16. [Federation composition and execution](federation.md)
-17. [Portable validation constraints](validation.md)
-18. [Namespaced protocol and runtime extensions](extensions.md)
+17. [Generator model and common SDK behavior](generation.md)
+18. [Portable validation constraints](validation.md)
+19. [Namespaced protocol and runtime extensions](extensions.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.
