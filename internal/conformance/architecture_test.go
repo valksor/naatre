@@ -29,6 +29,7 @@ var layers = []struct {
 	{"mutation", 2},
 	{"generator", 2},
 	{"runtime", 2},
+	{"tooling", 3},
 	{"sdk", 3},
 	{"observability", 3},
 	{"reflectadapter", 3},

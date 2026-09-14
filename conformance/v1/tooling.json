@@ -1,0 +1,14 @@
+{
+  "profile": "tooling.workflow-1",
+  "version": "1.0.0",
+  "diagnostics": {"version": "naatre.tooling.diagnostics-1", "sharedFields": ["phase", "code", "path"], "surfaces": ["cli", "editor"]},
+  "commands": {"names": ["validate", "format", "canonicalize", "hash", "schema export", "schema diff", "generate", "manifest", "compatibility", "explain", "mock", "conformance"], "exitCodes": {"success": 0, "diagnostic": 1, "usage": 2, "io": 3, "internal": 4}},
+  "formatIdentity": {"preserved": ["operations", "fragments", "selections", "stages", "branches", "literals", "extensions"], "mutable": ["whitespace", "object-key-order"]},
+  "sideEffectFree": {"operations": ["explain", "completion", "introspection", "mock"], "businessHandlerCalls": 0, "redacted": ["literal-arguments", "authorization-policy", "hidden-schema-names"]},
+  "editor": {"features": ["diagnostics", "completion", "hover", "definition", "rename", "deprecation"], "transport": "lsp-3.17-or-documented-adapter", "ownerIssue": 94},
+  "playground": {"optIn": true, "features": ["schema", "variables", "request-error-paths", "stream-frames", "sdk-examples"], "redactedSurfaces": ["history", "urls", "logs", "snippets"], "ownerIssue": 91},
+  "mocks": {"scenarios": ["success", "null", "missing", "failure", "unknown-variant"], "pagination": true, "streamFrames": ["open", "next", "complete"], "sameSeedSameResult": true, "applicationEvidence": false},
+  "configuration": {"precedence": ["flags", "environment", "project-file", "defaults"], "schemaMode": "offline", "plugin": ["absolute-path", "explicit-trust", "stable-id", "version", "sha256"]},
+  "compatibility": {"manifestProfile": "naatre.operation-manifest-1", "checks": ["document-digest", "operation-name", "operation-kind", "schema-plan"], "globalDiffSufficient": false},
+  "workflow": {"steps": ["validate-document", "generate-client", "emit-manifest", "check-schema-compatibility"], "artifacts": ["generator-model-1", "generator-output", "operation-manifest-1", "schema-digest"]}
+}
