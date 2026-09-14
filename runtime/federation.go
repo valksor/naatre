@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -236,6 +237,7 @@ type FederationCall struct {
 	Input       any
 	Path        []any
 	MaxAttempts uint32
+	DependsOn   []string
 }
 
 type FederationPlan struct {
@@ -251,6 +253,7 @@ type FederationInvocation struct {
 	SchemaDigest      string
 	RequestID         string
 	Delegation        string
+	TraceContext      FederationTraceContext
 	Input             any
 	Cost              uint64
 	Attempt           uint32
@@ -283,6 +286,7 @@ type ReferenceFederationConfig struct {
 	Composition     schema.FederationComposition
 	Delegations     *FederationDelegationIssuer
 	Invoker         FederationInvoker
+	TraceContext    FederationTraceContextProvider
 	Limits          FederationLimits
 	MaximumDuration time.Duration
 	AbandonGrace    time.Duration
@@ -294,6 +298,7 @@ type ReferenceFederationCoordinator struct {
 	composition     schema.FederationComposition
 	delegations     *FederationDelegationIssuer
 	invoker         FederationInvoker
+	traceContext    FederationTraceContextProvider
 	limits          FederationLimits
 	maximumDuration time.Duration
 	abandonGrace    time.Duration
@@ -315,7 +320,8 @@ func NewReferenceFederationCoordinator(config ReferenceFederationConfig) (*Refer
 	}
 	return &ReferenceFederationCoordinator{
 		composition: config.Composition, delegations: config.Delegations, invoker: config.Invoker,
-		limits: config.Limits, maximumDuration: config.MaximumDuration,
+		traceContext: config.TraceContext,
+		limits:       config.Limits, maximumDuration: config.MaximumDuration,
 		abandonGrace: federationAbandonGrace(config.AbandonGrace), slots: slots,
 	}, nil
 }
@@ -354,18 +360,17 @@ func (c *ReferenceFederationCoordinator) Execute(ctx context.Context, requestID 
 }
 
 func (c *ReferenceFederationCoordinator) executeCalls(ctx context.Context, requestID string, plan FederationPlan) []federationCallResult {
-	results := c.dispatchFederationCalls(ctx, requestID, plan)
-	return collectFederationCallResults(plan.Calls, results)
+	return executeFederationDependencies(ctx, c, requestID, plan)
 }
 
-func (c *ReferenceFederationCoordinator) dispatchFederationCalls(ctx context.Context, requestID string, plan FederationPlan) <-chan indexedFederationCallResult {
-	results := make(chan indexedFederationCallResult, len(plan.Calls))
-	jobs := make(chan int, len(plan.Calls))
-	for index := range plan.Calls {
+func (c *ReferenceFederationCoordinator) dispatchFederationCalls(ctx context.Context, requestID string, plan FederationPlan, indices []int) <-chan indexedFederationCallResult {
+	results := make(chan indexedFederationCallResult, len(indices))
+	jobs := make(chan int, len(indices))
+	for _, index := range indices {
 		jobs <- index
 	}
 	close(jobs)
-	workers := min(len(plan.Calls), int(c.limits.MaxConcurrency))
+	workers := min(len(indices), int(c.limits.MaxConcurrency))
 	for range workers {
 		go func() {
 			for index := range jobs {
@@ -410,6 +415,17 @@ func (c *ReferenceFederationCoordinator) validatePlan(requestID string, plan Fed
 			return failure
 		}
 	}
+	return c.validateFederationPlanDependencies(plan)
+}
+
+func (c *ReferenceFederationCoordinator) validateFederationPlanDependencies(plan FederationPlan) *ExecutionError {
+	graph, failure := buildFederationDependencyGraph(plan.Calls, c.limits.MaxCalls)
+	if failure != nil {
+		return failure
+	}
+	if !graph.acyclic() {
+		return federationPlanFailure("federation plan contains a dependency cycle", nil)
+	}
 	return nil
 }
 
@@ -421,9 +437,15 @@ func (c *ReferenceFederationCoordinator) validateFederationPlanShape(requestID s
 	if len(plan.Calls) == 0 || uint64(len(plan.Calls)) > c.limits.MaxCalls {
 		return federationPlanFailure("federation plan exceeds the call bound", nil)
 	}
+	var dependencyEdges uint64
 	for _, call := range plan.Calls {
 		if len(call.Path) == 0 || !validFederationRemotePath(call.Path) {
 			return federationPlanFailure("federation plan contains an invalid path", nil)
+		}
+		var ok bool
+		dependencyEdges, ok = checkedResourceAdd(dependencyEdges, uint64(len(call.DependsOn)))
+		if !ok || dependencyEdges > c.limits.MaxCalls {
+			return federationBudgetFailure(call.Path)
 		}
 	}
 	return nil
@@ -504,6 +526,11 @@ func (c *ReferenceFederationCoordinator) invokeFederationCall(
 		failure := federationContextFailure(call.Path, ctx)
 		return nil, &failure, nil
 	}
+	traceContext, err := c.federationTraceContext(ctx)
+	if err != nil {
+		failure := makeExecutionError(CodeFederationUnavailable, "federation trace context could not be established", clonePath(call.Path), protocol.Source{}, err)
+		return nil, &failure, nil
+	}
 	delegation, err := c.delegations.Issue(ctx, FederationDelegationOptions{
 		Audience: service.Audience, RequestID: requestID, OperationID: call.OperationID,
 		SchemaRevision: schemaRevision, ServiceSchemaRevision: service.SchemaRevision, ServiceSchemaDigest: service.SchemaDigest,
@@ -537,6 +564,7 @@ func (c *ReferenceFederationCoordinator) invokeFederationCall(
 			ServiceID: call.ServiceID, EndpointReference: service.EndpointReference, OperationID: call.OperationID,
 			SchemaRevision: service.SchemaRevision, SchemaDigest: service.SchemaDigest, RequestID: requestID,
 			Delegation: delegation, Input: input, Cost: cost, Attempt: attempt,
+			TraceContext: traceContext,
 		})
 	})
 	if ctx.Err() != nil {
@@ -605,12 +633,15 @@ func federationErrorsRetryable(failures []FederationRemoteError) bool {
 }
 
 func federationPlanFailure(message string, path []any) *ExecutionError {
-	failure := makeExecutionError(CodeFederationPlanInvalid, message, clonePath(path), protocol.Source{}, nil)
-	return &failure
+	return federationExecutionFailure(CodeFederationPlanInvalid, message, path, nil)
 }
 
 func federationBudgetFailure(path []any) *ExecutionError {
-	failure := makeExecutionError(CodeResourceExhausted, "federation cost budget exhausted", clonePath(path), protocol.Source{}, errResourceBudget)
+	return federationExecutionFailure(CodeResourceExhausted, "federation cost budget exhausted", path, errResourceBudget)
+}
+
+func federationExecutionFailure(code, message string, path []any, cause error) *ExecutionError {
+	failure := makeExecutionError(code, message, clonePath(path), protocol.Source{}, cause)
 	return &failure
 }
 
@@ -628,20 +659,53 @@ func federationFailure(code, message string, path []any, cause error) Outcome {
 func cloneFederationPlan(plan FederationPlan) (FederationPlan, error) {
 	cloned := FederationPlan{SchemaRevision: plan.SchemaRevision, Calls: make([]FederationCall, len(plan.Calls))}
 	for index, call := range plan.Calls {
+		call.Path = clonePath(call.Path)
+		call.DependsOn = slices.Clone(call.DependsOn)
+		sort.Strings(call.DependsOn)
 		var err error
-		cloned.Calls[index], err = cloneFederationCall(call)
+		call.Input, err = cloneFederationValue(call.Input)
 		if err != nil {
 			return FederationPlan{}, err
 		}
+		cloned.Calls[index] = call
 	}
 	return cloned, nil
 }
 
-func cloneFederationCall(call FederationCall) (FederationCall, error) {
-	call.Path = clonePath(call.Path)
-	var err error
-	call.Input, err = cloneFederationValue(call.Input)
-	return call, err
+func (c *ReferenceFederationCoordinator) federationTraceContext(ctx context.Context) (traceContext FederationTraceContext, err error) {
+	if c.traceContext == nil {
+		return FederationTraceContext{}, nil
+	}
+	containPanic(func() {
+		traceContext, err = c.traceContext.TraceContext(ctx)
+	}, func() {
+		err = errors.New("federation trace context provider failed")
+	})
+	if err != nil || !validFederationTraceContext(traceContext) {
+		return FederationTraceContext{}, errors.New("federation trace context provider failed")
+	}
+	return traceContext, nil
+}
+
+func validFederationTraceContext(traceContext FederationTraceContext) bool {
+	value := traceContext.TraceParent
+	if value == "" {
+		return true
+	}
+	if len(value) != 55 || value[:3] != "00-" || value[35] != '-' || value[52] != '-' ||
+		!federationLowerHex(value[3:35]) || !federationLowerHex(value[36:52]) || !federationLowerHex(value[53:55]) {
+		return false
+	}
+	return value[3:35] != "00000000000000000000000000000000" && value[36:52] != "0000000000000000"
+}
+
+func federationLowerHex(value string) bool {
+	for _, digit := range value {
+		if (digit < '0' || digit > '9') && (digit < 'a' || digit > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func clonePath(path []any) []any { return slices.Clone(path) }
@@ -694,6 +758,9 @@ func (s *federationValueCloneState) cloneMap(current map[string]any, depth int) 
 	if current == nil {
 		return nil, nil
 	}
+	if err := s.checkContainerLength(len(current)); err != nil {
+		return nil, err
+	}
 	reference, err := s.beginReference(current)
 	if err != nil {
 		return nil, err
@@ -717,6 +784,9 @@ func (s *federationValueCloneState) cloneSlice(current []any, depth int) ([]any,
 	if current == nil {
 		return nil, nil
 	}
+	if err := s.checkContainerLength(len(current)); err != nil {
+		return nil, err
+	}
 	reference, err := s.beginReference(current)
 	if err != nil {
 		return nil, err
@@ -731,6 +801,13 @@ func (s *federationValueCloneState) cloneSlice(current []any, depth int) ([]any,
 		cloned[index] = clonedChild
 	}
 	return cloned, nil
+}
+
+func (s *federationValueCloneState) checkContainerLength(length int) error {
+	if length > federationValueMaxNodes-s.nodes {
+		return errors.New("federation value exceeds portable structural limits")
+	}
+	return nil
 }
 
 func (s *federationValueCloneState) beginReference(value any) (federationValueReference, error) {

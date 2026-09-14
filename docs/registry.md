@@ -235,8 +235,12 @@ only the public key. `runtime.ReferenceFederationCoordinator` executes an
 already resolved read-only plan with schema-owned cost/retry metadata, shared
 request-wide concurrency and deadline accounting, safe partial results, and
 stable public errors. It preserves in-process context values into the invoker.
-Production entity planning, cross-process trace serialization, discovery, and
-transport integration remain explicitly owned by #109.
+`runtime.FederationPlanner` and `runtime.FederationCoordinator` add deterministic
+entity-route planning, dependency-aware scheduling, exact opaque endpoint
+bindings, and bounded W3C `traceparent` propagation without introducing another
+wire or schema authority. Discovery, built-in network transports, routing
+optimization, mutations, and distributed transactions remain unsupported; see
+the [coordinator profile](federation-coordinator.md).
 
 ## Request resource limits
 

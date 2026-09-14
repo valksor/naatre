@@ -40,10 +40,11 @@ evidence must be described as planned.
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, process-wide admission/lifecycle control, bounded
   stream replay and source ownership, a bounded reference federation
-  coordinator, planning, and execution; see the
+  coordinator, deterministic distributed entity-fetch planning, operator-bound
+  transport adapters, planning, and execution; see the
   [Go registry contract](docs/registry.md) and
-  [process-hosting guide](docs/process-hosting.md). Production distributed
-  federation planning and transport integration remain owned by #109.
+  [process-hosting guide](docs/process-hosting.md), plus the
+  [Go federation coordinator profile](docs/federation-coordinator.md).
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the

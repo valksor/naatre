@@ -1,0 +1,148 @@
+{
+  "profile": "runtime.go.federation-coordinator-1",
+  "normativeProfile": "core.federation-1",
+  "implementation": {
+    "package": "github.com/valksor/naatre/runtime",
+    "language": "go",
+    "minimumRuntime": "go1.27.0",
+    "executedRuntime": "go1.27.1",
+    "executedPlatform": "darwin/arm64",
+    "portableTargets": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"],
+    "lifecycle": "operator composes and pins manifests, binds every opaque endpoint, creates one coordinator, plans each request against the retained composition revision, and drains invocations before replacing that revision"
+  },
+  "dependencies": [
+    {
+      "kind": "issue",
+      "issue": 24,
+      "revision": "2a10f2f05d5929779add085b52bd769a359792f4",
+      "profile": "core.federation-1",
+      "fixture": "v1/federation.json",
+      "sha256": "3e2e99f07612f5f8520b8e3d81be02b18c1f3dde657adc5463f94cee8900488a"
+    },
+    {
+      "kind": "module",
+      "revision": "go1.27.0",
+      "fixture": "go.mod",
+      "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"
+    }
+  ],
+  "commands": [
+    "go test ./runtime -run 'Federation' -count=1",
+    "go test ./internal/conformance -run 'TestGoFederationCoordinatorProfile' -count=1",
+    "go test -race ./runtime ./schema ./internal/conformance -run 'Federation' -count=1"
+  ],
+  "supported": [
+    "operator-pinned-manifest-composition",
+    "ownership-and-entity-cycle-validation",
+    "deterministic-entity-fetch-planning",
+    "dependency-aware-bounded-fan-out",
+    "ed25519-least-authority-delegation",
+    "exact-composition-and-service-revision-pins",
+    "operator-bound-transport-adapters",
+    "w3c-traceparent-propagation",
+    "safe-partial-availability",
+    "stable-remote-error-mapping",
+    "bounded-retries-cancellation-and-timeouts"
+  ],
+  "unsupported": [
+    "service-discovery",
+    "endpoint-reference-dereferencing",
+    "routing-optimization",
+    "built-in-http-transport",
+    "built-in-grpc-transport",
+    "sse-streaming",
+    "websocket-streaming",
+    "federated-mutations",
+    "distributed-transactions",
+    "w3c-tracestate",
+    "w3c-baggage",
+    "framework-integration",
+    "cross-language-native-runtime-certification"
+  ],
+  "entityRoutes": {
+    "users": [
+      {
+        "type": "User",
+        "operationId": "query.user",
+        "keys": ["id"],
+        "requires": [{"serviceId": "orders", "type": "Order"}]
+      }
+    ],
+    "orders": [
+      {
+        "type": "Order",
+        "operationId": "query.order",
+        "keys": ["id"]
+      }
+    ]
+  },
+  "planningCases": [
+    {
+      "name": "dependency-order-is-deterministic",
+      "polarity": "positive",
+      "schemaRevision": "federation-r1",
+      "limits": {"maxCalls": 2, "maxCost": 3, "maxConcurrency": 2, "maxAttempts": 1},
+      "fetches": [
+        {"responseKey": "user", "serviceId": "users", "type": "User", "input": {"id": "user-1"}, "path": ["user"], "maxAttempts": 1, "dependencies": ["order"]},
+        {"responseKey": "order", "serviceId": "orders", "type": "Order", "input": {"id": "order-1"}, "path": ["order"], "maxAttempts": 1}
+      ],
+      "expectedCalls": ["order", "user"]
+    },
+    {
+      "name": "required-entity-dependency-is-missing",
+      "polarity": "negative",
+      "schemaRevision": "federation-r1",
+      "limits": {"maxCalls": 2, "maxCost": 3, "maxConcurrency": 2, "maxAttempts": 1},
+      "fetches": [
+        {"responseKey": "user", "serviceId": "users", "type": "User", "input": {"id": "user-1"}, "path": ["user"], "maxAttempts": 1}
+      ],
+      "expectedCode": "FEDERATION_PLAN_INVALID"
+    },
+    {
+      "name": "composition-revision-is-not-retained",
+      "polarity": "negative",
+      "schemaRevision": "federation-r2",
+      "limits": {"maxCalls": 1, "maxCost": 1, "maxConcurrency": 1, "maxAttempts": 1},
+      "fetches": [
+        {"responseKey": "order", "serviceId": "orders", "type": "Order", "input": {"id": "order-1"}, "path": ["order"], "maxAttempts": 1}
+      ],
+      "expectedCode": "FEDERATION_SCHEMA_MISMATCH"
+    },
+    {
+      "name": "entity-fan-out-exceeds-call-bound",
+      "polarity": "boundary",
+      "schemaRevision": "federation-r1",
+      "limits": {"maxCalls": 1, "maxCost": 3, "maxConcurrency": 1, "maxAttempts": 1},
+      "fetches": [
+        {"responseKey": "order", "serviceId": "orders", "type": "Order", "input": {"id": "order-1"}, "path": ["order"], "maxAttempts": 1},
+        {"responseKey": "user", "serviceId": "users", "type": "User", "input": {"id": "user-1"}, "path": ["user"], "maxAttempts": 1, "dependencies": ["order"]}
+      ],
+      "expectedCode": "RESOURCE_EXHAUSTED"
+    },
+    {
+      "name": "retry-cost-multiplies-before-dispatch",
+      "polarity": "resource-limit",
+      "schemaRevision": "federation-r1",
+      "limits": {"maxCalls": 2, "maxCost": 4, "maxConcurrency": 1, "maxAttempts": 2},
+      "fetches": [
+        {"responseKey": "order", "serviceId": "orders", "type": "Order", "input": {"id": "order-1"}, "path": ["order"], "maxAttempts": 1},
+        {"responseKey": "user", "serviceId": "users", "type": "User", "input": {"id": "user-1"}, "path": ["user"], "maxAttempts": 2, "dependencies": ["order"]}
+      ],
+      "expectedCode": "RESOURCE_EXHAUSTED"
+    }
+  ],
+  "executionEvidence": [
+    {"name": "entity-fetch-cycle", "fixture": "v1/federation.json", "pointer": "/compositionCases/3"},
+    {"name": "ownership-conflict", "fixture": "v1/federation.json", "pointer": "/compositionCases/4"},
+    {"name": "type-conflict", "fixture": "v1/federation.json", "pointer": "/compositionCases/5"},
+    {"name": "forged-delegation", "fixture": "v1/federation.json", "pointer": "/delegationCases/1"},
+    {"name": "wrong-audience", "fixture": "v1/federation.json", "pointer": "/delegationCases/2"},
+    {"name": "partial-failure-retains-sibling-data", "fixture": "v1/federation.json", "pointer": "/executionCases/1"},
+    {"name": "deadline-stops-scheduling", "fixture": "v1/federation.json", "pointer": "/executionCases/2"},
+    {"name": "remote-schema-drift", "fixture": "v1/federation.json", "pointer": "/executionCases/3"},
+    {"name": "rolling-upgrade-version-skew", "fixture": "v1/federation.json", "pointer": "/executionCases/4"},
+    {"name": "multiplicative-retry-cost-fanout", "fixture": "v1/federation.json", "pointer": "/executionCases/5"},
+    {"name": "parent-cancellation", "test": "TestReferenceFederationCoordinatorDistinguishesParentCancellation"},
+    {"name": "dependency-cancellation", "test": "TestFederationCoordinatorPreservesIndependentDataAndBlocksFailedDependencies"}
+  ]
+}

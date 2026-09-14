@@ -241,4 +241,12 @@ Ed25519 delegation token, composition failures, and coordinator success,
 partial-failure, timeout, schema-drift, rolling-upgrade, and multiplicative
 fan-out outcomes. The Go bridge executes every vector against the real composer,
 public-key verifier, and bounded reference coordinator. Production discovery,
-distributed planning, and transport integration remain owned by #109.
+distributed planning, and transport integration are outside that core fixture.
+
+`v1/federation-coordinator.json` fixes the separately executable Go coordinator
+evidence without redefining `core.federation-1`. It pins the exact #24 commit,
+core fixture and module digests, deterministic entity dependency planning,
+bounded fan-out and retry multiplication, cancellation/timeout and rolling
+upgrade evidence, operator-owned endpoint bindings, trace propagation, the
+runtime/platform boundary, and every unsupported optional capability. The Go
+harness consumes its planning vectors directly.

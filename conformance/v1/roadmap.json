@@ -1328,23 +1328,6 @@
         "capabilities": []
       }
     },
-    "109": {
-      "issue": 109,
-      "state": "open",
-      "coverage": "deferred-to-owner",
-      "ownerIssue": 109,
-      "execution": "unsupported-until-owner-closes",
-      "expected": {
-        "phase": "runner",
-        "code": "UNSUPPORTED",
-        "source": {},
-        "path": [],
-        "data": null,
-        "errors": [],
-        "canonicalBytes": "",
-        "capabilities": []
-      }
-    },
     "110": {
       "issue": 110,
       "state": "open",
