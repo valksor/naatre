@@ -36,8 +36,8 @@
     "QUALITY_BUDGET_EXCEEDED"
   ],
   "evidenceFiles": [
-    {"path": "go.mod", "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"},
-    {"path": "go.sum", "sha256": "59d6f9f0590f841c826c0c2003f906b038b16397a886eaef7a562ac031b68d6b"},
+    {"path": "go.mod", "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
+    {"path": "go.sum", "sha256": "4ab1142371fb95281ac0e674e481d95e234eb937bcdcadb686ff4bb11da8c94f"},
     {"path": "conformance/v1/adversarial.json", "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"},
     {"path": "conformance/v1/benchmarks.json", "sha256": "939cf24cdb653f9cf9b68bd074040a23ae77de08d82533ca9889b68373dee0fa"},
     {"path": "internal/qualityharness/harness.go", "sha256": "2c86e7b6b5e4a7005c0bd4af3dfaffabf0e30f950b5be51060e89f6eec12ef72"},

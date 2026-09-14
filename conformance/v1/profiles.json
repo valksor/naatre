@@ -488,7 +488,7 @@
         {
           "path": "v1/generation.json",
           "profile": "sdk.generation-1",
-          "sha256": "bbf36816b917db6617e54a061ed255c81619bf9ea3887f0da087e2b6bb7946b0"
+          "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
         },
         {
           "path": "v1/http.json",
@@ -1435,7 +1435,7 @@
         {
           "path": "v1/operations.json",
           "profile": "operations.lifecycle-1",
-          "sha256": "b1cc57cc7b32174e0973f0dc66a539f4b1eae34e15b0ed40b3285c6e396db208"
+          "sha256": "421d6ee39d18867fe4df738ea1efe93960611f25e2f358025a2cb16a9281814f"
         },
         {
           "path": "v1/protocol.json",
@@ -1822,7 +1822,12 @@
         {
           "path": "v1/generation.json",
           "profile": "sdk.generation-1",
-          "sha256": "bbf36816b917db6617e54a061ed255c81619bf9ea3887f0da087e2b6bb7946b0"
+          "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
+        },
+        {
+          "path": "v1/generator-plugin-host.json",
+          "profile": "sdk.generator-plugin-host-1",
+          "sha256": "41acaf0ce979bcd686d5b2880d2070a6dab67012ab4cd55c697a0466bfe748f9"
         },
         {
           "path": "v1/language.json",
@@ -1843,6 +1848,11 @@
           "path": "v1/scalars.json",
           "profile": "core.scalar.c14n-1",
           "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"
+        },
+        {
+          "path": "v1/schema-discovery.json",
+          "profile": "schema.discovery.http-1",
+          "sha256": "6869e10218f69b6f5c723288ecd713cdd5ad3e12e8590261f39ea81dbd1ea865"
         },
         {
           "path": "v1/schema.json",
@@ -2453,7 +2463,7 @@
         {
           "path": "v1/operations.json",
           "profile": "operations.lifecycle-1",
-          "sha256": "b1cc57cc7b32174e0973f0dc66a539f4b1eae34e15b0ed40b3285c6e396db208"
+          "sha256": "421d6ee39d18867fe4df738ea1efe93960611f25e2f358025a2cb16a9281814f"
         },
         {
           "path": "v1/partial-results.json",
@@ -3131,7 +3141,7 @@
         {
           "path": "v1/generation.json",
           "profile": "sdk.generation-1",
-          "sha256": "bbf36816b917db6617e54a061ed255c81619bf9ea3887f0da087e2b6bb7946b0"
+          "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
         },
         {
           "path": "v1/http.json",

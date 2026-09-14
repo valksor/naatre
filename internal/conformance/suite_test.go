@@ -182,8 +182,7 @@ func TestIndependentRunnerProtocol(t *testing.T) {
 	}
 	request := strings.Join([]string{
 		`{"protocol":"naatre.conformance.runner-1","id":"discover","command":"discover"}`,
-		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.profiles-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http-1"]}`,
-		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http.digest-1","core.http-1"]}`,
+		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.profiles-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http.digest-1","core.http-1"]}`,
 		`{"protocol":`,
 		`{"protocol":"naatre.conformance.runner-1","id":"unknown","command":"discover","extra":true}`,
 	}, "\n") + "\n"
@@ -248,8 +247,7 @@ func TestIndependentRunnerProtocol(t *testing.T) {
 			supervisionEvidence = result.Evidence
 		}
 	}
-	if statuses["suite.contract-1"] != "passed" || statuses["suite.profiles-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
-	if statuses["suite.contract-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http.digest-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
+	if statuses["suite.contract-1"] != "passed" || statuses["suite.profiles-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http.digest-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
 		t.Fatalf("runner statuses = %#v", statuses)
 	}
 	var manifest suiteManifest
@@ -502,8 +500,7 @@ func TestGoRunnerProtocol(t *testing.T) {
 	if response.Protocol != conformancerunner.Protocol || response.FixtureVersion == "" || len(response.Results) != 5 {
 		t.Fatalf("Go runner response = %#v", response)
 	}
-	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "passed" || response.Results[4].Status != "unsupported" {
-	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "passed" {
+	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "passed" || response.Results[4].Status != "passed" {
 		t.Fatalf("Go runner results = %#v", response.Results)
 	}
 
@@ -960,39 +957,11 @@ func assertNormativeCoverage(t *testing.T, manifest suiteManifest) {
 			}
 		}
 	}
-	if len(coveredClauses) != 523 {
-		t.Errorf("mapped normative clauses = %d, want 523", len(coveredClauses))
+	if len(coveredClauses) != 626 {
+		t.Errorf("mapped normative clauses = %d, want 626", len(coveredClauses))
 	}
-	if len(mustClauses) != 235 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 235", len(mustClauses))
-	if len(coveredClauses) != 535 {
-		t.Errorf("mapped normative clauses = %d, want 535", len(coveredClauses))
-	}
-	if len(coveredClauses) != 525 {
-		t.Errorf("mapped normative clauses = %d, want 525", len(coveredClauses))
-	}
-	if len(mustClauses) != 238 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 238", len(mustClauses))
-	if len(coveredClauses) != 520 {
-		t.Errorf("mapped normative clauses = %d, want 520", len(coveredClauses))
-	}
-	if len(mustClauses) != 235 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 235", len(mustClauses))
-	if len(coveredClauses) != 524 {
-		t.Errorf("mapped normative clauses = %d, want 524", len(coveredClauses))
-	}
-	if len(mustClauses) != 242 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 242", len(mustClauses))
-	if len(coveredClauses) != 529 {
-		t.Errorf("mapped normative clauses = %d, want 529", len(coveredClauses))
-	}
-	if len(mustClauses) != 243 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 243", len(mustClauses))
-	if len(coveredClauses) != 530 {
-		t.Errorf("mapped normative clauses = %d, want 530", len(coveredClauses))
-	}
-	if len(mustClauses) != 240 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 240", len(mustClauses))
+	if len(mustClauses) != 303 {
+		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 303", len(mustClauses))
 	}
 	for clause := range mustClauses {
 		if coveredClauses[clause] == "" {

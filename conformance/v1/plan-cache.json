@@ -9,8 +9,8 @@
   "dependencies": {
     "coreProfile": "core.language-1",
     "planning": {"path": "conformance/v1/planning.json", "sha256": "0a95eceafa0b4269a80ef887bf985df254361c0dcacb23fe5ff151309818012f"},
-    "goMod": {"path": "go.mod", "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"},
-    "goSum": {"path": "go.sum", "sha256": "59d6f9f0590f841c826c0c2003f906b038b16397a886eaef7a562ac031b68d6b"}
+    "goMod": {"path": "go.mod", "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
+    "goSum": {"path": "go.sum", "sha256": "4ab1142371fb95281ac0e674e481d95e234eb937bcdcadb686ff4bb11da8c94f"}
   },
   "evidence": [
     {"path": "runtime/plan_cache.go", "sha256": "b6792a9b0ff375fac2eb22377880dab4dc9f76d83d19a6d4e4671704ecba6c0f"},

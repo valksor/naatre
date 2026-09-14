@@ -11,7 +11,7 @@
     {
       "name": "generator-core",
       "path": "generator/generator.go",
-      "sha256": "95a2bff82fa4155e5cc83a48c3ca2bf28fd953517e5e0c25ae6dd9ec4d11a5d8",
+      "sha256": "00008161b0fae40d882241fe1e2a259bdd5894cf7b174d26d39779c066f2b646",
       "revision": "naatre.generator.reference-json-1"
     },
     {
@@ -35,19 +35,19 @@
     {
       "name": "go-module",
       "path": "go.mod",
-      "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76",
+      "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206",
       "revision": "go-1.27.0"
     },
     {
       "name": "go-dependency-lock",
       "path": "go.sum",
-      "sha256": "59d6f9f0590f841c826c0c2003f906b038b16397a886eaef7a562ac031b68d6b",
+      "sha256": "4ab1142371fb95281ac0e674e481d95e234eb937bcdcadb686ff4bb11da8c94f",
       "revision": "go.sum-sha256"
     },
     {
       "name": "ci-toolchain",
       "path": ".github/workflows/ci.yml",
-      "sha256": "83736da9a1003b60073e70ddb91e7972fb79624cd9386b8df5fc2463aabc5188",
+      "sha256": "e46e9f8eae99a5a8b619351e7683cb894ef606ff2b6e319f56edc1e45820ea8a",
       "revision": "node-24.21.0"
     }
   ],

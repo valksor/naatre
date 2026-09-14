@@ -33,7 +33,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.typescript.core-1"]
+        "capabilities": [
+          "sdk.typescript.core-1"
+        ]
       }
     },
     "31": {
@@ -139,7 +141,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.python.core-1"]
+        "capabilities": [
+          "sdk.python.core-1"
+        ]
       }
     },
     "39": {
@@ -173,7 +177,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.jvm.core-1"]
+        "capabilities": [
+          "sdk.jvm.core-1"
+        ]
       }
     },
     "41": {
@@ -190,7 +196,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.dotnet.core-1"]
+        "capabilities": [
+          "sdk.dotnet.core-1"
+        ]
       }
     },
     "42": {
@@ -207,7 +215,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.swift.core-1"]
+        "capabilities": [
+          "sdk.swift.core-1"
+        ]
       }
     },
     "43": {
@@ -224,7 +234,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.dart.core-1"]
+        "capabilities": [
+          "sdk.dart.core-1"
+        ]
       }
     },
     "44": {
@@ -241,7 +253,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.ruby.core-1"]
+        "capabilities": [
+          "sdk.ruby.core-1"
+        ]
       }
     },
     "45": {
@@ -343,7 +357,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["core.transport-batch-1"]
+        "capabilities": [
+          "core.transport-batch-1"
+        ]
       }
     },
     "51": {
@@ -428,7 +444,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["tooling.workflow-1"]
+        "capabilities": [
+          "tooling.workflow-1"
+        ]
       }
     },
     "56": {
@@ -564,7 +582,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["core.http.digest-1"]
+        "capabilities": [
+          "core.http.digest-1"
+        ]
       }
     },
     "64": {
@@ -700,7 +720,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.go.operations-1"]
+        "capabilities": [
+          "sdk.go.operations-1"
+        ]
       }
     },
     "72": {
@@ -717,7 +739,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.typescript.adapters-1"]
+        "capabilities": [
+          "sdk.typescript.adapters-1"
+        ]
       }
     },
     "73": {
@@ -734,8 +758,7 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": [
-        ]
+        "capabilities": []
       }
     },
     "74": {
@@ -752,7 +775,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["runtime.go.plan-cache-1"]
+        "capabilities": [
+          "runtime.go.plan-cache-1"
+        ]
       }
     },
     "75": {
@@ -769,7 +794,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.typescript.adapters-1"]
+        "capabilities": [
+          "sdk.typescript.adapters-1"
+        ]
       }
     },
     "76": {
@@ -786,7 +813,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["sdk.generator-plugin-host-1"]
+        "capabilities": [
+          "sdk.generator-plugin-host-1"
+        ]
       }
     },
     "77": {
@@ -1128,7 +1157,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["operations.lifecycle-1"]
+        "capabilities": [
+          "operations.lifecycle-1"
+        ]
       }
     },
     "97": {
@@ -1323,6 +1354,23 @@
       "state": "open",
       "coverage": "deferred-to-owner",
       "ownerIssue": 108,
+      "execution": "unsupported-until-owner-closes",
+      "expected": {
+        "phase": "runner",
+        "code": "UNSUPPORTED",
+        "source": {},
+        "path": [],
+        "data": null,
+        "errors": [],
+        "canonicalBytes": "",
+        "capabilities": []
+      }
+    },
+    "109": {
+      "issue": 109,
+      "state": "open",
+      "coverage": "deferred-to-owner",
+      "ownerIssue": 109,
       "execution": "unsupported-until-owner-closes",
       "expected": {
         "phase": "runner",

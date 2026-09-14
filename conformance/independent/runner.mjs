@@ -22,19 +22,22 @@ const implementations = new Map([
   ["core.http.digest-1", "http-digest.mjs"],
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
   ["core.validation-1", "validation.mjs"],
-  ["sdk.dart.core-1", "verify-dart-sdk.mjs"],
   ["sdk.generation-1", "verify-generator.mjs"],
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
+  ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
+  ["sdk.dart.core-1", "verify-dart-sdk.mjs"],
   ["sdk.ruby.core-1", "verify-ruby-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
-  ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
 ]);
-const profileTimeouts = new Map([["sdk.jvm.core-1", 240_000]]);
+const profileTimeouts = new Map([
+  ["sdk.jvm.core-1", 240_000],
+  ["sdk.dotnet.core-1", 120_000],
+]);
 
 class ProtocolError extends Error {
   constructor(code, message) {
@@ -161,7 +164,6 @@ function runProfile(profile) {
   const executed = spawnSync(executable, [fileURLToPath(new URL(script, import.meta.url))], {
     encoding: "utf8",
     timeout: profileTimeouts.get(profile) ?? 30_000,
-    timeout: profile === "sdk.dotnet.core-1" ? 120_000 : 30_000,
   });
   const evidence = evidenceForProfile(profile);
   if (executed.error || executed.status !== 0) {
