@@ -51,6 +51,10 @@ evidence must be described as planned.
 - `transport/http`: strict reusable SSE framing for
   [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
   streaming and general `net/http` adapters.
+- [`core.transport-batch-1`](spec/v1/request-batching.md) defines the distinct
+  finite request-batch envelope, aggregate admission, item correlation,
+  independent/fail-fast/atomic policies, and the HTTP-versus-streaming
+  multiplexing boundary. It does not turn connection sharing into atomic work.
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`

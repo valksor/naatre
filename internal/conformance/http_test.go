@@ -159,7 +159,7 @@ func TestHTTPBindingFixture(t *testing.T) {
 func assertHTTPMethodCases(t *testing.T, cases []httpMethodCase) {
 	t.Helper()
 	expected := []string{"post", "get-persisted", "get-inline-rejected", "head-rejected", "put-rejected", "options-preflight"}
-	assertHTTPCases(t, cases, expected, func(test httpMethodCase) string { return test.Name }, func(test httpMethodCase) {
+	assertFixtureCases(t, cases, expected, func(test httpMethodCase) string { return test.Name }, func(test httpMethodCase) {
 		if test.Name == "post" && (!test.Accepted || test.Method != "POST" || test.Status != 200) {
 			t.Fatalf("POST binding is incomplete: %#v", test)
 		}
@@ -176,7 +176,7 @@ func assertHTTPNegotiationCases(t *testing.T, cases []httpNegotiationCase) {
 		"request-version-2", "request-non-utf8", "accept-absent", "accept-v1", "accept-wildcard",
 		"accept-version-2", "accept-v1-q-zero", "accept-event-stream",
 	}
-	assertHTTPCases(t, cases, expected, func(test httpNegotiationCase) string { return test.Name }, func(test httpNegotiationCase) {
+	assertFixtureCases(t, cases, expected, func(test httpNegotiationCase) string { return test.Name }, func(test httpNegotiationCase) {
 		if !test.Accepted && (test.Status == 0 || test.PublicCode == "") {
 			t.Fatalf("rejected negotiation lacks stable failure: %#v", test)
 		}
@@ -189,7 +189,7 @@ func assertHTTPHeaderCases(t *testing.T, cases []httpHeaderCase) {
 		"duplicate-content-type", "conflicting-content-encoding", "duplicate-authorization",
 		"duplicate-deadline", "forged-principal", "comma-list-accept",
 	}
-	assertHTTPCases(t, cases, expected, func(test httpHeaderCase) string { return test.Name }, func(test httpHeaderCase) {
+	assertFixtureCases(t, cases, expected, func(test httpHeaderCase) string { return test.Name }, func(test httpHeaderCase) {
 		if !test.Accepted && (test.Status != 400 || test.PublicCode == "") {
 			t.Fatalf("unsafe header rejection: %#v", test)
 		}
@@ -230,7 +230,7 @@ func assertHTTPStatusCases(t *testing.T, cases []httpStatusCase) {
 func assertHTTPEncodingCases(t *testing.T, cases []httpEncodingCase) {
 	t.Helper()
 	expected := []string{"identity", "gzip", "gzip-bomb", "unsupported-br", "streaming-identity", "streaming-gzip"}
-	assertHTTPCases(t, cases, expected, func(test httpEncodingCase) string { return test.Name }, func(test httpEncodingCase) {
+	assertFixtureCases(t, cases, expected, func(test httpEncodingCase) string { return test.Name }, func(test httpEncodingCase) {
 		if test.Accepted && (!test.CompressedLimit || !test.DecompressedLimit) {
 			t.Fatalf("accepted encoding lacks both limits: %#v", test)
 		}
@@ -246,7 +246,7 @@ func assertHTTPDeadlineCases(t *testing.T, cases []httpDeadlineCase) {
 		"valid-client-timeout", "malformed-client-timeout", "server-maximum",
 		"disconnect-before-headers", "execution-deadline",
 	}
-	assertHTTPCases(t, cases, expected, func(test httpDeadlineCase) string { return test.Name }, func(test httpDeadlineCase) {
+	assertFixtureCases(t, cases, expected, func(test httpDeadlineCase) string { return test.Name }, func(test httpDeadlineCase) {
 		if test.Name == "server-maximum" && !test.CappedByServerMaximum {
 			t.Fatalf("server deadline is not capped: %#v", test)
 		}
@@ -263,7 +263,7 @@ func assertHTTPCacheCases(t *testing.T, cases []httpCacheCase) {
 		"get-sensitive-variables-rejected", "get-private-persisted", "shared-public-persisted",
 		"shared-auth-variant-rejected", "shared-tenant-isolated",
 	}
-	assertHTTPCases(t, cases, expected, func(test httpCacheCase) string { return test.Name }, func(test httpCacheCase) {
+	assertFixtureCases(t, cases, expected, func(test httpCacheCase) string { return test.Name }, func(test httpCacheCase) {
 		if test.Eligible && test.Method == "GET" && !test.CanonicalVariableKey {
 			t.Fatalf("GET lacks canonical variable key: %#v", test)
 		}
@@ -281,7 +281,7 @@ func assertHTTPCacheCases(t *testing.T, cases []httpCacheCase) {
 func assertHTTPBrowserCases(t *testing.T, cases []httpBrowserCase) {
 	t.Helper()
 	expected := []string{"post-stream-fetch", "cors-preflight", "cookie-csrf", "cross-origin-redirect", "history-safe-url"}
-	assertHTTPCases(t, cases, expected, func(test httpBrowserCase) string { return test.Name }, func(test httpBrowserCase) {
+	assertFixtureCases(t, cases, expected, func(test httpBrowserCase) string { return test.Name }, func(test httpBrowserCase) {
 		if test.CredentialsInURL || (test.Name == "cross-origin-redirect" && test.ForwardAuthorization) {
 			t.Fatalf("unsafe browser case: %#v", test)
 		}
@@ -291,7 +291,7 @@ func assertHTTPBrowserCases(t *testing.T, cases []httpBrowserCase) {
 func assertHTTPResponseCases(t *testing.T, cases []httpResponseCase) {
 	t.Helper()
 	expected := []string{"non-2xx-problem", "non-2xx-naatre", "truncated-problem", "truncated-naatre", "oversized-response"}
-	assertHTTPCases(t, cases, expected, func(test httpResponseCase) string { return test.Name }, func(test httpResponseCase) {
+	assertFixtureCases(t, cases, expected, func(test httpResponseCase) string { return test.Name }, func(test httpResponseCase) {
 		if !test.RetainStructured || test.PublicCode == "" ||
 			(test.BodyKind != "problem" && test.BodyKind != "naatre") {
 			t.Fatalf("unsafe response decoding case: %#v", test)
@@ -301,14 +301,14 @@ func assertHTTPResponseCases(t *testing.T, cases []httpResponseCase) {
 
 func assertHTTPProtocolVersions(t *testing.T, versions []httpProtocolVersion) {
 	t.Helper()
-	assertHTTPCases(t, versions, []string{"HTTP/1.1", "HTTP/2", "HTTP/3"}, func(version httpProtocolVersion) string { return version.Name }, func(version httpProtocolVersion) {
+	assertFixtureCases(t, versions, []string{"HTTP/1.1", "HTTP/2", "HTTP/3"}, func(version httpProtocolVersion) string { return version.Name }, func(version httpProtocolVersion) {
 		if !version.EquivalentSemantics || version.RequiresTrailers {
 			t.Fatalf("HTTP version is not equivalent: %#v", version)
 		}
 	})
 }
 
-func assertHTTPCases[T any](t *testing.T, cases []T, expected []string, name func(T) string, validate func(T)) {
+func assertFixtureCases[T any](t *testing.T, cases []T, expected []string, name func(T) string, validate func(T)) {
 	t.Helper()
 	names := make([]string, 0, len(cases))
 	for _, test := range cases {
@@ -316,6 +316,6 @@ func assertHTTPCases[T any](t *testing.T, cases []T, expected []string, name fun
 		validate(test)
 	}
 	if !slices.Equal(names, expected) {
-		t.Fatalf("HTTP case names = %v, want %v", names, expected)
+		t.Fatalf("fixture case names = %v, want %v", names, expected)
 	}
 }
