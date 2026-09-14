@@ -1,0 +1,60 @@
+{
+  "profile": "sdk.go.operations-1",
+  "fixtureSuite": "1.0.0",
+  "implementation": {
+    "module": "github.com/valksor/naatre/sdk/go/generated",
+    "minimumGo": "1.27",
+    "generatorVersion": "naatre.generator.go-sdk-1",
+    "goMod": {
+      "path": "go.mod",
+      "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"
+    },
+    "files": [
+      {"path": "client/builder.go", "sha256": "833f05d8f0dc5dd9f2dec1f90854ac5d24f85af77ca7c5d6d08ac3950b50098d"},
+      {"path": "client/manifest.go", "sha256": "db20decc00b2977ce001766270c7c83e8828e8f70a9f3343dc81b185068d3696"},
+      {"path": "client/operation.go", "sha256": "15dfc027c5ebc26a5ee87223d6d2d35ec4920de8d8e788b29715ffd3e52501aa"},
+      {"path": "client/request.go", "sha256": "192d7dd5d4bc1bceaee5044759cbff7eb4cae687aed2c5eb5018819982bcb38f"},
+      {"path": "client/stream.go", "sha256": "e4d4e076f2de68422861c010636643e91628b79ac4100b262fe0a2832462ca36"},
+      {"path": "protocol/sse.go", "sha256": "5e6c3343eba90e9aa58e4da25dc9e8de9ebfb5189faf8dc6a787ada717b33ef1"},
+      {"path": "sdk/go/sdkgen/generator.go", "sha256": "b6a01d36360e47fc02c56a15b18be04232a555c90aadce5b78b32f7ce0d5f804"},
+      {"path": "cmd/naatre-go-sdk-generator/main.go", "sha256": "4e4af4c68a74c47dec92fbf1fa2b437ecbbf58e1533c63ab4dec1f8689c341a1"}
+    ]
+  },
+  "sources": {
+    "model": {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
+  },
+  "generated": {
+    "source": {"path": "sdk/go/generated/operations.go", "sha256": "0982b6c46f62ae9ac57cca5ca58487b1d5628467769111d563c65dfedbe5aba6"},
+    "manifest": {"path": "sdk/go/generated/operations.json", "sha256": "8e3a9aa3893409c7a34ca7d2ee9ad85c6817f608fe2d044a6d9cd308c5e857b3"}
+  },
+  "vectors": [
+    "builder-shared-document",
+    "generated-shared-request",
+    "selected-missing-null-pending-present",
+    "strict-persisted-manifest",
+    "query-only-bounded-retry",
+    "partial-data-no-replay",
+    "ordered-bounded-batch",
+    "bounded-forward-pagination",
+    "authenticated-post-sse",
+    "active-stream-cancellation",
+    "truncated-stream-rejection",
+    "byte-identical-regeneration"
+  ],
+  "limits": {
+    "maximumRetryAttempts": 8,
+    "maximumManifestBytes": 1048576,
+    "maximumFrameBytes": 1048576
+  },
+  "unsupported": [
+    "websocket-adapter",
+    "native-eventsource-post-authentication",
+    "mutation-replay",
+    "subscription-replay",
+    "bidirectional-streaming",
+    "generated-union-convenience-accessors",
+    "framework-bindings",
+    "official-sdk-matrix-certification"
+  ]
+}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+
+	"github.com/valksor/naatre/internal/slicesx"
 )
 
 // Limits bounds work performed by the strict decoder. Zero fields use safe
@@ -540,11 +542,7 @@ func cloneSlice[T any](input []T) []T {
 }
 
 func cloneSliceWith[T any](input []T, clone func(T) T) []T {
-	result := make([]T, len(input))
-	for index, value := range input {
-		result[index] = clone(value)
-	}
-	return result
+	return slicesx.Map(input, clone)
 }
 
 func pointedValue[T any](input *T) (T, bool) {

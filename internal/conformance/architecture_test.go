@@ -21,12 +21,14 @@ var layers = []struct {
 	prefix string
 	layer  int
 }{
+	{"internal/slicesx", -1},
 	{"protocol", 0},
 	{"schema", 1},
 	{"client", 2},
 	{"collectionquery", 2},
 	{"generator", 2},
 	{"runtime", 2},
+	{"sdk", 3},
 	{"reflectadapter", 3},
 	{"transport", 4},
 	{"examples", 5},

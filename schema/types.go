@@ -9,6 +9,8 @@ import (
 	"slices"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/valksor/naatre/internal/slicesx"
 )
 
 // TypeID is a portable schema type identifier.
@@ -452,11 +454,7 @@ func sortedValues[K ~string, V any](values map[K]V) []V {
 }
 
 func mapSlice[S, D any](values []S, transform func(S) D) []D {
-	result := make([]D, len(values))
-	for index, value := range values {
-		result[index] = transform(value)
-	}
-	return result
+	return slicesx.Map(values, transform)
 }
 
 func cloneDescriptor(descriptor TypeDescriptor) TypeDescriptor {

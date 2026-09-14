@@ -22,6 +22,7 @@ type Request struct {
 	document     json.RawMessage
 	persisted    *protocol.PersistedReference
 	operation    string
+	kind         protocol.OperationKind
 	id           string
 	hasID        bool
 	variables    map[string]json.RawMessage
@@ -36,16 +37,18 @@ func NewRequest(document protocol.Document, operation string) (Request, error) {
 		operation = operations[0].Name()
 	}
 	found := false
+	kind := protocol.OperationKind("")
 	for _, candidate := range operations {
 		if candidate.Name() == operation {
 			found = true
+			kind = candidate.Kind()
 			break
 		}
 	}
 	if !found || len(document.CanonicalJSON()) == 0 {
 		return Request{}, clientError("INVALID_REQUEST", 0, errors.New("operation is absent from document"))
 	}
-	request := Request{document: document.CanonicalJSON(), operation: operation, variables: make(map[string]json.RawMessage)}
+	request := Request{document: document.CanonicalJSON(), operation: operation, kind: kind, variables: make(map[string]json.RawMessage)}
 	if _, err := request.CanonicalJSON(); err != nil {
 		return Request{}, err
 	}
@@ -55,13 +58,26 @@ func NewRequest(document protocol.Document, operation string) (Request, error) {
 // NewPersistedRequest builds a request that carries only a canonical document
 // reference. The reference is validated by the shared protocol decoder.
 func NewPersistedRequest(reference protocol.PersistedReference, operation string) (Request, error) {
+	return NewPersistedOperation(reference, operation, "")
+}
+
+// NewPersistedOperation carries a known operation kind for generated retry and
+// streaming helpers while preserving the same persisted wire envelope.
+func NewPersistedOperation(reference protocol.PersistedReference, operation string, kind protocol.OperationKind) (Request, error) {
+	if kind != "" && kind != protocol.Query && kind != protocol.Mutation && kind != protocol.Subscription {
+		return Request{}, clientError("INVALID_REQUEST", 0, errors.New("invalid operation kind"))
+	}
 	copy := reference
-	request := Request{persisted: &copy, operation: operation, variables: make(map[string]json.RawMessage)}
+	request := Request{persisted: &copy, operation: operation, kind: kind, variables: make(map[string]json.RawMessage)}
 	if _, err := request.CanonicalJSON(); err != nil {
 		return Request{}, err
 	}
 	return request, nil
 }
+
+// OperationKind reports the kind known from the inline document or persisted
+// manifest. A request built from a bare persisted reference has no known kind.
+func (r Request) OperationKind() protocol.OperationKind { return r.kind }
 
 // WithID returns an isolated request carrying a bounded correlation ID.
 func (r Request) WithID(id string) (Request, error) {
@@ -91,16 +107,24 @@ func (r Request) WithVariable(name string, value json.RawMessage) (Request, erro
 // WithCapabilities returns an isolated request with a sorted, unique set of
 // explicitly requested capability names.
 func (r Request) WithCapabilities(capabilities ...string) (Request, error) {
-	values := slices.Clone(capabilities)
-	sort.Strings(values)
-	for index, capability := range values {
-		if capability == "" || !utf8.ValidString(capability) || utf8.RuneCountInString(capability) > 128 || index > 0 && values[index-1] == capability {
-			return Request{}, clientError("INVALID_CAPABILITY", 0, errors.New("invalid or duplicate capability"))
-		}
+	values, err := normalizeCapabilities(capabilities)
+	if err != nil {
+		return Request{}, clientError("INVALID_CAPABILITY", 0, err)
 	}
 	result := r.clone()
 	result.capabilities = values
 	return result, nil
+}
+
+func normalizeCapabilities(capabilities []string) ([]string, error) {
+	values := slices.Clone(capabilities)
+	sort.Strings(values)
+	for index, capability := range values {
+		if !typeIdentifier.MatchString(capability) || !utf8.ValidString(capability) || utf8.RuneCountInString(capability) > 128 || index > 0 && values[index-1] == capability {
+			return nil, errors.New("invalid or duplicate capability")
+		}
+	}
+	return values, nil
 }
 
 // CanonicalJSON returns the exact c14n-1 request envelope bytes.
@@ -168,6 +192,7 @@ func (r Request) clone() Request {
 	result := Request{
 		document:     slices.Clone(r.document),
 		operation:    r.operation,
+		kind:         r.kind,
 		id:           r.id,
 		hasID:        r.hasID,
 		variables:    cloneRawMap(r.variables),

@@ -88,33 +88,45 @@ func (r *Runner) verifyGoClient(ctx context.Context, _ Request) Result {
 }
 
 func (r *Runner) loadGoClientFixture() (goClientFixture, Evidence, error) {
-	path, err := r.fixturePath("v1/go-client.json")
-	if err != nil {
-		return goClientFixture{}, Evidence{}, err
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return goClientFixture{}, Evidence{}, err
-	}
 	var fixture goClientFixture
-	if err := json.Unmarshal(content, &fixture); err != nil {
+	_, evidence, err := r.loadPinnedFixture("v1/go-client.json", &fixture)
+	if err != nil {
 		return goClientFixture{}, Evidence{}, err
 	}
 	if fixture.Profile != goClientProfile || fixture.FixtureSuite != r.manifest.FixtureVersion || fixture.Implementation.Module != "github.com/valksor/naatre/client" || fixture.Implementation.MinimumGo != "1.27" {
 		return goClientFixture{}, Evidence{}, errors.New("incompatible Go client fixture")
 	}
-	digest := sha256.Sum256(content)
-	actual := hex.EncodeToString(digest[:])
-	for _, file := range r.manifest.Files {
-		if file.Path == "v1/go-client.json" && file.SHA256 == actual {
-			return fixture, Evidence{Fixture: file.Path, SHA256: actual}, nil
-		}
-	}
-	return goClientFixture{}, Evidence{}, errors.New("go client fixture is not pinned by suite")
+	return fixture, evidence, nil
 }
 
 func (r *Runner) verifyGoClientEvidence(fixture goClientFixture) ([]Evidence, map[string][]byte, error) {
 	files := append([]evidenceFile{fixture.Implementation.GoMod, fixture.Sources.Model, fixture.Sources.Output}, fixture.Implementation.Files...)
+	return r.verifyEvidenceFiles(files)
+}
+
+func (r *Runner) loadPinnedFixture(relative string, target any) ([]byte, Evidence, error) {
+	path, err := r.fixturePath(relative)
+	if err != nil {
+		return nil, Evidence{}, err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, Evidence{}, err
+	}
+	if err := json.Unmarshal(content, target); err != nil {
+		return nil, Evidence{}, err
+	}
+	digest := sha256.Sum256(content)
+	actual := hex.EncodeToString(digest[:])
+	for _, file := range r.manifest.Files {
+		if file.Path == relative && file.SHA256 == actual {
+			return content, Evidence{Fixture: file.Path, SHA256: actual}, nil
+		}
+	}
+	return nil, Evidence{}, errors.New("fixture is not pinned by suite")
+}
+
+func (r *Runner) verifyEvidenceFiles(files []evidenceFile) ([]Evidence, map[string][]byte, error) {
 	evidence := make([]Evidence, 0, len(files))
 	contents := make(map[string][]byte, len(files))
 	repositoryRoot := filepath.Dir(r.conformanceRoot)

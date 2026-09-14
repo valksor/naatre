@@ -1148,11 +1148,7 @@ func cloneDocumentWire(input documentWire) documentWire {
 }
 
 func cloneExtensionDescriptors(input []ExtensionDescriptor) []ExtensionDescriptor {
-	result := make([]ExtensionDescriptor, len(input))
-	for index := range input {
-		result[index] = CloneExtensionDescriptor(input[index])
-	}
-	return result
+	return mapSlice(input, CloneExtensionDescriptor)
 }
 
 func cloneTypeDeclarations(input []TypeDeclaration) []TypeDeclaration {

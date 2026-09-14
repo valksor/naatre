@@ -22,8 +22,17 @@ Supported in this core profile:
   plus structured errors;
 - stable safe client error codes and resource closure.
 
-Higher-level typed selection builders, generated selected-result types,
-persisted manifests, pagination and batching helpers, retries, SSE, and
-optional WebSocket adapters are not claimed by this core package. They are
-owned and tested by issue #71. Framework integrations and the complete official
-SDK matrix remain owned by their dedicated roadmap issues.
+The same package also provides the higher-level primitives exercised by the
+separate `sdk.go.operations-1` profile: immutable typed language builders,
+selected-result decoding, strict persisted manifests, query-only finite retry,
+bounded ordered batching, bounded forward pagination, generic actively-closing
+streams, and authenticated POST SSE. Deterministic generated bindings and their
+manifest live in `sdk/go/generated` and can be reproduced with
+`go generate ./sdk/go/generated`.
+
+WebSocket adapters, native EventSource POST authentication, mutation or
+subscription replay, bidirectional streaming, framework bindings, and the
+complete official SDK matrix remain unsupported. The core
+`sdk.go.client-1` fixture continues to list higher-level behavior as unsupported
+within that narrower profile; support is claimed only by
+`sdk.go.operations-1`.

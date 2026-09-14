@@ -7,7 +7,7 @@
     "goMod": {"path": "go.mod", "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"},
     "files": [
       {"path": "client/client.go", "sha256": "752fc6c5d0a7bf07127d7d817d679edbbbacdfce977645441f6e4f8da8cbc447"},
-      {"path": "client/request.go", "sha256": "d5f0721db23df8f1e05e89b6cf936942de49e38034a97aa8a00f9ecbf47dba54"}
+      {"path": "client/request.go", "sha256": "192d7dd5d4bc1bceaee5044759cbff7eb4cae687aed2c5eb5018819982bcb38f"}
     ]
   },
   "sources": {

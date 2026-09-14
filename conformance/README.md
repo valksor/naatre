@@ -71,6 +71,13 @@ credential policy, partial-result behavior, and unsupported higher-level
 capabilities. The Go runner executes this profile; the independent JavaScript
 runner advertises it as unsupported.
 
+`v1/go-sdk.json` pins `sdk.go.operations-1`, including the typed builder,
+selected-result decoder, manifest, retry, batching, pagination, POST-SSE, and
+stream lifecycle sources plus the deterministic Go generator and checked-in
+artifacts. The Go runner regenerates both artifacts byte-for-byte and executes
+the shared generated request/result contract. The independent JavaScript runner
+advertises this Go-only profile as unsupported.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,

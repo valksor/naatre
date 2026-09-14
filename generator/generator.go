@@ -379,6 +379,10 @@ func generatedSymbol(name string) (string, bool) {
 	return result, true
 }
 
+// PortableSymbol applies the generator-model-1 escaping table used by every
+// checked-in language binding.
+func PortableSymbol(name string) (string, bool) { return generatedSymbol(name) }
+
 func generationError(code, pointer, message string) error {
 	diagnostic := Diagnostic{Code: code, Pointer: pointer, Message: message}
 	return &Error{diagnostics: []Diagnostic{diagnostic}}

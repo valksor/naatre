@@ -21,8 +21,11 @@ evidence must be described as planned.
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
-- `client`: runtime-independent Go SDK request values and bounded unary HTTP
-  execution for the `sdk.go.client-1` profile.
+- `internal/slicesx`: dependency-free slice transformations shared by portable layers.
+- `client`: runtime-independent Go SDK request values, immutable typed
+  builders, generated-result primitives, persisted manifests, query-only
+  retries, bounded batching/pagination, unary HTTP, and authenticated POST SSE
+  for the `sdk.go.client-1` and `sdk.go.operations-1` profiles.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
@@ -48,8 +51,9 @@ evidence must be described as planned.
   streaming and general `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
-- `sdk`: generated client mapping slices; full official and
-  compatibility-certified client implementations remain planned.
+- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
+  contains the checked-in `sdk.go.operations-1` result and operation bindings;
+  full cross-language compatibility certification remains planned.
 
 Dependencies point inward in that order: client packages use only portable
 protocol contracts; reflection adapters, transports, other SDKs, and example
