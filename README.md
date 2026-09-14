@@ -52,6 +52,9 @@ evidence must be described as planned.
   [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
   streaming and general `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
+- `internal/qualityharness`: Go-only fuzz, repeated-race, owned-resource leak,
+  fault-injection, and benchmark instrumentation for `quality.go.harness-1`;
+  see the [Go quality harness](docs/go-quality-harness.md).
 - `examples/processhost`: executable minimal `net/http` process host.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
   contains the checked-in `sdk.go.operations-1` result and operation bindings;

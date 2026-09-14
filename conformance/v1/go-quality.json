@@ -1,0 +1,61 @@
+{
+  "profile": "quality.go.harness-1",
+  "description": "Go-only execution harness for the adversarial and benchmark contracts owned by suite.adversarial-1 and suite.benchmarks-1.",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 78,
+  "package": "github.com/valksor/naatre/internal/qualityharness",
+  "runtime": {
+    "language": "go",
+    "minimumGo": "1.27",
+    "platforms": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"]
+  },
+  "authority": {
+    "adversarial": "v1/adversarial.json",
+    "benchmarks": "v1/benchmarks.json"
+  },
+  "commands": [
+    {"name": "fuzz", "command": "go test ./protocol -run=^$ -fuzz=FuzzStrictDecoder -fuzztime=30s && go test ./runtime -run=^$ -fuzz=FuzzCheckedResourceAddition -fuzztime=30s && go test ./internal/qualityharness -run=^$ -fuzz=FuzzFaultSchedule -fuzztime=30s && go test ./internal/qualityharness -run=^$ -fuzz=FuzzResourceLifecycle -fuzztime=30s"},
+    {"name": "repeated-race", "command": "go test -race -count=3 ./..."},
+    {"name": "leak", "command": "go test ./internal/qualityharness -run=^TestLeak -count=20"},
+    {"name": "fault-injection", "command": "go test ./internal/qualityharness -run=^TestFault -count=20"},
+    {"name": "benchmark", "command": "bash conformance/run-go-quality-ci.sh benchmark"}
+  ],
+  "cases": [
+    {"name": "balanced-resource-lifecycle", "kind": "positive", "fixtureRef": "v1/interactions.json#/cases", "code": ""},
+    {"name": "unreleased-body", "kind": "negative", "fixtureRef": "v1/adversarial.json#/resourcePolicy", "code": "QUALITY_BODY_LEAK"},
+    {"name": "fault-at-exact-ordinal", "kind": "boundary", "fixtureRef": "v1/interactions.json#/cases", "code": "QUALITY_FAULT_INJECTED"},
+    {"name": "cooperative-cancellation", "kind": "cancellation", "fixtureRef": "v1/adversarial.json#/cases/9", "code": ""},
+    {"name": "case-budget-exhaustion", "kind": "resource-limit", "fixtureRef": "v1/resources.json#/limitVectors", "code": "QUALITY_BUDGET_EXCEEDED"}
+  ],
+  "publicCodes": [
+    "QUALITY_INVALID_CONFIGURATION",
+    "QUALITY_GOROUTINE_LEAK",
+    "QUALITY_BODY_LEAK",
+    "QUALITY_STREAM_LEAK",
+    "QUALITY_FAULT_INJECTED",
+    "QUALITY_BUDGET_EXCEEDED"
+  ],
+  "evidenceFiles": [
+    {"path": "go.mod", "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"},
+    {"path": "go.sum", "sha256": "59d6f9f0590f841c826c0c2003f906b038b16397a886eaef7a562ac031b68d6b"},
+    {"path": "conformance/v1/adversarial.json", "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"},
+    {"path": "conformance/v1/benchmarks.json", "sha256": "939cf24cdb653f9cf9b68bd074040a23ae77de08d82533ca9889b68373dee0fa"},
+    {"path": "internal/qualityharness/harness.go", "sha256": "2c86e7b6b5e4a7005c0bd4af3dfaffabf0e30f950b5be51060e89f6eec12ef72"},
+    {"path": "internal/qualityharness/harness_test.go", "sha256": "d58444e9f8e6c8cf35ada5f3ff6aab262db7c3e61020465c3007c557f5742d09"},
+    {"path": "internal/qualityharness/fuzz_test.go", "sha256": "478953c50319a65984c5dd8a7f699849ea410357b23523b76f2570218d47176b"},
+    {"path": "internal/qualityharness/benchmark_test.go", "sha256": "c7da3b709f7ff438b70525a43d45df7a4c6cacc0ea61cda88106132a439089b5"},
+    {"path": "internal/qualityharness/benchmark_report.go", "sha256": "997146b236d392a6f1939c79054c4fae5fb6d90d26043ab1cde24e43ae2b2fa5"},
+    {"path": "internal/qualityharness/benchmark_report_test.go", "sha256": "f9fd3aa773e17fcb1bcd6972111526098ea51ce18b13da44ed5575d0a24c2b73"},
+    {"path": "cmd/naatre-benchmark-report/main.go", "sha256": "ba6b66c47123d1e5aa3ebaf4d9fe9ca8263422df43a2da8b850f29371a00d145"},
+    {"path": "conformance/run-go-quality-ci.sh", "sha256": "38864c39cdc6a9b69d5dd075ec3b7d1d81bc9c7116be02beb3343b39a64d8284"},
+    {"path": "internal/conformancerunner/go_quality.go", "sha256": "d9b04e344eb9c08c33ebf24e487fb303a5ffff4583f8d867fbc180b0ceeb3dae"}
+  ],
+  "unsupported": [
+    "non-Go fuzz, race, leak, fault-injection, or benchmark execution",
+    "native-runtime, framework, browser, HTTP, WebSocket, or worker certification",
+    "distributed federation transport benchmarking",
+    "performance pass or fail thresholds",
+    "automatic benchmark environment discovery on Windows",
+    "platforms outside the published runtime matrix"
+  ]
+}

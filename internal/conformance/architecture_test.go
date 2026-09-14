@@ -32,6 +32,7 @@ var layers = []struct {
 	{"reflectadapter", 3},
 	{"transport", 4},
 	{"examples", 5},
+	{"internal/qualityharness", 5},
 	{"internal", 6},
 	{"cmd", 7},
 }
