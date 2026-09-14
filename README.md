@@ -21,7 +21,8 @@ evidence must be described as planned.
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
-- `schema`: portable types, values, scalar codecs, and deterministic federation
+- `schema`: portable types, values, scalar codecs, portable validation and
+  strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
 - `collectionquery`: optional provider-neutral typed filter evaluation, stable
   sorting, and parameterized SQLite translation for `collection.query-1`.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/valksor/naatre/protocol"
@@ -135,27 +136,37 @@ func (s *coercionState) coerce(typeID TypeID, raw json.RawMessage, nullable bool
 	s.active[typeID]++
 	defer func() { s.active[typeID]-- }()
 
+	var value InputValue
+	var err error
 	switch descriptor.Kind {
 	case ScalarType:
-		return s.coerceScalar(typeID, raw)
+		value, err = s.coerceScalar(typeID, raw)
 	case ListType:
-		return s.coerceList(descriptor, raw)
+		value, err = s.coerceList(descriptor, raw)
 	case MapType:
-		return s.coerceMap(descriptor, raw)
+		value, err = s.coerceMap(descriptor, raw)
 	case InputObjectType, OneOfType:
-		return s.coerceObject(descriptor, raw)
+		value, err = s.coerceObject(descriptor, raw)
 	case ObjectType:
 		if s.allowOutput {
-			return s.coerceObject(descriptor, raw)
+			value, err = s.coerceObject(descriptor, raw)
+			break
 		}
 		return InputValue{}, fmt.Errorf("type %q is output-only", typeID)
 	case EnumType:
-		return coerceEnum(descriptor, raw)
+		value, err = coerceEnum(descriptor, raw)
 	case InterfaceType, UnionType:
 		return InputValue{}, fmt.Errorf("type %q is output-only", typeID)
 	default:
 		return InputValue{}, fmt.Errorf("type %q has unknown input kind", typeID)
 	}
+	if err != nil {
+		return InputValue{}, err
+	}
+	if err := validateCoercedConstraints(value, descriptor.Traits); err != nil {
+		return InputValue{}, err
+	}
+	return value, nil
 }
 
 func (s *coercionState) coerceScalar(typeID TypeID, raw json.RawMessage) (InputValue, error) {
@@ -196,7 +207,7 @@ func (s *coercionState) coerceList(descriptor TypeDescriptor, raw json.RawMessag
 	for index, item := range items {
 		coerced, err := s.coerce(descriptor.Element, item, descriptor.ElementNullable)
 		if err != nil {
-			return InputValue{}, fmt.Errorf("list input %q item %d: %w", descriptor.ID, index, err)
+			return InputValue{}, fmt.Errorf("list input %q item %d: %w", descriptor.ID, index, prependConstraintPath(err, strconv.Itoa(index)))
 		}
 		result[index] = coerced
 	}
@@ -215,7 +226,7 @@ func (s *coercionState) coerceMap(descriptor TypeDescriptor, raw json.RawMessage
 		}
 		coerced, err := s.coerce(descriptor.Element, members[key], descriptor.ElementNullable)
 		if err != nil {
-			return InputValue{}, fmt.Errorf("map input %q key %q: %w", descriptor.ID, key, err)
+			return InputValue{}, fmt.Errorf("map input %q key %q: %w", descriptor.ID, key, prependConstraintPath(err, key))
 		}
 		result[key] = coerced
 	}
@@ -270,7 +281,10 @@ func (s *coercionState) coerceDeclaredField(descriptor TypeDescriptor, name stri
 	}
 	coerced, err := s.coerce(field.Type, member, field.Nullable)
 	if err != nil {
-		return InputValue{}, fmt.Errorf("object input %q field %q: %w", descriptor.ID, name, err)
+		return InputValue{}, fmt.Errorf("object input %q field %q: %w", descriptor.ID, name, prependConstraintPath(err, name))
+	}
+	if err := validateCoercedConstraints(coerced, field.Traits); err != nil {
+		return InputValue{}, fmt.Errorf("object input %q field %q: %w", descriptor.ID, name, prependConstraintPath(err, name))
 	}
 	return coerced, nil
 }
@@ -309,15 +323,11 @@ func canonicalizeInputDefaults(snapshot Snapshot) error {
 				continue
 			}
 			defaults++
-			coerced, err := CoerceInput(snapshot, field.Type, field.Default, field.Nullable)
+			canonical, err := canonicalInputDefault(snapshot, descriptor.ID, name, field)
 			if err != nil {
-				return fmt.Errorf("schema type %q field %q has invalid default: %w", descriptor.ID, name, err)
+				return err
 			}
-			canonical, err := coerced.MarshalJSON()
-			if err != nil {
-				return fmt.Errorf("schema type %q field %q cannot encode default: %w", descriptor.ID, name, err)
-			}
-			field.Default = append(json.RawMessage(nil), canonical...)
+			field.Default = canonical
 			descriptor.Fields[name] = field
 		}
 		if descriptor.Kind == OneOfType && defaults > 1 {
@@ -326,6 +336,32 @@ func canonicalizeInputDefaults(snapshot Snapshot) error {
 		snapshot.types[identifier] = descriptor
 	}
 	return nil
+}
+
+func canonicalInputDefault(snapshot Snapshot, owner TypeID, name string, field FieldDescriptor) (json.RawMessage, error) {
+	coerced, err := CoerceInput(snapshot, field.Type, field.Default, field.Nullable)
+	if err != nil {
+		return nil, fmt.Errorf("schema type %q field %q has invalid default: %w", owner, name, err)
+	}
+	canonical, err := coerced.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("schema type %q field %q cannot encode default: %w", owner, name, err)
+	}
+	if err := ValidateConstraintValue(canonical, field.Traits); err != nil {
+		return nil, fmt.Errorf("schema type %q field %q has invalid default: %w", owner, name, err)
+	}
+	return append(json.RawMessage(nil), canonical...), nil
+}
+
+func validateCoercedConstraints(value InputValue, traits []TraitDescriptor) error {
+	if value.IsMissing() || value.IsNull() {
+		return nil
+	}
+	canonical, err := value.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	return ValidateConstraintValue(canonical, traits)
 }
 
 func marshalInputList(values []InputValue) ([]byte, error) {

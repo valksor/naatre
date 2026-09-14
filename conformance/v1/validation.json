@@ -1,0 +1,68 @@
+{
+  "profile": "core.validation-1",
+  "fixtureSuite": "1.0.0",
+  "trait": "naatre.constraints-1",
+  "limits": {"maxViolations": 32, "maxPatternBytes": 1024, "maxRules": 32, "maxRuleDepth": 16, "maxRuleNodes": 128},
+  "agreement": {
+    "order": ["substitute-variables", "apply-missing-defaults", "coerce-declared-type", "evaluate-constraints", "authorize", "execute"],
+    "missing": "not-evaluated",
+    "null": "not-evaluated-after-nullability-check",
+    "client": "advisory-must-match-corpus",
+    "server": "authoritative-before-handler",
+    "persistedIdentity": "canonical-post-default-input"
+  },
+  "output": {
+    "phase": "completion-before-emission",
+    "failureCode": "OUTPUT_COMPLETION",
+    "invalidMember": "unavailable",
+    "unrelatedSiblings": "retained",
+    "cascadingConstraints": "suppressed-after-structural-failure"
+  },
+  "cases": [
+    {"name": "astral-unicode-scalar", "inputJSON": "\"😀\"", "constraints": {"maxLength": 1}, "violations": []},
+    {"name": "combining-scalars", "inputJSON": "\"é\"", "constraints": {"maxLength": 1}, "violations": [{"id": "maxLength", "code": "CONSTRAINT_MAX_LENGTH", "path": ""}]},
+    {"name": "utf8-byte-length", "inputJSON": "\"😀\"", "constraints": {"maxLength": 3, "lengthUnit": "bytes"}, "violations": [{"id": "maxLength", "code": "CONSTRAINT_MAX_LENGTH", "path": ""}]},
+    {"name": "invalid-unicode", "inputJSON": "\"\\ud800\"", "constraints": {"maxLength": 1}, "violations": [{"id": "unicode", "code": "INVALID_UNICODE", "path": ""}]},
+    {"name": "explicit-null-skips-constraints", "inputJSON": "null", "constraints": {"minLength": 4}, "violations": []},
+    {"name": "exact-minimum", "inputJSON": "\"17.999999999999999999\"", "constraints": {"minimum": 18}, "violations": [{"id": "minimum", "code": "CONSTRAINT_MINIMUM", "path": ""}]},
+    {"name": "exact-exclusive-maximum", "inputJSON": "10", "constraints": {"maximum": 10, "exclusiveMaximum": true}, "violations": [{"id": "maximum", "code": "CONSTRAINT_MAXIMUM", "path": ""}]},
+    {"name": "decimal-precision", "inputJSON": "\"123.45\"", "constraints": {"precision": 4}, "violations": [{"id": "precision", "code": "CONSTRAINT_PRECISION", "path": ""}]},
+    {"name": "decimal-scale", "inputJSON": "\"12.345\"", "constraints": {"precision": 5, "scale": 2}, "violations": [{"id": "scale", "code": "CONSTRAINT_SCALE", "path": ""}]},
+    {"name": "pattern-full-default", "inputJSON": "\"prefix-safe-suffix\"", "constraints": {"pattern": "safe"}, "violations": [{"id": "pattern", "code": "CONSTRAINT_PATTERN", "path": ""}]},
+    {"name": "pattern-search", "inputJSON": "\"prefix-safe-suffix\"", "constraints": {"pattern": "safe", "patternMode": "search"}, "violations": []},
+    {"name": "format-annotation", "inputJSON": "\"not-a-uuid\"", "constraints": {"format": {"id": "uuid"}}, "violations": []},
+    {"name": "minimum-items", "inputJSON": "[]", "constraints": {"minItems": 1}, "violations": [{"id": "minItems", "code": "CONSTRAINT_MIN_ITEMS", "path": ""}]},
+    {"name": "maximum-items", "inputJSON": "[1,2]", "constraints": {"maxItems": 1}, "violations": [{"id": "maxItems", "code": "CONSTRAINT_MAX_ITEMS", "path": ""}]},
+    {"name": "canonical-unique-items", "inputJSON": "[{\"a\":1,\"b\":2},{\"b\":2,\"a\":1}]", "constraints": {"uniqueItems": true}, "violations": [{"id": "uniqueItems", "code": "CONSTRAINT_UNIQUE_ITEMS", "path": "/1"}]},
+    {"name": "minimum-properties", "inputJSON": "{}", "constraints": {"minProperties": 1}, "violations": [{"id": "minProperties", "code": "CONSTRAINT_MIN_PROPERTIES", "path": ""}]},
+    {"name": "maximum-properties", "inputJSON": "{\"a\":1,\"b\":2}", "constraints": {"maxProperties": 1}, "violations": [{"id": "maxProperties", "code": "CONSTRAINT_MAX_PROPERTIES", "path": ""}]},
+    {"name": "map-key-pattern", "inputJSON": "{\"safe\":1,\"Bad\":2}", "constraints": {"keyPattern": "[a-z]+"}, "violations": [{"id": "keyPattern", "code": "CONSTRAINT_KEY_PATTERN", "path": "/Bad"}]},
+    {"name": "cross-field-dependency", "inputJSON": "{\"company\":\"Naatre\"}", "constraints": {"rules": [{"id": "company-requires-vat", "assert": {"operator": "or", "children": [{"operator": "absent", "field": "company"}, {"operator": "present", "field": "vat"}]}}]}, "violations": [{"id": "company-requires-vat", "code": "CONSTRAINT_RULE", "path": ""}]},
+    {"name": "format-assertion", "inputJSON": "\"not-a-uuid\"", "constraints": {"format": {"id": "uuid", "assertion": true}}, "violations": [{"id": "format", "code": "CONSTRAINT_FORMAT", "path": ""}]},
+    {"name": "timestamp-calendar-assertion", "inputJSON": "\"2026-02-30T12:00:00Z\"", "constraints": {"format": {"id": "timestamp", "assertion": true}}, "violations": [{"id": "format", "code": "CONSTRAINT_FORMAT", "path": ""}]},
+    {"name": "uri-requires-authority", "inputJSON": "\"relative/path\"", "constraints": {"format": {"id": "uri", "assertion": true}}, "violations": [{"id": "format", "code": "CONSTRAINT_FORMAT", "path": ""}]},
+    {"name": "portable-email-assertion", "inputJSON": "\"name@example.test\"", "constraints": {"format": {"id": "email", "assertion": true}}, "violations": []}
+  ],
+  "rejectedPatterns": ["(?=unsafe)", "(value)\\1", "(?<=unsafe)value"],
+  "jsonSchema": {
+    "dialect": "https://json-schema.org/draft/2020-12/schema",
+    "exact": {"$schema": "https://json-schema.org/draft/2020-12/schema", "minLength": 1, "maxLength": 8, "pattern": "[a-z]+", "minItems": 1, "uniqueItems": true},
+    "unsupported": [
+      {"schema": {"oneOf": [{"type": "string"}]}, "code": "JSON_SCHEMA_UNSUPPORTED_KEYWORD", "pointer": "/oneOf"},
+      {"schema": {"$schema": "http://json-schema.org/draft-07/schema#"}, "code": "JSON_SCHEMA_DIALECT", "pointer": "/$schema"},
+      {"schema": {"$ref": "https://example.invalid/schema.json"}, "code": "JSON_SCHEMA_REF_BLOCKED", "pointer": "/$ref"},
+      {"schema": {"$id": "https://example.test/schema"}, "code": "JSON_SCHEMA_UNSUPPORTED_KEYWORD", "pointer": "/$id"},
+      {"schema": {"pattern": "(?=unsupported)"}, "code": "JSON_SCHEMA_UNSUPPORTED_PATTERN", "pointer": "/pattern"},
+      {"schema": {"x-naatre-cel": "this.secret == true"}, "code": "JSON_SCHEMA_UNSUPPORTED_KEYWORD", "pointer": "/x-naatre-cel"}
+    ]
+  },
+  "unsupportedFeatures": [
+    {"feature": "cel", "code": "CONSTRAINT_FEATURE_UNSUPPORTED", "pointer": "/cel"}
+  ],
+  "unsupported": ["cel-core-evaluation", "network-ref-resolution", "unregistered-format-assertions", "non-re2-patterns", "unsupported-json-schema-vocabularies"],
+  "commands": [
+    "go test ./schema ./runtime -count=1",
+    "go test ./internal/conformance -run TestPortableValidationEvidence -count=1",
+    "node conformance/independent/validation.mjs"
+  ]
+}

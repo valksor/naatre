@@ -49,7 +49,7 @@ func (v *planValidator) validateExpression(expression protocol.Expression, expec
 	if expression.Kind() == protocol.LiteralExpression {
 		literal, _ := expression.Literal()
 		if _, err := schema.CoerceInput(v.registry.types, expected.id, literal, expected.nullable); err != nil {
-			v.add("TYPE_MISMATCH", "LANG-100", err.Error(), expression.Source())
+			v.addCoercionError("TYPE_MISMATCH", "LANG-100", "literal", err, expression.Source())
 		}
 		return
 	}

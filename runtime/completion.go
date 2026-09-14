@@ -7,6 +7,8 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/valksor/naatre/protocol"
@@ -183,6 +185,22 @@ func (s *copyState) leave(reference copyReference) {
 }
 
 func (s *completionState) completeOutput(value any, output schema.TypeID, nullable bool, depth int, path []any) (completed any, issues []completionIssue, available bool) {
+	completed, issues, available = s.completeOutputUnchecked(value, output, nullable, depth, path)
+	if !available || len(issues) != 0 {
+		return completed, issues, available
+	}
+	descriptor, ok := s.types.Lookup(output)
+	if !ok {
+		return completed, issues, available
+	}
+	constraintIssues := completedConstraintIssues(completed, descriptor.Traits, path)
+	if len(constraintIssues) != 0 {
+		return nil, append(issues, constraintIssues...), false
+	}
+	return completed, issues, true
+}
+
+func (s *completionState) completeOutputUnchecked(value any, output schema.TypeID, nullable bool, depth int, path []any) (completed any, issues []completionIssue, available bool) {
 	if uint64(depth) > s.limits.MaxOutputDepth {
 		return nil, []completionIssue{{path: append([]any(nil), path...), cause: fmt.Errorf("%w: schema completion exceeds maximum depth", errResourceBudget)}}, false
 	}
@@ -251,7 +269,11 @@ func (s *completionState) completeObjectFields(result, object map[string]any, de
 		fieldOutput, fieldIssues, fieldAvailable := s.completeOutput(fieldValue, field.Type, field.Nullable, depth+1, fieldPath)
 		issues = append(issues, fieldIssues...)
 		if fieldAvailable {
-			result[name] = fieldOutput
+			constraintIssues := completedConstraintIssues(fieldOutput, field.Traits, fieldPath)
+			issues = append(issues, constraintIssues...)
+			if len(constraintIssues) == 0 {
+				result[name] = fieldOutput
+			}
 		}
 	}
 	return issues
@@ -459,6 +481,57 @@ func validateOpaqueJSONValue(value any) error {
 
 func issue(path []any, message string) []completionIssue {
 	return []completionIssue{{path: append([]any(nil), path...), cause: fmt.Errorf("%w: %s", errInvalidOutput, message)}}
+}
+
+func completedConstraintIssues(value any, traits []schema.TraitDescriptor, path []any) []completionIssue {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return []completionIssue{{path: append([]any(nil), path...), cause: fmt.Errorf("%w: output constraint encoding failed", errInvalidOutput)}}
+	}
+	if err := schema.ValidateConstraintValue(encoded, traits); err != nil {
+		var constraints *schema.ConstraintError
+		if !errors.As(err, &constraints) {
+			return []completionIssue{{path: append([]any(nil), path...), cause: fmt.Errorf("%w: output constraint metadata is invalid", errInvalidOutput)}}
+		}
+		violations := constraints.Violations()
+		issues := make([]completionIssue, len(violations))
+		for index, violation := range violations {
+			issues[index] = completionIssue{
+				path:  appendConstraintPointer(path, violation.Path, value),
+				cause: fmt.Errorf("%w: output violates constraint %q", errInvalidOutput, violation.ID),
+			}
+		}
+		return issues
+	}
+	return nil
+}
+
+func appendConstraintPointer(path []any, pointer string, value any) []any {
+	result := append([]any(nil), path...)
+	if pointer == "" {
+		return result
+	}
+	for _, token := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		if list, ok := value.([]any); ok {
+			index, err := strconv.Atoi(token)
+			if err != nil || index < 0 || index >= len(list) {
+				result = append(result, token)
+				value = nil
+				continue
+			}
+			result = append(result, index)
+			value = list[index]
+			continue
+		}
+		result = append(result, token)
+		if object, ok := value.(map[string]any); ok {
+			value = object[token]
+		} else {
+			value = nil
+		}
+	}
+	return result
 }
 
 func appendPath(path []any, segment any) []any {

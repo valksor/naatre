@@ -942,6 +942,15 @@ func validateTraits(traits []TraitDescriptor, options ImportOptions) error {
 			return fmt.Errorf("invalid schema trait %q", trait.ID)
 		}
 		seen[trait.ID] = true
+		if trait.ID == ConstraintTraitID {
+			if trait.Semantics != TraitValidation {
+				return fmt.Errorf("constraint trait has semantics %q", trait.Semantics)
+			}
+			if _, err := decodeConstraintSet(trait.Value); err != nil {
+				return err
+			}
+			continue
+		}
 		switch trait.Semantics {
 		case TraitDocumentation:
 		case TraitValidation, TraitExecution, TraitAuthorization, TraitIdentity:

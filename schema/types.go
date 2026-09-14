@@ -193,6 +193,9 @@ func (c *Catalog) Freeze() (Snapshot, error) {
 	if err := validateCatalogReferences(c.types); err != nil {
 		return Snapshot{}, err
 	}
+	if err := validateCatalogConstraintApplicability(c.types); err != nil {
+		return Snapshot{}, err
+	}
 	if err := requireBoundedRecursion(c.types); err != nil {
 		return Snapshot{}, err
 	}
@@ -259,6 +262,9 @@ func validateDescriptor(descriptor TypeDescriptor) error {
 		return err
 	}
 	if err := validateFieldDescriptors(descriptor); err != nil {
+		return err
+	}
+	if err := validateConstraintTraits(descriptor); err != nil {
 		return err
 	}
 	return validateVariantIDs(descriptor)

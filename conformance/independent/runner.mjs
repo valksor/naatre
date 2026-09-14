@@ -5,6 +5,8 @@ import { createServer } from "node:http";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { hasUnpairedSurrogate, hasUnpairedSurrogateValue } from "./unicode.mjs";
+
 const protocol = "naatre.conformance.runner-1";
 const maxInputBytes = 1024 * 1024;
 const suiteURL = new URL("../v1/suite.json", import.meta.url);
@@ -16,6 +18,7 @@ const implementations = new Map([
   ["core.scalar.c14n-1", "scalars.mjs"],
   ["core.interop.c14n-1", "canonical.mjs"],
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
+  ["core.validation-1", "validation.mjs"],
 ]);
 
 class ProtocolError extends Error {
@@ -110,30 +113,6 @@ function validatePath(path) {
 function boundedString(value, maximum) {
   const length = typeof value === "string" ? Array.from(value).length : 0;
   return length > 0 && length <= maximum && !hasUnpairedSurrogate(value);
-}
-
-function hasUnpairedSurrogate(value) {
-  if (typeof value !== "string") return false;
-  for (let index = 0; index < value.length; index += 1) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const low = value.charCodeAt(index + 1);
-      if (!(low >= 0xdc00 && low <= 0xdfff)) return true;
-      index += 1;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function hasUnpairedSurrogateValue(value, seen = new Set()) {
-  if (typeof value === "string") return hasUnpairedSurrogate(value);
-  if (value === null || typeof value !== "object") return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  if (Array.isArray(value)) return value.some((entry) => hasUnpairedSurrogateValue(entry, seen));
-  return Object.entries(value).some(([key, entry]) => hasUnpairedSurrogate(key) || hasUnpairedSurrogateValue(entry, seen));
 }
 
 function handle(request) {

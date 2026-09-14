@@ -39,6 +39,7 @@
     {"path": "v1/schema.json", "profile": "core.schema-1", "category": "schema", "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"},
     {"path": "v1/security.json", "profile": "core.security-1", "category": "security", "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"},
     {"path": "v1/streaming.json", "profile": "core.streaming-1", "category": "stream", "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"},
+    {"path": "v1/validation.json", "profile": "core.validation-1", "category": "schema", "sha256": "5fc557e491786eb99718f9c559fd38f9fc8f95adf269bdaef99fc55283819ff3"},
     {"path": "v1/values.json", "profile": "core.value-1", "category": "schema", "sha256": "22a2eb0350de94567307ce52936601a495acd7a9332a5d8ed0a46293aa159910"}
   ],
   "normativeSources": [
@@ -232,6 +233,11 @@
     {"caseId": "requirements.schema.evolution.deployment", "spec": "spec/v1/schema.md", "clauses": ["TYPE-424","TYPE-425"], "fixtureRefs": [{"path":"v1/schema.json","pointer":"/diffs/0","polarity":"mixed"},{"path":"v1/schema.json","pointer":"/diffs/3","polarity":"mixed"}]},
     {"caseId": "requirements.schema.discovery", "spec": "spec/v1/schema.md", "clauses": ["TYPE-430","TYPE-431","TYPE-432","TYPE-434","TYPE-433"], "fixtureRefs": [{"path":"v1/schema.json","pointer":"/filters/0","polarity":"mixed"}]},
 
+    {"caseId": "requirements.validation.boundary", "spec": "spec/v1/validation.md", "clauses": ["VALID-001","VALID-002","VALID-003","VALID-004"], "fixtureRefs": [{"path":"v1/validation.json","pointer":"/agreement","polarity":"mixed"},{"path":"v1/validation.json","pointer":"/cases/4","polarity":"positive"}]},
+    {"caseId": "requirements.validation.values", "spec": "spec/v1/validation.md", "clauses": ["VALID-100","VALID-101","VALID-102","VALID-103","VALID-104"], "fixtureRefs": [{"path":"v1/validation.json","pointer":"/cases/5","polarity":"negative"},{"path":"v1/validation.json","pointer":"/cases/0","polarity":"positive"},{"path":"v1/validation.json","pointer":"/cases/9","polarity":"negative"},{"path":"v1/validation.json","pointer":"/cases/19","polarity":"negative"},{"path":"v1/validation.json","pointer":"/cases/14","polarity":"negative"}]},
+    {"caseId": "requirements.validation.rules-errors-output", "spec": "spec/v1/validation.md", "clauses": ["VALID-110","VALID-111","VALID-200","VALID-201","VALID-202"], "fixtureRefs": [{"path":"v1/validation.json","pointer":"/cases/18","polarity":"negative"},{"path":"v1/validation.json","pointer":"/unsupportedFeatures/0","polarity":"negative"},{"path":"v1/validation.json","pointer":"/output","polarity":"mixed"}]},
+    {"caseId": "requirements.validation.json-schema", "spec": "spec/v1/validation.md", "clauses": ["VALID-300","VALID-301","VALID-302","VALID-303"], "fixtureRefs": [{"path":"v1/validation.json","pointer":"/jsonSchema/exact","polarity":"positive"},{"path":"v1/validation.json","pointer":"/jsonSchema/unsupported/0","polarity":"negative"},{"path":"v1/validation.json","pointer":"/jsonSchema/unsupported/2","polarity":"negative"}]},
+
     {"caseId": "requirements.security.principal", "spec": "spec/v1/security.md", "clauses": ["SEC-001","SEC-002","SEC-003"], "fixtureRefs": [{"path": "v1/security.json", "pointer": "/operationVectors/0", "polarity": "positive"}]},
     {"caseId": "requirements.security.authorization.default-boundary", "spec": "spec/v1/security.md", "clauses": ["SEC-100","SEC-101","SEC-102"], "fixtureRefs": [{"path":"v1/security.json","pointer":"/executionVectors/0","polarity":"negative"},{"path":"v1/security.json","pointer":"/executionVectors/2","polarity":"negative"}]},
     {"caseId": "requirements.security.authorization.policy-input", "spec": "spec/v1/security.md", "clauses": ["SEC-103","SEC-104","SEC-105"], "fixtureRefs": [{"path":"v1/security.json","pointer":"/executionVectors/0","polarity":"negative"},{"path":"v1/security.json","pointer":"/executionVectors/2","polarity":"negative"}]},
@@ -312,7 +318,7 @@
     {"caseId": "issue.51", "issue": 51, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/51", "polarity": "mixed"}]},
     {"caseId": "issue.52", "issue": 52, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/52", "polarity": "mixed"}]},
     {"caseId": "issue.53", "issue": 53, "fixtureRefs": [{"path":"v1/collections.json","pointer":"/query","polarity":"mixed"},{"path": "v1/roadmap.json", "pointer": "/issues/53", "polarity": "mixed"}]},
-    {"caseId": "issue.54", "issue": 54, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/54", "polarity": "mixed"}]},
+    {"caseId": "issue.54", "issue": 54, "fixtureRefs": [{"path": "v1/validation.json", "pointer": "", "polarity": "mixed"}, {"path": "v1/roadmap.json", "pointer": "/issues/54", "polarity": "mixed"}]},
     {"caseId": "issue.55", "issue": 55, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/55", "polarity": "mixed"}]},
     {"caseId": "issue.56", "issue": 56, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/56", "polarity": "mixed"}]},
     {"caseId": "issue.57", "issue": 57, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/57", "polarity": "mixed"}]},

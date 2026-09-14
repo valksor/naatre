@@ -872,11 +872,11 @@ func assertNormativeCoverage(t *testing.T, manifest suiteManifest) {
 			}
 		}
 	}
-	if len(coveredClauses) != 474 {
-		t.Errorf("mapped normative clauses = %d, want 474", len(coveredClauses))
+	if len(coveredClauses) != 492 {
+		t.Errorf("mapped normative clauses = %d, want 492", len(coveredClauses))
 	}
-	if len(mustClauses) != 202 {
-		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 202", len(mustClauses))
+	if len(mustClauses) != 215 {
+		t.Errorf("mapped MUST/MUST NOT clause blocks = %d, want 215", len(mustClauses))
 	}
 	for clause := range mustClauses {
 		if coveredClauses[clause] == "" {

@@ -11,7 +11,7 @@ checked-in files rather than duplicating their expected values in Go source.
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 474 stable normative clauses and all 110 repository issues to exact
+maps all 492 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -54,6 +54,15 @@ node conformance/independent/reliability.mjs
 
 The `core.value-1` vectors cover schema-directed maps, lists, input objects,
 one-of activation, enum compatibility, and recursive value limits.
+
+`v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
+exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
+full/search patterns, annotation/assertion formats, canonical uniqueness,
+bounded native cross-field rules, violation ordering, client/server authority,
+output-completion boundary, and strict JSON Schema 2020-12 fidelity. The Go
+reference implementation and dependency-free JavaScript consumer execute the
+same valid/invalid corpus. CEL evaluation and automatic network reference
+resolution are explicitly unsupported.
 
 The `core.language-1` vectors cover every core composition tag and expression,
 response shaping, collection edge states, result-reference scopes, and the

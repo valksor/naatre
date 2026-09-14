@@ -208,12 +208,12 @@ func (v *planValidator) validateVariables() {
 		if present {
 			planned.guaranteed = true
 			if _, err := schema.CoerceInput(v.registry.types, typeID, value, definition.Nullable()); err != nil {
-				v.add("TYPE_MISMATCH", "TYPE-100", fmt.Sprintf("variable %q: %v", definition.Name(), err), definition.Source())
+				v.addCoercionError("TYPE_MISMATCH", "TYPE-100", fmt.Sprintf("variable %q", definition.Name()), err, definition.Source())
 			}
 		} else if fallback, hasDefault := definition.Default(); hasDefault {
 			planned.guaranteed = true
 			if _, err := schema.CoerceInput(v.registry.types, typeID, fallback, definition.Nullable()); err != nil {
-				v.add("TYPE_MISMATCH", "TYPE-100", fmt.Sprintf("variable %q default: %v", definition.Name(), err), definition.Source())
+				v.addCoercionError("TYPE_MISMATCH", "TYPE-100", fmt.Sprintf("variable %q default", definition.Name()), err, definition.Source())
 			}
 		} else if definition.Required() {
 			v.add("MISSING_VARIABLE", "LANG-023", "required request variable is missing", definition.Source())
@@ -680,7 +680,7 @@ func (v *planValidator) bindFragmentParameter(parameter protocol.VariableDefinit
 		binding.defaultValue = append(json.RawMessage(nil), fallback...)
 		binding.hasDefault = true
 		if _, err := schema.CoerceInput(v.registry.types, typeID, fallback, parameter.Nullable()); err != nil {
-			v.add("TYPE_MISMATCH", "LANG-244", fmt.Sprintf("fragment parameter %q default: %v", parameter.Name(), err), parameter.Source())
+			v.addCoercionError("TYPE_MISMATCH", "LANG-244", fmt.Sprintf("fragment parameter %q default", parameter.Name()), err, parameter.Source())
 		}
 	}
 	switch {
