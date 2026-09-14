@@ -158,6 +158,7 @@ type Plan struct {
 	resourceLimits  ResourceLimits
 	staticCost      uint64
 	document        json.RawMessage
+	transformations []PlanTransformation
 }
 
 // StaticCost is the complete request-independent planned cost admitted before

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/valksor/naatre/protocol"
@@ -25,6 +26,7 @@ var (
 	ErrSourceType            = errors.New("handler source has wrong Go type")
 	namePattern              = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	schemaIdentityPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,127}$`)
+	snapshotIdentity         atomic.Uint64
 )
 
 // Scope identifies root operations and members of registered object types.
@@ -297,6 +299,7 @@ type Registry struct {
 
 // Snapshot is an immutable, concurrent-readable registry.
 type Snapshot struct {
+	cacheIdentity uint64
 	types         schema.Snapshot
 	definitions   map[string]Definition
 	directives    map[string]registeredDirective
@@ -379,7 +382,8 @@ func (r *Registry) Freeze() (Snapshot, error) {
 	}
 	r.frozen = true
 	return Snapshot{
-		types: r.types, definitions: definitions, directives: directives, extensions: extensions, authorization: r.authorization,
+		cacheIdentity: snapshotIdentity.Add(1),
+		types:         r.types, definitions: definitions, directives: directives, extensions: extensions, authorization: r.authorization,
 		interceptors: slices.Clone(r.interceptors),
 		transactions: r.transactions,
 	}, nil

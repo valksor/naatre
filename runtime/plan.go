@@ -53,6 +53,7 @@ type PlanDescription struct {
 	VariableDefinitions []PlanVariableDescription      `json:"variableDefinitions,omitempty"`
 	Nodes               []PlanNodeDescription          `json:"nodes"`
 	Result              SelectedResultDescription      `json:"result"`
+	Transformations     []PlanTransformation           `json:"transformations,omitempty"`
 }
 
 // PlanNodeDescription identifies one resolved language node without exposing
@@ -155,6 +156,7 @@ func (p *Plan) Description() PlanDescription {
 		Extensions:          append([]protocol.NegotiatedExtension(nil), p.extensions...),
 		VariableDefinitions: describeVariables(p.variables),
 		Nodes:               describePlanNodes(p.nodes), Result: selectedObject(p.nodes, p.types),
+		Transformations: clonePlanTransformations(p.transformations),
 	}
 }
 

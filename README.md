@@ -40,8 +40,10 @@ evidence must be described as planned.
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, process-wide admission/lifecycle control, bounded
   stream replay and source ownership, a bounded reference federation
-  coordinator, planning, and execution; see the
+  coordinator, planning, execution, and the optional bounded
+  `runtime.go.plan-cache-1` plan-template cache; see the
   [Go registry contract](docs/registry.md) and
+  [plan-cache profile](docs/plan-cache.md), and
   [process-hosting guide](docs/process-hosting.md). Production distributed
   federation planning and transport integration remain owned by #109.
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go

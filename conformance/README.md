@@ -116,6 +116,15 @@ policy inputs, and authorization identities must retain the same static handler,
 type, effect, authorization-policy, and source-pointer description without
 retaining any of that per-request state.
 
+`v1/plan-cache.json` pins the Go-only `runtime.go.plan-cache-1` implementation
+to the exact core planning fixture, Go module metadata, source, tests, and
+profile documentation. Its executable runner checks request-state isolation,
+revision invalidation, active-plan eviction, effect-barrier provenance,
+redacted stable failures, cancellation, and the finite capacity boundary. It
+does not extend `core.language-1` or claim distributed caching, user-defined
+optimizers, native compilation, framework integration, or unexecuted runtime
+certification.
+
 `v1/security.json` fixes the `core.security-1` denial shape, static and dynamic
 decision semantics, operation-kind distinction, lifecycle and cache-scope
 rules, and equivalent decisions for planned, cached, batched, streamed, and
