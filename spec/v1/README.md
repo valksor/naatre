@@ -33,6 +33,7 @@ Documents:
 20. [JVM Java and Kotlin client core](jvm.md)
 20. [Asynchronous long-running operations](async-operations.md)
 8. [Transport batching and request multiplexing](request-batching.md)
+8. [HTTP digest fields](http-digest.md)
 9. [Persisted and allowlisted operations](persisted.md)
 10. [Cursor pagination and collection metadata](collections.md)
 11. [Mutations and transaction boundaries](mutations.md)

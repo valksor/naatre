@@ -19,6 +19,7 @@ const implementations = new Map([
   ["core.scalar.c14n-1", "scalars.mjs"],
   ["core.interop.c14n-1", "canonical.mjs"],
   ["core.adapters-1", "adapters.mjs"],
+  ["core.http.digest-1", "http-digest.mjs"],
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
   ["core.validation-1", "validation.mjs"],
   ["sdk.dart.core-1", "verify-dart-sdk.mjs"],

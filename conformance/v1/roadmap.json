@@ -552,19 +552,19 @@
     },
     "63": {
       "issue": 63,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 63,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "core.http.digest-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["core.http.digest-1"]
       }
     },
     "64": {
