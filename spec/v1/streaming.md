@@ -198,10 +198,12 @@ non-`none` bounded identifier and positive event and byte limits.
 
 ## Required SSE binding
 
-The reference tree in this issue implements the bounded incremental SSE codec
-and its portable vectors. The authenticated Fetch POST endpoint and optional
-WebSocket adapter are the independently tracked integration work in #72; until
-then neither transport is advertised by the reference runtime.
+The core profile owns the bounded incremental SSE codec, logical stream
+contract, and portable vectors. Its transport records remain unadvertised
+because `core.streaming-1` is transport-independent. The separately executable
+`sdk.typescript.adapters-1` evidence owned by #72 advertises the authenticated
+Fetch POST SSE binding and, independently, the optional `stream.websocket-1`
+subprofile without changing this contract.
 
 - **STR-700:** `sse-post-fetch` uses authenticated Fetch POST with `Accept:
   text/event-stream`, UTF-8, identity content encoding, no intermediary

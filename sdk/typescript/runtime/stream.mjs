@@ -2,6 +2,7 @@ import { NaatreClientError } from "./error.mjs";
 import { canonicalStringify, parseJSON, safeObject } from "./json.mjs";
 
 const frameTypes = new Set(["open", "data", "patch", "error", "complete", "keepalive", "resume", "history-unavailable"]);
+const streamErrorCodes = new Set(["CLIENT_CANCELED", "CLIENT_FRAME_LIMIT", "CLIENT_PROTOCOL_INVALID", "CLIENT_RESPONSE_LIMIT", "CLIENT_STREAM_INVALID", "CLIENT_STREAM_TRUNCATED", "CLIENT_VALUE_PRECISION"]);
 
 export async function* decodeSSEStream(body, options = {}) {
   const maximumFrameBytes = positiveLimit(options.maximumFrameBytes, 1 << 20);
@@ -13,7 +14,7 @@ export async function* decodeSSEStream(body, options = {}) {
     if (!reader) transportFail("CLIENT_STREAM_INVALID");
   } catch (error) {
     try { await body?.cancel?.(); } catch {}
-    if (error instanceof NaatreClientError) throw error;
+    if (error instanceof NaatreClientError && streamErrorCodes.has(error.code)) transportFail(error.code);
     transportFail("CLIENT_STREAM_INVALID");
   }
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -51,7 +52,7 @@ export async function* decodeSSEStream(body, options = {}) {
     }
     buffered += decoder.decode();
   } catch (error) {
-    if (error instanceof NaatreClientError) throw error;
+    if (error instanceof NaatreClientError && streamErrorCodes.has(error.code)) transportFail(error.code);
     if (signal?.aborted || error?.name === "AbortError") transportFail("CLIENT_CANCELED");
     transportFail("CLIENT_STREAM_INVALID");
   } finally {
@@ -117,7 +118,7 @@ async function* websocketFrames(configuration) {
       }
     }
   } catch (error) {
-    if (error instanceof NaatreClientError) throw error;
+    if (error instanceof NaatreClientError && streamErrorCodes.has(error.code)) transportFail(error.code);
     if (signal?.aborted || error?.name === "AbortError") transportFail("CLIENT_CANCELED");
     transportFail("CLIENT_STREAM_INVALID");
   } finally {

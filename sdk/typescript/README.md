@@ -44,14 +44,29 @@ limits validate the declared wire length; decompressed byte limits apply to
 the bytes exposed by the Fetch implementation after content decoding.
 
 POST-SSE and WebSocket streams validate bounded UTF-8 JSON frames, sequence
-ordering, exact duplicates, bounded WebSocket queues, terminal/truncated outcomes, and the special
-`history-unavailable` recovery end. Cancellation closes the reader or socket.
-WebSocket support is optional, accepts only `wss:` endpoints and text frames,
-and sends the same canonical request envelope after the connection opens.
+ordering, exact duplicates, bounded WebSocket queues, terminal/truncated
+outcomes, and the special `history-unavailable` recovery end. Cancellation
+closes the reader or socket. A caller reconnects SSE explicitly by supplying
+the last successfully accepted cursor as `lastEventId`; the adapter validates
+and sends `Last-Event-ID`, exposes the same value to the authentication callback
+for binding, and strips it with credentials on an untrusted cross-origin
+redirect. Automatic reconnect policy remains application-owned. WebSocket
+support is optional, accepts only `wss:` endpoints and text frames, and sends
+the same canonical request envelope after the connection opens.
 
-The checked evidence covers Node 26.8.2, Bun 1.4.2, Deno 2.9.6, Chrome
-headless shell 153.0.8010.36, and workerd package 1.20260914.1 on Darwin arm64.
-Run the portable profiles and targeted Node tests with:
+Issue #23 and `core.streaming-1` remain the authority for frames, replay,
+terminal states, and lifecycle. Issue #72 owns only the concrete Fetch POST SSE
+binding and separately advertised `stream.websocket-1` adapter in this package;
+the unary Fetch behavior remains part of the TypeScript adapter surface from
+issue #75. The transport profile lifecycle is tied to fixture suite `1.0.0`,
+runtime `naatre.typescript.runtime-1`, and the exact dependency revisions in
+`conformance/v1/typescript-adapters.json`.
+
+The current checked evidence covers Node 26.8.2, Bun 1.4.2, and Deno 2.9.6 on
+Darwin arm64. Chrome headless shell 153.0.8010.36 and workerd package
+1.20260914.1 have reproducible harnesses but are explicitly not claimed until
+those harnesses execute against this exact revision. Run the portable profiles
+and targeted Node tests with:
 
 ```sh
 node conformance/independent/typescript-adapter-runtime.mjs
@@ -62,28 +77,34 @@ node --test sdk/typescript/runtime/exports.test.mjs \
   sdk/typescript/runtime/transport.test.mjs
 ```
 
-For the selected browser, serve the repository root with
-`python3 -m http.server 18775 --bind 127.0.0.1`, set
-`CHROME_HEADLESS_SHELL` to the exact 153.0.8010.36 executable, and run the
-wrapper. It verifies the version and DOM result, and replays captured browser
-diagnostics on failure:
+For the selected browser, set `CHROME_HEADLESS_SHELL` to the exact
+153.0.8010.36 executable and run the wrapper. It binds an OS-selected ephemeral
+loopback port, verifies the browser version and DOM result, and replays captured
+browser diagnostics on failure:
 
 ```sh
 conformance/browser/run-typescript-adapter-runtime.sh
 ```
 
-For the selected edge runtime, run
-`npx --yes --userconfig=/dev/null workerd@1.20260914.1 serve
-conformance/edge/typescript-adapter-workerd.capnp`, then request
-`http://127.0.0.1:18776/`.
+For the selected edge runtime, run the wrapper below. It pins workerd, binds an
+OS-selected ephemeral loopback port, probes the worker, validates the result,
+and stops the runtime:
 
-The profile does not claim automatic reconnect/replay orchestration, binary or
-compressed WebSocket frames, WebSocket upgrade authentication headers,
-non-WSS sockets, browsers other than the recorded Chrome revision, edge
-runtimes other than the recorded workerd revision, framework bindings, or
-deployment certification. The core profile remains independently verifiable
-and does not acquire those transport claims merely because the package root
-re-exports the adapter functions.
+```sh
+conformance/edge/run-typescript-adapter-workerd.sh
+```
+
+The complete unsupported optional-capability list is automatic reconnect and
+replay policy, native `EventSource` POST authentication, bidirectional client
+stream messages after WebSocket establishment, binary or compressed WebSocket
+frames, WebSocket upgrade authentication headers, non-WSS sockets, browsers
+other than the recorded Chrome revision, edge runtimes other than the recorded
+workerd revision, Node/Bun/Deno revisions other than those recorded in the
+fixture, framework bindings, native mobile runtime bindings, service-worker
+offline replay, durable client cursor storage, and deployment certification.
+The core profile remains independently verifiable and does not acquire those
+transport claims merely because the package root re-exports the adapter
+functions.
 
 ## Collection-query mapping
 

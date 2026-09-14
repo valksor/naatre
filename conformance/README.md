@@ -139,12 +139,17 @@ marks HTTP, Rails, SSE, WebSocket, retry/auth, and transport cancellation as
 unsupported until issue #83; issue #69 owns the combined official matrix.
 
 `v1/typescript-adapters.json` pins `sdk.typescript.adapters-1`: Fetch unary and
-POST-SSE adapters, the optional secure WebSocket adapter, strict ESM subpath
-exports, cancellation and body/socket cleanup, redirect credential policy,
-decompression and frame limits, and the exact Node, Bun, Deno, Chrome headless,
-and workerd revisions executed by the portable runtime matrix. The independent
-runner rechecks source digests, Node behavior, and package-export boundaries;
-the recorded commands reproduce the other selected runtimes.
+POST-SSE adapters, the separately advertised optional `stream.websocket-1`
+adapter, strict ESM subpath exports, cancellation and body/socket cleanup,
+redirect credential policy, decompression and frame limits, and the exact Node,
+Bun, and Deno revisions executed by the portable runtime matrix. The pinned
+Chrome headless and workerd harnesses remain explicitly unclaimed until they
+execute against the current evidence revision. Issue #75 owns the general
+TypeScript adapter/package surface; issue #72 owns the concrete streaming
+transport slice and its dependency on issue #23. The independent runner
+rechecks source and dependency digests, Node behavior, package-export
+boundaries, and exact published transport results; the recorded commands
+reproduce the other selected runtimes with ephemeral loopback ports.
 
 `v1/python-sdk.json` pins `sdk.python.core-1`: dependency-free Python 3.11-3.14
 transport protocols, identical sync/async canonical behavior, frozen generated

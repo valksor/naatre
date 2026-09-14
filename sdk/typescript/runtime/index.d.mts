@@ -51,7 +51,7 @@ export interface StreamFrame extends Readonly<Record<string, unknown>> {
 export interface FetchAdapterConfiguration {
   readonly endpoint: string | URL;
   readonly fetch?: typeof fetch;
-  readonly authenticate?: (context: Readonly<{ url: string; operation: Operation<object, unknown>; signal?: AbortSignal }>) => HeadersInit | undefined | Promise<HeadersInit | undefined>;
+  readonly authenticate?: (context: Readonly<{ url: string; operation: Operation<object, unknown>; signal?: AbortSignal; lastEventId?: string }>) => HeadersInit | undefined | Promise<HeadersInit | undefined>;
   readonly compressedBytes?: number;
   readonly decompressedBytes?: number;
   readonly frameBytes?: number;
@@ -63,7 +63,7 @@ export interface FetchAdapterConfiguration {
 
 export interface FetchAdapter {
   execute<TVariables extends object, TResult>(operation: Operation<TVariables, TResult>, options?: Readonly<{ signal?: AbortSignal }>): Promise<ReturnType<Operation<TVariables, TResult>["decodeResult"]>>;
-  stream<TVariables extends object, TResult>(operation: Operation<TVariables, TResult>, options?: Readonly<{ signal?: AbortSignal }>): Promise<AsyncIterable<StreamFrame>>;
+  stream<TVariables extends object, TResult>(operation: Operation<TVariables, TResult>, options?: Readonly<{ signal?: AbortSignal; lastEventId?: string }>): Promise<AsyncIterable<StreamFrame>>;
 }
 
 export interface WebSocketAdapterConfiguration {

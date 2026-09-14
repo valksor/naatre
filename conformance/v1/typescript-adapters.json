@@ -2,6 +2,14 @@
   "profile": "sdk.typescript.adapters-1",
   "fixtureSuite": "1.0.0",
   "runtimeVersion": "naatre.typescript.runtime-1",
+  "dependencies": [
+    {
+      "issue": 23,
+      "profile": "core.streaming-1",
+      "gitCommit": "8d91381f3f88ecc7fe6a9f1512975bf5514f285e",
+      "fixture": {"path": "conformance/v1/streaming.json", "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"}
+    }
+  ],
   "package": {
     "name": "@naatre/sdk",
     "format": "esm",
@@ -10,22 +18,23 @@
   },
   "evidence": [
     {"path": "sdk/typescript/runtime/index.mjs", "sha256": "443221d5a09ca02631bdf5f99df55362b1e780c2d240b9cbdb9f2aec2588829a"},
-    {"path": "sdk/typescript/runtime/transport.mjs", "sha256": "2623ff1391c98dfe060de09de07a836e9e546cf08d14d57833f96fa6394a59ea"},
-    {"path": "sdk/typescript/runtime/stream.mjs", "sha256": "1f92e416b6c2cb710c077b13344b14008ae4e22a4d1a120a68c8a7e8bb3bf594"},
-    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "26c1a4107e314f0a9ccbdd973dfc4ee43f8e16ef028a435043ba97ed022c4e1d"},
+    {"path": "sdk/typescript/runtime/transport.mjs", "sha256": "2b743d126c650d7efe7ac202e53096bb337a0c44d330181adc2acca471da1da8"},
+    {"path": "sdk/typescript/runtime/stream.mjs", "sha256": "41d13f2c50ea30ecdedd7c5cd8d22e2abd7766e1eb37d093c7cd5f4388cf3006"},
+    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "c4f007dabd8a96894f7c694cb728f6b78e7a042611087d7c6ebc39e61ea4eb90"},
     {"path": "sdk/typescript/runtime/transport.d.mts", "sha256": "441ee985113648e525344d2c77aa2fa7a404821a036951fbfcf69b9e1a351a5b"},
     {"path": "sdk/typescript/runtime/stream.d.mts", "sha256": "853c20799a6f5b2af488c170c5354c13c91095c3dc917dfc8234ae9654e4ca4e"},
-    {"path": "sdk/typescript/runtime/adapter-types.test.ts", "sha256": "dd568a2483495a45c78e897c4ff78f725d8b19828204e714d6f545061eb6f274"},
+    {"path": "sdk/typescript/runtime/adapter-types.test.ts", "sha256": "fbcb48f24ed28da28a43c1213bcefceb4e10c94881d3e5846d97211d89263a97"},
     {"path": "sdk/typescript/runtime/exports.test.mjs", "sha256": "59dd4154e3b1fde7749fa3b0a176cc4a7ffa5da6e063839f527689cc714fb541"},
-    {"path": "sdk/typescript/runtime/transport.test.mjs", "sha256": "df2c1896a515ca9192863984e21f6f72ba50fd971d5ba235c23f6b24453bdc01"},
+    {"path": "sdk/typescript/runtime/transport.test.mjs", "sha256": "9216550b061d2a4a98e68ccb46ab7d505a8fbdd428b9a17a55b35e67e2c68526"},
     {"path": "sdk/typescript/package.json", "sha256": "75676f70299a1d48f8c5e4d29f25ec1aa1e76855dedb557cff832a40d56a4a79"},
     {"path": "sdk/typescript/package-lock.json", "sha256": "e356c4b3e5b96c03d0427347ad81510f7f2692c735da7b65f4c15dbd31558c41"},
-    {"path": "conformance/independent/typescript-adapter-runtime.mjs", "sha256": "0daa9a8990239c1f36723d04a9d43bcbe702fefca614cd9c6018f9bd154c939a"},
-    {"path": "conformance/independent/verify-typescript-adapters.mjs", "sha256": "8247cf07f483ba187dcef648d1f1d51e488b8495a804103e86c03dfb623bf9f8"},
+    {"path": "conformance/independent/typescript-adapter-runtime.mjs", "sha256": "814f8455337fd38fbb90bd2afd9a28409309cc46dd543fdd6cc438b4a3674a9c"},
+    {"path": "conformance/independent/verify-typescript-adapters.mjs", "sha256": "46029399f6d3a32a120f823b35e8f16a1a0a1632687ea5953b7cc68f9c340920"},
     {"path": "conformance/browser/typescript-adapter-runtime.html", "sha256": "47e97c705ea67736bbf76a8bbb68288846312f27669f6b4e4a0f084954e849b1"},
-    {"path": "conformance/browser/run-typescript-adapter-runtime.sh", "sha256": "b9c4cfce62e14f96fd316da3ac0858639b42d9e7e7ea22712adbe2d1b183636f"},
+    {"path": "conformance/browser/run-typescript-adapter-runtime.sh", "sha256": "ce9327c7aeb19ab8e59543256431c4257da956ff5637fbae5bf79f9e3ab64225"},
     {"path": "conformance/edge/typescript-adapter-worker.mjs", "sha256": "88b30bfe7a4e1eb389969c52978ad38bee7536fe2e0a3e436ba76d2861f27e7e"},
-    {"path": "conformance/edge/typescript-adapter-workerd.capnp", "sha256": "5b9c9086bf21b247bd569918bb6ab9b2f6b456ae85f2256b4be5a8c98a622a72"}
+    {"path": "conformance/edge/typescript-adapter-workerd.capnp", "sha256": "6d551e5ce554dc38f2b046de1013256616391d13cfff0001163fb58f332663dd"},
+    {"path": "conformance/edge/run-typescript-adapter-workerd.sh", "sha256": "803d8b2b1728425cea1f4c6c014bb793115054831a65cd11449097f3cf81412c"}
   ],
   "vectors": [
     "canonical-bigint-sparse-prototype",
@@ -35,10 +44,30 @@
     "fetch-cross-origin-credential-strip",
     "fetch-active-abort",
     "post-sse-terminal-and-truncation",
+    "post-sse-framing-split-utf8",
+    "post-sse-reconnect-resume",
+    "post-sse-backpressure",
+    "post-sse-cancellation",
+    "post-sse-resource-limits",
     "post-sse-history-recovery-and-invalid-frame",
     "websocket-terminal-and-active-close",
     "websocket-binary-frame-rejected",
-    "websocket-queue-limit"
+    "websocket-queue-limit",
+    "stable-public-errors-no-protected-details"
+  ],
+  "transports": [
+    {
+      "profile": "sse-post-fetch",
+      "required": true,
+      "status": "passed",
+      "vectors": ["post-sse-terminal-and-truncation", "post-sse-framing-split-utf8", "post-sse-reconnect-resume", "post-sse-backpressure", "post-sse-cancellation", "post-sse-resource-limits", "post-sse-history-recovery-and-invalid-frame", "stable-public-errors-no-protected-details"]
+    },
+    {
+      "profile": "stream.websocket-1",
+      "required": false,
+      "status": "passed",
+      "vectors": ["websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit", "stable-public-errors-no-protected-details"]
+    }
   ],
   "platforms": [
     {
@@ -47,7 +76,7 @@
       "runtimeID": "node-26.8.2",
       "platform": "darwin-arm64",
       "status": "passed",
-      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit"]
+      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-framing-split-utf8", "post-sse-reconnect-resume", "post-sse-backpressure", "post-sse-cancellation", "post-sse-resource-limits", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit", "stable-public-errors-no-protected-details"]
     },
     {
       "runtime": "bun",
@@ -55,7 +84,7 @@
       "runtimeID": "bun-1.4.2",
       "platform": "darwin-arm64",
       "status": "passed",
-      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit"]
+      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-framing-split-utf8", "post-sse-reconnect-resume", "post-sse-backpressure", "post-sse-cancellation", "post-sse-resource-limits", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit", "stable-public-errors-no-protected-details"]
     },
     {
       "runtime": "deno",
@@ -63,43 +92,37 @@
       "runtimeID": "deno-2.9.6",
       "platform": "darwin-arm64",
       "status": "passed",
-      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit"]
-    },
-    {
-      "runtime": "chrome-headless-shell",
-      "version": "153.0.8010.36",
-      "runtimeID": "browser-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.36 Safari/537.36",
-      "platform": "darwin-arm64",
-      "status": "passed",
-      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit"]
-    },
-    {
-      "runtime": "workerd",
-      "version": "1.20260914.1",
-      "runtimeID": "edge-workerd-2026-09-14",
-      "platform": "darwin-arm64",
-      "status": "passed",
-      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit"]
+      "vectors": ["canonical-bigint-sparse-prototype", "fetch-unary-partial-data", "fetch-decompression-limit", "fetch-rejected-body-lifecycle", "fetch-cross-origin-credential-strip", "fetch-active-abort", "post-sse-terminal-and-truncation", "post-sse-framing-split-utf8", "post-sse-reconnect-resume", "post-sse-backpressure", "post-sse-cancellation", "post-sse-resource-limits", "post-sse-history-recovery-and-invalid-frame", "websocket-terminal-and-active-close", "websocket-binary-frame-rejected", "websocket-queue-limit", "stable-public-errors-no-protected-details"]
     }
+  ],
+  "unverifiedRuntimes": [
+    {"runtime": "chrome-headless-shell", "version": "153.0.8010.36", "platform": "darwin-arm64", "status": "not-claimed", "reason": "requires-browser-harness-execution"},
+    {"runtime": "workerd", "version": "1.20260914.1", "platform": "darwin-arm64", "status": "not-claimed", "reason": "requires-edge-harness-execution"}
   ],
   "commands": {
     "node": "node conformance/independent/typescript-adapter-runtime.mjs",
     "bun": "bun conformance/independent/typescript-adapter-runtime.mjs",
     "deno": "npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read conformance/independent/typescript-adapter-runtime.mjs",
-    "browserServer": "python3 -m http.server 18775 --bind 127.0.0.1",
     "browser": "CHROME_HEADLESS_SHELL=/absolute/path/to/chrome-headless-shell conformance/browser/run-typescript-adapter-runtime.sh",
-    "workerd": "npx --yes --userconfig=/dev/null workerd@1.20260914.1 serve conformance/edge/typescript-adapter-workerd.capnp",
-    "workerdProbe": "curl --fail --silent --show-error http://127.0.0.1:18776/"
+    "workerd": "conformance/edge/run-typescript-adapter-workerd.sh"
   },
   "unsupported": [
     "automatic-reconnect-and-replay-orchestration",
+    "native-eventsource-post-authentication",
+    "websocket-client-messages-after-establishment",
     "websocket-binary-frames",
     "websocket-compression-extensions",
     "websocket-upgrade-authentication-headers",
     "non-wss-websocket-endpoints",
+    "browser-runtime-certification",
+    "edge-runtime-certification",
     "browser-matrix-beyond-chrome-headless-shell-153.0.8010.36",
     "edge-matrix-beyond-workerd-1.20260914.1",
+    "runtime-revisions-beyond-recorded-matrix",
     "framework-bindings",
+    "native-mobile-runtime-bindings",
+    "service-worker-offline-replay",
+    "durable-client-cursor-storage",
     "deployment-certification"
   ]
 }

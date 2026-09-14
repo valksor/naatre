@@ -9,12 +9,25 @@ const fixture = JSON.parse(readFileSync(new URL("conformance/v1/typescript-adapt
 
 assert.equal(fixture.profile, "sdk.typescript.adapters-1");
 assert.equal(fixture.runtimeVersion, "naatre.typescript.runtime-1");
-assert.deepEqual(fixture.platforms.map((entry) => entry.runtime), ["node", "bun", "deno", "chrome-headless-shell", "workerd"]);
+assert.deepEqual(fixture.transports.map((entry) => [entry.profile, entry.required, entry.status]), [
+  ["sse-post-fetch", true, "passed"],
+  ["stream.websocket-1", false, "passed"],
+]);
+for (const dependency of fixture.dependencies) {
+  assert.match(dependency.gitCommit, /^[0-9a-f]{40}$/u);
+  const content = readFileSync(new URL(dependency.fixture.path, root));
+  assert.equal(createHash("sha256").update(content).digest("hex"), dependency.fixture.sha256);
+}
+assert.deepEqual(fixture.platforms.map((entry) => entry.runtime), ["node", "bun", "deno"]);
 assert.equal(new Set(fixture.platforms.map((entry) => entry.runtimeID)).size, fixture.platforms.length);
 for (const platform of fixture.platforms) {
   assert.equal(platform.status, "passed");
   assert.deepEqual(platform.vectors, fixture.vectors);
 }
+assert.deepEqual(fixture.unverifiedRuntimes.map((entry) => [entry.runtime, entry.status]), [
+  ["chrome-headless-shell", "not-claimed"],
+  ["workerd", "not-claimed"],
+]);
 for (const evidence of fixture.evidence) {
   const content = readFileSync(new URL(evidence.path, root));
   assert.equal(createHash("sha256").update(content).digest("hex"), evidence.sha256);
@@ -32,6 +45,8 @@ if (matrix.error || matrix.status !== 0) throw new Error("TypeScript adapter run
 const result = JSON.parse(matrix.stdout.trim());
 assert.equal(result.profile, fixture.profile);
 assert.equal(result.status, "passed");
+assert.deepEqual(result.capabilities, fixture.transports.map((entry) => entry.profile));
+assert.deepEqual(result.dependencies, fixture.dependencies);
 assert.deepEqual(result.vectors, fixture.vectors);
 
 const typecheck = spawnSync("tsc", ["-p", fileURLToPath(new URL("sdk/typescript/tsconfig.json", root))], { encoding: "utf8", timeout: 30_000 });

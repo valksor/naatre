@@ -19,6 +19,6 @@ const config :Workerd.Config = (
     ))
   ],
   sockets = [
-    (name = "http", address = "127.0.0.1:18776", http = (), service = "main")
+    (name = "http", address = "127.0.0.1:0", http = (), service = "main")
   ]
 );
