@@ -20,6 +20,11 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24.21.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: |
+            8.0.425
+            10.0.401
       - name: Formatting
         run: test -z "$(gofmt -l .)"
       - name: Unit tests
@@ -38,6 +43,10 @@ jobs:
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"sdk","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["sdk.typescript.core-1","sdk.typescript.adapters-1"]}' | node conformance/independent/runner.mjs --require-pass
       - name: Go conformance runner
         run: printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.contract-1"]}' | go run ./cmd/naatre-conformance --require-pass
+      - name: .NET SDK conformance
+        run: |
+          node conformance/independent/verify-dotnet-sdk.mjs
+          printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"dotnet","command":"run","path":{"source":{"kind":"sdk","language":"dotnet"},"destination":{"kind":"native-runtime","language":"dotnet"}},"profiles":["sdk.dotnet.core-1"]}' | node conformance/independent/runner.mjs --require-pass
       - name: Core parallel and cancellation race fixtures
         run: go test -race ./internal/conformance -run 'TestGoRunnerParallelCancellationProfile' -count=1
       - name: Race tests

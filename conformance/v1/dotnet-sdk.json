@@ -1,0 +1,84 @@
+{
+  "profile": "sdk.dotnet.core-1",
+  "fixtureSuite": "1.0.0",
+  "generatorVersion": "naatre.generator.dotnet-sdk-1",
+  "runtimeVersion": "naatre.dotnet.core-1",
+  "package": {
+    "assembly": "Valksor.Naatre",
+    "targetFrameworks": ["net8.0", "net10.0"],
+    "sdkVersions": ["8.0.425", "10.0.401"],
+    "referencePacks": ["8.0.31", "10.0.12"],
+    "nullable": "enabled",
+    "csharp": "12.0",
+    "dependencies": []
+  },
+  "sources": {
+    "model": {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
+  },
+  "generated": {
+    "source": {"path": "sdk/dotnet/Naatre.Core/Generated/Operations.g.cs", "sha256": "162a24183f30186ecc663eef223e49de897fa90de7f81d7678f3f8993d743b11"},
+    "manifest": {"path": "sdk/dotnet/Naatre.Core/Generated/operations.json", "sha256": "f3150c96c5c288b8ce75e42ea601cd79a2a1ee2524480a1a6231389fc20fb362"}
+  },
+  "evidence": [
+    {"path": "sdk/dotnet/Directory.Build.props", "sha256": "af0d58db8c13b106aee16b2132d515a350dcf8bcba446b8b49c3ee11ce48d03f"},
+    {"path": "sdk/dotnet/Naatre.Core/Naatre.Core.csproj", "sha256": "5e8f06d56037a77a598c2a8c359a9b0dc54b151fc3c26713cc41fd860df59d87"},
+    {"path": "sdk/dotnet/Naatre.Core/Presence.cs", "sha256": "6a129fb27d6c778e75cb3e34d9d73839336b59d6ba474f49ed0ca4af71a98fcd"},
+    {"path": "sdk/dotnet/Naatre.Core/Results.cs", "sha256": "9c9f93aec3b5997960235ddd7e77b8bef0c266712532d91f60d2816a07729fc4"},
+    {"path": "sdk/dotnet/Naatre.Core/OpenVariants.cs", "sha256": "46f65c19c2ee5aca84c0a83e66d51b52cf75d2f1fca34831d16adb0f3460a73f"},
+    {"path": "sdk/dotnet/Naatre.Core/Scalars.cs", "sha256": "f0b273634ee06c3219393ebb23133651f07fcf54a42293bd413dd7dfc5377806"},
+    {"path": "sdk/dotnet/Naatre.Core/CanonicalJson.cs", "sha256": "8aca1b99ae51cfa034c66b8b584b6a0c6f1b4c1117f01977c959ce5895625ecf"},
+    {"path": "sdk/dotnet/Naatre.Core/Operation.cs", "sha256": "2fe82321b66f2e6157641151b1951d3cf5acdc5ec4ee24e75bf6f064cd86ce12"},
+    {"path": "sdk/dotnet/Naatre.Core/HttpClientTransport.cs", "sha256": "7e299e9c5dadd194fa12890e978474a6e7621e61c67f878397aa7d5bfb19a336"},
+    {"path": "sdk/dotnet/Naatre.Generator/Program.cs", "sha256": "856b7a1db8f43842f6a43af335462ffcb205893d2c689a6806bc10d93bc99ef9"},
+    {"path": "sdk/dotnet/Naatre.Conformance/Program.cs", "sha256": "ebefc799a07499ff1cc7b17640ea989248572f5028c094d65febfaf77c365910"},
+    {"path": "sdk/dotnet/Naatre.FSharpSmoke/Program.fs", "sha256": "2da0befc0796e1d498e35d56d7b3aaf08a307cee34f50251d088157c69a04863"},
+    {"path": "conformance/independent/verify-dotnet-sdk.mjs", "sha256": "fe9e1b33be50c0a9bf20eadd05f854f49cb02a056eeaa1c56e87670a791c6286"}
+  ],
+  "runtimeMatrix": [
+    {"language": "csharp", "target": "net8.0", "status": "passed", "report": "conformance/v1/dotnet-sdk.json"},
+    {"language": "csharp", "target": "net10.0", "status": "passed", "report": "conformance/v1/dotnet-sdk.json"},
+    {"language": "fsharp-consumer", "target": "net8.0", "status": "passed", "report": "conformance/v1/dotnet-sdk.json"},
+    {"language": "fsharp-consumer", "target": "net10.0", "status": "passed", "report": "conformance/v1/dotnet-sdk.json"},
+    {"language": "csharp", "target": "nativeaot", "status": "unsupported", "ownerIssue": 85},
+    {"language": "fsharp-consumer", "target": "nativeaot", "status": "unsupported", "ownerIssue": 85}
+  ],
+  "transportMatrix": [
+    {"transport": "unary-http", "status": "passed", "cancellation": "active-abort", "report": "conformance/v1/dotnet-sdk.json"},
+    {"transport": "post-sse", "status": "passed", "cancellation": "active-abort", "terminal": "explicit-terminal-frame", "report": "conformance/v1/dotnet-sdk.json"},
+    {"transport": "websocket", "status": "unsupported", "ownerIssue": 85}
+  ],
+  "vectors": [
+    "byte-identical-generation",
+    "nullable-multitarget-csharp-build",
+    "fsharp-consumer-build",
+    "required-optional-nullable",
+    "open-enum-raw-value",
+    "lossless-int64-uint64-bigint-decimal-timestamp-duration-uuid-bytes",
+    "missing-null-pending-present-failed-skipped",
+    "partial-data-with-errors",
+    "persisted-manifest-and-canonical-request",
+    "culture-and-local-time-zone-independent-output",
+    "unary-and-sse-active-cancellation",
+    "sse-terminal-and-truncation",
+    "malformed-and-oversized-response-rejection",
+    "redirect-credential-stripping",
+    "idempotent-only-retry"
+  ],
+  "commands": [
+    "dotnet build sdk/dotnet/Naatre.Core/Naatre.Core.csproj --configuration Release",
+    "dotnet build sdk/dotnet/Naatre.FSharpSmoke/Naatre.FSharpSmoke.fsproj --configuration Release",
+    "dotnet run --project sdk/dotnet/Naatre.Conformance/Naatre.Conformance.csproj --configuration Release",
+    "node conformance/independent/verify-dotnet-sdk.mjs"
+  ],
+  "unsupported": [
+    "websocket-transport",
+    "aspnet-dependency-injection",
+    "automatic-auth-refresh",
+    "automatic-reconnect-and-replay",
+    "transparent-decompression",
+    "trimming-and-nativeaot-certification",
+    "mobile-and-browser-runtimes",
+    "framework-package-certification"
+  ]
+}

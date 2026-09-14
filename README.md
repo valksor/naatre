@@ -28,6 +28,9 @@ evidence must be described as planned.
   for the `sdk.go.client-1` and `sdk.go.operations-1` profiles.
 - `sdk/typescript`: dependency-free ESM JavaScript runtime and deterministic
   strict TypeScript operation bindings for `sdk.typescript.core-1`.
+- `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,
+  F# consumption proof, and cancellable HTTP/SSE reference client for
+  `sdk.dotnet.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
@@ -53,9 +56,10 @@ evidence must be described as planned.
   streaming and general `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
-- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
-  contains the checked-in `sdk.go.operations-1` result and operation bindings;
-  full cross-language compatibility certification remains planned.
+- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`,
+  `sdk/typescript/generated`, and `sdk/dotnet/Naatre.Core/Generated` contain
+  checked-in operation bindings; the final combined compatibility matrix
+  remains owned by #69.
 
 Dependencies point inward in that order: client packages use only portable
 protocol contracts; reflection adapters, transports, other SDKs, and example
