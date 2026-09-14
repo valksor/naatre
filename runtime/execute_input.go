@@ -17,7 +17,7 @@ func (p *Plan) handlerInput(node planNode, scope executionScope) (any, execution
 	}
 	arguments := node.selection.Arguments()
 	if node.definition.adapter && len(arguments) == 0 {
-		return Invocation{Operation: p.operationName, Selection: node.source}, valueAvailable, nil
+		return Invocation{Operation: p.operationName, Selection: node.source, Selected: node.selection}, valueAvailable, nil
 	}
 	descriptor, ok := p.types.Lookup(node.definition.descriptor.Input)
 	if !ok {
@@ -77,7 +77,12 @@ func (p *Plan) handlerInput(node planNode, scope executionScope) (any, execution
 		return nil, valueUnavailable, fmt.Errorf("coerce handler input: %w", err)
 	}
 	if node.definition.adapter {
-		return Invocation{Operation: p.operationName, Selection: node.source}, valueAvailable, nil
+		return Invocation{
+			Operation: p.operationName,
+			Selection: node.source,
+			Selected:  node.selection,
+			Input:     coerced,
+		}, valueAvailable, nil
 	}
 	input, err := inputForHandler(coerced, descriptor, node.definition.descriptor.InputNullable)
 	if err != nil {

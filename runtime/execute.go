@@ -15,10 +15,14 @@ import (
 )
 
 // Invocation is the immutable runtime context supplied by the reference
-// executor to handlers explicitly bound for document execution.
+// executor to handlers explicitly bound for document execution. Selected is
+// the admitted selection and Input is its schema-coerced value; a call without
+// arguments receives a missing InputValue.
 type Invocation struct {
 	Operation string
 	Selection protocol.Source
+	Selected  protocol.Selection
+	Input     schema.InputValue
 }
 
 // BindInvocation binds a handler that consumes the reference executor's

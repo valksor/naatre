@@ -30,6 +30,7 @@ var layers = []struct {
 	{"runtime", 2},
 	{"sdk", 3},
 	{"reflectadapter", 3},
+	{"interopadapter", 3},
 	{"transport", 4},
 	{"examples", 5},
 	{"internal", 6},

@@ -17,6 +17,7 @@ const implementations = new Map([
   ["suite.supervision-1", "supervise.mjs"],
   ["core.scalar.c14n-1", "scalars.mjs"],
   ["core.interop.c14n-1", "canonical.mjs"],
+  ["core.adapters-1", "adapters.mjs"],
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
   ["core.validation-1", "validation.mjs"],
   ["sdk.generation-1", "verify-generator.mjs"],
