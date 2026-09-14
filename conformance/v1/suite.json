@@ -21,6 +21,7 @@
     "crossProfileSecurity": 70
   },
   "files": [
+    {"path": "v1/adapters.json", "profile": "core.adapters-1", "category": "transport", "sha256": "4ada331660f6c692fbdfa518e0c70479daf28341d0ee3764d9d6f7a18e1ae28a"},
     {"path": "v1/adversarial.json", "profile": "suite.adversarial-1", "category": "adversarial", "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"},
     {"path": "v1/async-operations.json", "profile": "operations.async-1", "category": "execution", "sha256": "9efe62107f1583f2531fe794272a36f6e899dbbd2273e8cdfbd06dff973f48e0"},
     {"path": "v1/batching.json", "profile": "core.batch-cache-1", "category": "execution", "sha256": "b1c1a4697e43a8914f28407f378155c524be131e7403694743af1c2e8b347ea1"},
@@ -96,6 +97,12 @@
     {"caseId": "requirements.async.cancellation", "spec": "spec/v1/async-operations.md", "clauses": ["ASYNC-400","ASYNC-401"], "fixtureRefs": [{"path":"v1/async-operations.json","pointer":"/vectors/4","polarity":"positive"},{"path":"v1/async-operations.json","pointer":"/vectors/5","polarity":"negative"},{"path":"v1/async-operations.json","pointer":"/vectors/7","polarity":"negative"}]},
     {"caseId": "requirements.async.retention", "spec": "spec/v1/async-operations.md", "clauses": ["ASYNC-500","ASYNC-501"], "fixtureRefs": [{"path":"v1/async-operations.json","pointer":"/vectors/3","polarity":"mixed"}]},
     {"caseId": "requirements.async.http", "spec": "spec/v1/async-operations.md", "clauses": ["ASYNC-600","ASYNC-601","ASYNC-602","ASYNC-603"], "fixtureRefs": [{"path":"v1/async-operations.json","pointer":"/http","polarity":"mixed"}]},
+    {"caseId": "requirements.adapters.profile", "spec": "spec/v1/adapters.md", "clauses": ["ADAPT-001","ADAPT-002","ADAPT-003"], "fixtureRefs": [{"path":"v1/adapters.json","pointer":"/goldenCases/3","polarity":"negative"},{"path":"v1/adapters.json","pointer":"/specifications","polarity":"positive"}]},
+    {"caseId": "requirements.adapters.fidelity", "spec": "spec/v1/adapters.md", "clauses": ["ADAPT-100","ADAPT-101","ADAPT-102","ADAPT-103"], "fixtureRefs": [{"path":"v1/adapters.json","pointer":"/matrix/0","polarity":"mixed"},{"path":"v1/adapters.json","pointer":"/goldenCases/0","polarity":"positive"},{"path":"v1/adapters.json","pointer":"/goldenCases/6","polarity":"negative"},{"path":"v1/adapters.json","pointer":"/roundTrip","polarity":"mixed"}]},
+    {"caseId": "requirements.adapters.policy", "spec": "spec/v1/adapters.md", "clauses": ["ADAPT-200","ADAPT-201","ADAPT-202"], "fixtureRefs": [{"path":"v1/adapters.json","pointer":"/example/policy","polarity":"positive"},{"path":"v1/adapters.json","pointer":"/security","polarity":"positive"},{"path":"v1/adapters.json","pointer":"/example","polarity":"negative"}]},
+    {"caseId": "requirements.adapters.selection", "spec": "spec/v1/adapters.md", "clauses": ["ADAPT-300","ADAPT-301","ADAPT-302"], "fixtureRefs": [{"path":"v1/adapters.json","pointer":"/example/request","polarity":"positive"},{"path":"v1/adapters.json","pointer":"/goldenCases/2","polarity":"mixed"},{"path":"v1/adapters.json","pointer":"/roundTrip","polarity":"negative"}]},
+    {"caseId": "requirements.adapters.trust", "spec": "spec/v1/adapters.md", "clauses": ["ADAPT-400","ADAPT-401","ADAPT-402"], "fixtureRefs": [{"path":"v1/adapters.json","pointer":"/security","polarity":"mixed"},{"path":"v1/adapters.json","pointer":"/goldenCases/4","polarity":"positive"},{"path":"v1/adapters.json","pointer":"/goldenCases/5","polarity":"mixed"}]},
+    {"caseId": "requirements.adapters.evidence", "spec": "spec/v1/adapters.md", "clauses": ["ADAPT-500","ADAPT-501","ADAPT-502"], "fixtureRefs": [{"path":"v1/adapters.json","pointer":"/goldenCases/0","polarity":"mixed"},{"path":"v1/adapters.json","pointer":"/example","polarity":"positive"},{"path":"v1/adapters.json","pointer":"/ownership","polarity":"positive"}]},
 
     {"caseId": "requirements.batching.registration", "spec": "spec/v1/batching.md", "clauses": ["BATCH-100","BATCH-101","BATCH-102","BATCH-103"], "fixtureRefs": [{"path":"v1/batching.json","pointer":"/dispatchVectors/0","polarity":"positive"},{"path":"v1/batching.json","pointer":"/dispatchVectors/2","polarity":"positive"},{"path":"v1/batching.json","pointer":"/dispatchVectors/6","polarity":"negative"},{"path":"v1/interactions.json","pointer":"/cases/0","polarity":"negative"}]},
     {"caseId": "requirements.batching.results", "spec": "spec/v1/batching.md", "clauses": ["BATCH-200","BATCH-201"], "fixtureRefs": [{"path":"v1/batching.json","pointer":"/dispatchVectors/0","polarity":"positive"},{"path":"v1/batching.json","pointer":"/dispatchVectors/1","polarity":"negative"}]},
@@ -412,6 +419,8 @@
     {"caseId": "issue.54", "issue": 54, "fixtureRefs": [{"path": "v1/validation.json", "pointer": "", "polarity": "mixed"}, {"path": "v1/roadmap.json", "pointer": "/issues/54", "polarity": "mixed"}]},
     {"caseId": "issue.55", "issue": 55, "fixtureRefs": [{"path":"v1/tooling.json","pointer":"","polarity":"mixed"},{"path": "v1/roadmap.json", "pointer": "/issues/55", "polarity": "mixed"}]},
     {"caseId": "issue.56", "issue": 56, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/56", "polarity": "mixed"}]},
+    {"caseId": "issue.55", "issue": 55, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/55", "polarity": "mixed"}]},
+    {"caseId": "issue.56", "issue": 56, "fixtureRefs": [{"path":"v1/adapters.json","pointer":"","polarity":"mixed"},{"path": "v1/roadmap.json", "pointer": "/issues/56", "polarity": "mixed"}]},
     {"caseId": "issue.57", "issue": 57, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/57", "polarity": "mixed"}]},
     {"caseId": "issue.58", "issue": 58, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/58", "polarity": "mixed"}]},
     {"caseId": "issue.59", "issue": 59, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/59", "polarity": "mixed"}]},

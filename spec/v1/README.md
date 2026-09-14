@@ -46,6 +46,7 @@ Documents:
 19. [Portable validation constraints](validation.md)
 20. [Namespaced protocol and runtime extensions](extensions.md)
 20. [Developer tooling](tooling.md)
+20. [Interoperability adapters](adapters.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

@@ -62,6 +62,10 @@ evidence must be described as planned.
 - `generator`: versioned language-neutral generator-model validation,
   deterministic reference output, semantic manifest hashing, and output-root
   containment for `sdk.generation-1`.
+- `interopadapter`: protocol-neutral, fail-closed fidelity reports,
+  deterministic bounded backend projections, explicit imported-operation
+  registration, and a constrained HTTP-JSON reference consumer for
+  `core.adapters-1`; full external-protocol integrations remain optional.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, durable queue-neutral asynchronous operation

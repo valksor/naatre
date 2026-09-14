@@ -179,6 +179,15 @@ reference implementation and dependency-free JavaScript consumer execute the
 same valid/invalid corpus. CEL evaluation and automatic network reference
 resolution are explicitly unsupported.
 
+`v1/adapters.json` fixes `core.adapters-1`: separate schema and runtime
+directions, pinned OpenAPI/GraphQL/OpenRPC/protobuf/gRPC/Connect versions, the
+four fidelity classifications, explicit application policy and operation
+approval, deterministic bounded projections, constrained egress and credential
+forwarding, safe semantic differences, limited round-trip claims, and one
+language-neutral existing-service example. The Go `interopadapter` package is
+the smallest runtime-consume reference path; #92, #93, #95, and #98 own full
+protocol integrations, while #69 owns multi-SDK execution.
+
 The `core.language-1` vectors cover every core composition tag and expression,
 response shaping, collection edge states, result-reference scopes, and the
 zero-handler boundary for invalid operations. Their document grammar is the
