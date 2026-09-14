@@ -93,7 +93,7 @@
       "required": ["profile", "status", "capabilities", "phase", "code", "source", "path", "data", "errors", "canonicalBytes", "diagnostics", "evidence"],
       "properties": {
         "profile": {"type": "string", "minLength": 1, "maxLength": 128},
-        "status": {"enum": ["passed", "failed", "unsupported", "error"]},
+        "status": {"enum": ["passed", "failed", "unsupported", "invalid-skip", "infrastructure-failure"]},
         "capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
         "phase": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/phase"}]},
         "code": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/code"}]},

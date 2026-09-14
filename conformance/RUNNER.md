@@ -31,6 +31,14 @@ source location, response path, data, negotiated capabilities, diagnostics,
 and fixture digests. Empty values are explicit. Reports bind the independently
 versioned fixture suite, runner version, language, and platform.
 
+Runner discovery and execution responses are named-run evidence, not profile
+certificates. Publishable certification reports use
+`naatre.conformance.report-1`, the closed
+[`profile-report.schema.json`](profile-report.schema.json) shape, and the exact
+coverage rules in [PROFILES.md](PROFILES.md). Runner internal errors use
+`infrastructure-failure`; `invalid-skip` is reserved for invalid required-
+fixture skips, while `unsupported` discovery remains non-certifying.
+
 ## Reference independent runner
 
 The dependency-free JavaScript runner supports NDJSON and HTTP:

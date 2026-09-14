@@ -31,17 +31,22 @@ import (
 )
 
 type suiteManifest struct {
-	FixtureVersion   string            `json:"fixtureVersion"`
-	SpecVersion      string            `json:"specVersion"`
-	RunnerProtocol   string            `json:"runnerProtocol"`
-	DigestAlgorithm  string            `json:"digestAlgorithm"`
-	Ownership        map[string]int    `json:"ownership"`
-	Files            []suiteFile       `json:"files"`
-	NormativeSources []normativeSource `json:"normativeSources"`
-	IssueMappings    []issueMapping    `json:"issueMappings"`
-	Languages        []string          `json:"languages"`
-	ReportFields     []string          `json:"reportFields"`
-	Categories       []string          `json:"categories"`
+	FixtureVersion         string            `json:"fixtureVersion"`
+	SpecVersion            string            `json:"specVersion"`
+	RunnerProtocol         string            `json:"runnerProtocol"`
+	ProfileRegistryVersion string            `json:"profileRegistryVersion"`
+	ReportProtocol         string            `json:"reportProtocol"`
+	ProfileManifest        string            `json:"profileManifest"`
+	ReportSchema           string            `json:"reportSchema"`
+	CompatibilityMatrix    string            `json:"compatibilityMatrix"`
+	DigestAlgorithm        string            `json:"digestAlgorithm"`
+	Ownership              map[string]int    `json:"ownership"`
+	Files                  []suiteFile       `json:"files"`
+	NormativeSources       []normativeSource `json:"normativeSources"`
+	IssueMappings          []issueMapping    `json:"issueMappings"`
+	Languages              []string          `json:"languages"`
+	ReportFields           []string          `json:"reportFields"`
+	Categories             []string          `json:"categories"`
 }
 
 type suiteFile struct {
@@ -83,6 +88,11 @@ func TestConformanceSuiteContract(t *testing.T) {
 	if manifest.SpecVersion != "1" || manifest.RunnerProtocol != "naatre.conformance.runner-1" {
 		t.Fatalf("suite versions = spec %q, runner %q", manifest.SpecVersion, manifest.RunnerProtocol)
 	}
+	if manifest.ProfileRegistryVersion != "1.0.0" || manifest.ReportProtocol != "naatre.conformance.report-1" ||
+		manifest.ProfileManifest != "v1/profiles.json" || manifest.ReportSchema != "profile-report.schema.json" ||
+		manifest.CompatibilityMatrix != "v1/compatibility.json" {
+		t.Fatalf("suite profile metadata is incomplete: %#v", manifest)
+	}
 
 	requiredCategories := []string{"wire", "document", "schema", "execution", "transport", "integration", "canonical", "stream", "security", "evolution", "interaction", "adversarial", "benchmark"}
 	for _, category := range requiredCategories {
@@ -90,7 +100,7 @@ func TestConformanceSuiteContract(t *testing.T) {
 			t.Errorf("suite does not declare %q fixture category", category)
 		}
 	}
-	for _, field := range []string{"phase", "code", "source", "path", "data", "errors", "canonicalBytes", "capabilities"} {
+	for _, field := range []string{"status", "phase", "code", "source", "path", "data", "errors", "canonicalBytes", "capabilities", "evidence", "implementation", "environment", "versions", "claims"} {
 		if !slices.Contains(manifest.ReportFields, field) {
 			t.Errorf("suite report fields omit %q", field)
 		}
@@ -173,7 +183,7 @@ func TestIndependentRunnerProtocol(t *testing.T) {
 	}
 	request := strings.Join([]string{
 		`{"protocol":"naatre.conformance.runner-1","id":"discover","command":"discover"}`,
-		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http-1"]}`,
+		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.profiles-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http-1"]}`,
 		`{"protocol":`,
 		`{"protocol":"naatre.conformance.runner-1","id":"unknown","command":"discover","extra":true}`,
 	}, "\n") + "\n"
@@ -238,7 +248,7 @@ func TestIndependentRunnerProtocol(t *testing.T) {
 			supervisionEvidence = result.Evidence
 		}
 	}
-	if statuses["suite.contract-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
+	if statuses["suite.contract-1"] != "passed" || statuses["suite.profiles-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
 		t.Fatalf("runner statuses = %#v", statuses)
 	}
 	var manifest suiteManifest
@@ -356,6 +366,21 @@ func assertProfileSchema(t *testing.T) {
 	if name.Type != "string" || name.MinLength != 1 || name.MaxLength != 128 || !slices.Equal(status.Enum, []string{"supported", "unsupported"}) {
 		t.Fatalf("runner profile schema fields = %#v %#v", name, status)
 	}
+	var result struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Definitions["result"], &result); err != nil {
+		t.Fatalf("decode runner result schema: %v", err)
+	}
+	var resultStatus struct {
+		Enum []string `json:"enum"`
+	}
+	if err := json.Unmarshal(result.Properties["status"], &resultStatus); err != nil {
+		t.Fatalf("decode runner result status schema: %v", err)
+	}
+	if !slices.Equal(resultStatus.Enum, []string{"passed", "failed", "unsupported", "invalid-skip", "infrastructure-failure"}) {
+		t.Fatalf("runner result statuses = %#v", resultStatus.Enum)
+	}
 }
 
 func TestIndependentRunnerHTTPMediaType(t *testing.T) {
@@ -470,13 +495,13 @@ func TestGoRunnerProtocol(t *testing.T) {
 			Source:      conformancerunner.Endpoint{Kind: "sdk", Language: "go"},
 			Destination: conformancerunner.Endpoint{Kind: "native-runtime", Language: "go"},
 		},
-		Profiles: []string{"suite.contract-1", "sdk.go.client-1", "sdk.go.operations-1", "core.http-1"},
+		Profiles: []string{"suite.contract-1", "suite.profiles-1", "sdk.go.client-1", "sdk.go.operations-1", "core.http-1"},
 	}
 	response := runner.Handle(context.Background(), request)
-	if response.Protocol != conformancerunner.Protocol || response.FixtureVersion == "" || len(response.Results) != 4 {
+	if response.Protocol != conformancerunner.Protocol || response.FixtureVersion == "" || len(response.Results) != 5 {
 		t.Fatalf("Go runner response = %#v", response)
 	}
-	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "unsupported" {
+	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "passed" || response.Results[3].Status != "passed" || response.Results[4].Status != "unsupported" {
 		t.Fatalf("Go runner results = %#v", response.Results)
 	}
 
@@ -620,7 +645,7 @@ func TestGoRunnerRejectsInvalidHandlerResults(t *testing.T) {
 		},
 		Profiles: []string{"invalid-result-1"},
 	})
-	if len(response.Results) != 1 || response.Results[0].Status != "error" || response.Results[0].Code != "INVALID_RUNNER_RESULT" {
+	if len(response.Results) != 1 || response.Results[0].Status != "infrastructure-failure" || response.Results[0].Code != "INVALID_RUNNER_RESULT" {
 		t.Fatalf("invalid handler result was emitted: %#v", response)
 	}
 	encoded, err := json.Marshal(response)
@@ -629,6 +654,67 @@ func TestGoRunnerRejectsInvalidHandlerResults(t *testing.T) {
 	}
 	if !json.Valid(encoded) || bytes.Contains(encoded, []byte("nonsense")) || bytes.Contains(encoded, []byte("not-a-digest")) {
 		t.Fatalf("normalized response is not a safe protocol response: %s", encoded)
+	}
+}
+
+func TestGoRunnerResultStatusVocabulary(t *testing.T) {
+	t.Parallel()
+	runner, err := conformancerunner.New("../../conformance/v1/suite.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		profile string
+		result  conformancerunner.Result
+	}{
+		{
+			profile: "optional-capability-result-1",
+			result: conformancerunner.Result{
+				Status: "unsupported",
+				Reason: "optional capability is not implemented",
+			},
+		},
+		{
+			profile: "invalid-skip-result-1",
+			result: conformancerunner.Result{
+				Status: "invalid-skip",
+				Reason: "required fixture cannot be skipped",
+			},
+		},
+		{
+			profile: "infrastructure-result-1",
+			result: conformancerunner.Result{
+				Status: "infrastructure-failure", Phase: "runner", Code: "TOOL_UNAVAILABLE",
+				Diagnostics: []conformancerunner.Diagnostic{{
+					Phase: "runner", Code: "TOOL_UNAVAILABLE", Message: "runtime unavailable",
+					Source: map[string]any{}, Path: []any{},
+				}},
+			},
+		},
+	}
+	for _, testCase := range cases {
+		testCase := testCase
+		if err := runner.Register(testCase.profile, func(context.Context, conformancerunner.Request) conformancerunner.Result {
+			return testCase.result
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := conformancerunner.Request{
+		Protocol: conformancerunner.Protocol,
+		ID:       "status-vocabulary",
+		Command:  "run",
+		Path: &conformancerunner.Path{
+			Source:      conformancerunner.Endpoint{Kind: "sdk", Language: "go"},
+			Destination: conformancerunner.Endpoint{Kind: "native-runtime", Language: "go"},
+		},
+		Profiles: []string{cases[0].profile, cases[1].profile, cases[2].profile},
+	}
+	response := runner.Handle(context.Background(), request)
+	for index, testCase := range cases {
+		if response.Results[index].Status != testCase.result.Status {
+			t.Fatalf("result %s = %#v", testCase.profile, response.Results[index])
+		}
 	}
 }
 
