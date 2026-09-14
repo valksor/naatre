@@ -66,6 +66,10 @@ evidence must be described as planned.
   deterministic bounded backend projections, explicit imported-operation
   registration, and a constrained HTTP-JSON reference consumer for
   `core.adapters-1`; full external-protocol integrations remain optional.
+- `generatorplugin`: explicit generator-plugin discovery, bounded process
+  hosting, safe diagnostics, and reproducible third-party fixture execution for
+  `sdk.generator-plugin-host-1`; see the
+  [generator plugin host guide](docs/generator-plugin-host.md).
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, durable queue-neutral asynchronous operation

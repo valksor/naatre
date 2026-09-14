@@ -775,18 +775,18 @@
     "76": {
       "issue": 76,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 76,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.generator-plugin-host-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["sdk.generator-plugin-host-1"]
       }
     },
     "77": {
