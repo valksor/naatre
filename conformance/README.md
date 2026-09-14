@@ -11,7 +11,7 @@ checked-in files rather than duplicating their expected values in Go source.
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 510 stable normative clauses and all 110 repository issues to exact
+maps all 535 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -216,6 +216,14 @@ revisions, supported and unsupported capabilities, retained-state and audit
 limits, reproducible commands, and positive, negative, boundary,
 cancellation, and resource-limit test evidence. It adds no normative event or
 storage schema; `operations.observability-1` remains authoritative.
+`v1/async-operations.json` fixes the `operations.async-1` handle states,
+monotonic transitions, cancellation dispositions, durable acceptance,
+authorization binding, conditional polling, optional revision subscription,
+retention, and HTTP metadata. Its race vectors cover acceptance-to-dispatch
+crash recovery, worker crash, duplicate delivery, cancellation/completion,
+expiry, unknown commit outcome, and cross-principal result isolation. The Go
+runtime provides the queue-neutral coordinator; issue #89 owns concrete durable
+stores, leases, dispatch scanners, and worker adapters.
 
 `v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
 complete, filtered, recursive, extended-trait, evolving, open-union, and

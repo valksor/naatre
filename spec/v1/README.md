@@ -31,6 +31,7 @@ Documents:
 18. [Portable validation constraints](validation.md)
 19. [Namespaced protocol and runtime extensions](extensions.md)
 20. [JVM Java and Kotlin client core](jvm.md)
+20. [Asynchronous long-running operations](async-operations.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.
