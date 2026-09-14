@@ -22,6 +22,7 @@ const implementations = new Map([
   ["sdk.generation-1", "verify-generator.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
+  ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
 ]);
 
 class ProtocolError extends Error {

@@ -93,6 +93,15 @@ and workerd revisions executed by the portable runtime matrix. The independent
 runner rechecks source digests, Node behavior, and package-export boundaries;
 the recorded commands reproduce the other selected runtimes.
 
+`v1/swift-sdk.json` pins `sdk.swift.core-1`: the Swift Package Manager core,
+lossless canonical scalar wrappers, explicit input/selected presence states,
+structured partial errors and open variants, deterministic generated Codable
+bindings, persisted request hashes, bounded async transport contracts, active
+task/sequence cancellation, stream truncation, and redirect credential policy.
+Its platform entries link the executed macOS arm64 report and explicitly leave
+URLSession/SSE/WebSocket and device/simulator adapter evidence to #86 and the
+complete official matrix to #69.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,

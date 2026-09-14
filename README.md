@@ -28,6 +28,10 @@ evidence must be described as planned.
   for the `sdk.go.client-1` and `sdk.go.operations-1` profiles.
 - `sdk/typescript`: dependency-free ESM JavaScript runtime and deterministic
   strict TypeScript operation bindings for `sdk.typescript.core-1`.
+- `sdk/swift`: reflection-free Swift Package Manager client core, lossless
+  canonical scalar wrappers, async transport/cancellation contract, and
+  deterministic Codable operation bindings for `sdk.swift.core-1`; concrete
+  Apple transport adapters remain owned by #86.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.

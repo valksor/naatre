@@ -1,0 +1,74 @@
+{
+  "profile": "sdk.swift.core-1",
+  "fixtureSuite": "1.0.0",
+  "generatorVersion": "naatre.generator.swift-sdk-1",
+  "runtimeVersion": "naatre.swift.runtime-1",
+  "package": {
+    "name": "NaatreSDK",
+    "minimumSwift": "6.0",
+    "reflection": false
+  },
+  "sources": {
+    "model": {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
+  },
+  "generated": {
+    "source": {"path": "sdk/swift/Sources/NaatreGenerated/Operations.swift", "sha256": "49d2f3cd17229fee904383100b9586caeba9e19904cb7525bc620dc87b52218d"},
+    "manifest": {"path": "sdk/swift/Sources/NaatreGenerated/operations.json", "sha256": "d943001799bc0bde98aba30bce0f2aa63d0bf45f91e68f06b21301f2221a8ed1"}
+  },
+  "evidence": [
+    {"path": "sdk/swift/Package.swift", "sha256": "075e2ac18de5c0139241bf5de009443cbd54121bc750ce4e56a04a1ce54b879f"},
+    {"path": "sdk/swift/README.md", "sha256": "a26e98d8bde5e1d797f4528daaa756ee0a90b3f51762a236eb80ce0746a04e23"},
+    {"path": "sdk/swift/Sources/NaatreCore/Client.swift", "sha256": "3f3f8e860d78478714ca39944e2fdaf7f02adf64c0fec8944e477a0ecf410921"},
+    {"path": "sdk/swift/Sources/NaatreCore/Errors.swift", "sha256": "0906c371d156dc24d122b533a94eae0e1968a26545ddb0e2f99c07ad27d3bb13"},
+    {"path": "sdk/swift/Sources/NaatreCore/Operation.swift", "sha256": "23ec21f5c63182a6a08f9d491d3fe9d765bb3bb7cef7ce47a439e58afa10ccb6"},
+    {"path": "sdk/swift/Sources/NaatreCore/Scalars.swift", "sha256": "cdb13ba1dc977f836878cf8aecb5debd7ae263cb0f42e5c46a5087fd60f693eb"},
+    {"path": "sdk/swift/Sources/NaatreCore/Values.swift", "sha256": "4fab17b0eb4920c3cd866e88a6ed269d331ec6791373d5e6cfbb1f7388502ca7"},
+    {"path": "sdk/swift/Sources/NaatreConformance/main.swift", "sha256": "4620b271adad9b6e8221e91e32a134066a99661968b515b713b08df08a10e43c"},
+    {"path": "sdk/swift/sdkgen/generator.go", "sha256": "948765cde8f9c4caa0610bca0aa8181cfd9c008049784cccd2ce5a5a9687b73d"},
+    {"path": "conformance/independent/verify-swift-sdk.mjs", "sha256": "171639b0ebc4eea93e44096493b536606021f03c3172b7b868d876ce3f528df0"},
+    {"path": "conformance/reports/swift-sdk-macos-arm64.json", "sha256": "e73fc5e222ace3cd1e7c76e1328f02356d81659a77f2d24b0388310b7d9ad472"}
+  ],
+  "vectors": [
+    "byte-identical-generation",
+    "codable-variables-and-selected-results",
+    "open-enum-and-union-preservation",
+    "lossless-int64-uint64-bigint-decimal-timestamp-duration-uuid-bytes-url",
+    "missing-null-pending-present-failed-skipped",
+    "partial-data-with-structured-errors",
+    "locale-calendar-time-zone-independence",
+    "persisted-manifest-and-canonical-request",
+    "task-cancellation-active-release",
+    "async-sequence-cancellation-active-release",
+    "stream-terminal-and-truncation",
+    "response-and-frame-limits",
+    "redirect-credential-policy",
+    "authentication-and-background-hooks",
+    "unsupported-capability-errors"
+  ],
+  "limits": {"responseBytes": 8388608, "frameBytes": 1048576, "redirects": 5},
+  "cancellation": {"unary": "active-transport-cancel", "stream": "active-transport-cancel", "background": "policy-controlled-cancel-all"},
+  "platforms": [
+    {"platform": "macOS", "minimum": "14", "status": "passed", "report": "conformance/reports/swift-sdk-macos-arm64.json"},
+    {"platform": "iOS", "minimum": "17", "status": "not-executed", "reason": "device and simulator report owned by #69; adapter owned by #86"},
+    {"platform": "tvOS", "minimum": "17", "status": "not-executed", "reason": "device and simulator report owned by #69; adapter owned by #86"},
+    {"platform": "watchOS", "minimum": "10", "status": "not-executed", "reason": "device and simulator report owned by #69; adapter owned by #86"},
+    {"platform": "visionOS", "minimum": "1", "status": "not-executed", "reason": "device and simulator report owned by #69; adapter owned by #86"}
+  ],
+  "commands": [
+    "go generate ./sdk/swift",
+    "go test ./sdk/swift/sdkgen ./cmd/naatre-swift-sdk-generator",
+    "swift build --package-path sdk/swift",
+    "swift run --package-path sdk/swift naatre-swift-conformance",
+    "node conformance/independent/verify-swift-sdk.mjs"
+  ],
+  "unsupported": [
+    "urlsession-transport-owned-by-86",
+    "sse-transport-owned-by-86",
+    "websocket-transport-owned-by-86",
+    "apple-lifecycle-adapter-owned-by-86",
+    "automatic-authentication-refresh",
+    "automatic-mutation-or-subscription-replay",
+    "complete-official-sdk-matrix-owned-by-69"
+  ]
+}

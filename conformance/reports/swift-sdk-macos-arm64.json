@@ -1,0 +1,31 @@
+{
+  "profile": "sdk.swift.core-1",
+  "recordedAt": "2026-09-14",
+  "platform": "macos-26.6.2-arm64",
+  "swift": "6.4",
+  "status": "passed",
+  "commands": [
+    "swift build --disable-sandbox --package-path sdk/swift",
+    "swift run --disable-sandbox --package-path sdk/swift naatre-swift-conformance"
+  ],
+  "capabilities": [
+    "codable-selected-bindings",
+    "lossless-canonical-scalars",
+    "persisted-operations",
+    "async-transport-contract",
+    "active-task-cancellation",
+    "active-async-sequence-cancellation",
+    "terminal-and-truncated-streams",
+    "redirect-credential-policy"
+  ],
+  "unsupported": [
+    "urlsession-transport",
+    "sse-transport",
+    "websocket-transport",
+    "apple-lifecycle-adapter",
+    "ios-device-and-simulator-report",
+    "tvos-device-and-simulator-report",
+    "watchos-device-and-simulator-report",
+    "visionos-device-and-simulator-report"
+  ]
+}
