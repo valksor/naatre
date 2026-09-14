@@ -4,15 +4,16 @@ package schema
 // missing map entry is hidden. Retired identities are separate because they
 // are not active declarations.
 type Visibility struct {
-	Types      map[TypeID]bool `json:"types,omitempty"`
-	Fields     map[string]bool `json:"fields,omitempty"`
-	EnumValues map[string]bool `json:"enumValues,omitempty"`
-	Variants   map[string]bool `json:"variants,omitempty"`
-	Operations map[string]bool `json:"operations,omitempty"`
-	Members    map[string]bool `json:"members,omitempty"`
-	Directives map[string]bool `json:"directives,omitempty"`
-	Extensions map[string]bool `json:"extensions,omitempty"`
-	Retired    map[string]bool `json:"retired,omitempty"`
+	Types            map[TypeID]bool `json:"types,omitempty"`
+	Fields           map[string]bool `json:"fields,omitempty"`
+	EnumValues       map[string]bool `json:"enumValues,omitempty"`
+	Variants         map[string]bool `json:"variants,omitempty"`
+	Operations       map[string]bool `json:"operations,omitempty"`
+	Members          map[string]bool `json:"members,omitempty"`
+	Directives       map[string]bool `json:"directives,omitempty"`
+	Extensions       map[string]bool `json:"extensions,omitempty"`
+	CollectionFields map[string]bool `json:"collectionFields,omitempty"`
+	Retired          map[string]bool `json:"retired,omitempty"`
 }
 
 // Filter returns an immutable, self-contained discovery document containing
@@ -29,8 +30,8 @@ func (d Document) Filter(visibility Visibility) (Document, error) {
 	}
 
 	available, fields := filteredTypeIndex(wire.Types)
-	wire.Operations = filterOperations(wire.Operations, visibility.Operations, available)
-	wire.Members = filterMembers(wire.Members, visibility.Members, available, fields)
+	wire.Operations = filterOperations(wire.Operations, visibility.Operations, visibility.CollectionFields, available)
+	wire.Members = filterMembers(wire.Members, visibility.Members, visibility.CollectionFields, available, fields)
 	wire.Directives = filterDirectives(wire.Directives, visibility.Directives, available)
 	wire.Extensions = filterExtensions(wire.Extensions, visibility.Extensions, wire.Directives)
 
@@ -240,17 +241,20 @@ func typeReferenceAvailable(id TypeID, available map[TypeID]bool) bool {
 	return id == "" || available[id] || knownScalar(ScalarKind(id))
 }
 
-func filterOperations(input []OperationDescriptor, visibility map[string]bool, available map[TypeID]bool) []OperationDescriptor {
+func filterOperations(input []OperationDescriptor, visibility, collectionVisibility map[string]bool, available map[TypeID]bool) []OperationDescriptor {
 	result := make([]OperationDescriptor, 0, len(input))
 	for _, operation := range input {
 		if visibility[operation.ID] && typeReferenceAvailable(operation.Input, available) && typeReferenceAvailable(operation.Output, available) {
+			if filterCollectionQuery(operation.Collection, collectionVisibility, available) {
+				operation.Capabilities = removeString(operation.Capabilities, CollectionQueryCapability)
+			}
 			result = append(result, operation)
 		}
 	}
 	return result
 }
 
-func filterMembers(input []MemberDescriptor, visibility map[string]bool, available map[TypeID]bool, fields map[TypeID]map[string]bool) []MemberDescriptor {
+func filterMembers(input []MemberDescriptor, visibility, collectionVisibility map[string]bool, available map[TypeID]bool, fields map[TypeID]map[string]bool) []MemberDescriptor {
 	result := make([]MemberDescriptor, 0, len(input))
 	for _, member := range input {
 		if !visibility[member.ID] || !available[member.Owner] || !typeReferenceAvailable(member.Input, available) || !typeReferenceAvailable(member.Output, available) {
@@ -259,7 +263,38 @@ func filterMembers(input []MemberDescriptor, visibility map[string]bool, availab
 		if member.Kind == "field" && !fields[member.Owner][member.Name] {
 			continue
 		}
+		if filterCollectionQuery(member.Collection, collectionVisibility, available) {
+			member.Capabilities = removeString(member.Capabilities, CollectionQueryCapability)
+		}
 		result = append(result, member)
+	}
+	return result
+}
+
+func filterCollectionQuery(collection *CollectionDescriptor, visibility map[string]bool, available map[TypeID]bool) bool {
+	if collection == nil || collection.Query == nil {
+		return false
+	}
+	fields := collection.Query.Fields[:0]
+	for _, field := range collection.Query.Fields {
+		if visibility[field.ID] && typeReferenceAvailable(field.Type, available) && typeReferenceAvailable(field.ElementType, available) {
+			fields = append(fields, field)
+		}
+	}
+	collection.Query.Fields = fields
+	if len(fields) == 0 {
+		collection.Query = nil
+		return true
+	}
+	return false
+}
+
+func removeString(values []string, removed string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != removed {
+			result = append(result, value)
+		}
 	}
 	return result
 }

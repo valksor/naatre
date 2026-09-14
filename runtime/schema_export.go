@@ -93,7 +93,11 @@ func portableCollection(metadata *CollectionMetadata) *schema.CollectionDescript
 	if metadata == nil {
 		return nil
 	}
-	return &schema.CollectionDescriptor{MaxPageSize: metadata.MaxPageSize, TotalCountCost: metadata.TotalCountCost}
+	portable := new(schema.CollectionDescriptor)
+	portable.MaxPageSize = metadata.MaxPageSize
+	portable.TotalCountCost = metadata.TotalCountCost
+	portable.Query = schema.CloneCollectionQueryDescriptor(metadata.Query)
+	return portable
 }
 
 func portableDescriptorID(descriptor Descriptor) string {
@@ -127,6 +131,7 @@ func cloneRuntimeDescriptor(descriptor Descriptor) Descriptor {
 	}
 	if descriptor.Metadata.Collection != nil {
 		collection := *descriptor.Metadata.Collection
+		collection.Query = schema.CloneCollectionQueryDescriptor(collection.Query)
 		descriptor.Metadata.Collection = &collection
 	}
 	return descriptor

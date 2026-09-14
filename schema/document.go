@@ -199,8 +199,9 @@ type OperationDescriptor struct {
 // CollectionDescriptor is the portable, non-secret portion of a pageable
 // collection contract.
 type CollectionDescriptor struct {
-	MaxPageSize    uint64 `json:"maxPageSize"`
-	TotalCountCost uint64 `json:"totalCountCost,omitempty"`
+	MaxPageSize    uint64                     `json:"maxPageSize"`
+	TotalCountCost uint64                     `json:"totalCountCost,omitempty"`
+	Query          *CollectionQueryDescriptor `json:"query,omitempty"`
 }
 
 type MemberDescriptor struct {
@@ -519,10 +520,16 @@ func normalizeVariantDeclarations(declaration *TypeDeclaration) {
 
 func normalizeOperation(operation *OperationDescriptor) {
 	operation.Capabilities, operation.Traits = normalizedCallableCollections(operation.Capabilities, operation.Traits)
+	if operation.Collection != nil {
+		normalizeCollectionQuery(operation.Collection.Query)
+	}
 }
 
 func normalizeMember(member *MemberDescriptor) {
 	member.Capabilities, member.Traits = normalizedCallableCollections(member.Capabilities, member.Traits)
+	if member.Collection != nil {
+		normalizeCollectionQuery(member.Collection.Query)
+	}
 }
 
 func normalizedCallableCollections(capabilities []string, traits []TraitDescriptor) ([]string, []TraitDescriptor) {
@@ -860,6 +867,9 @@ func validateOperationDescriptor(operation OperationDescriptor, activeIDs, activ
 	if err := validateCollectionDescriptor("operation "+operation.ID, operation.Collection); err != nil {
 		return err
 	}
+	if err := validateCollectionCapability("operation "+operation.ID, operation.Collection, operation.Capabilities); err != nil {
+		return err
+	}
 	if err := validateTraits(operation.Traits, options); err != nil {
 		return err
 	}
@@ -886,6 +896,9 @@ func validateMemberDescriptor(member MemberDescriptor, activeIDs, activeNames ma
 	if err := validateCollectionDescriptor("member "+member.ID, member.Collection); err != nil {
 		return err
 	}
+	if err := validateCollectionCapability("member "+member.ID, member.Collection, member.Capabilities); err != nil {
+		return err
+	}
 	if err := validateTraits(member.Traits, options); err != nil {
 		return err
 	}
@@ -901,6 +914,9 @@ func validateCollectionDescriptor(owner string, collection *CollectionDescriptor
 	}
 	if collection.TotalCountCost > MaxDirectiveCost {
 		return fmt.Errorf("%s collection total count cost exceeds the portable maximum", owner)
+	}
+	if err := ValidateCollectionQueryDescriptor(collection.Query); err != nil {
+		return fmt.Errorf("%s: %w", owner, err)
 	}
 	return nil
 }
@@ -967,10 +983,7 @@ func validateSource(source *SourceMetadata) error {
 func validateDocumentReferences(wire documentWire) error {
 	types := schemaTypeIndex(wire.Types)
 	for _, operation := range wire.Operations {
-		if err := validateCallableTypeReferences("operation "+operation.ID, operation.Input, operation.Output, types); err != nil {
-			return err
-		}
-		if err := validateCollectionOutput("operation "+operation.ID, operation.Output, operation.Collection, types); err != nil {
+		if err := validateCallableReferences("operation "+operation.ID, operation.Input, operation.Output, operation.Collection, types); err != nil {
 			return err
 		}
 	}
@@ -978,19 +991,31 @@ func validateDocumentReferences(wire documentWire) error {
 		if _, exists := types[member.Owner]; !exists {
 			return fmt.Errorf("member %q references unknown owner %q", member.ID, member.Owner)
 		}
-		if err := validateCallableTypeReferences("member "+member.ID, member.Input, member.Output, types); err != nil {
-			return err
-		}
-		if err := validateCollectionOutput("member "+member.ID, member.Output, member.Collection, types); err != nil {
+		if err := validateCallableReferences("member "+member.ID, member.Input, member.Output, member.Collection, types); err != nil {
 			return err
 		}
 	}
 	return validateDirectiveTypeReferences(wire.Directives, types)
 }
 
+func validateCallableReferences(owner string, input, output TypeID, collection *CollectionDescriptor, types map[TypeID]schemaTypeReference) error {
+	if err := validateCallableTypeReferences(owner, input, output, types); err != nil {
+		return err
+	}
+	if err := validateCollectionOutput(owner, output, collection, types); err != nil {
+		return err
+	}
+	if collection != nil {
+		return validateCollectionQueryReferences(owner, collection.Query, types)
+	}
+	return nil
+}
+
 type schemaTypeReference struct {
 	input      bool
 	collection bool
+	element    TypeID
+	kind       TypeKind
 }
 
 func validateDirectiveTypeReferences(directives []DirectiveDescriptor, types map[TypeID]schemaTypeReference) error {
@@ -1011,11 +1036,11 @@ func validateDirectiveTypeReferences(directives []DirectiveDescriptor, types map
 func schemaTypeIndex(declarations []TypeDeclaration) map[TypeID]schemaTypeReference {
 	types := make(map[TypeID]schemaTypeReference, len(declarations)+13)
 	for _, scalar := range []ScalarKind{Boolean, String, ID, Int32, Float64, Int64, UInt64, BigInt, Decimal, Timestamp, Duration, UUID, Bytes} {
-		types[TypeID(scalar)] = schemaTypeReference{input: true}
+		types[TypeID(scalar)] = schemaTypeReference{input: true, kind: ScalarType}
 	}
 	for _, declaration := range declarations {
 		types[declaration.ID] = schemaTypeReference{
-			input: declaration.Input, collection: declaration.Kind == ListType || declaration.Kind == MapType,
+			input: declaration.Input, collection: declaration.Kind == ListType || declaration.Kind == MapType, element: declaration.Element, kind: declaration.Kind,
 		}
 	}
 	return types
@@ -1135,8 +1160,7 @@ func cloneOperations(input []OperationDescriptor) []OperationDescriptor {
 	for index := range result {
 		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
 		if result[index].Collection != nil {
-			collection := *result[index].Collection
-			result[index].Collection = &collection
+			result[index].Collection = cloneCollectionDescriptor(result[index].Collection)
 		}
 		result[index].Capabilities = slices.Clone(result[index].Capabilities)
 		result[index].Traits = cloneTraits(result[index].Traits)
@@ -1150,8 +1174,7 @@ func cloneMembers(input []MemberDescriptor) []MemberDescriptor {
 	for index := range result {
 		result[index].Deprecation = cloneDeprecation(result[index].Deprecation)
 		if result[index].Collection != nil {
-			collection := *result[index].Collection
-			result[index].Collection = &collection
+			result[index].Collection = cloneCollectionDescriptor(result[index].Collection)
 		}
 		result[index].Capabilities = slices.Clone(result[index].Capabilities)
 		result[index].Traits = cloneTraits(result[index].Traits)

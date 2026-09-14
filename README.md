@@ -23,6 +23,8 @@ evidence must be described as planned.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `schema`: portable types, values, scalar codecs, and deterministic federation
   composition from operator-pinned service manifests.
+- `collectionquery`: optional provider-neutral typed filter evaluation, stable
+  sorting, and parameterized SQLite translation for `collection.query-1`.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, process-wide admission/lifecycle control, bounded

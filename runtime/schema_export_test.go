@@ -109,7 +109,7 @@ func TestRuntimeSnapshotExportsPortableCollectionContract(t *testing.T) {
 			{"id":"User","kind":"object","output":true,"fields":[{"id":"User.name","name":"name","type":"String"}]},
 			{"id":"Users","kind":"list","output":true,"element":"User"}
 		],
-		"operations":[{"id":"query.users","name":"users","kind":"query","input":"String","output":"Users","effect":"read","deterministic":true,"cacheable":true,"retrySafe":true,"threadSafety":"thread-safe","batching":"ineligible","transaction":"none","authorizationPolicy":"users.read","collection":{"maxPageSize":25,"totalCountCost":7}}]
+		"operations":[{"id":"query.users","name":"users","kind":"query","input":"String","output":"Users","effect":"read","deterministic":true,"cacheable":true,"retrySafe":true,"threadSafety":"thread-safe","batching":"ineligible","transaction":"none","authorizationPolicy":"users.read","capabilities":["collection.query-1"],"collection":{"maxPageSize":25,"totalCountCost":7,"query":{"capability":"collection.query-1","fields":[{"id":"User.name","path":["name"],"type":"String","operators":["eq"],"cost":1,"indexed":true,"sort":{"directions":["asc","desc"],"nulls":["first","last"],"collation":"unicode-code-point","caseSensitivity":"sensitive"}}],"tieBreaker":{"type":"ID","collation":"unicode-code-point","caseSensitivity":"sensitive"},"limits":{"maxDepth":8,"maxPredicates":32,"maxMembership":50,"maxSortKeys":3,"maxCost":100}}}}]
 	}`), schema.ImportOptions{})
 	if err != nil {
 		t.Fatalf("ParseDocument: %v", err)
@@ -121,13 +121,25 @@ func TestRuntimeSnapshotExportsPortableCollectionContract(t *testing.T) {
 	registry := runtime.NewRegistry(types)
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.AuthorizationPolicy = "users.read"
-	metadata.Collection = &runtime.CollectionMetadata{MaxPageSize: 25, TotalCountCost: 7}
+	query := &schema.CollectionQueryDescriptor{
+		Capability: schema.CollectionQueryCapability,
+		Fields: []schema.CollectionQueryFieldDescriptor{{
+			ID: "User.name", Path: []string{"name"}, Type: schema.TypeID(schema.String), Operators: []schema.FilterOperator{schema.FilterEqual}, Cost: 1, Indexed: true,
+			Sort: &schema.CollectionSortDescriptor{Directions: []schema.SortDirection{schema.SortAscending, schema.SortDescending}, Nulls: []schema.NullPlacement{schema.NullsFirst, schema.NullsLast}, Collation: "unicode-code-point", CaseSensitivity: "sensitive"},
+		}},
+		TieBreaker: schema.CollectionTieBreakerDescriptor{Type: schema.TypeID(schema.ID), Collation: "unicode-code-point", CaseSensitivity: "sensitive"},
+		Limits:     schema.CollectionQueryLimits{MaxDepth: 8, MaxPredicates: 32, MaxMembership: 50, MaxSortKeys: 3, MaxCost: 100},
+	}
+	metadata.Collection = &runtime.CollectionMetadata{MaxPageSize: 25, TotalCountCost: 7, Query: query}
 	if err := registry.Register(runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		ID: "query.users", Name: "users", Scope: runtime.RootScope, Kind: protocol.Query,
 		Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Users", Metadata: metadata,
+		Capabilities: []string{schema.CollectionQueryCapability},
 	}, func(context.Context, runtime.Invocation) ([]map[string]any, error) { return nil, nil })); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	query.Fields[0].ID = "mutated"
+	query.Fields[0].Operators[0] = schema.FilterRegex
 	snapshot, err := registry.Freeze()
 	if err != nil {
 		t.Fatalf("Freeze: %v", err)
@@ -137,7 +149,7 @@ func TestRuntimeSnapshotExportsPortableCollectionContract(t *testing.T) {
 		t.Fatalf("ExportSchema: %v", err)
 	}
 	operations := exported.Operations()
-	if len(operations) != 1 || operations[0].Collection == nil || operations[0].Collection.MaxPageSize != 25 || operations[0].Collection.TotalCountCost != 7 {
+	if len(operations) != 1 || operations[0].Collection == nil || operations[0].Collection.MaxPageSize != 25 || operations[0].Collection.TotalCountCost != 7 || operations[0].Collection.Query == nil || operations[0].Collection.Query.Fields[0].ID != "User.name" {
 		t.Fatalf("exported collection contract = %#v", operations)
 	}
 	canonical, err := exported.CanonicalJSON()

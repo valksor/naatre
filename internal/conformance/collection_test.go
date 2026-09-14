@@ -1,6 +1,7 @@
 package conformance_test
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ type collectionFixture struct {
 	FailureCases  []collectionFailureCase  `json:"failureCases"`
 	Consistency   []string                 `json:"consistency"`
 	Cost          collectionCostContract   `json:"cost"`
+	Query         json.RawMessage          `json:"query"`
 }
 
 type collectionBoundaryCase struct {

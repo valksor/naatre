@@ -357,6 +357,15 @@ func diffCollection(diff *SchemaDiff, path string, before, after *CollectionDesc
 		diff.add(path+"/maxPageSize", maximumClassification, before.MaxPageSize, after.MaxPageSize)
 	}
 	diff.scalar(path+"/totalCountCost", ChangeDangerous, before.TotalCountCost, after.TotalCountCost)
+	if !reflect.DeepEqual(before.Query, after.Query) {
+		classification := ChangeDangerous
+		if after.Query == nil {
+			classification = ChangeBreaking
+		} else if before.Query == nil {
+			classification = ChangeAdditive
+		}
+		diff.add(path+"/query", classification, before.Query, after.Query)
+	}
 }
 
 func diffRetiredReuse(diff *SchemaDiff, retired []RetiredIdentity, after documentWire) {

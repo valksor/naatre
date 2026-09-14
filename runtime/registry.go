@@ -99,6 +99,7 @@ type Metadata struct {
 type CollectionMetadata struct {
 	MaxPageSize    uint64                                     `json:"maxPageSize"`
 	TotalCountCost uint64                                     `json:"totalCountCost,omitempty"`
+	Query          *schema.CollectionQueryDescriptor          `json:"query,omitempty"`
 	CursorCodec    *CursorCodec                               `json:"-"`
 	CursorScope    func(context.Context) (CursorScope, error) `json:"-"`
 	Position       func(any) (CursorPosition, error)          `json:"-"`
@@ -475,7 +476,7 @@ func validateRegistration(types schema.Snapshot, definition Definition) error {
 	if err := validateBinding(types, definition); err != nil {
 		return err
 	}
-	if err := validateCollectionMetadata(output, descriptor.Metadata.Collection); err != nil {
+	if err := validateCollectionMetadata(types, output, descriptor.Metadata.Collection); err != nil {
 		return fmt.Errorf("registration %q: %w", descriptor.Name, err)
 	}
 	if err := validateHandlerTypes(types, definition, output); err != nil {
@@ -501,7 +502,7 @@ func validateBatchRegistration(definition Definition) error {
 	return nil
 }
 
-func validateCollectionMetadata(output schema.TypeDescriptor, metadata *CollectionMetadata) error {
+func validateCollectionMetadata(types schema.Snapshot, output schema.TypeDescriptor, metadata *CollectionMetadata) error {
 	if metadata == nil {
 		return nil
 	}
@@ -513,6 +514,12 @@ func validateCollectionMetadata(output schema.TypeDescriptor, metadata *Collecti
 	}
 	if metadata.TotalCountCost > schema.MaxDirectiveCost {
 		return errors.New("collection total count cost exceeds the portable maximum")
+	}
+	if err := schema.ValidateCollectionQueryDescriptor(metadata.Query); err != nil {
+		return err
+	}
+	if err := schema.ValidateCollectionQueryTypes(metadata.Query, types); err != nil {
+		return err
 	}
 	secureFields := 0
 	for _, present := range []bool{metadata.CursorCodec != nil, metadata.CursorScope != nil, metadata.Position != nil} {

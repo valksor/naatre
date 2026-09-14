@@ -77,5 +77,71 @@
     "pageSizeMultiplier": true,
     "totalCountExplicit": true,
     "totalCountSeparate": true
+  },
+  "query": {
+    "profile": "collection.query-1",
+    "astKinds": ["and", "or", "not", "predicate", "any", "all"],
+    "coreOperators": ["eq", "ne", "lt", "lte", "gt", "gte", "in", "not-in", "is-null", "is-not-null", "exists", "not-exists", "any", "all"],
+    "optionalOperators": [
+      {"operator": "regex", "capability": "collection.regex-1"},
+      {"operator": "full-text", "capability": "collection.full-text-1"},
+      {"operator": "geo-within", "capability": "collection.geospatial-1"}
+    ],
+    "schema": {
+      "capability": "collection.query-1",
+      "fields": [
+        {"id": "User.age", "path": ["age"], "type": "Int64", "operators": ["eq", "ne", "lt", "lte", "gt", "gte", "in", "not-in"], "cost": 1, "indexed": true, "sort": {"directions": ["asc", "desc"], "nulls": ["first", "last"], "collation": "numeric", "caseSensitivity": "sensitive"}},
+        {"id": "User.name", "path": ["name"], "type": "String", "nullable": true, "missing": true, "operators": ["eq", "ne", "in", "not-in", "is-null", "is-not-null", "exists", "not-exists"], "cost": 1, "indexed": true, "sort": {"directions": ["asc", "desc"], "nulls": ["first", "last"], "collation": "unicode-code-point", "caseSensitivity": "sensitive"}},
+        {"id": "User.tags", "path": ["tags"], "type": "Tags", "elementType": "String", "nullable": true, "missing": true, "operators": ["any", "all"], "cost": 2, "indexed": true}
+      ],
+      "tieBreaker": {"type": "ID", "collation": "unicode-code-point", "caseSensitivity": "sensitive"},
+      "limits": {"maxDepth": 4, "maxPredicates": 8, "maxMembership": 4, "maxSortKeys": 2, "maxCost": 8}
+    },
+    "truthTable": [
+      {"state": "missing", "eq": false, "ne": false, "in": false, "not-in": false, "is-null": false, "is-not-null": false, "exists": false, "not-exists": true},
+      {"state": "null", "eq": false, "ne": false, "in": false, "not-in": false, "is-null": true, "is-not-null": false, "exists": true, "not-exists": false},
+      {"state": "present-non-null", "is-null": false, "is-not-null": true, "exists": true, "not-exists": false}
+    ],
+    "listSemantics": [
+      {"state": "missing", "any": false, "all": false},
+      {"state": "null", "any": false, "all": false},
+      {"state": "empty", "any": false, "all": true},
+      {"state": "one-match", "any": true},
+      {"state": "one-non-match", "all": false}
+    ],
+    "sortContract": {
+      "orderedMultiKey": true,
+      "directions": ["asc", "desc"],
+      "nullPlacement": ["first", "last"],
+      "missingIsNullish": true,
+      "collations": ["binary", "numeric", "unicode-code-point"],
+      "caseSensitivity": "sensitive",
+      "stableUniqueTieBreaker": true
+    },
+    "provider": {
+      "dialect": "sqlite",
+      "parameterized": true,
+      "serverMappedFields": true,
+      "fallbackInMemory": false,
+      "parity": ["missing", "null", "empty-list", "unicode", "int64-boundaries", "stable-sort"]
+    },
+    "cursorMismatchCases": [
+      {"name": "filter-literal", "code": "INVALID_CURSOR"},
+      {"name": "variable-result", "code": "INVALID_CURSOR"},
+      {"name": "multi-key-sort", "code": "INVALID_CURSOR"},
+      {"name": "tenant", "code": "INVALID_CURSOR"},
+      {"name": "authorization", "code": "INVALID_CURSOR"},
+      {"name": "snapshot", "code": "INVALID_CURSOR"}
+    ],
+    "failureCases": [
+      {"name": "hidden-field", "phase": "preflight", "code": "FILTER_UNSUPPORTED", "backendInvocations": 0, "leaksRequestedName": false},
+      {"name": "sql-looking-literal", "phase": "provider", "code": "OK", "boundArgument": true},
+      {"name": "depth", "phase": "preflight", "code": "RESOURCE_EXHAUSTED", "backendInvocations": 0},
+      {"name": "predicate-count", "phase": "preflight", "code": "RESOURCE_EXHAUSTED", "backendInvocations": 0},
+      {"name": "membership-size", "phase": "preflight", "code": "RESOURCE_EXHAUSTED", "backendInvocations": 0},
+      {"name": "cost", "phase": "preflight", "code": "RESOURCE_EXHAUSTED", "backendInvocations": 0},
+      {"name": "unindexed-cost", "phase": "preflight", "code": "RESOURCE_EXHAUSTED", "backendInvocations": 0},
+      {"name": "regex-without-provider-capability", "phase": "preflight", "code": "FILTER_UNSUPPORTED", "backendInvocations": 0}
+    ]
   }
 }

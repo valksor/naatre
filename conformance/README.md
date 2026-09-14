@@ -11,7 +11,7 @@ checked-in files rather than duplicating their expected values in Go source.
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 459 stable normative clauses and all 110 repository issues to exact
+maps all 474 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -125,7 +125,10 @@ external isolation boundary.
 
 `v1/collections.json` fixes the `collection.page-1` composite-position
 boundaries, scope bindings, safe failure code, live/snapshot modes, and static
-cost contract. The Go runtime supplies HMAC-protected versioned cursors,
+cost contract. It also fixes the `collection.query-1` typed filter AST,
+two-valued null/missing truth table, list semantics, ordered sorts, discovery
+descriptor, budgets, safe failures, cursor mismatches, and minimum SQLite
+provider parity. The Go runtime supplies HMAC-protected versioned cursors,
 pre-handler scope verification, key rotation and expiry, stable forward and
 backward paging, optional edge metadata, and separately costed `totalCount`.
 
