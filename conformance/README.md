@@ -12,6 +12,7 @@ checked-in files rather than duplicating their expected values in Go source.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
 maps all 535 stable normative clauses and all 110 repository issues to exact
+maps all 525 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -298,6 +299,14 @@ media negotiation, singleton-header, status/body, encoding, deadline, cache,
 browser, bounded-response, and HTTP-version cases. It is the portable contract
 fixture; #73 owns the concrete Go `net/http` adapter, slow-client,
 cancellation, graceful-shutdown, and version-specific integration harness.
+
+`v1/request-batching.json` fixes the distinct `core.transport-batch-1`
+envelope, aggregate and per-item budgets, required unique item identifiers,
+out-of-order internal completion correlation, independent cancellation,
+fail-fast admission, optional single-provider atomic mutations, trusted scope
+boundaries, partial failures, timeouts, rate limits, and response-loss truth.
+HTTP batching remains finite and separate from streaming or WebSocket
+multiplexing; notifications and cross-item result references are unsupported.
 
 `v1/persisted.json` fixes the `core.persisted-1` document hashes and identity
 equivalence boundaries plus lookup-only, deploy-registration, controlled

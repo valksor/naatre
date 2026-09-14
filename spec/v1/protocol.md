@@ -32,6 +32,8 @@
 - **PROTO-009:** Duplicate members after JSON unescaping, trailing data, BOMs,
   invalid UTF-8, and unpaired UTF-16 surrogate escapes are decoding failures.
 - **PROTO-010:** The single-operation envelope MUST NOT be used as a batch.
+  Finite transport batches use the distinct TBATCH-001 envelope and
+  `core.transport-batch-1` media types.
 
 Valid:
 
