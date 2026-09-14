@@ -109,18 +109,20 @@
     "37": {
       "issue": 37,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 37,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.php.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.php.core-1"
+        ]
       }
     },
     "38": {

@@ -28,6 +28,9 @@ evidence must be described as planned.
   for the `sdk.go.client-1` and `sdk.go.operations-1` profiles.
 - `sdk/typescript`: dependency-free ESM JavaScript runtime and deterministic
   strict TypeScript operation bindings for `sdk.typescript.core-1`.
+- `sdk/php`: framework-neutral PSR-18 unary client, lossless PHP value model,
+  serializer-neutral attributes, and deterministic bindings for
+  `sdk.php.core-1`; framework integrations remain owned by #79.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.

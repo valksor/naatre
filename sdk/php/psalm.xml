@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<psalm
+  errorLevel="1"
+  phpVersion="8.3"
+  resolveFromConfigFile="true"
+  cacheDirectory="../../.tmp/psalm"
+  findUnusedBaselineEntry="true"
+  findUnusedCode="false"
+>
+  <projectFiles>
+    <directory name="src" />
+    <directory name="generated" />
+  </projectFiles>
+</psalm>

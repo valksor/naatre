@@ -1,0 +1,11 @@
+parameters:
+  level: max
+  phpVersion: 80300
+  paths:
+    - src
+    - generated
+    - sdkgen
+  parallel:
+    maximumNumberOfProcesses: 1
+  tmpDir: ../../.tmp/phpstan
+  treatPhpDocTypesAsCertain: true

@@ -9,4 +9,6 @@ bin/
 coverage.out
 dist/
 node_modules/
+vendor/
+.tmp/
 *.test

@@ -1,0 +1,91 @@
+{
+  "profile": "sdk.php.core-1",
+  "fixtureSuite": "1.0.0",
+  "generatorVersion": "naatre.generator.php-sdk-1",
+  "runtimeVersion": "naatre.php.runtime-1",
+  "sources": {
+    "model": {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
+  },
+  "generated": {
+    "source": {"path": "sdk/php/generated/Operations.php", "sha256": "c9f974128a503c137022edf9c043433fc389a07b53cbfdac8d08316b1cc12246"},
+    "manifest": {"path": "sdk/php/generated/operations.json", "sha256": "b7e2211237ed952fc0e0a8c423cb11a2ee9d087f2f2e4d5ef5e569826fef12c3"}
+  },
+  "evidence": [
+    {"path": "sdk/php/composer.json", "sha256": "a38e9954a7d4458f4cc9d8da7a6e68f2f281a448189be4bd7fd64816ae0019d6"},
+    {"path": "sdk/php/phpstan.neon", "sha256": "533b8b7b3954ed2cb957be520cdaffa3fcea8a5f30606245eb96c3b2d04fcdd3"},
+    {"path": "sdk/php/psalm.xml", "sha256": "a34b751821b8c2a506b7ec5e5374c2a76ffc6a1c167a8c881228f6ca96255723"},
+    {"path": "sdk/php/sdkgen/generate.php", "sha256": "2fef215aa3bbfcc5d8c03fc9117d053e551f402e7a6bbcfe5c84923399771f55"},
+    {"path": "sdk/php/tests/PsrStubs.php", "sha256": "50c0cb1130e95f4730b0f8aa917156fde0dfc38cc86d8f459eb8e9a6b335df5c"},
+    {"path": "sdk/php/tests/run.php", "sha256": "cc2aace8926603a6a78406459398371fa47fae8132ea86ddacef55ad2e6f574a"},
+    {"path": "sdk/php/src/Wire/Json.php", "sha256": "33cce6e922be65a95bb2e7be24e054da48f7cb0f61dbe554fa119aea394136f6"},
+    {"path": "sdk/php/src/Wire/DuplicateKeyGuard.php", "sha256": "b1c941973ece9d734a4e0470d4b646b6451088cb06fd8998330ae01141b99e02"},
+    {"path": "sdk/php/src/Transport/Psr18Client.php", "sha256": "3711ab3168e167a533b51ae7ff10a2d00e991dfa201a5730a2d9601d5ed6ff98"},
+    {"path": "sdk/php/src/Stream/CloseableStream.php", "sha256": "8669cb66b5be4589dc297fd2011659add8277cab235414c9b8514a50c72fe934"},
+    {"path": "sdk/php/src/Scalar/Timestamp.php", "sha256": "be9a15e771faa4f5cf45d68d6c4edf652c692ed37b5c287b15cdf86007224c06"},
+    {"path": "conformance/independent/verify-php-sdk.mjs", "sha256": "b2d64c3689e879a136570872019266ae96554df91d07c3ac53d80eac5768da22"}
+  ],
+  "support": {
+    "php": ["8.3", "8.4", "8.5"],
+    "composer": "2.x",
+    "phpstanLevel": "max",
+    "psalmErrorLevel": 1
+  },
+  "persisted": {
+    "algorithm": "sha-256",
+    "canonicalVersion": "c14n-1",
+    "digest": "cc863005080edcb85ec0345a50593dc58111896bbbe7ff86475ef2412fc5cb90"
+  },
+  "wireFixtures": {
+    "emptyObject": "{}",
+    "emptyList": "[]",
+    "numericStringObject": "{\"0\":\"x\"}",
+    "missing": {"state": "missing"},
+    "null": {"state": "null"},
+    "highPrecisionTimestamp": {
+      "input": "2026-09-11T23:30:01.123456789+03:00",
+      "canonical": "2026-09-11T20:30:01.123456789Z"
+    },
+    "unary4xx": {
+      "status": 422,
+      "contentType": "application/vnd.naatre.response+json;version=1",
+      "response": "{\"complete\":true,\"data\":{\"profile\":{\"display\":\"Ada\"}}}"
+    },
+    "canonicalRequest": "{\"operation\":\"GetAccount\",\"persisted\":{\"algorithm\":\"sha-256\",\"canonicalVersion\":\"c14n-1\",\"digest\":\"cc863005080edcb85ec0345a50593dc58111896bbbe7ff86475ef2412fc5cb90\"},\"variables\":{\"filter\":{},\"id\":\"acct-1\",\"nickname\":null,\"tags\":[]},\"version\":\"1\"}"
+  },
+  "transport": {
+    "psr18": "unary-deadline-only",
+    "activeAbort": false,
+    "sse": "optional-adapter-contract",
+    "websocket": "unsupported",
+    "symfony": "deferred-to-issue-79",
+    "laravel": "deferred-to-issue-79"
+  },
+  "sharedFixtureConsumers": ["psr18", "symfony-issue-79", "laravel-issue-79"],
+  "vectors": [
+    "byte-identical-generation",
+    "phpstan-max",
+    "psalm-level-1",
+    "required-optional-nullable",
+    "open-enum-and-union-shapes",
+    "lossless-int64-uint64-decimal-timestamp-bytes",
+    "empty-object-list-and-numeric-string-map-key",
+    "missing-null-pending-present-failed-skipped",
+    "partial-data-with-errors",
+    "persisted-manifest-and-canonical-request",
+    "psr18-4xx-response-and-deadline-only",
+    "stream-resource-lifecycle"
+  ],
+  "commands": [
+    "composer --working-dir=sdk/php install --no-interaction --prefer-dist",
+    "composer --working-dir=sdk/php check"
+  ],
+  "unsupported": [
+    "active-abort-in-pure-psr18",
+    "sse-transport",
+    "websocket-transport",
+    "symfony-adapter",
+    "laravel-adapter",
+    "framework-worker-bindings"
+  ]
+}
