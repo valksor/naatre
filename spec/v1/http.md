@@ -4,6 +4,8 @@ The `core.http-1` profile binds one Naatre operation to one HTTP exchange. Its
 portable cases are [http.json](../../conformance/v1/http.json). This document
 defines carrier semantics; it does not make HTTP method, authentication state,
 or cacheability part of a Naatre operation's semantic identity.
+RFC 9530 byte integrity is the separately negotiated
+[core.http.digest-1](http-digest.md) profile.
 
 ## Endpoint and methods
 

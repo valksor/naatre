@@ -8,6 +8,12 @@ implementation version, platform, and claimed profile.
 Generated fixture changes must be reproducible byte-for-byte. Tests read the
 checked-in files rather than duplicating their expected values in Go source.
 
+`v1/http-digest.json` pins the `core.http.digest-1` RFC 9530 profile with exact
+identity, gzip, range, and transfer-framed bytes; strict negotiation and failure
+vectors; phase outcomes; webhook signature inputs; and explicit trailer
+capability. The Go reference codec and dependency-free JavaScript verifier both
+consume it directly.
+
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
