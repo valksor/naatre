@@ -279,6 +279,13 @@ crash recovery, worker crash, duplicate delivery, cancellation/completion,
 expiry, unknown commit outcome, and cross-principal result isolation. The Go
 runtime provides the queue-neutral coordinator; issue #89 owns concrete durable
 stores, leases, dispatch scanners, and worker adapters.
+`v1/operations.json` fixes the `operations.lifecycle-1` state machine owned by
+#57 and the #96 Go integration evidence. It pins the exact dependency revision,
+runtime/host/runner source digests, supported runtime boundary, complete
+unsupported-capability inventory, and overload, dependency-failure, rolling-
+restart, reconnect-storm, drain-deadline, and forced-kill transitions. The Go
+runner publishes the pinned profile result; the independent Node supervisor
+executes the POSIX forced-kill boundary.
 
 `v1/schema.json` fixes the `core.schema-1` portable schema authority. It covers
 complete, filtered, recursive, extended-trait, evolving, open-union, and

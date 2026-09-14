@@ -11,12 +11,17 @@ admission or shutdown. Use the optional durable observability integration when
 lossless external delivery is required. The queue closes after graceful stop,
 or after the final still-owned lease is released following a forced drain.
 
-The executable [`examples/processhost`](../examples/processhost) package shows
-the smallest `net/http` host. It exposes liveness and readiness probes and maps
-partition rejection to 429, aggregate rejection to 503, and both to a bounded
-`Retry-After` hint. It deliberately does not decode the Naatre wire protocol,
-authenticate headers, handle operating-system signals, or replace the concrete
-supervisor and transport integrations.
+The [`examples/processhost`](../examples/processhost) package is the reference
+`net/http` integration. It exposes liveness and readiness probes, maps
+partition rejection to 429 and aggregate rejection to 503 with a bounded
+`Retry-After` hint, and binds an `http.Server` to process drain through
+`Supervisor`. A caller passes a context derived from its service manager or
+signal policy. Cancellation closes admission and the listener concurrently,
+waits for the controller's bounded drain, and force-closes HTTP connections if
+drain or independently bounded server cleanup cannot finish. Public
+`SupervisorResult` values contain only a drain outcome, forced flag, and stable
+code; the separately returned error is private operator data and must never be
+serialized to a client.
 
 ## Deployment contract
 
@@ -60,6 +65,32 @@ cleanup allowance required by the deployment. The same contract works under a
 plain service manager, a container scheduler, or an embedded host; no specific
 orchestration or metrics backend is required.
 
+## Ownership and support boundary
+
+Issue #57 and `spec/v1/operations.md` own the normative
+`operations.lifecycle-1` state machine. The `runtime` package is its Go
+reference implementation. Issue #96 owns only the `examples/processhost`
+HTTP/supervisor integration and the Go conformance-runner evidence; neither is
+a second protocol, schema, or lifecycle authority.
+
+The supported runtime is Go 1.27 with the standard-library `context`,
+`net/http`, and `net.Listener` contracts. The controller and context-driven
+supervisor contain no operating-system-specific calls. The independently
+executed forced-kill fixture additionally supports Node 24 on POSIX platforms
+with `SIGTERM` and `SIGKILL`. Tests use in-memory listeners, so concurrent
+workers do not claim fixed ports.
+
+The profile does not implement native Windows service control, systemd launch
+configuration, container-orchestrator manifests, automatic restart/backoff,
+cross-process listener handoff, TLS or HTTP/2/HTTP/3 configuration, Naatre
+protocol decoding, authentication, dependency-probe scheduling, a metrics
+exporter, durable lifecycle-event delivery, in-process operating-system forced
+kill, upgraded or hijacked connection termination, or a connection pool.
+`ConnectionDeadline` supplies only a finite deterministic rotation deadline.
+Every optional host capability not explicitly listed as supported in
+`conformance/v1/operations.json` is outside `operations.lifecycle-1` and is
+unsupported by this integration.
+
 ## Reload and rotation
 
 Build the next registry/configuration generation completely, then call
@@ -84,3 +115,16 @@ completed drain, forced drain, and deterministic connection rotation. The unit
 and race suites contain the overload, queue cancellation, noisy-tenant,
 uncooperative-handler, dependency-failure, revision rollback, graceful drain,
 forced drain, and hook-failure scenarios.
+
+Run the integration profile and its independent forced-kill fixture with:
+
+```sh
+go test ./runtime ./examples/processhost ./internal/conformancerunner -count=1
+go test -race ./runtime ./examples/processhost ./internal/conformancerunner -count=1
+printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"operations","command":"run","path":{"source":{"kind":"http-server","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["operations.lifecycle-1"]}' | go run ./cmd/naatre-conformance --require-pass
+node conformance/independent/supervise.mjs
+```
+
+The operations fixture pins the exact #57 dependency revision and SHA-256
+digests for every runtime, host, and runner source used by the machine-readable
+profile result.

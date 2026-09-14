@@ -1,6 +1,6 @@
 // Package conformancerunner implements the language-neutral runner protocol.
 // It deliberately depends only on the standard library and checked-in JSON
-// fixtures; profile implementations register outside this package.
+// fixtures; profile implementations are registered explicitly by New.
 package conformancerunner
 
 import (
@@ -163,6 +163,7 @@ func New(suitePath string) (*Runner, error) {
 	runner.handlers[planCacheProfile] = runner.verifyPlanCache
 	runner.handlers[generatorPluginHostProfile] = runner.verifyGeneratorPluginHost
 	runner.handlers[goQualityProfile] = runner.verifyGoQuality
+	runner.handlers[operationsProfile] = runner.verifyOperations
 	return runner, nil
 }
 

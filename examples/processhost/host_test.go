@@ -40,6 +40,39 @@ func TestHealthEndpointsTrackProcessLifecycleWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestHealthEndpointsTrackEssentialDependencyFailureAndRecovery(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_800_000_000, 0)
+	config := runtime.DefaultProcessConfig()
+	config.Clock = func() time.Time { return now }
+	config.DependencyFailureGrace = time.Second
+	config.Dependencies = []runtime.DependencyConfig{{Name: "database-password-secret", Essential: true, Ready: true}}
+	controller := startedExampleController(t, config)
+	handler, err := NewHandler(controller, fixedAdmission, func(context.Context, runtime.AdmittedWork, http.ResponseWriter, *http.Request) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.SetDependency("database-password-secret", false); err != nil {
+		t.Fatal(err)
+	}
+	assertHealth(t, handler, "/health/ready", http.StatusServiceUnavailable, `"ready":false`)
+	assertHealth(t, handler, "/health/live", http.StatusOK, `"live":true`)
+	now = now.Add(time.Second)
+	assertHealth(t, handler, "/health/live", http.StatusServiceUnavailable, `"live":false`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	if strings.Contains(response.Body.String(), "database-password-secret") {
+		t.Fatalf("health response leaked dependency metadata: %s", response.Body.String())
+	}
+	if err := controller.SetDependency("database-password-secret", true); err != nil {
+		t.Fatal(err)
+	}
+	assertHealth(t, handler, "/health/ready", http.StatusOK, `"ready":true`)
+	assertHealth(t, handler, "/health/live", http.StatusOK, `"live":true`)
+}
+
 func TestAdmissionRejectsBeforeHTTPBusinessCallback(t *testing.T) {
 	t.Parallel()
 	config := runtime.DefaultProcessConfig()

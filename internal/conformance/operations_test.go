@@ -6,19 +6,66 @@ import (
 )
 
 type operationsFixture struct {
-	Profile            string               `json:"profile"`
-	States             []string             `json:"states"`
-	WorkKinds          []string             `json:"workKinds"`
-	EventStages        []string             `json:"eventStages"`
-	PublicCodes        []string             `json:"publicCodes"`
-	Accounting         operationsAccounting `json:"accounting"`
-	FairnessVectors    []operationsFairness `json:"fairnessVectors"`
-	HealthVectors      []operationsHealth   `json:"healthVectors"`
-	DrainVectors       []operationsDrain    `json:"drainVectors"`
-	CleanupKinds       []string             `json:"cleanupKinds"`
-	RevisionSequence   []string             `json:"revisionSequence"`
-	ConnectionRotation operationsRotation   `json:"connectionRotation"`
-	Boundaries         map[string]bool      `json:"boundaries"`
+	Profile            string                      `json:"profile"`
+	FixtureSuite       string                      `json:"fixtureSuite"`
+	Integration        operationsIntegration       `json:"integration"`
+	States             []string                    `json:"states"`
+	WorkKinds          []string                    `json:"workKinds"`
+	EventStages        []string                    `json:"eventStages"`
+	PublicCodes        []string                    `json:"publicCodes"`
+	Accounting         operationsAccounting        `json:"accounting"`
+	FairnessVectors    []operationsFairness        `json:"fairnessVectors"`
+	HealthVectors      []operationsHealth          `json:"healthVectors"`
+	DrainVectors       []operationsDrain           `json:"drainVectors"`
+	CleanupKinds       []string                    `json:"cleanupKinds"`
+	RevisionSequence   []string                    `json:"revisionSequence"`
+	ConnectionRotation operationsRotation          `json:"connectionRotation"`
+	IntegrationCases   []operationsIntegrationCase `json:"integrationCases"`
+	Boundaries         map[string]bool             `json:"boundaries"`
+}
+
+type operationsIntegration struct {
+	Module        string                 `json:"module"`
+	MinimumGo     string                 `json:"minimumGo"`
+	Runtime       string                 `json:"runtime"`
+	Dependencies  []operationsDependency `json:"dependencies"`
+	Packages      []operationsPackage    `json:"packages"`
+	Supported     []string               `json:"supported"`
+	FailureCodes  []string               `json:"failureCodes"`
+	Unsupported   []string               `json:"unsupported"`
+	Commands      []string               `json:"commands"`
+	EvidenceFiles []operationsEvidence   `json:"evidence"`
+}
+
+type operationsDependency struct {
+	Issue    int    `json:"issue"`
+	Revision string `json:"revision"`
+	Profile  string `json:"profile"`
+}
+
+type operationsPackage struct {
+	Path string `json:"path"`
+	Role string `json:"role"`
+}
+
+type operationsEvidence struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type operationsIntegrationCase struct {
+	Name            string                 `json:"name"`
+	Classifications []string               `json:"classifications"`
+	States          []string               `json:"states"`
+	Health          []operationsCaseHealth `json:"health"`
+	Code            string                 `json:"code"`
+	ProtectedOutput bool                   `json:"protectedOutput"`
+}
+
+type operationsCaseHealth struct {
+	State string `json:"state"`
+	Ready bool   `json:"ready"`
+	Live  bool   `json:"live"`
 }
 
 type operationsAccounting struct {
@@ -79,7 +126,15 @@ func assertOperationsHeader(t *testing.T, fixture operationsFixture) {
 	assertExactStrings(t, "queued accounting", fixture.Accounting.Queued, []string{"queued", "queuedBytes"})
 	assertExactStrings(t, "cleanup kinds", fixture.CleanupKinds, []string{"rollback", "lease-release", "source-close"})
 	assertExactStrings(t, "revision sequence", fixture.RevisionSequence, []string{"r1", "r2", "r1"})
-	if fixture.Profile != "operations.lifecycle-1" || fixture.Accounting.MinimumRequestWeight != 1 ||
+	if fixture.Profile != "operations.lifecycle-1" || fixture.FixtureSuite != "1.0.0" ||
+		fixture.Integration.Module != "github.com/valksor/naatre" || fixture.Integration.MinimumGo != "1.27" ||
+		fixture.Integration.Runtime != "go-standard-library" || len(fixture.Integration.Dependencies) != 1 ||
+		fixture.Integration.Dependencies[0].Issue != 57 || fixture.Integration.Dependencies[0].Revision != "81000002f89bac6a342036d4fd34c35506292b34" ||
+		fixture.Integration.Dependencies[0].Profile != "operations.lifecycle-1" || len(fixture.Integration.Packages) != 3 ||
+		len(fixture.Integration.Supported) == 0 || !slices.Equal(fixture.Integration.FailureCodes, []string{"OVERLOADED", "RATE_LIMITED", "CANCELLED", "RESOURCE_EXHAUSTED", "INTERNAL"}) ||
+		len(fixture.Integration.Unsupported) == 0 ||
+		len(fixture.Integration.Commands) == 0 || len(fixture.Integration.EvidenceFiles) == 0 ||
+		fixture.Accounting.MinimumRequestWeight != 1 ||
 		fixture.Accounting.PartitionReferenceMaxBytes != 256 || fixture.Accounting.ReleaseOnCancellation {
 		t.Fatalf("operations fixture header/accounting = %#v", fixture)
 	}
@@ -118,6 +173,7 @@ func assertOperationsBehavior(t *testing.T, fixture operationsFixture) {
 		!fixture.ConnectionRotation.IdentityExpiryShortens || !fixture.ConnectionRotation.StaggerStrictlyLessThanLifetime {
 		t.Fatalf("connection rotation = %#v", fixture.ConnectionRotation)
 	}
+	assertOperationsIntegrationCases(t, fixture.IntegrationCases)
 	wantBoundaries := map[string]bool{
 		"admissionBeforeBusinessExecution": true, "activeRevisionImmutable": true, "queuedCancellationReleasesAccounting": true,
 		"uncooperativeWorkRetainsSlot": true, "partitionCapacityReserved": true,
@@ -129,6 +185,32 @@ func assertOperationsBehavior(t *testing.T, fixture operationsFixture) {
 	for name, want := range wantBoundaries {
 		if got, ok := fixture.Boundaries[name]; !ok || got != want {
 			t.Errorf("boundary %q = %v,%v want %v", name, got, ok, want)
+		}
+	}
+}
+
+func assertOperationsIntegrationCases(t testing.TB, cases []operationsIntegrationCase) {
+	t.Helper()
+	if len(cases) != 6 {
+		t.Fatalf("integration cases = %#v", cases)
+	}
+	classifications := make(map[string]bool)
+	for _, testCase := range cases {
+		if testCase.Name == "" || len(testCase.States) < 2 || len(testCase.Health) != len(testCase.States) || testCase.ProtectedOutput {
+			t.Fatalf("integration case = %#v", testCase)
+		}
+		for index, health := range testCase.Health {
+			if health.State != testCase.States[index] {
+				t.Fatalf("integration case health = %#v", testCase)
+			}
+		}
+		for _, classification := range testCase.Classifications {
+			classifications[classification] = true
+		}
+	}
+	for _, classification := range []string{"positive", "negative", "boundary", "cancellation", "resource-limit"} {
+		if !classifications[classification] {
+			t.Errorf("integration cases omit %q classification", classification)
 		}
 	}
 }

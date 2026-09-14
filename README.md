@@ -120,6 +120,11 @@ evidence must be described as planned.
   `sdk/typescript/generated`, and `sdk/dotnet/Naatre.Core/Generated` contain
   checked-in operation bindings; the final combined compatibility matrix
   remains owned by #69.
+- `examples/processhost`: bounded `net/http` health, admission, drain, and
+  context-driven supervisor integration for `operations.lifecycle-1`.
+- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
+  contains the checked-in `sdk.go.operations-1` result and operation bindings;
+  full cross-language compatibility certification remains planned.
 
 Dependencies point inward in that order: client packages use only portable
 protocol contracts; observability and reflection adapters, transports, other
