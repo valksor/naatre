@@ -6,7 +6,10 @@
 .idea/
 .vscode/
 bin/
+!sdk/dart/bin/
+!sdk/dart/bin/naatre_sdkgen.dart
 coverage.out
 dist/
 node_modules/
+.dart_tool/
 *.test

@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24.21.0
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
+        with:
+          sdk: 3.13.3
       - name: Formatting
         run: test -z "$(gofmt -l .)"
       - name: Unit tests
@@ -36,6 +39,10 @@ jobs:
           node conformance/independent/verify-typescript-adapters.mjs
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"codec","language":"javascript-typescript"},"destination":{"kind":"codec","language":"javascript-typescript"}},"profiles":["suite.contract-1","core.scalar.c14n-1","core.interop.c14n-1"]}' | node conformance/independent/runner.mjs --require-pass
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"sdk","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["sdk.typescript.core-1","sdk.typescript.adapters-1"]}' | node conformance/independent/runner.mjs --require-pass
+      - name: Dart SDK conformance
+        run: |
+          node conformance/independent/verify-dart-sdk.mjs
+          printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"dart","command":"run","path":{"source":{"kind":"sdk","language":"dart"},"destination":{"kind":"native-runtime","language":"dart"}},"profiles":["sdk.dart.core-1"]}' | node conformance/independent/runner.mjs --require-pass
       - name: Go conformance runner
         run: printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.contract-1"]}' | go run ./cmd/naatre-conformance --require-pass
       - name: Core parallel and cancellation race fixtures

@@ -93,6 +93,15 @@ and workerd revisions executed by the portable runtime matrix. The independent
 runner rechecks source digests, Node behavior, and package-export boundaries;
 the recorded commands reproduce the other selected runtimes.
 
+`v1/dart-sdk.json` pins `sdk.dart.core-1`: null-safe generated variables and
+selected-result shapes, explicit missing/null/pending states, open variants,
+lossless extended numeric scalars, strict bounded JSON, persisted request
+identity, cancellation-aware transport contracts, pagination, SSE terminal
+validation, isolate-aware work dispatch, and byte-identical VM/AOT/dart2js
+canonical output. Its report certifies Dart 3.13.3 core execution; Flutter and
+concrete HTTP, SSE, and WebSocket adapters remain explicitly unsupported until
+issue #84, while issue #69 owns the combined official matrix.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,
