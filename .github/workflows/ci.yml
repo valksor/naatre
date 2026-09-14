@@ -24,7 +24,7 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Unit tests
         run: go test ./...
-      - name: Independent JavaScript conformance
+      - name: SDK and independent conformance
         run: |
           npm --prefix sdk/typescript ci --ignore-scripts
           npm --prefix sdk/typescript test
@@ -36,6 +36,7 @@ jobs:
           node conformance/independent/verify-typescript-adapters.mjs
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"codec","language":"javascript-typescript"},"destination":{"kind":"codec","language":"javascript-typescript"}},"profiles":["suite.contract-1","core.scalar.c14n-1","core.interop.c14n-1"]}' | node conformance/independent/runner.mjs --require-pass
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"sdk","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["sdk.typescript.core-1","sdk.typescript.adapters-1"]}' | node conformance/independent/runner.mjs --require-pass
+          ./sdk/rust/ci.sh
       - name: Go conformance runner
         run: printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.contract-1"]}' | go run ./cmd/naatre-conformance --require-pass
       - name: Core parallel and cancellation race fixtures

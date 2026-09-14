@@ -93,6 +93,13 @@ and workerd revisions executed by the portable runtime matrix. The independent
 runner rechecks source digests, Node behavior, and package-export boundaries;
 the recorded commands reproduce the other selected runtimes.
 
+`v1/rust-sdk.json` pins `sdk.rust.core-1`: the Rust 1.85 minimum version and
+feature matrix, serde bindings, exact scalar wrappers, persisted manifest,
+runtime-neutral transport ownership, bounded pagination and fallible streams,
+drop cancellation, and checked generator artifacts. The independent runner
+executes its Rust conformance verifier; async network adapters remain owned by
+issue #80 and the complete official SDK matrix by #69.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,

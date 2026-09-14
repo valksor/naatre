@@ -9,4 +9,5 @@ bin/
 coverage.out
 dist/
 node_modules/
+target/
 *.test
