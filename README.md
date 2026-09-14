@@ -38,7 +38,8 @@ evidence must be described as planned.
   containment for `sdk.generation-1`.
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
-  observability hooks, process-wide admission/lifecycle control, bounded
+  observability hooks, durable queue-neutral asynchronous operation
+  coordination, process-wide admission/lifecycle control, bounded
   stream replay and source ownership, a bounded reference federation
   coordinator, planning, and execution; see the
   [Go registry contract](docs/registry.md) and

@@ -1,0 +1,91 @@
+{
+  "profile": "operations.async-1",
+  "states": ["pending", "running", "succeeded", "failed", "cancelling", "cancelled", "indeterminate"],
+  "terminalStates": ["succeeded", "failed", "cancelled", "indeterminate"],
+  "transitions": [
+    {"from": "pending", "to": "running"},
+    {"from": "pending", "to": "cancelled"},
+    {"from": "running", "to": "succeeded"},
+    {"from": "running", "to": "failed"},
+    {"from": "running", "to": "cancelling"},
+    {"from": "running", "to": "indeterminate"},
+    {"from": "cancelling", "to": "succeeded"},
+    {"from": "cancelling", "to": "failed"},
+    {"from": "cancelling", "to": "cancelled"},
+    {"from": "cancelling", "to": "indeterminate"}
+  ],
+  "cancellationOutcomes": ["requested", "effective", "too-late", "unsupported"],
+  "bindings": ["principal", "tenant", "schemaRevision", "operation", "idempotencyKey"],
+  "http": {
+    "acceptanceStatus": 202,
+    "pollStatus": 200,
+    "conditionalStatus": 304,
+    "location": "poll-resource",
+    "retryAfter": "required-while-active",
+    "etag": "state-revision"
+  },
+  "logicalStateSource": "authorized-durable-record",
+  "vectors": [
+    {
+      "name": "acceptance-dispatch-crash",
+      "events": ["persist-pending", "acknowledge-202", "acceptor-crash", "recover-pending", "claim-running"],
+      "finalState": "running",
+      "reauthorized": true
+    },
+    {
+      "name": "worker-crash",
+      "events": ["claim-running", "worker-crash", "compare-and-swap-indeterminate"],
+      "finalState": "indeterminate",
+      "reauthorized": true,
+      "terminalRevision": 3
+    },
+    {
+      "name": "duplicate-delivery",
+      "events": ["claim-running", "complete-succeeded", "duplicate-worker-delivery", "reject-terminal-regression"],
+      "finalState": "succeeded",
+      "sameHandle": true,
+      "reauthorized": true,
+      "terminalRevision": 3
+    },
+    {
+      "name": "retention-expiry",
+      "events": ["complete-succeeded", "retain-until-expiry", "hide-expired", "garbage-collect"],
+      "finalState": "succeeded",
+      "reauthorized": true
+    },
+    {
+      "name": "cancellation-effective",
+      "events": ["claim-running", "request-cancellation", "mark-cancelling", "worker-acknowledges", "complete-cancelled"],
+      "finalState": "cancelled",
+      "expectedCancellation": "effective",
+      "reauthorized": true
+    },
+    {
+      "name": "cancellation-too-late",
+      "events": ["claim-running", "complete-succeeded", "request-cancellation", "report-too-late"],
+      "finalState": "succeeded",
+      "expectedCancellation": "too-late",
+      "reauthorized": true
+    },
+    {
+      "name": "unknown-commit-outcome",
+      "events": ["claim-running", "commit-acknowledgement-lost", "compare-and-swap-indeterminate", "forbid-retry"],
+      "finalState": "indeterminate",
+      "reauthorized": true
+    },
+    {
+      "name": "completion-cancel-race",
+      "events": ["claim-running", "request-cancellation", "complete-succeeded-wins", "reject-late-cancel-transition"],
+      "finalState": "succeeded",
+      "expectedCancellation": "too-late",
+      "reauthorized": true,
+      "terminalRevision": 3
+    },
+    {
+      "name": "authorization-boundary",
+      "events": ["complete-succeeded", "poll-different-principal", "return-generic-unavailable", "poll-owner", "return-result"],
+      "finalState": "succeeded",
+      "reauthorized": true
+    }
+  ]
+}
