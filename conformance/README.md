@@ -11,7 +11,7 @@ checked-in files rather than duplicating their expected values in Go source.
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 510 stable normative clauses and all 110 repository issues to exact
+maps all 524 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile

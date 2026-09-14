@@ -20,6 +20,7 @@ evidence must be described as planned.
 
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
+- `docs/tooling.md`: offline CLI, editor adapter, mocks, and compatibility workflow.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `internal/slicesx`: dependency-free slice transformations shared by portable layers.
 - `client`: runtime-independent Go SDK request values, immutable typed
@@ -44,6 +45,9 @@ evidence must be described as planned.
   [Go registry contract](docs/registry.md) and
   [process-hosting guide](docs/process-hosting.md). Production distributed
   federation planning and transport integration remain owned by #109.
+- `tooling`: shared offline validation, formatting, hashing, explain, editor,
+  manifest compatibility, deterministic mocks, and credential-redaction core
+  for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the

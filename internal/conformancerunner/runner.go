@@ -138,6 +138,7 @@ func New(suitePath string) (*Runner, error) {
 	runner.handlers["suite.contract-1"] = runner.verifySuite
 	runner.handlers[goClientProfile] = runner.verifyGoClient
 	runner.handlers[goSDKProfile] = runner.verifyGoSDK
+	runner.handlers[toolingProfile] = runner.verifyTooling
 	return runner, nil
 }
 
