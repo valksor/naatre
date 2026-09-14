@@ -85,6 +85,13 @@ TypeScript generator, checked artifacts, exact TypeScript compiler version,
 and strict compilation command. Transport and runtime-matrix evidence remains
 owned by `sdk.typescript.adapters-1` in issue #75.
 
+`v1/php-sdk.json` pins `sdk.php.core-1`: lossless scalar and map wrappers,
+selected-result presence states, serializer-neutral attributes, deterministic
+PHP generation, canonical persisted requests, the deadline-only PSR-18 unary
+profile, and exact stream-resource ownership. Symfony, Laravel, active-abort,
+SSE, and WebSocket adapters remain explicitly unsupported here and are owned by
+issue #79.
+
 `v1/typescript-adapters.json` pins `sdk.typescript.adapters-1`: Fetch unary and
 POST-SSE adapters, the optional secure WebSocket adapter, strict ESM subpath
 exports, cancellation and body/socket cleanup, redirect credential policy,
