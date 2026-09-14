@@ -1,0 +1,55 @@
+name: JVM SDK
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  KOTLIN_COMPILER_SHA256: 81f0264c9073b5cbbdb3ff8418cf2c5dac076879fc156fa1a6462f5a5acc4420
+  KOTLIN_COROUTINES_SHA256: 5ca175b38df331fd64155b35cd8cae1251fa9ee369709b36d42e0a288ccce3fd
+
+jobs:
+  conformance:
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [17, 21, 25]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.27.1
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24.21.0
+      - uses: actions/setup-java@17f84c3641ba7b8f6deff6309fc4c864478f5d62 # v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Install pinned Kotlin compiler
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/JetBrains/kotlin/releases/download/v2.2.20/kotlin-compiler-2.2.20.zip \
+            --output "$RUNNER_TEMP/kotlin.zip"
+          curl --fail --location --silent --show-error \
+            https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.10.2/kotlinx-coroutines-core-jvm-1.10.2.jar \
+            --output "$RUNNER_TEMP/kotlinx-coroutines.jar"
+          printf '%s  %s\n' "$KOTLIN_COMPILER_SHA256" "$RUNNER_TEMP/kotlin.zip" | shasum -a 256 --check
+          printf '%s  %s\n' "$KOTLIN_COROUTINES_SHA256" "$RUNNER_TEMP/kotlinx-coroutines.jar" | shasum -a 256 --check
+          unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP/kotlin"
+      - name: Verify deterministic JVM generation
+        run: |
+          go test ./sdk/jvm/sdkgen ./cmd/naatre-jvm-sdk-generator
+          go generate ./sdk/jvm
+          git diff --exit-code -- sdk/jvm/generated
+          test -z "$(git status --porcelain --untracked-files=all -- sdk/jvm/generated)"
+      - name: Run JVM client conformance and verify evidence
+        env:
+          KOTLIN_HOME: ${{ runner.temp }}/kotlin/kotlinc
+          KOTLIN_COROUTINES_JAR: ${{ runner.temp }}/kotlinx-coroutines.jar
+        run: node conformance/independent/verify-jvm-sdk.mjs

@@ -30,6 +30,7 @@ Documents:
 17. [Generator model and common SDK behavior](generation.md)
 18. [Portable validation constraints](validation.md)
 19. [Namespaced protocol and runtime extensions](extensions.md)
+20. [JVM Java and Kotlin client core](jvm.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

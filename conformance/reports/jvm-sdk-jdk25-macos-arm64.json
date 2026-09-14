@@ -1,0 +1,12 @@
+{
+  "profile": "sdk.jvm.core-1",
+  "status": "passed",
+  "platform": "macOS 26.6.2 arm64",
+  "jdk": "Corretto 25.0.4.1",
+  "kotlin": "2.2.20",
+  "coroutines": "1.10.2",
+  "bytecodeTarget": "17",
+  "sourceSetSha256": "352289f1a2b595ad406182131c483149d1d37b5972a1b4f2012ee06a99db6e0e",
+  "command": "sdk/jvm/check.sh",
+  "vectors": ["request-hash-parity", "explicit-nullability", "unknown-variants", "lossless-scalars", "locale-time-zone-independence", "partial-errors", "malformed-response", "future-cancellation", "blocking-deadline", "blocking-interruption", "coroutine-cancellation", "flow-cancellation", "stream-terminal-truncation", "response-frame-limits", "redirect-credentials", "authentication-interceptor", "unsupported-capabilities"]
+}

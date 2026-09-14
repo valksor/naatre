@@ -9,4 +9,7 @@ bin/
 coverage.out
 dist/
 node_modules/
+sdk/jvm/.gradle/
+sdk/jvm/build/
+sdk/jvm/target/
 *.test
