@@ -26,10 +26,64 @@ source records `naatre.generator.typescript-sdk-1`; operation and manifest
 digests derive from the shared language-neutral model and canonical reference
 output.
 
-Transport adapters and the Browser, Node.js, Deno, Bun, and edge packaging
-matrix are intentionally separate and owned by issue #75. The core package
-does not claim Fetch, SSE, WebSocket, decompression, redirect, or credential
-forwarding support by itself.
+## Transport adapters and runtime matrix
+
+The separately executable `sdk.typescript.adapters-1` profile exports the
+Fetch adapter from `@naatre/sdk/fetch` and the WebSocket adapter and standalone
+SSE decoder from `@naatre/sdk/websocket`. The root package also re-exports all
+three functions. All entry points are dependency-free strict ESM.
+
+Fetch execution uses canonical POST request bytes, bounded incremental reads,
+manual 307/308 redirects, strict response media types, active abort handling,
+and partial-data decoding. Cross-origin redirects are denied unless their
+origin is explicitly listed. Authentication and tenant headers are stripped
+on an allowed cross-origin redirect unless that destination origin is also in
+`credentialOrigins`; Fetch credentials are always `omit` or `same-origin`.
+Rejected responses and redirects close their response bodies. Compressed byte
+limits validate the declared wire length; decompressed byte limits apply to
+the bytes exposed by the Fetch implementation after content decoding.
+
+POST-SSE and WebSocket streams validate bounded UTF-8 JSON frames, sequence
+ordering, exact duplicates, bounded WebSocket queues, terminal/truncated outcomes, and the special
+`history-unavailable` recovery end. Cancellation closes the reader or socket.
+WebSocket support is optional, accepts only `wss:` endpoints and text frames,
+and sends the same canonical request envelope after the connection opens.
+
+The checked evidence covers Node 26.8.2, Bun 1.4.2, Deno 2.9.6, Chrome
+headless shell 153.0.8010.36, and workerd package 1.20260914.1 on Darwin arm64.
+Run the portable profiles and targeted Node tests with:
+
+```sh
+node conformance/independent/typescript-adapter-runtime.mjs
+bun conformance/independent/typescript-adapter-runtime.mjs
+npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read \
+  conformance/independent/typescript-adapter-runtime.mjs
+node --test sdk/typescript/runtime/exports.test.mjs \
+  sdk/typescript/runtime/transport.test.mjs
+```
+
+For the selected browser, serve the repository root with
+`python3 -m http.server 18775 --bind 127.0.0.1`, set
+`CHROME_HEADLESS_SHELL` to the exact 153.0.8010.36 executable, and run the
+wrapper. It verifies the version and DOM result, and replays captured browser
+diagnostics on failure:
+
+```sh
+conformance/browser/run-typescript-adapter-runtime.sh
+```
+
+For the selected edge runtime, run
+`npx --yes --userconfig=/dev/null workerd@1.20260914.1 serve
+conformance/edge/typescript-adapter-workerd.capnp`, then request
+`http://127.0.0.1:18776/`.
+
+The profile does not claim automatic reconnect/replay orchestration, binary or
+compressed WebSocket frames, WebSocket upgrade authentication headers,
+non-WSS sockets, browsers other than the recorded Chrome revision, edge
+runtimes other than the recorded workerd revision, framework bindings, or
+deployment certification. The core profile remains independently verifiable
+and does not acquire those transport claims merely because the package root
+re-exports the adapter functions.
 
 ## Collection-query mapping
 

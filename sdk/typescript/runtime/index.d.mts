@@ -42,6 +42,43 @@ export interface Operation<TVariables extends object, TResult> {
   decodeResult(input: string | Uint8Array | Readonly<Record<string, unknown>>): Readonly<{ data: TResult | null; errors: readonly Readonly<Record<string, unknown>>[]; complete: boolean }>;
 }
 
+export interface StreamFrame extends Readonly<Record<string, unknown>> {
+  readonly type: "open" | "data" | "patch" | "error" | "complete" | "keepalive" | "resume" | "history-unavailable";
+  readonly stream: string;
+  readonly sequence?: number;
+}
+
+export interface FetchAdapterConfiguration {
+  readonly endpoint: string | URL;
+  readonly fetch?: typeof fetch;
+  readonly authenticate?: (context: Readonly<{ url: string; operation: Operation<object, unknown>; signal?: AbortSignal }>) => HeadersInit | undefined | Promise<HeadersInit | undefined>;
+  readonly compressedBytes?: number;
+  readonly decompressedBytes?: number;
+  readonly frameBytes?: number;
+  readonly redirects?: number;
+  readonly redirectOrigins?: readonly string[];
+  readonly credentialOrigins?: readonly string[];
+  readonly credentials?: "omit" | "same-origin";
+}
+
+export interface FetchAdapter {
+  execute<TVariables extends object, TResult>(operation: Operation<TVariables, TResult>, options?: Readonly<{ signal?: AbortSignal }>): Promise<ReturnType<Operation<TVariables, TResult>["decodeResult"]>>;
+  stream<TVariables extends object, TResult>(operation: Operation<TVariables, TResult>, options?: Readonly<{ signal?: AbortSignal }>): Promise<AsyncIterable<StreamFrame>>;
+}
+
+export interface WebSocketAdapterConfiguration {
+  readonly endpoint: string | URL;
+  readonly WebSocket?: typeof WebSocket;
+  readonly protocols?: readonly string[];
+  readonly maximumFrameBytes?: number;
+  readonly maximumQueuedBytes?: number;
+  readonly maximumQueuedFrames?: number;
+}
+
+export interface WebSocketAdapter {
+  stream<TVariables extends object, TResult>(operation: Operation<TVariables, TResult>, options?: Readonly<{ signal?: AbortSignal }>): AsyncIterable<StreamFrame>;
+}
+
 export class NaatreClientError extends Error {
   readonly code: string;
   readonly status: number;
@@ -77,4 +114,7 @@ export function decodeBytes(value: string): Uint8Array;
 export function createScalarCodecs(custom?: Readonly<Record<string, Readonly<{ encode(value: unknown): unknown; decode(value: unknown): unknown }>>>): Readonly<Record<string, Readonly<{ encode(value: unknown): unknown; decode(value: unknown): unknown }>>>;
 export function encodeScalar(codecs: ScalarCodecs, type: string, value: unknown): unknown;
 export function decodeScalar(codecs: ScalarCodecs, type: string, value: unknown): unknown;
+export function createFetchAdapter(configuration: FetchAdapterConfiguration): FetchAdapter;
+export function decodeSSEStream(body: ReadableStream<Uint8Array>, options?: Readonly<{ maximumFrameBytes?: number; maximumResponseBytes?: number; signal?: AbortSignal }>): AsyncIterable<StreamFrame>;
+export function createWebSocketAdapter(configuration: WebSocketAdapterConfiguration): WebSocketAdapter;
 export const runtimeVersion: "naatre.typescript.runtime-1";

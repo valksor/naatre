@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Naatre TypeScript adapter runtime fixture</title>
+</head>
+<body>
+  <pre id="result">running</pre>
+  <script type="module">
+    globalThis.NAATRE_RUNTIME_ID = `browser-${navigator.userAgent}`;
+    globalThis.NAATRE_ADAPTER_NO_AUTORUN = true;
+    try {
+      const { runAdapterRuntime } = await import("../independent/typescript-adapter-runtime.mjs");
+      globalThis.NAATRE_ADAPTER_RESULT = await runAdapterRuntime();
+      document.querySelector("#result").textContent = JSON.stringify(globalThis.NAATRE_ADAPTER_RESULT);
+      document.documentElement.dataset.status = "passed";
+    } catch (error) {
+      document.querySelector("#result").textContent = String(error?.stack ?? error);
+      document.documentElement.dataset.status = "failed";
+    }
+  </script>
+</body>
+</html>

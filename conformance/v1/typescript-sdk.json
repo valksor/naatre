@@ -18,17 +18,17 @@
     "manifest": {"path": "sdk/typescript/generated/operations.json", "sha256": "9627895c5ac0bd002aeef1d3fcfbd90fd3f7894e85619734d07420d85038bfb6"}
   },
   "evidence": [
-    {"path": "sdk/typescript/runtime/index.mjs", "sha256": "9410393a63932c1be3d05f3edd7e7f2b4bdf7fadf7a1334459756f966441184b"},
+    {"path": "sdk/typescript/runtime/index.mjs", "sha256": "443221d5a09ca02631bdf5f99df55362b1e780c2d240b9cbdb9f2aec2588829a"},
     {"path": "sdk/typescript/runtime/json.mjs", "sha256": "6b799ebb5087dbb4c76b715836c55ebfe9ee756d45702f5b72765283c026755c"},
     {"path": "sdk/typescript/runtime/scalars.mjs", "sha256": "783edfb181d7dcbce5d786c508918c3f1de67d2024d687a890b81e9242ab7e33"},
     {"path": "sdk/typescript/runtime/result.mjs", "sha256": "3e046e34af27180d34e06531a24859b2af723caec2b5c611b761cba5880b7672"},
     {"path": "sdk/typescript/runtime/operation.mjs", "sha256": "479969bf7fad1842f84c008fb320d7e7b5bc0f903ed04f474c1d140ab404d3e5"},
-    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "5539013b98c8f728d53039314239d0c87f54b6244ca58ebae9de8932740eabfc"},
+    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "26c1a4107e314f0a9ccbdd973dfc4ee43f8e16ef028a435043ba97ed022c4e1d"},
     {"path": "sdk/typescript/runtime/index.test.mjs", "sha256": "8d0c1d51e697c5dd657f44443d34d8ed7b258962b30b5025d5b1d2e69dfd6068"},
     {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "df6eb6a63e978b2d04e3bc3f51e4ad9d799659a4c2f3c5755296b447d57fa2f7"},
     {"path": "sdk/typescript/sdkgen/cli.mjs", "sha256": "62fbc2a1fbbd1970b7049567b60e33f08a4e9270ce1c65754ccda79a29aab4c0"},
     {"path": "sdk/typescript/sdkgen/generator.test.mjs", "sha256": "d8694902cfafe8e680c888ce92a1d68929f63f20da9157bdada7abc85b6b3160"},
-    {"path": "sdk/typescript/package.json", "sha256": "d3828143dc5c9c5133c320bc1cec3a07c112ca118aee36c36193698c4744448d"},
+    {"path": "sdk/typescript/package.json", "sha256": "75676f70299a1d48f8c5e4d29f25ec1aa1e76855dedb557cff832a40d56a4a79"},
     {"path": "sdk/typescript/package-lock.json", "sha256": "e356c4b3e5b96c03d0427347ad81510f7f2692c735da7b65f4c15dbd31558c41"},
     {"path": "sdk/typescript/tsconfig.json", "sha256": "5ecb76178558250c6afc75e8ecb8569c40c96defd2c1a0448d14cabdab6c4f98"},
     {"path": "conformance/independent/verify-typescript-sdk.mjs", "sha256": "a2c165009746380fabc974b5e92f24d8761a88a658d23b46d58dfc002c869300"}

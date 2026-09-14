@@ -8,6 +8,14 @@
       "types": "./runtime/index.d.mts",
       "import": "./runtime/index.mjs"
     },
+    "./fetch": {
+      "types": "./runtime/transport.d.mts",
+      "import": "./runtime/transport.mjs"
+    },
+    "./websocket": {
+      "types": "./runtime/stream.d.mts",
+      "import": "./runtime/stream.mjs"
+    },
     "./generated": "./generated/operations.ts"
   },
   "scripts": {
