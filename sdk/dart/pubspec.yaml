@@ -1,0 +1,8 @@
+name: naatre
+version: 0.1.0
+description: Dependency-free Dart client core and generated bindings for Naatre.
+repository: https://github.com/valksor/naatre
+license: Apache-2.0
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"

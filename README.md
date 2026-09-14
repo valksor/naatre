@@ -45,6 +45,9 @@ evidence must be described as planned.
   canonical scalar wrappers, async transport/cancellation contract, and
   deterministic Codable operation bindings for `sdk.swift.core-1`; concrete
   Apple transport adapters remain owned by #86.
+- `sdk/dart`: dependency-free null-safe Dart client core, lossless scalar and
+  partial-result models, pluggable transport contracts, and deterministic
+  operation bindings for `sdk.dart.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.

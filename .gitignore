@@ -22,4 +22,10 @@ target/
 sdk/jvm/.gradle/
 sdk/jvm/build/
 sdk/jvm/target/
+!sdk/dart/bin/
+!sdk/dart/bin/naatre_sdkgen.dart
+coverage.out
+dist/
+node_modules/
+.dart_tool/
 *.test

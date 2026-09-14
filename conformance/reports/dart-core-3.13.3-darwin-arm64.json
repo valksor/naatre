@@ -1,0 +1,39 @@
+{
+  "profile": "sdk.dart.core-1",
+  "fixtureSuite": "1.0.0",
+  "status": "passed",
+  "runtime": {
+    "name": "dart",
+    "version": "3.13.3",
+    "platform": "macos-arm64"
+  },
+  "canonicalTargets": ["vm", "native-aot", "dart2js-node"],
+  "canonicalProbeSha256": "fdc9602c423cf8102ea6675fcf2ef1b5280e2dd9399e36008f5a9d215cab9098",
+  "commands": [
+    {"command": "dart run tool/canonical_probe.dart", "status": "passed"},
+    {"command": "dart compile exe tool/canonical_probe.dart", "status": "passed"},
+    {"command": "dart compile js -O2 tool/canonical_probe.dart and node canonical-probe.js", "status": "passed"},
+    {"command": "compile and execute scalar vectors on native AOT and dart2js", "status": "passed"},
+    {"command": "dart analyze sdk/dart --fatal-infos", "status": "passed"},
+    {"command": "five dependency-free Dart test entrypoints", "status": "passed"},
+    {"command": "two clean generator runs", "status": "passed", "comparison": "byte-identical"}
+  ],
+  "vectors": [
+    "canonical-request-and-document-hash-parity",
+    "unsafe-integer-rejected-before-javascript-rounding",
+    "lossless-extended-scalars",
+    "missing-null-and-partial-errors",
+    "unknown-domain-variants",
+    "cancellation-and-resource-release",
+    "stream-backpressure-terminal-and-truncation",
+    "deterministic-generation"
+  ],
+  "unsupported": [
+    "flutter-runtime-and-tests-owned-by-84",
+    "concrete-http-transport-owned-by-84",
+    "concrete-sse-transport-owned-by-84",
+    "concrete-websocket-transport-owned-by-84",
+    "automatic-auth-refresh",
+    "complete-official-sdk-matrix-owned-by-69"
+  ]
+}

@@ -20,6 +20,7 @@ const implementations = new Map([
   ["core.interop.c14n-1", "canonical.mjs"],
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
   ["core.validation-1", "validation.mjs"],
+  ["sdk.dart.core-1", "verify-dart-sdk.mjs"],
   ["sdk.generation-1", "verify-generator.mjs"],
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
