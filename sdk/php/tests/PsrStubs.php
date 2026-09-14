@@ -23,6 +23,7 @@ namespace Psr\Http\Message {
 
     interface ResponseInterface
     {
+        public function getStatusCode(): int;
         public function getHeaderLine(string $name): string;
         public function getBody(): StreamInterface;
     }
@@ -53,6 +54,7 @@ namespace Psr\Http\Client {
 }
 
 namespace Naatre\Sdk\Tests {
+    use Psr\Http\Client\ClientExceptionInterface;
     use Psr\Http\Client\ClientInterface;
     use Psr\Http\Message\RequestFactoryInterface;
     use Psr\Http\Message\RequestInterface;
@@ -137,9 +139,14 @@ namespace Naatre\Sdk\Tests {
         public TestStream $body;
 
         /** @param array<string, string> $headers */
-        public function __construct(private array $headers, string $body)
+        public function __construct(private array $headers, string $body, private int $statusCode = 200)
         {
             $this->body = new TestStream($body);
+        }
+
+        public function getStatusCode(): int
+        {
+            return $this->statusCode;
         }
 
         public function getHeaderLine(string $name): string
@@ -169,15 +176,24 @@ namespace Naatre\Sdk\Tests {
     final class TestHttpClient implements ClientInterface
     {
         public ?RequestInterface $request = null;
+        public int $attempts = 0;
 
-        public function __construct(private readonly ResponseInterface $response)
+        public function __construct(private readonly ResponseInterface $response, private readonly int $failuresBeforeSuccess = 0)
         {
         }
 
         public function sendRequest(RequestInterface $request): ResponseInterface
         {
             $this->request = $request;
+            ++$this->attempts;
+            if ($this->attempts <= $this->failuresBeforeSuccess) {
+                throw new TestTransportException('temporary transport failure');
+            }
             return $this->response;
         }
+    }
+
+    final class TestTransportException extends \RuntimeException implements ClientExceptionInterface
+    {
     }
 }

@@ -35,7 +35,7 @@
     {"path": "v1/operations.json", "profile": "operations.lifecycle-1", "category": "execution", "sha256": "b1cc57cc7b32174e0973f0dc66a539f4b1eae34e15b0ed40b3285c6e396db208"},
     {"path": "v1/partial-results.json", "profile": "core.protocol-1", "category": "execution", "sha256": "6f29bc5b79d584f6f9aef796e47f71ccc685449b949af2867afb022824439eeb"},
     {"path": "v1/persisted.json", "profile": "core.persisted-1", "category": "document", "sha256": "b805a6070d17c3ab67b4cbf6e2f41df6f519b2ae86c6bf8aecf99a4dbe95f830"},
-    {"path": "v1/php-sdk.json", "profile": "sdk.php.core-1", "category": "canonical", "sha256": "8bf2cbf94095a559b4c818ef11f039f603455971e6164637e76d38920312603d"},
+    {"path": "v1/php-sdk.json", "profile": "sdk.php.core-1", "category": "canonical", "sha256": "dc6fffcd53070ffa58c0e542d01feaeb4be43d969ce7fbffb1c7d981cb382df7"},
     {"path": "v1/planning.json", "profile": "core.language-1", "category": "execution", "sha256": "0a95eceafa0b4269a80ef887bf985df254361c0dcacb23fe5ff151309818012f"},
     {"path": "v1/protocol.json", "profile": "core.protocol-1", "category": "wire", "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"},
     {"path": "v1/reliability.json", "profile": "core.reliability-1", "category": "execution", "sha256": "24a0eb39c1094957b41a90b2cf6ce73ea26a233e7252344f23d25a98448cba68"},

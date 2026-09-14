@@ -9,6 +9,7 @@ use Naatre\Sdk\Generated\Operations;
 use Naatre\Sdk\Generated\Status;
 use Naatre\Sdk\Pagination\Page;
 use Naatre\Sdk\Pagination\Paginator;
+use Naatre\Sdk\Protocol\Operation;
 use Naatre\Sdk\Scalar\Bytes;
 use Naatre\Sdk\Scalar\Decimal;
 use Naatre\Sdk\Scalar\Int64;
@@ -48,6 +49,7 @@ function rejects(callable $function, string $code): void
 $fixturePath = dirname(__DIR__, 3) . '/conformance/v1/php-sdk.json';
 $fixture = json_decode((string) file_get_contents($fixturePath), true, 512, JSON_THROW_ON_ERROR);
 check($fixture['profile'] === 'sdk.php.core-1', 'profile');
+check($fixture['sharedFixtureConsumers'] === ['psr18', 'symfony-issue-79', 'laravel-issue-79'], 'shared integration fixtures');
 
 check((string) new Int64('-9223372036854775808') === '-9223372036854775808', 'int64 minimum');
 check((string) new UInt64('18446744073709551615') === '18446744073709551615', 'uint64 maximum');
@@ -96,7 +98,8 @@ check(count($partial->errors) === 1 && !$partial->complete, 'partial errors');
 check($partial->data->later->presence === Presence::Pending, 'pending field');
 
 $factory = new TestFactory();
-$response = new TestResponse(['content-type' => Psr18Client::RESPONSE_MEDIA_TYPE], '{"complete":true,"data":{"profile":{"display":"Ada"}}}');
+$unaryFixture = $fixture['wireFixtures']['unary4xx'];
+$response = new TestResponse(['content-type' => $unaryFixture['contentType']], $unaryFixture['response'], $unaryFixture['status']);
 $http = new TestHttpClient($response);
 $client = new Psr18Client(
     'https://example.test/v1/execute',
@@ -106,9 +109,17 @@ $client = new Psr18Client(
     static fn (): array => ['Authorization' => 'Bearer local-fixture'],
 );
 $unary = $client->execute($operation, 1250);
-check($unary->complete && $http->request?->getHeaderLine('Naatre-Timeout-Ms') === '1250', 'deadline header');
+check($response->getStatusCode() === 422 && $unary->complete, 'valid 4xx response decoded');
+check($http->request?->getHeaderLine('Naatre-Timeout-Ms') === '1250', 'deadline header');
 check($http->request?->getHeaderLine('Authorization') === 'Bearer local-fixture', 'auth hook');
 check(!$response->body->isReadable(), 'response body closed');
+
+$retryResponse = new TestResponse(['content-type' => $unaryFixture['contentType']], $unaryFixture['response'], $unaryFixture['status']);
+$retryHTTP = new TestHttpClient($retryResponse, 1);
+$retryClient = new Psr18Client('https://example.test/v1/execute', $retryHTTP, $factory, $factory);
+check($retryClient->execute($operation, maximumAttempts: 2)->complete && $retryHTTP->attempts === 2, 'query retry');
+$mutation = new Operation('UpdateAccount', 'mutation', $operation->persistedDigest, new ObjectValue(), static fn (ObjectValue $data): ObjectValue => $data);
+rejects(static fn (): mixed => $retryClient->execute($mutation, maximumAttempts: 2), 'CLIENT_RETRY_INVALID');
 
 $pages = new Paginator(static fn (?string $cursor): Page => $cursor === null ? new Page(['a'], 'next') : new Page(['b'], null));
 check(iterator_to_array($pages->items()) === ['a', 'b'], 'pagination');
