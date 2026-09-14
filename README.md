@@ -36,6 +36,8 @@ evidence must be described as planned.
   deterministic dataclass bindings for `sdk.python.core-1`.
 - `sdk/rust`: runtime-neutral Rust client ownership traits, lossless scalar
   wrappers, and deterministic serde operation bindings for `sdk.rust.core-1`.
+- `sdk/jvm`: Java 17 wire/client core, deterministic Java and Kotlin bindings,
+  and cancellation-safe coroutine and Flow views for `sdk.jvm.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.

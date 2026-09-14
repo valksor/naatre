@@ -461,8 +461,8 @@ func ensureSafeParents(root, parent string) error {
 }
 
 func writeArtifactAtomic(target string, content []byte) error {
-	if info, err := os.Lstat(target); err == nil && info.IsDir() {
-		return errors.New("artifact target is a directory")
+	if info, err := os.Lstat(target); err == nil && (info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+		return errors.New("artifact target is not a regular file")
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

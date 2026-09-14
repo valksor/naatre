@@ -13,7 +13,7 @@
     {
       "language": "go",
       "path": "generator/generator.go",
-      "sha256": "95a2bff82fa4155e5cc83a48c3ca2bf28fd953517e5e0c25ae6dd9ec4d11a5d8"
+      "sha256": "00008161b0fae40d882241fe1e2a259bdd5894cf7b174d26d39779c066f2b646"
     },
     {
       "language": "javascript-typescript",

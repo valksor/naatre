@@ -86,6 +86,14 @@ artifacts. The Go runner regenerates both artifacts byte-for-byte and executes
 the shared generated request/result contract. The independent JavaScript runner
 advertises this Go-only profile as unsupported.
 
+`v1/jvm-sdk.json` pins `sdk.jvm.core-1`: one deterministic Java/Kotlin binding,
+explicit Java and Kotlin nullability, lossless numeric/time/UUID/byte wrappers,
+selected presence and partial-error states, open variants, cancellable future,
+blocking, coroutine and Flow views, terminal/truncation handling, and the JDK
+17/21/25 execution reports. Android and concrete HTTP, SSE, and WebSocket
+adapters remain explicitly unsupported until #82; #69 owns the combined
+language/runtime/transport matrix.
+
 `v1/typescript-sdk.json` pins `sdk.typescript.core-1`: the dependency-free
 plain-JavaScript runtime, exact scalar codecs, selected result states,
 prototype-safe decoding, persisted request/manifest behavior, deterministic

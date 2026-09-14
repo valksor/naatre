@@ -24,9 +24,11 @@ const implementations = new Map([
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
+  ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
 ]);
+const profileTimeouts = new Map([["sdk.jvm.core-1", 240_000]]);
 
 class ProtocolError extends Error {
   constructor(code, message) {
@@ -152,7 +154,7 @@ function runProfile(profile) {
   const executable = script.endsWith(".py") ? (process.env.PYTHON ?? "python3") : process.execPath;
   const executed = spawnSync(executable, [fileURLToPath(new URL(script, import.meta.url))], {
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: profileTimeouts.get(profile) ?? 30_000,
   });
   const evidence = evidenceForProfile(profile);
   if (executed.error || executed.status !== 0) {

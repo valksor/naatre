@@ -18,4 +18,7 @@ vendor/
 __pycache__/
 *.py[cod]
 target/
+sdk/jvm/.gradle/
+sdk/jvm/build/
+sdk/jvm/target/
 *.test
