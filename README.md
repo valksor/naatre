@@ -44,6 +44,10 @@ evidence must be described as planned.
   [Go registry contract](docs/registry.md) and
   [process-hosting guide](docs/process-hosting.md). Production distributed
   federation planning and transport integration remain owned by #109.
+- `observability`: optional OpenTelemetry trace, metric, and log export plus
+  application-owned transactional audit/outbox admission for
+  `operations.observability-integrations-go-1`; see the
+  [integration guide](docs/observability-integrations.md).
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the
@@ -58,10 +62,10 @@ evidence must be described as planned.
   full cross-language compatibility certification remains planned.
 
 Dependencies point inward in that order: client packages use only portable
-protocol contracts; reflection adapters, transports, other SDKs, and example
-packages may use the public protocol/schema/runtime contracts. Portable schema,
-protocol, runtime, and client packages never depend on an optional reflection
-adapter or application transport.
+protocol contracts; observability and reflection adapters, transports, other
+SDKs, and example packages may use the public protocol/schema/runtime
+contracts. Portable schema, protocol, runtime, and client packages never
+depend on an optional adapter or application transport.
 
 ## Development
 
