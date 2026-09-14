@@ -34,6 +34,8 @@ evidence must be described as planned.
 - `sdk/python`: dependency-free typed Python 3.11-3.14 client core, sync and
   async transport protocols, lossless scalar wrappers, SSE lifecycle, and
   deterministic dataclass bindings for `sdk.python.core-1`.
+- `sdk/rust`: runtime-neutral Rust client ownership traits, lossless scalar
+  wrappers, and deterministic serde operation bindings for `sdk.rust.core-1`.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
@@ -89,6 +91,10 @@ go test ./...
 go test -race ./...
 golangci-lint run
 govulncheck ./...
+cargo +stable fmt --manifest-path sdk/rust/Cargo.toml --check
+cargo +stable clippy --manifest-path sdk/rust/Cargo.toml --all-targets --all-features --locked -- -D warnings
+cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --no-default-features --locked
+cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --all-features --locked
 ```
 
 Generated files are committed only when `go generate ./...` reproduces them

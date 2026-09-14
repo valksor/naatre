@@ -50,10 +50,11 @@ node conformance/independent/runner.mjs --http=127.0.0.1:8080
 ```
 
 It executes the suite-integrity profile, the independent scalar and
-canonicalization profiles, and the JavaScript/TypeScript core and adapter SDK
-profiles. The standalone reliability script checks the portable reliability
-fixture contract but does not advertise execution of runtime reliability
-semantics. All other profiles are discovered
+canonicalization profiles, the JavaScript/TypeScript core and adapter SDK
+profiles, and the runtime-neutral Rust SDK core profile through its checked
+Cargo conformance target. The standalone reliability script checks the portable
+reliability fixture contract but does not advertise execution of runtime
+reliability semantics. All other profiles are discovered
 and reported explicitly as unsupported. The final advertised-language and
 cross-profile execution matrix belongs to issues #69 and #70.
 

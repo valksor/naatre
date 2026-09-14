@@ -17,4 +17,5 @@ vendor/
 .venv/
 __pycache__/
 *.py[cod]
+target/
 *.test

@@ -23,6 +23,7 @@ const implementations = new Map([
   ["sdk.generation-1", "verify-generator.mjs"],
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
+  ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
 ]);

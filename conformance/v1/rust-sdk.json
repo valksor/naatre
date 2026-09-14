@@ -1,0 +1,85 @@
+{
+  "profile": "sdk.rust.core-1",
+  "fixtureSuite": "1.0.0",
+  "generatorVersion": "naatre.generator.rust-sdk-1",
+  "runtimeVersion": "naatre.rust.runtime-neutral-1",
+  "package": {
+    "name": "naatre-sdk",
+    "edition": "2024",
+    "minimumRust": "1.85.0",
+    "defaultFeatures": [],
+    "features": {
+      "generator": "deterministic bindings and persisted manifest generation"
+    }
+  },
+  "featureMatrix": [
+    {"toolchain": "1.85.0", "features": "none", "command": "cargo check --no-default-features --locked"},
+    {"toolchain": "1.85.0", "features": "default", "command": "cargo test --locked"},
+    {"toolchain": "1.85.0", "features": "all", "command": "cargo test --all-features --locked"},
+    {"toolchain": "stable", "features": "all", "command": "cargo clippy --all-targets --all-features --locked -- -D warnings"}
+  ],
+  "sources": {
+    "model": {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"},
+    "scalars": {"path": "conformance/v1/scalars.json", "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"}
+  },
+  "generated": {
+    "source": {"path": "sdk/rust/generated/operations.rs", "sha256": "125a8481d2849b9b608720d263f9b9d810ab27ef57cc6c632373547bb39e595f"},
+    "manifest": {"path": "sdk/rust/generated/operations.json", "sha256": "cb2eaa5054148503dd7fc457ff72809f457d3500919841f61f892e7ab5771b1b"}
+  },
+  "evidence": [
+    {"path": "sdk/rust/Cargo.toml", "sha256": "a8df1e0e68892a20681bb7a54b999ac3617c79dd8e7893cd7583757a9f91be00"},
+    {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
+    {"path": "sdk/rust/ci.sh", "sha256": "df78df28f38d170c8807608b62c64c646bc9eb8ee88c6b9240105d2a923c90c3"},
+    {"path": "sdk/rust/README.md", "sha256": "0b0f569766f6bf23a19fc0d7ab424bb3a05ecaa2dd12cba73a6bf790e6d27e09"},
+    {"path": "sdk/rust/generate.go", "sha256": "750816eba5d1856ed424b8483976c4dd100cf270f914818acc3a4d322a146b7b"},
+    {"path": "sdk/rust/src/lib.rs", "sha256": "307ffa80dd906880b7877b1afd235646952ec49caff00f2bc6e1a54e1b7c0a6a"},
+    {"path": "sdk/rust/src/scalar.rs", "sha256": "636ce87781aa5edab0aa8b91197e9ca0b9fb6fb3c27f7d866b07346e080b012c"},
+    {"path": "sdk/rust/src/transport.rs", "sha256": "d312076dc2bf8b9de213b4ce63f5bd48e48cf93da46ae97921f8b96a384968e5"},
+    {"path": "sdk/rust/src/generator.rs", "sha256": "8d68bfeca88f1bac858db3319fba8559e75f28db2a243d4e377a01808c886b1c"},
+    {"path": "sdk/rust/src/bin/generator.rs", "sha256": "1a430a08e2516830bf97557b7534f4c3f239a212b52cb072484624c33fc2928a"},
+    {"path": "sdk/rust/tests/conformance.rs", "sha256": "bd7c8d641e2e86c08bc4d0ebb28e4d02d558bac85f25330bc17b509016297655"},
+    {"path": "conformance/independent/verify-rust-sdk.mjs", "sha256": "9ff391232f0449eda6f73bde524c10f3dad389039d398eb9688bece3e52eea22"}
+  ],
+  "ownership": {
+    "executor": "caller-selected",
+    "transport": "client-owned-static-send-sync",
+    "requestDrop": "cancel-token-and-drop-transport-future",
+    "streamDrop": "cancel-token-and-drop-transport-stream",
+    "detachedTasks": "adapter-retains-abort-and-join-ownership",
+    "result": "caller-owned-send-when-schema-permits"
+  },
+  "vectors": [
+    "byte-identical-generation",
+    "msrv-default-and-all-feature-builds",
+    "missing-null-value-round-trip",
+    "optional-non-null-rejects-explicit-null",
+    "missing-null-pending-present-failed-skipped-results",
+    "open-enum-unknown-raw-value",
+    "open-union-unknown-raw-discriminator-and-value",
+    "lossless-int64-uint64-bigint-decimal-timestamp-duration-uuid-bytes",
+    "timestamp-year-and-nanosecond-boundaries",
+    "persisted-hash-and-request-parity",
+    "partial-data-and-structured-errors",
+    "duplicate-truncated-oversized-response-rejection",
+    "request-stream-drop-cancellation-and-resource-release",
+    "detached-task-cancellation-token",
+    "bounded-fallible-stream-frames",
+    "generated-send-sync-assertions",
+    "fallible-cursor-pagination-values"
+  ],
+  "limits": {
+    "maximumResponseBytes": 8388608,
+    "maximumFrameBytes": 1048576,
+    "numericRepresentation": "canonical-lossless-strings",
+    "timestampPrecision": "nanoseconds"
+  },
+  "unsupported": [
+    "tokio-adapter",
+    "http-adapter",
+    "sse-adapter",
+    "websocket-adapter",
+    "framework-server-bindings",
+    "full-language-matrix-certification"
+  ]
+}
