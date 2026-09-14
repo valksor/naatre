@@ -1,0 +1,347 @@
+{
+  "profile": "suite.compatibility-1",
+  "matrixVersion": "1.0.0",
+  "profileRegistryVersion": "1.0.0",
+  "specVersion": "1",
+  "fixtureVersion": "1.0.0",
+  "reportProtocol": "naatre.conformance.report-1",
+  "releaseProfile": "release.stable-1",
+  "executionOwnerIssue": 69,
+  "publicationOwnerIssue": 69,
+  "releaseStatus": "awaiting-complete-evidence",
+  "mandatoryStableEvidence": [
+    {
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "runtime.execution-1",
+      "report": null
+    },
+    {
+      "implementation": "@naatre/sdk",
+      "language": "javascript-typescript",
+      "profile": "sdk.client-1",
+      "report": null
+    }
+  ],
+  "integrationPaths": [
+    {
+      "source": {
+        "implementation": "naatre-go",
+        "language": "go",
+        "kind": "gateway"
+      },
+      "destination": {
+        "implementation": "naatre-php-worker",
+        "language": "php",
+        "kind": "worker"
+      },
+      "profile": "worker.remote-1",
+      "status": "planned",
+      "executionOwnerIssue": 69,
+      "report": null
+    },
+    {
+      "source": {
+        "implementation": "naatre-go",
+        "language": "go",
+        "kind": "gateway"
+      },
+      "destination": {
+        "implementation": "naatre-python-worker",
+        "language": "python",
+        "kind": "worker"
+      },
+      "profile": "worker.remote-1",
+      "status": "planned",
+      "executionOwnerIssue": 69,
+      "report": null
+    },
+    {
+      "source": {
+        "implementation": "naatre-go",
+        "language": "go",
+        "kind": "gateway"
+      },
+      "destination": {
+        "implementation": "naatre-javascript-typescript-worker",
+        "language": "javascript-typescript",
+        "kind": "worker"
+      },
+      "profile": "worker.remote-1",
+      "status": "planned",
+      "executionOwnerIssue": 69,
+      "report": null
+    },
+    {
+      "source": {
+        "implementation": "naatre-go",
+        "language": "go",
+        "kind": "gateway"
+      },
+      "destination": {
+        "implementation": "naatre-rust-worker",
+        "language": "rust",
+        "kind": "worker"
+      },
+      "profile": "worker.remote-1",
+      "status": "planned",
+      "executionOwnerIssue": 69,
+      "report": null
+    }
+  ],
+  "implementations": [
+    {
+      "implementation": "naatre-go",
+      "language": "go",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1",
+        "transport.http.server-1",
+        "runtime.execution-1",
+        "transport.streaming-1",
+        "runtime.persisted-1",
+        "schema.tooling-1",
+        "runtime.federation-1",
+        "runtime.extensions-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "@naatre/sdk",
+      "language": "javascript-typescript",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1",
+        "transport.streaming-1",
+        "schema.tooling-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-php",
+      "language": "php",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-python",
+      "language": "python",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-rust",
+      "language": "rust",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-jvm",
+      "language": "jvm",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-dotnet",
+      "language": "dotnet",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-swift",
+      "language": "swift",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-dart",
+      "language": "dart",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    },
+    {
+      "implementation": "naatre-ruby",
+      "language": "ruby",
+      "authority": "official",
+      "status": "planned",
+      "plannedProfiles": [
+        "wire.codec-1",
+        "sdk.client-1"
+      ],
+      "claims": [],
+      "environment": {
+        "operatingSystems": [],
+        "architectures": [],
+        "runtimeVersions": [],
+        "featureFlags": [],
+        "wireTransports": [],
+        "streamTransports": [],
+        "scalarPrecision": [],
+        "cancellationCapabilities": []
+      },
+      "reports": []
+    }
+  ],
+  "thirdPartyImplementations": [],
+  "thirdPartySubmission": {
+    "status": "open",
+    "reportSchema": "profile-report.schema.json",
+    "requiredMetadata": [
+      "implementation name/version",
+      "spec version",
+      "profile registry version",
+      "fixture revision",
+      "schema revision",
+      "operator",
+      "reproducible command",
+      "artifact digests",
+      "OS",
+      "architecture",
+      "runtime version",
+      "feature flags",
+      "wire transports",
+      "stream transports",
+      "scalar precision",
+      "cancellation capabilities"
+    ],
+    "rule": "A third-party row is published only from a machine-verifiable report; repository location or self-declared partial execution is not certification."
+  }
+}

@@ -89,19 +89,21 @@
     },
     "36": {
       "issue": 36,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 36,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "suite.profiles-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "suite.profiles-1"
+        ]
       }
     },
     "37": {

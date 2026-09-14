@@ -17,6 +17,13 @@ those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
 execution (#69 and #70).
 
+`v1/profiles.json` defines the versioned certification profiles, their exact
+normative clauses and fixture digests, eligible evidence roles and paths, and
+stable-release requirements. `v1/compatibility.json` is the public compatibility
+matrix; unevidenced rows remain planned until #69 executes and publishes them.
+See [PROFILES.md](PROFILES.md) for claim, skip, version-skew, report, and
+publication rules.
+
 `v1/interactions.json` fixes the authorization/cache, conditional/fragment,
 sequential-write/loader, partial-data/generated-type, remote-cancellation, and
 transaction/idempotency/outbox process-death boundaries. It also specifies a
@@ -50,6 +57,7 @@ checks with the CI-pinned Node 24.21.0 toolchain:
 node conformance/independent/scalars.mjs
 node conformance/independent/canonical.mjs
 node conformance/independent/reliability.mjs
+node conformance/independent/profiles.mjs
 node conformance/independent/verify-generator.mjs
 ```
 

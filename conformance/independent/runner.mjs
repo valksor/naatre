@@ -14,6 +14,7 @@ const conformanceURL = new URL("../", import.meta.url);
 const suite = JSON.parse(readFileSync(suiteURL, "utf8"));
 const implementations = new Map([
   ["suite.contract-1", null],
+  ["suite.profiles-1", "profiles.mjs"],
   ["suite.supervision-1", "supervise.mjs"],
   ["core.scalar.c14n-1", "scalars.mjs"],
   ["core.interop.c14n-1", "canonical.mjs"],
@@ -80,6 +81,10 @@ function resultShape(profile, status, fields = {}) {
   };
 }
 
+function failureStatus(error) {
+  return error instanceof ProtocolError ? "failed" : "infrastructure-failure";
+}
+
 function validateRequest(request) {
   requireObject(request, "request");
   requireKeys(request, ["protocol", "id", "command", "path", "profiles"], "request");
@@ -126,7 +131,7 @@ function handle(request) {
   } catch (error) {
     const code = error.code ?? "RUNNER_INTERNAL";
     return response(boundedString(request?.id, 128) ? request.id : "invalid", undefined, [
-      resultShape("runner", "error", {
+      resultShape("runner", failureStatus(error), {
         phase: "runner",
         code,
         diagnostics: [{ phase: "runner", code, message: safeMessage(error), source: {}, path: [] }],
@@ -147,7 +152,7 @@ function runProfile(profile) {
   });
   const evidence = evidenceForProfile(profile);
   if (executed.error || executed.status !== 0) {
-    return resultShape(profile, "failed", {
+    return resultShape(profile, executed.error ? "infrastructure-failure" : "failed", {
       phase: "runner",
       code: "PROFILE_FAILED",
       diagnostics: [{
@@ -187,6 +192,8 @@ function verifySuite() {
 function evidenceForProfile(profile) {
   const fixtureProfiles = profile === "suite.supervision-1"
     ? new Set(["suite.interactions-1"])
+    : profile === "suite.profiles-1"
+      ? new Set(["suite.profiles-1", "suite.compatibility-1"])
     : new Set([profile]);
   return suite.files
     .filter((file) => fixtureProfiles.has(file.profile))
@@ -246,7 +253,7 @@ async function startStdio(requirePass) {
     } catch (error) {
       const code = error.code ?? "RUNNER_INTERNAL";
       const id = boundedString(request?.id, 128) ? request.id : "invalid";
-      value = response(id, undefined, [resultShape("runner", "error", {
+      value = response(id, undefined, [resultShape("runner", failureStatus(error), {
         phase: "runner",
         code,
         diagnostics: [{ phase: "runner", code, message: safeMessage(error), source: {}, path: [] }],
@@ -317,7 +324,7 @@ function startHTTP(address) {
       } catch (error) {
         const code = error.code ?? "RUNNER_INTERNAL";
         const id = boundedString(decoded?.id, 128) ? decoded.id : "invalid";
-        return writeHTTP(reply, 400, response(id, undefined, [resultShape("runner", "error", {
+        return writeHTTP(reply, 400, response(id, undefined, [resultShape("runner", failureStatus(error), {
           phase: "runner",
           code,
           diagnostics: [{ phase: "runner", code, message: safeMessage(error), source: {}, path: [] }],

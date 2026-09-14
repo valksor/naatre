@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	Protocol      = "naatre.conformance.runner-1"
-	MaxInputBytes = 1024 * 1024
+	Protocol       = "naatre.conformance.runner-1"
+	ReportProtocol = "naatre.conformance.report-1"
+	MaxInputBytes  = 1024 * 1024
 )
 
 var ErrRequiredProfileFailed = errors.New("one or more required conformance profiles did not pass")
@@ -108,9 +109,14 @@ type fixtureFile struct {
 }
 
 type manifest struct {
-	FixtureVersion string        `json:"fixtureVersion"`
-	RunnerProtocol string        `json:"runnerProtocol"`
-	Files          []fixtureFile `json:"files"`
+	FixtureVersion         string                 `json:"fixtureVersion"`
+	SpecVersion            string                 `json:"specVersion"`
+	RunnerProtocol         string                 `json:"runnerProtocol"`
+	ProfileRegistryVersion string                 `json:"profileRegistryVersion"`
+	ReportProtocol         string                 `json:"reportProtocol"`
+	Files                  []fixtureFile          `json:"files"`
+	NormativeSources       []suiteNormativeSource `json:"normativeSources"`
+	Languages              []string               `json:"languages"`
 }
 
 type Handler func(context.Context, Request) Result
@@ -130,12 +136,14 @@ func New(suitePath string) (*Runner, error) {
 	if err := json.Unmarshal(content, &suite); err != nil {
 		return nil, fmt.Errorf("decode suite manifest: %w", err)
 	}
-	if suite.FixtureVersion == "" || suite.RunnerProtocol != Protocol || len(suite.Files) == 0 {
+	if suite.FixtureVersion == "" || suite.SpecVersion == "" || suite.RunnerProtocol != Protocol ||
+		suite.ProfileRegistryVersion == "" || suite.ReportProtocol != ReportProtocol || len(suite.Files) == 0 {
 		return nil, errors.New("suite manifest has incompatible metadata")
 	}
 	root := filepath.Dir(filepath.Dir(suitePath))
 	runner := &Runner{manifest: suite, conformanceRoot: root, handlers: make(map[string]Handler)}
 	runner.handlers["suite.contract-1"] = runner.verifySuite
+	runner.handlers["suite.profiles-1"] = runner.verifyProfileRegistry
 	runner.handlers[goClientProfile] = runner.verifyGoClient
 	runner.handlers[goSDKProfile] = runner.verifyGoSDK
 	return runner, nil
@@ -172,7 +180,7 @@ func (r *Runner) Handle(ctx context.Context, request Request) Response {
 		normalizeResult(&result)
 		if !validResult(result) {
 			result = failureResult(profile, "INVALID_RUNNER_RESULT", "")
-			result.Status = "error"
+			result.Status = "infrastructure-failure"
 		}
 		response.Results = append(response.Results, result)
 	}
@@ -356,7 +364,9 @@ func (r *Runner) errorResponse(id string, err error) Response {
 		message = protocolFailure.message
 	}
 	result := failureResult("runner", code, "")
-	result.Status = "error"
+	if protocolFailure == nil {
+		result.Status = "infrastructure-failure"
+	}
 	result.Diagnostics[0].Message = message
 	response := r.response(id, nil)
 	response.Results = []Result{result}
@@ -563,7 +573,7 @@ func validJSONMediaParameters(parameters map[string]string) bool {
 }
 
 func validResult(result Result) bool {
-	if !validBoundedString(result.Profile, 128) || !slices.Contains([]string{"passed", "failed", "unsupported", "error"}, result.Status) || !utf8.ValidString(result.Reason) || utf8.RuneCountInString(result.Reason) > 1024 || !utf8.ValidString(result.CanonicalBytes) {
+	if !validBoundedString(result.Profile, 128) || !slices.Contains([]string{"passed", "failed", "unsupported", "invalid-skip", "infrastructure-failure"}, result.Status) || !utf8.ValidString(result.Reason) || utf8.RuneCountInString(result.Reason) > 1024 || !utf8.ValidString(result.CanonicalBytes) {
 		return false
 	}
 	if _, err := json.Marshal(result); err != nil || !allStringsValid(reflect.ValueOf(result), make(map[visit]bool)) {
@@ -795,8 +805,9 @@ func failureResult(profile, code, fixture string) Result {
 }
 
 func normalizeResult(result *Result) {
-	if result.Status != "passed" && result.Status != "failed" && result.Status != "unsupported" && result.Status != "error" {
+	if result.Status != "passed" && result.Status != "failed" && result.Status != "unsupported" && result.Status != "invalid-skip" && result.Status != "infrastructure-failure" {
 		*result = failureResult(result.Profile, "INVALID_RUNNER_RESULT", "")
+		result.Status = "infrastructure-failure"
 	}
 	if result.Capabilities == nil {
 		result.Capabilities = []string{}
@@ -822,6 +833,7 @@ func invokeHandler(ctx context.Context, handler Handler, request Request) (resul
 	defer func() {
 		if recover() != nil {
 			result = failureResult("", "PROFILE_PANIC", "")
+			result.Status = "infrastructure-failure"
 		}
 	}()
 	return handler(ctx, request)

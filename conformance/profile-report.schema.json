@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naatre.dev/conformance/profile-report-1.schema.json",
+  "title": "Naatre conformance profile evidence report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "run", "versions", "implementation", "environment", "path", "claims", "results"],
+  "properties": {
+    "protocol": {"const": "naatre.conformance.report-1"},
+    "run": {"$ref": "#/$defs/run"},
+    "versions": {"$ref": "#/$defs/versions"},
+    "implementation": {"$ref": "#/$defs/implementation"},
+    "environment": {"$ref": "#/$defs/environment"},
+    "path": {"$ref": "#/$defs/path"},
+    "claims": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/claim"}
+    },
+    "results": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/result"}
+    }
+  },
+  "$defs": {
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/+-]*$"},
+    "boundedString": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stringSet": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "operator", "command", "artifacts"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "operator": {"$ref": "#/$defs/identifier"},
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "sha256"],
+            "properties": {
+              "name": {"$ref": "#/$defs/identifier"},
+              "sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spec", "fixtures", "profiles", "runnerProtocol", "canonicalization", "schemaRevision"],
+      "properties": {
+        "spec": {"const": "1"},
+        "fixtures": {"type": "string", "minLength": 1, "maxLength": 64},
+        "profiles": {"type": "string", "minLength": 1, "maxLength": 64},
+        "runnerProtocol": {"const": "naatre.conformance.runner-1"},
+        "canonicalization": {"const": "c14n-1"},
+        "schemaRevision": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "language", "runtimeVersion", "specVersion", "fixtureVersion", "profileVersion", "schemaRevision"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "version": {"$ref": "#/$defs/identifier"},
+        "language": {"enum": ["go", "javascript-typescript", "php", "python", "rust", "jvm", "dotnet", "swift", "dart", "ruby", "other"]},
+        "runtimeVersion": {"$ref": "#/$defs/identifier"},
+        "specVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+        "fixtureVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+        "profileVersion": {"type": "string", "minLength": 1, "maxLength": 64},
+        "schemaRevision": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "featureFlags", "wireTransports", "streamTransports", "scalarPrecision", "cancellationCapabilities"],
+      "properties": {
+        "os": {"enum": ["linux", "darwin", "windows", "other"]},
+        "architecture": {"enum": ["amd64", "arm64", "other"]},
+        "featureFlags": {"$ref": "#/$defs/stringSet"},
+        "wireTransports": {"$ref": "#/$defs/stringSet"},
+        "streamTransports": {"$ref": "#/$defs/stringSet"},
+        "scalarPrecision": {"$ref": "#/$defs/stringSet"},
+        "cancellationCapabilities": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language"],
+      "properties": {
+        "kind": {"enum": ["sdk", "codec", "gateway", "worker", "http-server", "native-runtime", "stream-transport", "persisted-store", "schema-tool", "federation-coordinator", "extension-host"]},
+        "language": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "destination"],
+      "properties": {
+        "source": {"$ref": "#/$defs/endpoint"},
+        "destination": {"$ref": "#/$defs/endpoint"}
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "capabilities"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/identifier"},
+        "capabilities": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture", "sha256"],
+      "properties": {
+        "fixture": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "skip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture", "reason"],
+      "properties": {
+        "fixture": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "evidenceRole", "status", "capabilities", "executedClauses", "evidence", "diagnostics"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/identifier"},
+        "evidenceRole": {"enum": ["wire-codec", "client", "http-server", "execution-runtime", "streaming-transport", "persisted-operations", "schema-tooling", "federation", "extensions", "remote-worker", "release-matrix"]},
+        "status": {"enum": ["passed", "failed", "unsupported", "invalid-skip", "infrastructure-failure"]},
+        "capabilities": {"$ref": "#/$defs/stringSet"},
+        "capability": {"$ref": "#/$defs/identifier"},
+        "executedClauses": {"$ref": "#/$defs/stringSet"},
+        "evidence": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/evidence"}},
+        "diagnostics": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/diagnostic"}},
+        "skip": {"$ref": "#/$defs/skip"}
+      }
+    }
+  }
+}
