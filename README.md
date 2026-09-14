@@ -21,6 +21,8 @@ evidence must be described as planned.
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
+- `client`: runtime-independent Go SDK request values and bounded unary HTTP
+  execution for the `sdk.go.client-1` profile.
 - `schema`: portable types, values, scalar codecs, portable validation and
   strict JSON Schema 2020-12 constraint mappings, and deterministic federation
   composition from operator-pinned service manifests.
@@ -49,10 +51,11 @@ evidence must be described as planned.
 - `sdk`: generated client mapping slices; full official and
   compatibility-certified client implementations remain planned.
 
-Dependencies point inward in that order: reflection adapters, transports,
-SDKs, and example packages may use the public protocol/schema/runtime
-contracts; portable schema, protocol, and runtime packages never depend on the
-optional reflection adapter or an application transport.
+Dependencies point inward in that order: client packages use only portable
+protocol contracts; reflection adapters, transports, other SDKs, and example
+packages may use the public protocol/schema/runtime contracts. Portable schema,
+protocol, runtime, and client packages never depend on an optional reflection
+adapter or application transport.
 
 ## Development
 

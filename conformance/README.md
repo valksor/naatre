@@ -65,6 +65,12 @@ HTTP/SSE/WebSocket cancellation claims. It does not certify an official SDK;
 those implementations and the complete matrix remain owned by their extracted
 issues and #69.
 
+`v1/go-client.json` pins `sdk.go.client-1`, its exact Go module and source
+revision, the shared generator model/output inputs, unary HTTP limits, redirect
+credential policy, partial-result behavior, and unsupported higher-level
+capabilities. The Go runner executes this profile; the independent JavaScript
+runner advertises it as unsupported.
+
 `v1/validation.json` fixes the `core.validation-1` typed constraint vocabulary,
 exact numeric comparisons, Unicode-scalar and byte lengths, RE2-compatible
 full/search patterns, annotation/assertion formats, canonical uniqueness,

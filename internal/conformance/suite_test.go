@@ -470,13 +470,13 @@ func TestGoRunnerProtocol(t *testing.T) {
 			Source:      conformancerunner.Endpoint{Kind: "sdk", Language: "go"},
 			Destination: conformancerunner.Endpoint{Kind: "native-runtime", Language: "go"},
 		},
-		Profiles: []string{"suite.contract-1", "core.http-1"},
+		Profiles: []string{"suite.contract-1", "sdk.go.client-1", "core.http-1"},
 	}
 	response := runner.Handle(context.Background(), request)
-	if response.Protocol != conformancerunner.Protocol || response.FixtureVersion == "" || len(response.Results) != 2 {
+	if response.Protocol != conformancerunner.Protocol || response.FixtureVersion == "" || len(response.Results) != 3 {
 		t.Fatalf("Go runner response = %#v", response)
 	}
-	if response.Results[0].Status != "passed" || response.Results[1].Status != "unsupported" {
+	if response.Results[0].Status != "passed" || response.Results[1].Status != "passed" || response.Results[2].Status != "unsupported" {
 		t.Fatalf("Go runner results = %#v", response.Results)
 	}
 
