@@ -55,8 +55,8 @@ an execution optimization inside one request and is not this transport profile.
   item waits for a released slot within its deadline rather than causing the
   complete envelope to be rejected merely because all slots are active.
   Process or tenant admission overload still follows the HTTP `503 OVERLOADED`
-  mapping before that item is admitted.
-  scheduling MAY reorder independent item completion only as allowed by
+  mapping before that item is admitted. Batch scheduling MAY reorder
+  independent item completion only as allowed by
   TBATCH-200. It never reorders sequential selections inside an item, changes
   mutation ordering inside an item, or turns serial work into parallel work.
 
