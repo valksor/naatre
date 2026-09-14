@@ -55,6 +55,9 @@ evidence must be described as planned.
   composition from operator-pinned service manifests.
 - `collectionquery`: optional provider-neutral typed filter evaluation, stable
   sorting, and parameterized SQLite translation for `collection.query-1`.
+- `mutation`: provider-neutral typed updates, exact-path JSON Patch validation,
+  opaque revisions, conditional writes, and declared read-consistency modes for
+  `mutation.update-1`.
 - `generator`: versioned language-neutral generator-model validation,
   deterministic reference output, semantic manifest hashing, and output-root
   containment for `sdk.generation-1`.

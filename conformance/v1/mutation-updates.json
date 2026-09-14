@@ -1,0 +1,34 @@
+{
+  "profile": "mutation.update-1",
+  "capabilities": ["mutation.typed-update-1", "mutation.json-patch-1", "mutation.read-consistency-1"],
+  "editActions": ["set", "remove", "list-append", "list-insert", "list-replace", "list-remove", "map-set", "map-remove"],
+  "preconditionCodes": ["PRECONDITION_REQUIRED", "REVISION_CONFLICT", "ENTITY_NOT_FOUND", "PRECONDITION_UNSUPPORTED", "UNAUTHORIZED"],
+  "updateCases": [
+    {"name": "omitted-field-unchanged", "input": {"name": {"set": "new"}}, "expected": {"name": "new", "nickname": "nick"}, "polarity": "positive"},
+    {"name": "explicit-null-is-value", "input": {"nickname": {"set": null}}, "expected": {"nickname": null}, "polarity": "positive"},
+    {"name": "removal-is-absence", "input": {"nickname": {"remove": true}}, "expectedAbsent": ["nickname"], "polarity": "positive"},
+    {"name": "forbidden-property", "input": {"administrator": {"set": true}}, "code": "FORBIDDEN_PROPERTY", "path": ["input", "administrator"], "polarity": "negative"},
+    {"name": "invalid-patch-path", "patch": [{"op": "replace", "path": "/profile/private", "value": "leak"}], "code": "INVALID_PATCH_PATH", "path": ["patch", 0], "polarity": "negative"},
+    {"name": "list-index-conflict", "current": {"tags": ["only"]}, "input": {"tags": {"list-remove": {"index": 1}}}, "expectedRevision": "committed-r1", "code": "LIST_INDEX_CONFLICT", "path": ["input", "tags", "list-remove"], "polarity": "negative"},
+    {"name": "duplicate-typed-target", "edits": [{"field": "tags", "list-remove": {"index": 1}}, {"field": "tags", "list-replace": {"index": 1, "value": "new"}}], "code": "DUPLICATE_EDIT", "path": ["edits", 1], "polarity": "negative"},
+    {"name": "patch-test-precondition", "patch": [{"op": "test", "path": "/name", "value": "old"}, {"op": "replace", "path": "/name", "value": "new"}], "expected": {"name": "new"}, "polarity": "positive"}
+  ],
+  "concurrencyCases": [
+    {"name": "same-revision-at-most-one-commit", "requests": 2, "sharedExpectedRevision": true, "maximumSuccessfulCommits": 1, "loserCode": "REVISION_CONFLICT"},
+    {"name": "precondition-failure-no-write-no-leak", "code": "REVISION_CONFLICT", "protectedWrites": 0, "forbiddenDetails": ["currentValue", "currentRevision", "providerKey"]},
+    {"name": "idempotency-replay-before-revision-check", "firstResult": "committed-r2", "currentRevision": "committed-r3", "replayResult": "committed-r2", "additionalWrites": 0}
+  ],
+  "readConsistencyCases": [
+    {"name": "best-effort-default", "requested": "", "effective": "best-effort"},
+    {"name": "snapshot-remains-stable", "requested": "snapshot", "firstRevision": "committed-r1", "concurrentCommit": "committed-r2", "secondRevision": "committed-r1"},
+    {"name": "read-your-writes-observes-commit", "requested": "read-your-writes", "afterRevision": "committed-r2", "observesAfterRevisionOrLater": true},
+    {"name": "unsupported-guarantee-is-explicit", "requested": "snapshot", "code": "READ_CONSISTENCY_UNSUPPORTED"}
+  ],
+  "commitBoundaryCases": [
+    {"name": "rollback-preserves-prior-revision", "priorRevision": "committed-r1", "attemptedRevision": "tentative-r2", "publishedRevision": "committed-r1", "publishesTentativeData": false},
+    {"name": "cache-invalidation-after-commit", "committedRevision": "committed-r2", "fault": "cache-invalidation", "publishedRevision": "committed-r2", "publishesTentativeData": false},
+    {"name": "stream-truncation-after-commit", "committedRevision": "committed-r2", "fault": "stream-truncation", "publishedRevision": "committed-r2", "publishesTentativeData": false},
+    {"name": "unknown-commit-withholds-revision", "fault": "commit-unknown", "effect": "indeterminate", "publishedRevision": "", "publishesTentativeData": false}
+  ],
+  "ownership": {"portableContract": 52, "completeSdkMatrix": 69, "sdkEvidenceRequiredPerLanguage": true}
+}

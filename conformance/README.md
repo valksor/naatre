@@ -13,6 +13,7 @@ Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
 maps all 535 stable normative clauses and all 110 repository issues to exact
 maps all 525 stable normative clauses and all 110 repository issues to exact
+maps all 520 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -61,6 +62,12 @@ node conformance/independent/reliability.mjs
 node conformance/independent/profiles.mjs
 node conformance/independent/verify-generator.mjs
 ```
+
+`v1/mutation-updates.json` owns the language-neutral `mutation.update-1`
+matrix: missing/null/removal, exact patch paths, optimistic concurrency,
+idempotency replay ordering, read consistency, and committed-revision
+boundaries. Each SDK records its own implementation evidence; issue #69 owns
+the complete cross-language matrix.
 
 The `core.value-1` vectors cover schema-directed maps, lists, input objects,
 one-of activation, enum compatibility, and recursive value limits.
