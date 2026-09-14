@@ -132,6 +132,13 @@ provider parity. The Go runtime supplies HMAC-protected versioned cursors,
 pre-handler scope verification, key rotation and expiry, stable forward and
 backward paging, optional edge metadata, and separately costed `totalCount`.
 
+`v1/collection-query-generation.json` pins the independent JavaScript
+generator, its exact `collection.query-1` source fixture, the checked-in
+TypeScript filter/sort mapping, SQLite dependency revision, executed parity
+surface, and unsupported capability boundary. Its Go harness regenerates the
+artifact byte-for-byte, parses it through Node's TypeScript stripping mode,
+and executes hostile scalar, operator, collision, and output-drift vectors.
+
 `v1/mutations.json` fixes the `core.mutation-1` operation and named-group
 boundaries, commit uncertainty, rollback and savepoint faults, cancellation,
 outbox/after-commit ordering, external-effect compensation, audit stages, and

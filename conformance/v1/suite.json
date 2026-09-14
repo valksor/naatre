@@ -19,6 +19,7 @@
     {"path": "v1/canonical.json", "profile": "core.interop.c14n-1", "category": "canonical", "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"},
     {"path": "v1/core.json", "profile": "core.execution-scenarios-1", "category": "execution", "sha256": "2b4aaa94576a9e7ad5a5a25a0215ca63816d5a6f19aa479de8988676c7c322fb"},
     {"path": "v1/collections.json", "profile": "collection.page-1", "category": "execution", "sha256": "f5da9ca478e63cd763ef5189693a8ba9a83936d074613a769a5eab90b0190349"},
+    {"path": "v1/collection-query-generation.json", "profile": "collection.query.codegen-1", "category": "schema", "sha256": "bc25b56f735aeac41ee0bc7cc635055131edfdd2283dc575ee7ffb7c3fa3c872"},
     {"path": "v1/extensions.json", "profile": "core.extensions-1", "category": "evolution", "sha256": "2c300bf4304ca5c20b05727a23ee3654710eef085255432aa6824d0ea71243d8"},
     {"path": "v1/federation.json", "profile": "core.federation-1", "category": "execution", "sha256": "3e2e99f07612f5f8520b8e3d81be02b18c1f3dde657adc5463f94cee8900488a"},
     {"path": "v1/http.json", "profile": "core.http-1", "category": "transport", "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"},
@@ -365,7 +366,7 @@
     {"caseId": "issue.105", "issue": 105, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/105", "polarity": "mixed"}]},
     {"caseId": "issue.106", "issue": 106, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/106", "polarity": "mixed"}]},
     {"caseId": "issue.107", "issue": 107, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/107", "polarity": "mixed"}]},
-    {"caseId": "issue.108", "issue": 108, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/108", "polarity": "mixed"}]},
+    {"caseId": "issue.108", "issue": 108, "fixtureRefs": [{"path": "v1/collection-query-generation.json", "pointer": "", "polarity": "mixed"}, {"path": "v1/roadmap.json", "pointer": "/issues/108", "polarity": "mixed"}]},
     {"caseId": "issue.109", "issue": 109, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/109", "polarity": "mixed"}]},
     {"caseId": "issue.110", "issue": 110, "fixtureRefs": [{"path": "v1/roadmap.json", "pointer": "/issues/110", "polarity": "mixed"}]}
   ]

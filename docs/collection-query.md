@@ -8,11 +8,11 @@ server registration.
 
 The profile is available in the Go 1.27 reference packages `schema`,
 `collectionquery`, and `runtime`. The minimum provider evidence uses the pure-Go
-`modernc.org/sqlite` v1.58.0 driver. It proves the SQLite translation only; it
-does not advertise PostgreSQL, MySQL, full-text, geospatial, regex, remote
-provider, or generated SDK support. Those broader implementations and mappings
-belong to issue #108, and the complete advertised-language matrix belongs to
-issue #69.
+`modernc.org/sqlite` v1.58.0 driver. A dependency-free JavaScript generator
+also emits the checked-in TypeScript filter/sort mapping from the exact
+authorized descriptor. This slice does not advertise PostgreSQL, MySQL,
+full-text, geospatial, regex, remote providers, or a complete TypeScript SDK.
+The complete advertised-language matrix belongs to issue #69.
 
 ## Request shape
 
@@ -110,4 +110,6 @@ go test ./runtime -run TestTypedCollectionQueryCursorRejectsEveryScopeMismatch -
 ```
 
 The normative vectors are in `conformance/v1/collections.json`; their exact
-digest is pinned by `conformance/v1/suite.json`.
+digest is pinned by `conformance/v1/suite.json`. Generator, dependency, output,
+platform, parity, and unsupported-capability evidence is pinned by
+`conformance/v1/collection-query-generation.json`.

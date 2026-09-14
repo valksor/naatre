@@ -109,7 +109,7 @@ func (s *prepareState) predicate(input schema.CollectionFilterExpression, curren
 	if !current && !slices.Contains(field.Operators, input.Operator) {
 		return preparedExpression{}, unsupported("filter operator is not available")
 	}
-	if current && !scalarOperator(input.Operator) {
+	if current && !nestedOperatorCompatible(s.types, currentType, input.Operator) {
 		return preparedExpression{}, unsupported("nested filter operator is not available")
 	}
 	if optionalOperator(input.Operator) {
@@ -274,6 +274,25 @@ func scalarOperator(operator schema.FilterOperator) bool {
 	return slices.Contains([]schema.FilterOperator{
 		schema.FilterEqual, schema.FilterNotEqual, schema.FilterLess, schema.FilterLessEqual, schema.FilterGreater,
 		schema.FilterGreaterEqual, schema.FilterIn, schema.FilterNotIn,
+	}, operator)
+}
+
+func nestedOperatorCompatible(types schema.Snapshot, typeID schema.TypeID, operator schema.FilterOperator) bool {
+	descriptor, exists := types.Lookup(typeID)
+	if !exists || (descriptor.Kind != schema.ScalarType && descriptor.Kind != schema.EnumType) {
+		return false
+	}
+	if slices.Contains([]schema.FilterOperator{schema.FilterEqual, schema.FilterNotEqual, schema.FilterIn, schema.FilterNotIn}, operator) {
+		return true
+	}
+	if descriptor.Kind == schema.EnumType {
+		return slices.Contains([]schema.FilterOperator{schema.FilterLess, schema.FilterLessEqual, schema.FilterGreater, schema.FilterGreaterEqual}, operator)
+	}
+	return slices.Contains([]schema.ScalarKind{
+		schema.String, schema.ID, schema.Int32, schema.Float64, schema.Int64, schema.UInt64,
+		schema.BigInt, schema.Decimal, schema.Timestamp, schema.Duration, schema.UUID,
+	}, schema.ScalarKind(typeID)) && slices.Contains([]schema.FilterOperator{
+		schema.FilterLess, schema.FilterLessEqual, schema.FilterGreater, schema.FilterGreaterEqual,
 	}, operator)
 }
 

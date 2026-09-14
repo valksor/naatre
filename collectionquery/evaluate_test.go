@@ -83,6 +83,7 @@ func TestFilterPreflightRejectsHiddenUnsupportedAndOverBudgetBeforeEvaluation(t 
 		{name: "oversized membership", filter: predicate("User.age", schema.FilterIn, schema.Int64, `[1,2,3,4,5]`), code: collectionquery.CodeResourceExhausted},
 		{name: "deep predicate", filter: nestedNot(predicate("User.age", schema.FilterEqual, schema.Int64, `1`), 5), code: collectionquery.CodeResourceExhausted},
 		{name: "outer join from list scope", filter: schema.CollectionFilterExpression{Kind: schema.CollectionFilterAny, Field: "User.tags", Predicate: ptrFilter(predicate("User.name", schema.FilterEqual, schema.String, `"Ada"`))}, code: collectionquery.CodeUnsupported},
+		{name: "ordered Boolean list element", filter: schema.CollectionFilterExpression{Kind: schema.CollectionFilterAny, Field: "User.flags", Predicate: ptrFilter(predicate("@", schema.FilterGreater, schema.Boolean, `true`))}, code: collectionquery.CodeUnsupported},
 		{name: "trailing literal", filter: predicate("User.age", schema.FilterEqual, schema.Int64, `1 2`), code: collectionquery.CodeInvalid},
 	}
 	for _, test := range tests {
@@ -253,6 +254,7 @@ func queryContract() schema.CollectionQueryDescriptor {
 			{ID: "User.age", Path: []string{"age"}, Type: schema.TypeID(schema.Int64), Operators: []schema.FilterOperator{schema.FilterEqual, schema.FilterNotEqual, schema.FilterLess, schema.FilterLessEqual, schema.FilterGreater, schema.FilterGreaterEqual, schema.FilterIn, schema.FilterNotIn}, Cost: 1, Indexed: true, Sort: &schema.CollectionSortDescriptor{Directions: []schema.SortDirection{schema.SortAscending, schema.SortDescending}, Nulls: []schema.NullPlacement{schema.NullsFirst, schema.NullsLast}, Collation: "numeric", CaseSensitivity: "sensitive"}},
 			{ID: "User.name", Path: []string{"name"}, Type: schema.TypeID(schema.String), Nullable: true, Missing: true, Operators: []schema.FilterOperator{schema.FilterEqual, schema.FilterNotEqual, schema.FilterIsNull, schema.FilterIsNotNull, schema.FilterExists, schema.FilterNotExists, schema.FilterIn, schema.FilterNotIn}, Cost: 1, Indexed: true, Sort: &schema.CollectionSortDescriptor{Directions: []schema.SortDirection{schema.SortAscending, schema.SortDescending}, Nulls: []schema.NullPlacement{schema.NullsFirst, schema.NullsLast}, Collation: "unicode-code-point", CaseSensitivity: "sensitive"}},
 			{ID: "User.tags", Path: []string{"tags"}, Type: "Tags", ElementType: schema.TypeID(schema.String), Nullable: true, Missing: true, Operators: []schema.FilterOperator{schema.FilterAny, schema.FilterAll}, Cost: 2, Indexed: true},
+			{ID: "User.flags", Path: []string{"flags"}, Type: "Flags", ElementType: schema.TypeID(schema.Boolean), Operators: []schema.FilterOperator{schema.FilterAny, schema.FilterAll}, Cost: 1, Indexed: true},
 		},
 		TieBreaker: schema.CollectionTieBreakerDescriptor{Type: schema.TypeID(schema.ID), Collation: "unicode-code-point", CaseSensitivity: "sensitive"},
 		Limits:     schema.CollectionQueryLimits{MaxDepth: 4, MaxPredicates: 8, MaxMembership: 4, MaxSortKeys: 2, MaxCost: 8},
@@ -277,6 +279,7 @@ func queryTypes(t testing.TB) schema.Snapshot {
 	for _, descriptor := range []schema.TypeDescriptor{
 		{ID: "Status", Kind: schema.EnumType, Input: true, Output: true, EnumValues: []string{"ACTIVE", "DISABLED"}},
 		{ID: "Tags", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.String)},
+		{ID: "Flags", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.Boolean)},
 	} {
 		if err := catalog.Register(descriptor); err != nil {
 			t.Fatal(err)

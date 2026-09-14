@@ -1,0 +1,51 @@
+{
+  "profile": "collection.query.codegen-1",
+  "fixtureSuite": "1.0.0",
+  "source": {
+    "profile": "collection.query-1",
+    "path": "v1/collections.json",
+    "pointer": "/query/schema",
+    "sha256": "f5da9ca478e63cd763ef5189693a8ba9a83936d074613a769a5eab90b0190349"
+  },
+  "generator": {
+    "language": "javascript",
+    "runtime": "node",
+    "version": "collection-query-ts-1",
+    "path": "conformance/independent/generate-collection-query.mjs",
+    "sha256": "b660aad1c0373da3c91b5d66a0a2d5fa023e396a9fafb2d54a5d631a6fd069be"
+  },
+  "verifier": {
+    "path": "conformance/independent/verify-collection-query-generation.mjs",
+    "sha256": "d647bbd57a9c60396f02c255ab1fd5ab43742ec292d27c8bb2fa03ef1fa11b90"
+  },
+  "outputs": [
+    {
+      "language": "typescript",
+      "path": "sdk/typescript/generated/collection-query.ts",
+      "sha256": "8ed16c4ec768e64cbd9dc76108eb06f909387195c1d0693f286b236ef1443f91",
+      "runtimeDependency": "none",
+      "platforms": ["linux-amd64", "linux-arm64", "macos-amd64", "macos-arm64", "windows-amd64"],
+      "features": ["typed-literal-or-variable", "boolean-ast", "list-element-scope", "declared-field-operators", "ordered-sort", "null-placement"]
+    }
+  ],
+  "providerEvidence": {
+    "language": "go",
+    "provider": "sqlite",
+    "dependency": "modernc.org/sqlite@v1.58.0",
+    "commands": [
+      "go test ./collectionquery -count=1",
+      "go test -race ./collectionquery -count=1",
+      "go test ./runtime -run TestTypedCollectionQueryCursor -count=1",
+      "go test ./schema -run 'TestCollectionQuery|TestFilteredDiscovery' -count=1",
+      "go test ./internal/conformance -run TestCollectionQueryGeneratedTypeScriptEvidence -count=1"
+    ],
+    "parity": ["missing", "null", "empty-list", "unicode", "int64-boundaries", "stable-sort", "cursor-scope", "authorization", "adversarial-cost", "cancellation"],
+    "unsupported": ["regex", "full-text", "geo-within", "case-fold", "uint64", "bigint", "decimal", "custom-scalars", "postgresql", "mysql"]
+  },
+  "negativeCases": [
+    {"name": "unknown-scalar", "result": "generation-error"},
+    {"name": "generated-symbol-collision", "result": "generation-error"},
+    {"name": "unknown-operator", "result": "generation-error"},
+    {"name": "output-drift", "result": "digest-mismatch"}
+  ]
+}

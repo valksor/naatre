@@ -34,30 +34,27 @@ func TestSQLiteTranslatorKeepsSQLLikeLiteralsInBoundArguments(t *testing.T) {
 
 func TestSQLiteProviderRejectsUnavailableFieldsBeforeBackendInvocation(t *testing.T) {
 	t.Parallel()
-	backend := &countingQueryer{}
-	provider := collectionquery.SQLiteProvider{BaseQuery: `SELECT id FROM users`, Translator: sqliteTranslator()}
-	_, err := provider.Select(context.Background(), backend, queryTypes(t), queryContract(), predicate("User.salary", schema.FilterEqual, schema.Int64, `"1"`), nil, nil)
-	var diagnostic *collectionquery.Error
-	if !errors.As(err, &diagnostic) || diagnostic.Code != collectionquery.CodeUnsupported || backend.calls != 0 {
-		t.Fatalf("Select error=%v calls=%d", err, backend.calls)
-	}
-	if strings.Contains(strings.ToLower(err.Error()), "salary") {
-		t.Fatalf("safe provider error leaked hidden field: %v", err)
-	}
+	backend, err := selectSQLiteFailure(t, context.Background(), nil, predicate("User.salary", schema.FilterEqual, schema.Int64, `"1"`))
+	assertSQLiteFailure(t, err, backend, sqliteFailureExpectation{code: collectionquery.CodeUnsupported, forbidden: []string{"salary"}})
 }
 
-func TestSQLiteProviderWrapsBackendErrorsWithoutExposingDetails(t *testing.T) {
+func TestSQLiteProviderFailureSafety(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("driver leaked users.secret and SELECT text")
-	backend := &countingQueryer{err: cause}
-	provider := collectionquery.SQLiteProvider{BaseQuery: `SELECT id FROM users`, Translator: sqliteTranslator()}
-	_, err := provider.Select(context.Background(), backend, queryTypes(t), queryContract(), predicate("User.name", schema.FilterEqual, schema.String, `"Ada"`), nil, nil)
-	var diagnostic *collectionquery.Error
-	if !errors.As(err, &diagnostic) || diagnostic.Code != collectionquery.CodeProviderFailed || !errors.Is(err, cause) || backend.calls != 1 {
-		t.Fatalf("Select error=%v calls=%d", err, backend.calls)
+	tests := []struct {
+		name         string
+		ctx          context.Context
+		backendError error
+		want         sqliteFailureExpectation
+	}{
+		{name: "backend details", ctx: context.Background(), backendError: cause, want: sqliteFailureExpectation{code: collectionquery.CodeProviderFailed, cause: cause, calls: 1, forbidden: []string{"secret", "select"}}},
+		{name: "cancellation details", ctx: canceledContext(), want: sqliteFailureExpectation{code: collectionquery.CodeProviderFailed, cause: context.Canceled, calls: 1, contextError: context.Canceled, forbidden: []string{"context"}}},
 	}
-	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "SELECT") {
-		t.Fatalf("provider error exposed backend details: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, err := selectSQLiteFailure(t, test.ctx, test.backendError, predicate("User.name", schema.FilterEqual, schema.String, `"Ada"`))
+			assertSQLiteFailure(t, err, backend, test.want)
+		})
 	}
 }
 
@@ -69,6 +66,39 @@ func TestSQLiteTranslatorRejectsInexactExtendedNumericTypes(t *testing.T) {
 	var diagnostic *collectionquery.Error
 	if !errors.As(err, &diagnostic) || diagnostic.Code != collectionquery.CodeUnsupported {
 		t.Fatalf("Translate error = %v, want %s", err, collectionquery.CodeUnsupported)
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+type sqliteFailureExpectation struct {
+	code         string
+	cause        error
+	contextError error
+	calls        int
+	forbidden    []string
+}
+
+func assertSQLiteFailure(t testing.TB, err error, backend *countingQueryer, want sqliteFailureExpectation) {
+	t.Helper()
+	var diagnostic *collectionquery.Error
+	if !errors.As(err, &diagnostic) || diagnostic.Code != want.code || backend.calls != want.calls {
+		t.Fatalf("Select cancellation error=%v context=%v calls=%d", err, backend.contextError, backend.calls)
+	}
+	if want.cause != nil && !errors.Is(err, want.cause) {
+		t.Fatalf("Select cause = %v, want %v", err, want.cause)
+	}
+	if want.contextError != nil && !errors.Is(backend.contextError, want.contextError) {
+		t.Fatalf("backend context error = %v, want %v", backend.contextError, want.contextError)
+	}
+	for _, forbidden := range want.forbidden {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(forbidden)) {
+			t.Fatalf("public provider error exposed %q: %v", forbidden, err)
+		}
 	}
 }
 
@@ -125,14 +155,27 @@ func TestSQLiteSortMatchesReferenceStableOrdering(t *testing.T) {
 }
 
 type countingQueryer struct {
-	calls int
-	err   error
+	calls        int
+	err          error
+	contextError error
 }
 
-func (q *countingQueryer) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+func selectSQLiteFailure(t testing.TB, ctx context.Context, backendError error, filter schema.CollectionFilterExpression) (*countingQueryer, error) {
+	t.Helper()
+	backend := &countingQueryer{err: backendError}
+	provider := collectionquery.SQLiteProvider{BaseQuery: `SELECT id FROM users`, Translator: sqliteTranslator()}
+	_, err := provider.Select(ctx, backend, queryTypes(t), queryContract(), filter, nil, nil)
+	return backend, err
+}
+
+func (q *countingQueryer) QueryContext(ctx context.Context, _ string, _ ...any) (*sql.Rows, error) {
 	q.calls++
+	q.contextError = ctx.Err()
 	if q.err != nil {
 		return nil, q.err
+	}
+	if q.contextError != nil {
+		return nil, q.contextError
 	}
 	return nil, errors.New("unexpected backend invocation")
 }

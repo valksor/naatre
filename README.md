@@ -42,7 +42,8 @@ evidence must be described as planned.
   streaming and general `net/http` adapters.
 - `internal/conformance`: Go-only conformance harness internals.
 - `examples/processhost`: executable minimal `net/http` process host.
-- `sdk` (planned): official and compatibility-certified client implementations.
+- `sdk`: generated client mapping slices; full official and
+  compatibility-certified client implementations remain planned.
 
 Dependencies point inward in that order: reflection adapters, transports,
 SDKs, and example packages may use the public protocol/schema/runtime
