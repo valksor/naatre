@@ -73,7 +73,10 @@ evidence must be described as planned.
   stream replay and source ownership, a bounded reference federation
   coordinator, deterministic distributed entity-fetch planning, operator-bound
   transport adapters, planning, and execution; see the
+  coordinator, planning, execution, and the optional bounded
+  `runtime.go.plan-cache-1` plan-template cache; see the
   [Go registry contract](docs/registry.md) and
+  [plan-cache profile](docs/plan-cache.md), and
   [process-hosting guide](docs/process-hosting.md). Production distributed
   federation planning and transport integration remain owned by #109.
 - `observability`: optional OpenTelemetry trace, metric, and log export plus

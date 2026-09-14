@@ -67,19 +67,13 @@ func (r *Runner) verifyGoSDK(_ context.Context, _ Request) Result {
 }
 
 func (r *Runner) loadGoSDKFixture() (goSDKFixture, Evidence, error) {
-	var fixture goSDKFixture
-	_, evidence, err := r.loadPinnedFixture("v1/go-sdk.json", &fixture)
-	if err != nil {
-		return goSDKFixture{}, Evidence{}, err
-	}
-	if fixture.Profile != goSDKProfile || fixture.FixtureSuite != r.manifest.FixtureVersion ||
-		fixture.Implementation.Module != "github.com/valksor/naatre/sdk/go/generated" ||
-		fixture.Implementation.MinimumGo != "1.27" || fixture.Implementation.GeneratorVersion != sdkgen.GeneratorVersion ||
-		len(fixture.Vectors) != 12 || len(fixture.Unsupported) == 0 || fixture.Limits.MaximumRetryAttempts != 8 ||
-		fixture.Limits.MaximumManifestBytes != 1<<20 || fixture.Limits.MaximumFrameBytes != 1<<20 {
-		return goSDKFixture{}, Evidence{}, errors.New("incompatible Go SDK fixture")
-	}
-	return fixture, evidence, nil
+	return loadProfileFixture(r, "v1/go-sdk.json", func(fixture goSDKFixture) bool {
+		return fixture.Profile == goSDKProfile && fixture.FixtureSuite == r.manifest.FixtureVersion &&
+			fixture.Implementation.Module == "github.com/valksor/naatre/sdk/go/generated" &&
+			fixture.Implementation.MinimumGo == "1.27" && fixture.Implementation.GeneratorVersion == sdkgen.GeneratorVersion &&
+			len(fixture.Vectors) == 12 && len(fixture.Unsupported) != 0 && fixture.Limits.MaximumRetryAttempts == 8 &&
+			fixture.Limits.MaximumManifestBytes == 1<<20 && fixture.Limits.MaximumFrameBytes == 1<<20
+	})
 }
 
 func verifyGoSDKGeneration(fixture goSDKFixture, contents map[string][]byte) error {

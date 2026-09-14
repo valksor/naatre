@@ -88,15 +88,10 @@ func (r *Runner) verifyGoClient(ctx context.Context, _ Request) Result {
 }
 
 func (r *Runner) loadGoClientFixture() (goClientFixture, Evidence, error) {
-	var fixture goClientFixture
-	_, evidence, err := r.loadPinnedFixture("v1/go-client.json", &fixture)
-	if err != nil {
-		return goClientFixture{}, Evidence{}, err
-	}
-	if fixture.Profile != goClientProfile || fixture.FixtureSuite != r.manifest.FixtureVersion || fixture.Implementation.Module != "github.com/valksor/naatre/client" || fixture.Implementation.MinimumGo != "1.27" {
-		return goClientFixture{}, Evidence{}, errors.New("incompatible Go client fixture")
-	}
-	return fixture, evidence, nil
+	return loadProfileFixture(r, "v1/go-client.json", func(fixture goClientFixture) bool {
+		return fixture.Profile == goClientProfile && fixture.FixtureSuite == r.manifest.FixtureVersion &&
+			fixture.Implementation.Module == "github.com/valksor/naatre/client" && fixture.Implementation.MinimumGo == "1.27"
+	})
 }
 
 func (r *Runner) verifyGoClientEvidence(fixture goClientFixture) ([]Evidence, map[string][]byte, error) {

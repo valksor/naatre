@@ -64,6 +64,7 @@ jobs:
         run: |
           node conformance/independent/verify-dotnet-sdk.mjs
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"dotnet","command":"run","path":{"source":{"kind":"sdk","language":"dotnet"},"destination":{"kind":"native-runtime","language":"dotnet"}},"profiles":["sdk.dotnet.core-1"]}' | node conformance/independent/runner.mjs --require-pass
+        run: printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.contract-1","runtime.go.plan-cache-1"]}' | go run ./cmd/naatre-conformance --require-pass
       - name: Core parallel and cancellation race fixtures
         run: go test -race ./internal/conformance -run 'TestGoRunnerParallelCancellationProfile' -count=1
       - name: Race tests

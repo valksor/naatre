@@ -121,6 +121,18 @@ type manifest struct {
 
 type Handler func(context.Context, Request) Result
 
+func loadProfileFixture[T any](runner *Runner, path string, valid func(T) bool) (T, Evidence, error) {
+	var fixture T
+	_, evidence, err := runner.loadPinnedFixture(path, &fixture)
+	if err != nil {
+		return *new(T), Evidence{}, err
+	}
+	if !valid(fixture) {
+		return *new(T), Evidence{}, errors.New("incompatible profile fixture")
+	}
+	return fixture, evidence, nil
+}
+
 type Runner struct {
 	manifest        manifest
 	conformanceRoot string
@@ -148,6 +160,7 @@ func New(suitePath string) (*Runner, error) {
 	runner.handlers[goClientProfile] = runner.verifyGoClient
 	runner.handlers[goSDKProfile] = runner.verifyGoSDK
 	runner.handlers[toolingProfile] = runner.verifyTooling
+	runner.handlers[planCacheProfile] = runner.verifyPlanCache
 	return runner, nil
 }
 

@@ -29,6 +29,11 @@ marked `thread-safe` may be called concurrently on the same captured handler
 instance. A handler marked `serial-only` is serialized across requests, and
 queued calls honor context cancellation before entering application code.
 
+The optional bounded plan-template cache composes only with frozen snapshots
+and preserves these request-state boundaries. Its revision lifecycle, safe
+optimizer passes, explain records, platform profile, and unsupported
+capabilities are documented in [the plan-cache guide](plan-cache.md).
+
 `Snapshot.ExportSchema` combines the frozen type catalog with root and object
 handler manifests to produce the canonical language-neutral schema document.
 Registrations may supply explicit stable IDs; legacy registrations derive

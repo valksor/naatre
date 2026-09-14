@@ -63,6 +63,9 @@ supports the same NDJSON and `--http=address` forms. Go implementations register
 context-aware profile handlers with `internal/conformancerunner`; the race suite
 executes a real 32-branch runtime plan through that runner and proves bounded
 parallelism, cancellation propagation, and complete branch joining.
+The Go runner also executes `runtime.go.plan-cache-1` directly and publishes
+the exact fixture, core-planning, module, source, test, and documentation
+digests used as evidence.
 
 Both NDJSON runners accept `--require-pass`, emit the complete report, and then
 exit non-zero when any requested profile is failed, errored, or unsupported.
