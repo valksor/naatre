@@ -350,6 +350,15 @@ func (d Document) CanonicalJSON() ([]byte, error) {
 	return cloneCanonical(d.canonical, d.requireInitialized())
 }
 
+// CanonicalJSONSize returns the canonical encoding length without copying the
+// document bytes. Callers can use it to reject work before serialization.
+func (d Document) CanonicalJSONSize() (int, error) {
+	if err := d.requireInitialized(); err != nil {
+		return 0, err
+	}
+	return len(d.canonical), nil
+}
+
 func cloneCanonical(canonical []byte, err error) ([]byte, error) {
 	if err != nil {
 		return nil, err

@@ -1,0 +1,121 @@
+{
+  "profile": "schema.discovery.http-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 106,
+  "dependencies": [
+    {"profile": "core.schema-1", "path": "conformance/v1/schema.json", "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"},
+    {"profile": "core.http-1", "path": "conformance/v1/http.json", "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"},
+    {"profile": "go.module", "path": "go.mod", "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76"}
+  ],
+  "implementation": {
+    "language": "go",
+    "runtime": "go1.27",
+    "package": "github.com/valksor/naatre/transport/http",
+    "files": [
+      {"path": "transport/http/discovery.go", "sha256": "73f3ed2451dc1c1cab91ad05ea135245f3c62abb2cdbe5bf7737c2641afe4ef7"},
+      {"path": "transport/http/discovery_revision.go", "sha256": "0543ade2ff85e6cdb9861679906d2a2d4db7d6e5ae94cb73368dbdce391b991e"},
+      {"path": "schema/document.go", "sha256": "27f4f403cb9a8f4ef179c533ac148f3b6d91ed05e6b99848de4205216599e51c"}
+    ]
+  },
+  "endpoints": [
+    {"method": "GET", "path": "/v1/schema", "response": "application/vnd.naatre.schema+json;version=1"},
+    {"method": "GET", "path": "/v1/schema/diff?from={revision}", "response": "application/vnd.naatre.schema-migration+json;version=1"}
+  ],
+  "defaults": {
+    "enabled": false,
+    "maxConcurrent": 32,
+    "maxRevisionBytes": 128,
+    "maxDocumentBytes": 1048576,
+    "maxResponseBytes": 1048576,
+    "maxMigrationChanges": 4096,
+    "revisionHistory": "finite-application-selected-capacity"
+  },
+  "cases": [
+    {"name": "default-off", "class": "negative", "expectedCode": "DISCOVERY_DISABLED"},
+    {"name": "authenticated-filtered-referential", "class": "positive", "expectedCode": "OK"},
+    {"name": "filtered-migration-classifications", "class": "positive", "expectedCode": "OK"},
+    {"name": "authentication-required", "class": "negative", "expectedCode": "DISCOVERY_UNAUTHENTICATED"},
+    {"name": "authorization-denied", "class": "negative", "expectedCode": "DISCOVERY_FORBIDDEN"},
+    {"name": "failure-redaction", "class": "negative", "expectedCode": "DISCOVERY_INTERNAL"},
+    {"name": "single-revision-during-install", "class": "boundary", "expectedCode": "OK"},
+    {"name": "active-cancellation", "class": "cancellation", "expectedCode": "DISCOVERY_CANCELLED"},
+    {"name": "concurrency-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_BUSY"},
+    {"name": "current-revision-byte-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_INTERNAL"},
+    {"name": "from-revision-byte-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_BAD_REQUEST"},
+    {"name": "document-byte-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_LIMIT_EXCEEDED"},
+    {"name": "response-byte-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_LIMIT_EXCEEDED"},
+    {"name": "migration-change-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_LIMIT_EXCEEDED"},
+    {"name": "history-retention-limit", "class": "resource-limit", "expectedCode": "DISCOVERY_REVISION_NOT_FOUND"},
+    {"name": "revision-reuse-conflict", "class": "negative", "expectedCode": "DISCOVERY_REVISION_CONFLICT"},
+    {"name": "cache-authorization-identity", "class": "boundary", "expectedCode": "OK"}
+  ],
+  "semanticDiffCoverage": [
+    {"change": "removal", "path": "type:Removed", "classification": "breaking"},
+    {"change": "required-input-tightening", "path": "field:Input.scope", "classification": "breaking"},
+    {"change": "nullability-tightening", "path": "field:User.name/nullable", "classification": "breaking"},
+    {"change": "openness", "path": "type:Role/open", "classification": "breaking"},
+    {"change": "default", "path": "field:Input.id/default", "classification": "behavior-only"},
+    {"change": "effect", "path": "operation:query.user/effect", "classification": "dangerous"},
+    {"change": "constraint", "path": "type:User/maxDepth", "classification": "dangerous"}
+  ],
+  "stableFailureCodes": [
+    "DISCOVERY_DISABLED",
+    "DISCOVERY_NOT_FOUND",
+    "DISCOVERY_METHOD_NOT_ALLOWED",
+    "DISCOVERY_BAD_REQUEST",
+    "DISCOVERY_UNAUTHENTICATED",
+    "DISCOVERY_FORBIDDEN",
+    "DISCOVERY_REVISION_NOT_FOUND",
+    "DISCOVERY_CANCELLED",
+    "DISCOVERY_BUSY",
+    "DISCOVERY_LIMIT_EXCEEDED",
+    "DISCOVERY_REVISION_CONFLICT",
+    "DISCOVERY_INTERNAL"
+  ],
+  "failureStatuses": [
+    {"code": "DISCOVERY_DISABLED", "httpStatus": 404, "surface": "http"},
+    {"code": "DISCOVERY_NOT_FOUND", "httpStatus": 404, "surface": "http"},
+    {"code": "DISCOVERY_METHOD_NOT_ALLOWED", "httpStatus": 405, "surface": "http"},
+    {"code": "DISCOVERY_BAD_REQUEST", "httpStatus": 400, "surface": "http"},
+    {"code": "DISCOVERY_UNAUTHENTICATED", "httpStatus": 401, "surface": "http"},
+    {"code": "DISCOVERY_FORBIDDEN", "httpStatus": 403, "surface": "http"},
+    {"code": "DISCOVERY_REVISION_NOT_FOUND", "httpStatus": 404, "surface": "http"},
+    {"code": "DISCOVERY_CANCELLED", "httpStatus": 408, "surface": "http"},
+    {"code": "DISCOVERY_BUSY", "httpStatus": 503, "surface": "http"},
+    {"code": "DISCOVERY_LIMIT_EXCEEDED", "httpStatus": 500, "surface": "http"},
+    {"code": "DISCOVERY_REVISION_CONFLICT", "httpStatus": null, "surface": "revision-store"},
+    {"code": "DISCOVERY_INTERNAL", "httpStatus": 500, "surface": "http"}
+  ],
+  "supported": {
+    "runtime": "go1.27",
+    "adapter": "net/http",
+    "platform": "portable-go-library",
+    "certifiedPlatforms": []
+  },
+  "unsupported": [
+    "anonymous-public-discovery",
+    "unfiltered-discovery",
+    "http-schema-mutation-registration",
+    "remote-revision-fetch",
+    "persistent-cross-process-history",
+    "automatic-process-controller-synchronization",
+    "watch-subscription-push",
+    "sse-websocket-discovery",
+    "general-operation-execution",
+    "shared-public-cache",
+    "conditional-if-none-match-304",
+    "accept-content-negotiation",
+    "compression-negotiation",
+    "cors-policy",
+    "cookie-authentication-csrf-policy",
+    "framework-specific-adapters",
+    "native-non-go-runtime-adapters",
+    "cross-language-migration-code-generation",
+    "os-architecture-proxy-orchestrator-certification"
+  ],
+  "commands": [
+    "go test ./transport/http -run 'TestDiscovery|TestRevisionStore' -count=1",
+    "go test -race ./transport/http -run 'TestDiscovery|TestRevisionStore' -count=1",
+    "go test ./internal/conformance -run 'TestSchemaDiscoveryProfile|TestPortableSchemaDiffFixtures' -count=1"
+  ]
+}

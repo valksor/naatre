@@ -151,6 +151,13 @@ hidden-name leaks, and checks stable-ID compatibility classifications. The core
 fixture and pure in-process APIs do not enable an HTTP discovery route; #106
 owns authenticated transport integration and migration reporting.
 
+`v1/schema-discovery.json` fixes the opt-in `schema.discovery.http-1` Go
+transport profile, its stable public failures, finite rolling-revision and
+response limits, executed positive/negative/boundary/cancellation/resource
+cases, exact `core.schema-1`/`core.http-1`/Go implementation revisions, and the
+complete unsupported-capability boundary. It composes the filtered schema and
+diff authority above rather than redefining either contract.
+
 The core planner resolves the built-in `include` and `skip` directives, rejects
 unregistered directives, and supports registered version-pinned custom
 directives through bounded planning, one-shot execution wrappers, and ordered
