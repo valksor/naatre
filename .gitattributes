@@ -1,0 +1,16 @@
+conformance/v1/suite.json merge=union
+conformance/v1/roadmap.json merge=union
+conformance/independent/runner.mjs merge=union
+conformance/README.md merge=union
+README.md merge=union
+conformance/RUNNER.md merge=union
+spec/v1/README.md merge=union
+docs/registry.md merge=union
+.gitignore merge=union
+.github/workflows/ci.yml merge=union
+internal/conformance/suite_test.go merge=union
+internal/conformance/architecture_test.go merge=union
+internal/conformance/spec_test.go merge=union
+internal/conformancerunner/runner.go merge=union
+runtime/execute.go merge=union
+transport/http/doc.go merge=union
