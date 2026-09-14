@@ -8,6 +8,13 @@ implementation version, platform, and claimed profile.
 Generated fixture changes must be reproducible byte-for-byte. Tests read the
 checked-in files rather than duplicating their expected values in Go source.
 
+`v1/generator-plugin-host.json` binds the public Go host, the exact generator
+model and toolchain revisions, and a dependency-free third-party JavaScript
+fixture. The `sdk.generator-plugin-host-1` profile executes discovery,
+hostile-source, output-boundary, cancellation, and resource-limit cases; its
+support and unsupported-capability boundaries are documented in
+[`docs/generator-plugin-host.md`](../docs/generator-plugin-host.md).
+
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,

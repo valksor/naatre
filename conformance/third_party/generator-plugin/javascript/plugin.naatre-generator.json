@@ -1,0 +1,19 @@
+{
+  "version": "naatre.generator-plugin-manifest-1",
+  "id": "fixture.javascript-typescript",
+  "algorithmVersion": "fixture.javascript-typescript-1",
+  "acceptedModelVersions": ["naatre.generator-model-1"],
+  "targetLanguage": "javascript-typescript",
+  "outputKinds": ["wire-model"],
+  "configurationSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "enum": ["generate", "path-escape", "reject", "hang", "oversized"]
+      }
+    }
+  },
+  "runtime": "node",
+  "entrypoint": "plugin.mjs"
+}

@@ -36,6 +36,10 @@ evidence must be described as planned.
 - `generator`: versioned language-neutral generator-model validation,
   deterministic reference output, semantic manifest hashing, and output-root
   containment for `sdk.generation-1`.
+- `generatorplugin`: explicit generator-plugin discovery, bounded process
+  hosting, safe diagnostics, and reproducible third-party fixture execution for
+  `sdk.generator-plugin-host-1`; see the
+  [generator plugin host guide](docs/generator-plugin-host.md).
 - `runtime`: explicit registration, persisted admission, bounded cursor
   pagination, request-scoped batch/cache coordination, dependency-free
   observability hooks, process-wide admission/lifecycle control, bounded

@@ -1,0 +1,125 @@
+{
+  "profile": "sdk.generator-plugin-host-1",
+  "fixtureSuite": "1.0.0",
+  "dependencies": [
+    {
+      "name": "generator-model",
+      "path": "conformance/v1/generator-plugin-host-model.json",
+      "sha256": "935dd7a84d19e6df7028f90ffb03906c30f02e83c67019f0017497ce273b9863",
+      "revision": "naatre.generator-model-1"
+    },
+    {
+      "name": "generator-core",
+      "path": "generator/generator.go",
+      "sha256": "95a2bff82fa4155e5cc83a48c3ca2bf28fd953517e5e0c25ae6dd9ec4d11a5d8",
+      "revision": "naatre.generator.reference-json-1"
+    },
+    {
+      "name": "plugin-host",
+      "path": "generatorplugin/host.go",
+      "sha256": "668f31cca553240137035f4e19287037dd3ee8f18a236319c522c29c0aa204e5",
+      "revision": "sdk.generator-plugin-host-1"
+    },
+    {
+      "name": "third-party-manifest",
+      "path": "conformance/third_party/generator-plugin/javascript/plugin.naatre-generator.json",
+      "sha256": "4da5b348ba443e0a32d46a9a3ec0f00a9cc8df840a8b88b11f740bd2b1d82646",
+      "revision": "naatre.generator-plugin-manifest-1"
+    },
+    {
+      "name": "third-party-source",
+      "path": "conformance/third_party/generator-plugin/javascript/plugin.mjs",
+      "sha256": "10ab22a9623165dd465166d0c8f3a2eca5594e61b27c4c26f4ea290de4be9a67",
+      "revision": "fixture.javascript-typescript-1"
+    },
+    {
+      "name": "go-module",
+      "path": "go.mod",
+      "sha256": "ec074dc247ef3f3f01391c222bbcb44ac2cf6992e2427740e00233fb4d9a1c76",
+      "revision": "go-1.27.0"
+    },
+    {
+      "name": "go-dependency-lock",
+      "path": "go.sum",
+      "sha256": "59d6f9f0590f841c826c0c2003f906b038b16397a886eaef7a562ac031b68d6b",
+      "revision": "go.sum-sha256"
+    },
+    {
+      "name": "ci-toolchain",
+      "path": ".github/workflows/ci.yml",
+      "sha256": "83736da9a1003b60073e70ddb91e7972fb79624cd9386b8df5fc2463aabc5188",
+      "revision": "node-24.21.0"
+    }
+  ],
+  "plugin": {
+    "manifest": "conformance/third_party/generator-plugin/javascript/plugin.naatre-generator.json",
+    "source": "conformance/third_party/generator-plugin/javascript/plugin.mjs",
+    "id": "fixture.javascript-typescript",
+    "algorithmVersion": "fixture.javascript-typescript-1",
+    "targetLanguage": "javascript-typescript",
+    "outputKinds": ["wire-model"]
+  },
+  "support": {
+    "ownerIssue": 76,
+    "lifecycle": "versioned-experimental-profile",
+    "platforms": ["darwin-arm64", "linux-amd64"],
+    "runtime": "node",
+    "runtimeRevision": "24.21.0",
+    "runtimeMajors": [24, 26],
+    "package": "github.com/valksor/naatre/generatorplugin",
+    "command": "github.com/valksor/naatre/cmd/naatre-generator-plugin-host"
+  },
+  "sandbox": {
+    "discovery": "explicit-files-or-non-recursive-directories-only",
+    "workingDirectory": "fresh-temporary-directory",
+    "environment": ["LANG=C", "LC_ALL=C", "TZ=UTC", "SOURCE_DATE_EPOCH=0"],
+    "input": "bounded-json-over-stdin",
+    "output": "bounded-json-over-stdout",
+    "finalOutputRootVisibleToPlugin": false,
+    "stderrPublished": false,
+    "atomicWrites": "same-directory-temp-and-rename"
+  },
+  "limits": {
+    "modelBytes": 4194304,
+    "configurationBytes": 262144,
+    "stdoutBytes": 8388608,
+    "stderrBytes": 65536,
+    "artifactCount": 1024,
+    "artifactBytes": 4194304,
+    "totalArtifactBytes": 8388608
+  },
+  "cases": [
+    {"name": "non-go-versioned-ir", "kind": "positive", "mode": "generate", "code": ""},
+    {"name": "hostile-schema-source-text", "kind": "negative", "mode": "hostile-source", "code": ""},
+    {"name": "output-root-traversal", "kind": "boundary", "mode": "path-escape", "code": "GENERATOR_PATH_ESCAPE"},
+    {"name": "private-stderr-discarded", "kind": "negative", "mode": "reject", "code": "GENERATOR_PLUGIN_EXECUTION_FAILED"},
+    {"name": "context-cancellation", "kind": "cancellation", "mode": "hang", "code": "GENERATOR_CANCELLED"},
+    {"name": "bounded-plugin-output", "kind": "resource-limit", "mode": "oversized", "code": "GENERATOR_RESOURCE_LIMIT"}
+  ],
+  "unsupportedOptionalCapabilities": [
+    "ambient-path-discovery",
+    "browser-runtime",
+    "cache-adapter-generation",
+    "certification-of-third-party-plugins",
+    "container-or-virtual-machine-isolation",
+    "cpu-quota-enforcement",
+    "framework-integration-generation",
+    "http-transport-generation",
+    "kernel-filesystem-confinement",
+    "memory-quota-enforcement",
+    "native-runtime-loading",
+    "network-namespace-enforcement",
+    "operating-system-adapter-generation",
+    "package-publication",
+    "remote-plugin-transport",
+    "sse-transport-generation",
+    "websocket-transport-generation",
+    "windows-host-execution",
+    "worker-adapter-generation"
+  ],
+  "commands": [
+    "go test ./generatorplugin ./cmd/naatre-generator-plugin-host -count=1",
+    "go test ./internal/conformance -run TestGeneratorPluginHostConformance -count=1",
+    "printf '%s\\n' '{\"protocol\":\"naatre.conformance.runner-1\",\"id\":\"plugin-host\",\"command\":\"run\",\"path\":{\"source\":{\"kind\":\"sdk\",\"language\":\"javascript-typescript\"},\"destination\":{\"kind\":\"native-runtime\",\"language\":\"go\"}},\"profiles\":[\"sdk.generator-plugin-host-1\"]}' | go run ./cmd/naatre-conformance --require-pass"
+  ]
+}

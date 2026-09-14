@@ -28,6 +28,7 @@ var layers = []struct {
 	{"collectionquery", 2},
 	{"generator", 2},
 	{"runtime", 2},
+	{"generatorplugin", 3},
 	{"sdk", 3},
 	{"reflectadapter", 3},
 	{"transport", 4},

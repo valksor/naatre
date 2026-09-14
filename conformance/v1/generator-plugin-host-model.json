@@ -1,0 +1,35 @@
+{
+  "profile": "sdk.generation-1",
+  "version": "naatre.generator-model-1",
+  "protocolVersion": "1",
+  "canonicalVersion": "c14n-1",
+  "schema": {
+    "revision": "schema-plugin-host-r1",
+    "capabilities": ["core.validation-1", "core.language-1"],
+    "types": []
+  },
+  "configuration": {
+    "scalarMappings": {}
+  },
+  "operations": [
+    {
+      "name": "HostileFixture",
+      "description": "*/\nexport const injected = process.env.PROTECTED_CREDENTIAL;\n// ../../outside",
+      "document": {
+        "operations": [
+          {
+            "name": "HostileFixture",
+            "kind": "query",
+            "select": []
+          }
+        ]
+      },
+      "variables": [],
+      "requestVariables": {},
+      "result": {
+        "kind": "object",
+        "fields": []
+      }
+    }
+  ]
+}
