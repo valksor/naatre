@@ -17,3 +17,4 @@ spl_autoload_register(static function (string $class): void {
 });
 
 require dirname(__DIR__) . '/generated/Operations.php';
+require dirname(__DIR__) . '/generated/Handlers.php';

@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "77d54079e3429f7135a1d6b045fd7be4cbb5cb6a23e0a0c6b4cbe416a410ffe0"
+      "sha256": "858ca3725f5f8fe79e9afe187b1a933d6cabc70ff2826836111be97521c8935e"
     },
     {
       "path": "v1/scalars.json",
@@ -310,7 +310,7 @@
       "path": "v1/php-sdk.json",
       "profile": "sdk.php.core-1",
       "category": "canonical",
-      "sha256": "249abb2e2e870a19d4b4f535ecdfecab09270da6f44e1a931ee6d3918fedfe73"
+      "sha256": "f3467f1d5474ea65f47e137117e95ce3215cc307c62b5ce456a7253c56f0b4ea"
     },
     {
       "path": "v1/python-sdk.json",
@@ -484,7 +484,13 @@
       "path": "v1/php-adapters.json",
       "profile": "sdk.php.adapters-1",
       "category": "integration",
-      "sha256": "13bfb8ffbbfbd6a496de2df038c22775aa9d44e5ad042d888db5ea1327878cb6"
+      "sha256": "1dc62137610e3748586a6891646ffe5948fb7bcf706353f2b3c153325d2a42dd"
+    },
+    {
+      "path": "v1/php-server.json",
+      "profile": "sdk.php.server-1",
+      "category": "integration",
+      "sha256": "2b61776952cdcf7e1594bc2298816ed0088bfb0219a6b50a81c4ab6664327f68"
     },
     {
       "path": "v1/rust-async-adapters.json",
@@ -7913,6 +7919,16 @@
       "caseId": "issue.58",
       "issue": 58,
       "fixtureRefs": [
+        {
+          "path": "v1/php-server.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/58",

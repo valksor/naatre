@@ -125,6 +125,10 @@ evidence must be described as planned.
   reference scoping, and stream-credit state for `worker.remote-1`; see the
   [remote-worker deployment guide](docs/remote-workers.md). Production HTTP/2
   pool and process integration remains owned by #88.
+- `sdk/php`: the PHP 8.3-8.5 client plus explicit generated server-handler
+  bindings, request-scoped dispatcher, FPM unary profile, and listener-free
+  framed worker conformance for `sdk.php.server-1`; native framework worker
+  adapters remain owned by #97.
 - `asyncoperation`: durable SQLite operation storage, private fencing leases,
   bounded recovery dispatch, lease-renewing workers, and optional post-commit
   queue hints for `operations.async-adapters-go-1`; see the

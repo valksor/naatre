@@ -77,14 +77,7 @@ type remoteWorkerFixture struct {
 
 func TestRemoteWorkerContractFixture(t *testing.T) {
 	t.Parallel()
-	var fixture remoteWorkerFixture
-	content, err := os.ReadFile("../../conformance/v1/remote-workers.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(content, &fixture); err != nil {
-		t.Fatal(err)
-	}
+	fixture := loadRemoteWorkerFixture(t)
 	if fixture.Profile != "worker.remote-1" || fixture.Protocol != "naatre.remote-worker.v1" || fixture.FixtureVersion != "1.0.0" {
 		t.Fatalf("remote-worker fixture identity = %s/%s/%s", fixture.Profile, fixture.Protocol, fixture.FixtureVersion)
 	}
@@ -116,6 +109,24 @@ func TestRemoteWorkerContractFixture(t *testing.T) {
 		fixture.Claims.ProductionOwner != 88 || fixture.Claims.MatrixOwner != 69 || !slices.Equal(fixture.Claims.LanguageOwners, []int{58, 59, 60, 61}) {
 		t.Fatalf("remote-worker claims overstate evidence: %#v", fixture.Claims)
 	}
+}
+
+func loadRemoteWorkerFixture(t testing.TB) remoteWorkerFixture {
+	t.Helper()
+	fixtureFile, err := os.Open("../../conformance/v1/remote-workers.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := fixtureFile.Close(); err != nil {
+			t.Errorf("close remote-worker fixture: %v", err)
+		}
+	}()
+	var fixture remoteWorkerFixture
+	if err := json.NewDecoder(fixtureFile).Decode(&fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
 }
 
 func TestRemoteWorkerSchemaIsClosedAndLanguageNeutral(t *testing.T) {

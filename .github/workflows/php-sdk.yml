@@ -28,4 +28,5 @@ jobs:
           composer --working-dir=sdk/php check
           node conformance/independent/verify-php-sdk.mjs
           node conformance/independent/verify-php-adapters.mjs
+          node conformance/independent/verify-php-server.mjs
           git diff --exit-code -- sdk/php/generated
