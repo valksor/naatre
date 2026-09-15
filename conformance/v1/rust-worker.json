@@ -1,0 +1,76 @@
+{
+  "profile": "worker.remote-1.rust",
+  "baseProfile": "worker.remote-1",
+  "fixtureSuite": "1.0.0",
+  "implementation": "naatre-rust-worker",
+  "package": {
+    "name": "naatre-sdk",
+    "edition": "2024",
+    "minimumRust": "1.85.0",
+    "feature": "server",
+    "defaultEnabled": false,
+    "externalRuntimeDependencies": []
+  },
+  "claims": {
+    "remoteWorker": true,
+    "goGatewayPath": true,
+    "independentNativeRuntime": false,
+    "tokioAdapter": false,
+    "axumAdapter": false,
+    "productionHttpTransport": false,
+    "panicAbortRecovery": false
+  },
+  "featureMatrix": [
+    {"toolchain": "1.85.0", "features": "none", "profile": "dev", "command": "cargo check --no-default-features --locked --offline"},
+    {"toolchain": "1.85.0", "features": "server", "profile": "unwind", "command": "cargo test --profile unwind --features server --test server --locked --offline"},
+    {"toolchain": "1.85.0", "features": "all", "profile": "dev", "command": "cargo test --all-features --all-targets --locked --offline"},
+    {"toolchain": "1.85.0", "features": "server", "profile": "release-abort", "command": "cargo build --release --features server --example remote_worker --locked --offline"},
+    {"toolchain": "stable", "features": "all", "profile": "dev", "command": "cargo clippy --all-targets --all-features --locked --offline -- -D warnings"}
+  ],
+  "targets": {
+    "supported": "Rust std targets with threads, atomics, and a caller-selected Send executor",
+    "notCertified": ["no-std", "embedded", "wasm-without-threads", "non-Send-local-executor", "panic-abort-recovery"]
+  },
+  "ownership": {
+    "input": "owned-before-handler-poll",
+    "handlerContext": "borrowed-for-handler-future",
+    "principalLoaderTransaction": "fresh-request-scope-consumed-at-cleanup",
+    "futureDrop": "cooperative-cancel-and-drop-no-rollback-claim",
+    "spawnedTask": "application-transfers-cancel-and-shutdown-owner",
+    "blockingTask": "application-transfers-pool-job-owner",
+    "sourceStream": "application-transfers-cancel-and-shutdown-owner"
+  },
+  "panicProfiles": {
+    "unwind": "contained-at-future-poll-boundary-as-private-INTERNAL-failure",
+    "abort": "process-failure-no-destructor-cancellation-or-recovery-guarantee"
+  },
+  "vectors": [
+    "generated-trait-and-explicit-registration",
+    "runtime-descriptor-and-schema-validation",
+    "go-fixture-public-data-and-typed-error-parity",
+    "malformed-output-not-published",
+    "missing-null-canonical-scalars-and-open-variants",
+    "strict-bounded-serde-framing",
+    "future-drop-cooperative-cancellation",
+    "spawned-blocking-stream-normal-shutdown",
+    "unwind-containment-and-abort-profile-separation",
+    "concurrent-request-scope-isolation",
+    "supervised-stdio-go-gateway-rust-worker-example"
+  ],
+  "evidence": [
+    {"path": "sdk/rust/Cargo.toml", "sha256": "cf2db2044e1168793a7881fb52c7ef1b9a178ee69935bb8116ab565572590331"},
+    {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
+    {"path": "sdk/rust/README.md", "sha256": "2ac55b67702041af5c77f6d47fddc404822c6abd2836ca9c0d8b420a9172eef1"},
+    {"path": "sdk/rust/ci.sh", "sha256": "6f9ed615107b35198e580b9a057db09b41a8feada41253814d70e77c32858831"},
+    {"path": "sdk/rust/src/lib.rs", "sha256": "32ff92bef81f22e17213408c9c84d3b325e6e4134382d996143b2fb1d3a62cf2"},
+    {"path": "sdk/rust/src/server.rs", "sha256": "51071bfd742274e72091ec219a06deb6a320e17f3cc9a9e84479a6bc8277bf66"},
+    {"path": "sdk/rust/src/generator.rs", "sha256": "fca697f253a61aeeaa89cf010e3703954320a9b199dba48bc0bc672d09dd2038"},
+    {"path": "sdk/rust/generated/operations.rs", "sha256": "b2d917ca24c39e22f67b77ce57ee18969605b517f015be6f8d23aa980c4a713b"},
+    {"path": "sdk/rust/tests/server.rs", "sha256": "2aff3bc342709ef1e8127de2a4338dd6135b914a0910deb8bfa613a502d96145"},
+    {"path": "sdk/rust/examples/remote_worker.rs", "sha256": "6fdeda16635d580f5b40f32efc6c499111c14c719ed85238a76a6847c7aaf035"},
+    {"path": "examples/go-gateway-rust-worker/main.go", "sha256": "4d32467e38ea7ba1c9dd15a335deecb508a6362f41b089cf239ffd6ec8a1640c"},
+    {"path": "examples/go-gateway-rust-worker/README.md", "sha256": "2760a9efe142a1de73df3106e0410694f32d4fb55a6382d17db57735249fbc68"},
+    {"path": "conformance/v1/remote-workers.json", "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
+    {"path": "conformance/independent/verify-rust-worker.mjs", "sha256": "4e57ed1a9181aadbbe9180ccf53e5d71841dfb853846450f2727a0c8e64b0522"}
+  ]
+}

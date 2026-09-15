@@ -10,6 +10,9 @@ additive:
 
 - default: client values, generated bindings, and transport ownership traits;
 - `generator`: deterministic generation from `naatre.generator-model-1`;
+- `server`: generated handler traits, explicit remote-worker registration,
+  executor-neutral dispatch, request-local resource hooks, and framed serde
+  codecs for `worker.remote-1`;
 - `tokio`: task-local unary and stream closure adapters for futures polled by a
   caller-selected Tokio runtime. This feature deliberately introduces no Tokio
   crate dependency, runtime construction, task spawning, or network backend.
@@ -20,6 +23,7 @@ The supported build matrix is:
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --no-default-features
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features generator
+cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --features server --test server
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --features tokio
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --all-features
 cargo +stable fmt --manifest-path sdk/rust/Cargo.toml --check
@@ -92,9 +96,64 @@ authenticated POST SSE, WebSocket, QUIC, compression/decompression, TLS and
 certificate policy, redirects, proxy handling, credential or tenant injection,
 automatic retries, reconnect/replay, pagination orchestration, bounded task or
 message queues, Tokio runtime construction, `tokio::spawn` ownership,
-`LocalSet` and non-`Send` futures, Tower/Hyper/Reqwest/Axum integration, panic
-containment guarantees for user handlers, WASM and embedded executors, mobile
-bindings, native-runtime certification, and deployment certification. Server
-registration, workers, Axum, unwind containment, and panic-abort behavior stay
-owned by issues #61 and #100; the complete official SDK matrix stays owned by
-issue #69.
+`LocalSet` and non-`Send` futures, Tower/Hyper/Reqwest/Axum integration, WASM
+and embedded executors, mobile bindings, native-runtime certification, and
+deployment certification. Axum and concrete Tokio/HTTP worker adapters stay
+owned by issue #100; the complete official SDK matrix stays owned by issue #69.
+
+## Remote-worker server core
+
+The `server` feature is a separate additive boundary: default model/client
+users do not compile the worker core, and the core has no Tokio, Axum, HTTP, or
+Go-runtime dependency. Generation emits one `Send + Sync` handler trait and one
+explicit registration function per shared-schema operation. Implementing a
+trait alone exposes nothing. `ServerBuilder::build` succeeds only when every
+advertised manifest row has an exact registered descriptor and typed handler;
+input and output schema callbacks run around every application call.
+
+Inputs are decoded into owned generated values before a handler is polled.
+`HandlerContext` is borrowed for exactly the handler future's lifetime. Its
+principal, loader, and optional transaction are newly created by the
+application's `RequestScopeFactory`, are not `Clone`, and are consumed by the
+terminal `RequestResources::finish` hook. Concurrent requests therefore do not
+receive state from another request through the worker core. Resource
+implementations may themselves use shared storage only when the application
+has authorized that sharing.
+
+`WorkerCore::invoke` returns a `Send` future and never chooses an executor.
+Dropping it requests cooperative cancellation, releases the active invocation,
+and drops the handler future and request scope. It does not prove that a task
+spawned elsewhere, blocking system call, transaction commit, or external write
+has stopped or rolled back. Handlers transfer spawned tasks, blocking jobs, and
+source streams into the context with the corresponding `own_*` method. Normal
+completion cancels and awaits each owned object's `shutdown` future. Abrupt
+future drop calls `cancel` and drops ownership but cannot synchronously await a
+join; an adapter or process supervisor remains responsible for any stronger
+termination guarantee. Cancellation acknowledgements mean only that the token
+was observed.
+
+Each `OwnedWork` source stream is shut down under the same rule, and all stream
+credit/frame/byte enforcement remains the adapter's responsibility. The core
+framing codec accepts exactly one flag-zero, four-byte big-endian,
+length-delimited JSON message and rejects duplicate keys, unknown fields,
+truncation, trailing bytes, and configured-limit violations. `Presence<T>`,
+canonical scalar wrappers, generated open variants, and typed `WorkerError`
+values preserve the shared JSON contract. Schema-invalid or oversized handler
+output returns `OUTPUT_COMPLETION` at the worker boundary and is never emitted
+as public data.
+
+The `unwind` development/test profile catches handler unwinds at the future
+polling boundary and returns a private `INTERNAL` server failure after dropping
+request state. The release profile is explicitly `panic = "abort"`: no
+destructor, hook, cancellation, or panic recovery is promised after an abort;
+the process supervisor owns failure and restart. Tests exercise unwind
+containment, while the feature matrix compiles the aborting release profile.
+
+Supported targets are targets with Rust 1.85+, `std`, threads, atomics, and a
+`Send` executor chosen by the application. WASM without those facilities,
+embedded/no-std targets, process supervision, TLS transports, and non-`Send`
+local executors are not certified by `worker.remote-1.rust`. The separately
+published result is `conformance/v1/rust-worker.json`; it claims a Go-gateway
+to Rust-worker path only and explicitly does not claim an independent native
+execution runtime. See the complete supervised-stdio example at
+`examples/go-gateway-rust-worker/README.md`.
