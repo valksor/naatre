@@ -66,6 +66,9 @@ evidence must be described as planned.
   deterministic bounded backend projections, explicit imported-operation
   registration, and a constrained HTTP-JSON reference consumer for
   `core.adapters-1`; full external-protocol integrations remain optional.
+- `openapiadapter`: strict OpenAPI 3.2.0 JSON import/export and explicitly
+  approved, bounded `net/http` runtime consumption for `adapter.openapi-1`;
+  see the [OpenAPI adapter guide](openapiadapter/README.md).
 - `generatorplugin`: explicit generator-plugin discovery, bounded process
   hosting, safe diagnostics, and reproducible third-party fixture execution for
   `sdk.generator-plugin-host-1`; see the
@@ -81,14 +84,14 @@ evidence must be described as planned.
   `runtime.go.plan-cache-1` plan-template cache; see the
   [Go registry contract](docs/registry.md) and
   [plan-cache profile](docs/plan-cache.md), and
-  [process-hosting guide](docs/process-hosting.md). Production distributed
-  federation planning and transport integration remain owned by #109.
+  [process-hosting guide](docs/process-hosting.md), plus the
+  [Go federation coordinator profile](docs/federation-coordinator.md).
+  Production distributed federation planning and transport integration remain
+  owned by #109.
 - `observability`: optional OpenTelemetry trace, metric, and log export plus
   application-owned transactional audit/outbox admission for
   `operations.observability-integrations-go-1`; see the
   [integration guide](docs/observability-integrations.md).
-  [process-hosting guide](docs/process-hosting.md), plus the
-  [Go federation coordinator profile](docs/federation-coordinator.md).
 - `tooling`: shared offline validation, formatting, hashing, explain, editor,
   manifest compatibility, deterministic mocks, and credential-redaction core
   for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).
@@ -96,35 +99,25 @@ evidence must be described as planned.
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the
   [reflection adapter guide](reflectadapter/README.md).
-- `transport/http`: strict reusable SSE framing for
-  [`core.streaming-1`](spec/v1/streaming.md) and opt-in authenticated,
-  filtered schema discovery for `schema.discovery.http-1`; see the
-  [discovery profile](docs/schema-discovery.md). #72 and #73 own the concrete
-  streaming and general operation `net/http` adapters.
-  [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
-  streaming and general `net/http` adapters.
 - [`core.transport-batch-1`](spec/v1/request-batching.md) defines the distinct
   finite request-batch envelope, aggregate admission, item correlation,
   independent/fail-fast/atomic policies, and the HTTP-versus-streaming
   multiplexing boundary. It does not turn connection sharing into atomic work.
 - `transport/http`: router-free Go `net/http` unary execution with bounded
   negotiation, cancellation, safe failures, cache-safe defaults, exact-origin
-  CORS, and strict reusable SSE framing; see the
-  [adapter runtime and capability matrix](transport/http/README.md).
+  CORS, strict reusable SSE framing, and opt-in authenticated schema discovery;
+  see the [adapter runtime and capability matrix](transport/http/README.md) and
+  [discovery profile](docs/schema-discovery.md).
 - `internal/conformance`: Go-only conformance harness internals.
 - `internal/qualityharness`: Go-only fuzz, repeated-race, owned-resource leak,
   fault-injection, and benchmark instrumentation for `quality.go.harness-1`;
   see the [Go quality harness](docs/go-quality-harness.md).
-- `examples/processhost`: executable minimal `net/http` process host.
+- `examples/processhost`: bounded `net/http` health, admission, drain, and
+  context-driven supervisor integration for `operations.lifecycle-1`.
 - `sdk`: deterministic generated client mapping slices. `sdk/go/generated`,
   `sdk/typescript/generated`, and `sdk/dotnet/Naatre.Core/Generated` contain
   checked-in operation bindings; the final combined compatibility matrix
   remains owned by #69.
-- `examples/processhost`: bounded `net/http` health, admission, drain, and
-  context-driven supervisor integration for `operations.lifecycle-1`.
-- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
-  contains the checked-in `sdk.go.operations-1` result and operation bindings;
-  full cross-language compatibility certification remains planned.
 
 Dependencies point inward in that order: client packages use only portable
 protocol contracts; observability and reflection adapters, transports, other

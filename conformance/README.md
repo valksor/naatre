@@ -23,11 +23,8 @@ support and unsupported-capability boundaries are documented in
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 535 stable normative clauses and all 110 repository issues to exact
-maps all 525 stable normative clauses and all 110 repository issues to exact
-maps all 520 stable normative clauses and all 110 repository issues to exact
-maps all 524 stable normative clauses and all 110 repository issues to exact
-JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
+and maps stable normative clauses and all repository issues to exact JSON
+pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
 execution (#69 and #70).
@@ -410,3 +407,9 @@ bounded fan-out and retry multiplication, cancellation/timeout and rolling
 upgrade evidence, operator-owned endpoint bindings, trace propagation, the
 runtime/platform boundary, and every unsupported optional capability. The Go
 harness consumes its planning vectors directly.
+
+`v1/openapi-adapter.json` pins `adapter.openapi-1` to OpenAPI 3.2.0, the Draft
+2020-12 JSON Schema dialect, the exact issue #56 dependency revisions and file
+digests, and the Go import, export, runtime-consume, cancellation, security,
+and resource-limit evidence. `openapiadapter/README.md` publishes the complete
+closed supported subset and its unsupported optional capabilities.
