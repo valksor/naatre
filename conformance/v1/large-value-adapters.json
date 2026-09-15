@@ -1,0 +1,147 @@
+{
+  "profile": "implementation.go.large-value-adapters-1",
+  "fixtureSuite": "1.0.0",
+  "owner": {
+    "issue": 87,
+    "coreContractIssue": 46,
+    "normativeProfile": "core.large-value-1",
+    "dependencyRevision": "d75647ef2c94e7adb60cedbcd8243f416e5468a0"
+  },
+  "dependencies": [
+    {"profile":"core.large-value-1-spec","path":"spec/v1/large-values.md","sha256":"4e9090e2e2199f55080598a6b599e59d9d1abb2165e617b69bca614b5f45dd2a"},
+    {"profile":"core.large-value-1-fixture","path":"conformance/v1/large-values.json","sha256":"2a3783fdee2236ea27e4617669ef5668425ce4aeb1cd9451e3ab68d4deb14ae3"},
+    {"profile":"core.large-value-1-types","path":"largevalue/types.go","sha256":"aeb06d3696af8aadf9e02d9aae8bc9e16cdb941b8772600c696ac6f0e0d925d1"},
+    {"profile":"core.large-value-1-egress","path":"largevalue/egress.go","sha256":"d0edf3d59731d5d46a505e7b8b2c9434c25fd1a37bb0228b143800fab37a53f1"},
+    {"profile":"core.large-value-1-range","path":"largevalue/range.go","sha256":"7d69bc37a6b639f7ae9357db38022e454baede9e04478161cccbcf6d835fce5a"},
+    {"profile":"core.large-value-1-identity","path":"largevalue/identity.go","sha256":"5459dd5d9df6ab54c4f0ebc913b7d84197a7e15704e0417b173afd4e1a59edab"},
+    {"profile":"go.module","path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+    {"profile":"go.module-lock","path":"go.sum","sha256":"0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+  ],
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "package": "github.com/valksor/naatre/largevalueadapter",
+    "goVersion": "1.27.0",
+    "externalDependencies": [],
+    "files": [
+      {"path":"largevalue/coordinator.go","sha256":"d2fb8b849f1ef7f976566b41ac26a9f4b6c9e34f4439b5585a4ae7b805929af0"},
+      {"path":"largevalueadapter/types.go","sha256":"e0f69fb1a1b9c731b015492f2a2c383e89131504fa49b133c17d90790239f743"},
+      {"path":"largevalueadapter/direct.go","sha256":"6b17020153d9b2046981ed9c26c64558db541e7194751565cef7ce04fe19def1"},
+      {"path":"largevalueadapter/presigned.go","sha256":"8966e54459862a3aab3cb738dca1c835b58f2de4fe1254b2dc3ac6b935cb7f7a"},
+      {"path":"largevalueadapter/pinned_http.go","sha256":"e1c8c0f312594923d1147dd2c5ac0466aefcf579cf1a26e0a831e684eaa9251c"},
+      {"path":"largevalueadapter/application.go","sha256":"a90ca81cd7914fbee5a505cb80598023a79bef752fb22081ef5d6e42a65ecdba"},
+      {"path":"largevalueadapter/assembly.go","sha256":"19573e1bd65080c05e930f6eeb8bb58909692c09eb755aad66a035ae7477739f"},
+      {"path":"largevalueadapter/test_helpers_test.go","sha256":"8ca81c8a117606362d35ba6a7f20a5e2bb8e21a2a0094c76771f090db5a5b9da"},
+      {"path":"largevalueadapter/direct_application_test.go","sha256":"2cc019758a31275fb26232a50571e6555b3c2d23ccb58ac00a080e9cbc5a4d1d"},
+      {"path":"largevalueadapter/presigned_test.go","sha256":"8824f49d162fa269187cc233f8109b8bcf8983e953941c80fa19f5fa440e8f2b"},
+      {"path":"largevalueadapter/assembly_test.go","sha256":"ca16fe15e59dc09689501118cba80f6c41a408bf872db277f1a4998c80cd58c4"},
+      {"path":"docs/large-value-adapters.md","sha256":"66bc3544c12049f72528ecf2d38723f1457258fbae2934b05153f1faf2db4a2b"}
+    ]
+  },
+  "runtime": {
+    "language": "go",
+    "minimum": "1.27.0",
+    "platformProfile": "portable-go-library-and-net-http-handler",
+    "requiresListener": false,
+    "requiresNetworkForFixtures": false,
+    "certifiedOperatingSystems": [],
+    "certifiedArchitectures": []
+  },
+  "profiles": [
+    {"name":"direct","upload":true,"download":true,"implementation":"net/http handler"},
+    {"name":"presigned","upload":true,"download":true,"implementation":"application-owned pinned transport"},
+    {"name":"multipart","upload":true,"download":false,"implementation":"filesystem assembly"},
+    {"name":"resumable","upload":true,"download":false,"implementation":"filesystem assembly"},
+    {"name":"application","upload":true,"download":true,"implementation":"application source and transactional sink"}
+  ],
+  "limits": {
+    "maximumTransferBytes": 67108864,
+    "maximumChunkBytes": 8388608,
+    "maximumParts": 128,
+    "maximumSessions": 128,
+    "maximumHeaderBytes": 32768,
+    "maximumURLBytes": 8192,
+    "maximumIdentifierBytes": 128,
+    "maximumRedirects": 5,
+    "maximumCleanupBatch": 128
+  },
+  "fixtures": [
+    {"name":"direct-stream-upload-range-download","class":"positive","tests":["TestDirectHandlerStreamsUploadAndConditionalRangeDownload"]},
+    {"name":"signed-method-limit-and-redaction","class":"negative","tests":["TestDirectHandlerRejectsMethodsLimitsAndSecretsWithStableCodes"]},
+    {"name":"conditional-single-range","class":"boundary","tests":["TestDirectHandlerStreamsUploadAndConditionalRangeDownload"]},
+    {"name":"application-transactional-cleanup","class":"cancellation","tests":["TestApplicationAdapterCommitsOrAbortsOwnedSink"]},
+    {"name":"presigned-pinned-redirect","class":"positive","tests":["TestPresignedImportPinsEveryRedirectAndStripsCrossOriginCredentials"]},
+    {"name":"concrete-http-pinned-dial","class":"positive","tests":["TestHTTPPinnedTransportDialsOnlyApprovedAddressWithoutListener"]},
+    {"name":"dns-rebinding-and-transport-redaction","class":"negative","tests":["TestPresignedImportRejectsDNSRebindingAndRedactsTransportFailure"]},
+    {"name":"capability-bound-presigned-target","class":"negative","tests":["TestPresignedRejectsUnsignedTransferURLBeforeRequest"]},
+    {"name":"presigned-upload-redirect-replay","class":"boundary","tests":["TestPresignedExportStreamsOnceAndRejectsUploadRedirectReplay"]},
+    {"name":"multipart-out-of-order-assembly","class":"positive","tests":["TestAssemblerStreamsOutOfOrderMultipartAndCleansAfterFinalization"]},
+    {"name":"gap-overlap-validator-digest-cancellation","class":"cancellation","tests":["TestAssemblerRejectsGapOverlapValidatorDigestAndCleansCancelledChunk"]},
+    {"name":"bounded-session-and-orphan-sweep","class":"resource-limit","tests":["TestAssemblerBoundsSessionsAndSweepsExpiredAndCrashOrphanData"]}
+  ],
+  "stableFailureCodes": [
+    "LARGE_ADAPTER_INVALID_CONFIG",
+    "LARGE_ADAPTER_INVALID_REQUEST",
+    "LARGE_ADAPTER_UNSUPPORTED_CAPABILITY",
+    "LARGE_ADAPTER_UNAVAILABLE",
+    "LARGE_ADAPTER_TRANSFER_FAILED",
+    "LARGE_ADAPTER_INTEGRITY_FAILED",
+    "LARGE_ADAPTER_RESOURCE_EXHAUSTED",
+    "LARGE_ADAPTER_CANCELLED",
+    "LARGE_ADAPTER_EGRESS_DENIED",
+    "LARGE_ADAPTER_CONFLICT",
+    "LARGE_ADAPTER_CLEANUP_FAILED"
+  ],
+  "capabilities": {
+    "supported": [
+      "direct-streaming-upload-download",
+      "conditional-single-range-download",
+      "signed-capability-method-enforcement",
+      "presigned-pinned-address-import-export",
+      "capability-bound-presigned-initial-target",
+      "concrete-no-proxy-http1-pinned-transport",
+      "per-hop-redirect-authorization-and-resolution",
+      "cross-origin-credential-and-digest-stripping",
+      "multipart-exact-part-assembly",
+      "resumable-exact-offset-assembly",
+      "application-source-and-transactional-sink",
+      "independent-bounded-abort-context",
+      "bounded-expiry-and-crash-orphan-sweep",
+      "stable-redacted-public-failures"
+    ],
+    "unsupported": [
+      "multipart-http-range-download",
+      "automatic-presigned-put-redirects-or-retries",
+      "resumable-download",
+      "parallel-part-writes-for-one-session",
+      "multi-process-shared-assembly-root",
+      "cross-process-file-locking",
+      "distributed-cleanup-leadership",
+      "bundled-final-object-store",
+      "s3-gcs-azure-vendor-sdks",
+      "provider-specific-multipart-apis",
+      "automatic-credential-acquisition-or-refresh",
+      "default-dns-or-proxy-dialing",
+      "http2-or-http3-transport-certification",
+      "websocket-or-sse-transfer",
+      "trailers-only-digests",
+      "brotli-or-zstd-decoding",
+      "encryption-at-rest-or-key-management",
+      "malware-scanner-implementation",
+      "antivirus-signatures",
+      "quota-billing",
+      "framework-middleware",
+      "browser-mobile-or-native-bindings",
+      "non-go-runtimes",
+      "cross-language-certification",
+      "operating-system-or-architecture-certification",
+      "deployment-certification"
+    ]
+  },
+  "commands": [
+    "GOWORK=off go test ./largevalue ./largevalueadapter -count=1",
+    "GOWORK=off go test -race ./largevalue ./largevalueadapter -count=1",
+    "GOWORK=off go test ./internal/conformance -run 'TestLargeValueAdapterProfile|TestLargeValueTransportFixture|TestLargeValueEgressAndSecurityFixture' -count=1",
+    "GOWORK=off go vet ./largevalue ./largevalueadapter ./internal/conformance",
+    "GOWORK=off go generate ./..."
+  ]
+}

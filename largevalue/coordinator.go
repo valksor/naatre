@@ -191,6 +191,18 @@ func (c *Coordinator) Consume(ctx context.Context, reference string, handler fun
 	return nil
 }
 
+// Inspect authorizes and resolves a capability without opening its content.
+// When method is non-empty it also enforces the method signed into the
+// capability. Adapter packages use it to gate staging and every remote
+// redirect hop. The returned record excludes the bearer reference.
+func (c *Coordinator) Inspect(ctx context.Context, reference string, action AuthorizationAction, method string) (Record, error) {
+	record, _, err := c.authorizedRecord(ctx, reference, action)
+	if err != nil || (method != "" && !slices.Contains(record.Methods, method)) {
+		return Record{}, ErrUnavailable
+	}
+	return record, nil
+}
+
 func (c *Coordinator) Revoke(ctx context.Context, reference string) error {
 	record, _, err := c.authorizedRecord(ctx, reference, AuthorizeRevoke)
 	if err != nil {

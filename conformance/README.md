@@ -34,6 +34,14 @@ schema-fidelity, trust, session-isolation, lifecycle-outcome, and separate stdio
 and Streamable HTTP claims. The Go reference compiler and dependency-free
 JavaScript verifier run without a listener or network access; concrete MCP wire
 clients and servers remain owned by issue 103.
+`v1/large-value-adapters.json` binds the separate
+`implementation.go.large-value-adapters-1` Go implementation to the exact core
+revision, stable redacted failures, finite limits, all five transfer profiles,
+deterministic assembly/orphan cleanup, and positive, negative, boundary,
+cancellation, and resource-limit tests. The handler, fake pinned transport, and
+temporary-directory fixtures require no listener or network endpoint. See the
+[adapter guide](../docs/large-value-adapters.md) for ownership and unsupported
+capabilities.
 `v1/events.json` pins the CloudEvents 1.0.2 envelope and
 `naatre.webhook.rfc9421-1` exact-byte signature profile. The Go reference
 receiver and dependency-free JavaScript receiver both verify whitespace, gzip,
