@@ -557,6 +557,12 @@
       "profile": "adapter.asyncapi-1",
       "category": "integration",
       "sha256": "c6ccf22fa8162de2698350555d320048d64d2f1e261a388f6e800f81eb482828"
+    },
+    {
+      "path": "v1/mcp-adapter.json",
+      "profile": "adapter.mcp-1",
+      "category": "integration",
+      "sha256": "7856cffa3ea17c64e6d856a30c7b7df97d46874d38ac1218fe628be19262a839"
     }
   ],
   "normativeSources": [
@@ -6444,6 +6450,96 @@
       ]
     },
     {
+      "caseId": "requirements.mcp.profile",
+      "spec": "spec/v1/mcp-adapter.md",
+      "clauses": [
+        "MCP-001",
+        "MCP-002",
+        "MCP-003"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/mcp-adapter.json","pointer":"/registrationFixtures/2","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/revisions","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/transports/stdio","polarity":"negative"}
+      ]
+    },
+    {
+      "caseId": "requirements.mcp.schema",
+      "spec": "spec/v1/mcp-adapter.md",
+      "clauses": [
+        "MCP-100",
+        "MCP-101",
+        "MCP-102",
+        "MCP-103"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/mcp-adapter.json","pointer":"/schemaFidelity","polarity":"mixed"},
+        {"path":"v1/mcp-adapter.json","pointer":"/roundTrip","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/mappingMatrix/18","polarity":"mixed"}
+      ]
+    },
+    {
+      "caseId": "requirements.mcp.trust",
+      "spec": "spec/v1/mcp-adapter.md",
+      "clauses": [
+        "MCP-200",
+        "MCP-201",
+        "MCP-202",
+        "MCP-203"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/mcp-adapter.json","pointer":"/policyAuthority","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/securityFixtures/0","polarity":"negative"},
+        {"path":"v1/mcp-adapter.json","pointer":"/registrationFixtures/0","polarity":"mixed"},
+        {"path":"v1/mcp-adapter.json","pointer":"/transports/streamable-http","polarity":"positive"}
+      ]
+    },
+    {
+      "caseId": "requirements.mcp.isolation",
+      "spec": "spec/v1/mcp-adapter.md",
+      "clauses": [
+        "MCP-300",
+        "MCP-301",
+        "MCP-302",
+        "MCP-303"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/mcp-adapter.json","pointer":"/sessionIsolation","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/0","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/1","polarity":"negative"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/2","polarity":"negative"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/3","polarity":"negative"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/4","polarity":"negative"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/5","polarity":"negative"},
+        {"path":"v1/mcp-adapter.json","pointer":"/lifecycleFixtures/6","polarity":"mixed"},
+        {"path":"v1/mcp-adapter.json","pointer":"/transports/stdio","polarity":"positive"}
+      ]
+    },
+    {
+      "caseId": "requirements.mcp.transports",
+      "spec": "spec/v1/mcp-adapter.md",
+      "clauses": [
+        "MCP-400",
+        "MCP-401",
+        "MCP-402"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/mcp-adapter.json","pointer":"/transports/stdio","polarity":"mixed"},
+        {"path":"v1/mcp-adapter.json","pointer":"/transports/streamable-http","polarity":"mixed"}
+      ]
+    },
+    {
+      "caseId": "requirements.mcp.evidence",
+      "spec": "spec/v1/mcp-adapter.md",
+      "clauses": [
+        "MCP-500"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/mcp-adapter.json","pointer":"/commands","polarity":"positive"},
+        {"path":"v1/mcp-adapter.json","pointer":"/ownership","polarity":"positive"}
+      ]
+    },
+    {
       "caseId": "requirements.http.digest.profile",
       "spec": "spec/v1/http-digest.md",
       "clauses": [
@@ -8069,6 +8165,11 @@
       "caseId": "issue.64",
       "issue": 64,
       "fixtureRefs": [
+        {
+          "path": "v1/mcp-adapter.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/64",

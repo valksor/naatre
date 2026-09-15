@@ -599,19 +599,21 @@
     },
     "64": {
       "issue": 64,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 64,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "adapter.mcp-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.mcp-1"
+        ]
       }
     },
     "65": {
