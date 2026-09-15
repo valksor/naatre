@@ -15,7 +15,11 @@ import (
 
 func TestPrepareAccumulatesIndependentErrorsInDocumentOrder(t *testing.T) {
 	t.Parallel()
-	snapshot := frozenRegistry(t, runtime.NewRegistry(coreTypes(t)))
+	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := frozenRegistry(t, registry)
 	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"missingOne"}},{"$call":{"name":"missingTwo"}}]}]}}`)
 
 	_, err := runtime.Prepare(snapshot, request)

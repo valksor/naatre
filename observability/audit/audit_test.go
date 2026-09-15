@@ -218,6 +218,9 @@ func mutationPlan(t *testing.T, provider runtime.TransactionProvider, handler fu
 		t.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := runtime.Descriptor{
 		Name: "write", Scope: runtime.RootScope, Kind: protocol.Mutation, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String),

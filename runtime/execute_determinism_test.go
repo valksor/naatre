@@ -19,6 +19,9 @@ func TestExecuteParallelResponsesAreByteStableAcrossRepeatedRuns(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"slowName", "fastName"} {
 		name := name
 		registerComposition(t, registry, naatreruntime.BindInvocation[string](naatreruntime.Descriptor{
@@ -58,6 +61,9 @@ func TestExecuteNestedParallelGroupsShareTheExecutionBound(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var active atomic.Int64
 	var maximum atomic.Int64
 	started := make(chan struct{})
@@ -148,6 +154,9 @@ func TestExecuteParallelResponsesIgnoreHandlerCompletionOrder(t *testing.T) {
 	const branches = 8
 	types := compositionTypes(t)
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var reverse atomic.Bool
 	gates := make([]chan struct{}, branches)
 	for index := range gates {
@@ -235,6 +244,9 @@ func TestExecuteFailFastParallelReportsCompletedSubsetInvariants(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, naatreruntime.BindInvocation[string](naatreruntime.Descriptor{
 		Name: "boom", Scope: naatreruntime.RootScope, Kind: protocol.Query, Member: naatreruntime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(naatreruntime.ReadEffect),
@@ -359,6 +371,9 @@ func indexAlias(prefix string) func(int) string {
 func rootStringCallSnapshot(t testing.TB, name string, handle func(context.Context, naatreruntime.Invocation) (string, error)) naatreruntime.Snapshot {
 	t.Helper()
 	registry := naatreruntime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, naatreruntime.BindInvocation[string](naatreruntime.Descriptor{
 		Name: name, Scope: naatreruntime.RootScope, Kind: protocol.Query, Member: naatreruntime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(naatreruntime.ReadEffect),

@@ -135,6 +135,9 @@ func portableExecutionRegistry(t testing.TB, vector string) (runtime.Snapshot, *
 		t.Fatalf("freeze types: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	starts := &atomic.Int64{}
 	registerPortableExecutionDefinitions(t, registry, vector, starts, objectUsers)
 	if vector == "mutation-operation-atomicity" || vector == "mutation-named-atomic-groups" {

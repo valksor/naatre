@@ -18,6 +18,9 @@ func TestExecuteComposesTypedCallsFieldsAliasesAndNesting(t *testing.T) {
 
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.Bind[schema.InputValue, map[string]any](runtime.Descriptor{
 		Name: "lookup", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: "LookupInput", Output: "User", Metadata: completeMetadata(runtime.ReadEffect),
@@ -72,6 +75,9 @@ func TestExecuteDeepMutationGoldenCompletesWriteBeforeFollowingRead(t *testing.T
 
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var state struct {
 		sync.Mutex
 		value string
@@ -123,6 +129,9 @@ func TestExecuteDeepQueryGoldenShapesCollectionOperationsWithoutImplicitMapping(
 
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var rootCalls atomic.Int64
 	var fieldCalls atomic.Int64
 	usersMetadata := completeMetadata(runtime.ReadEffect)
@@ -182,6 +191,9 @@ func TestExecuteRunsPipelinesBindingsDirectivesAndConcreteFragments(t *testing.T
 
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var skippedCalls atomic.Int64
 	registerComposition(t, registry, runtime.BindInvocation[map[string]any](runtime.Descriptor{
 		Name: "lookup", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
@@ -257,6 +269,9 @@ func TestExecuteContainsPanicsContinuesQueriesAndStopsMutations(t *testing.T) {
 			t.Parallel()
 			types := compositionTypes(t)
 			registry := runtime.NewRegistry(types)
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			var later atomic.Int64
 			panicMetadata := completeMetadata(runtime.ReadEffect)
 			if kind == protocol.Mutation {
@@ -309,6 +324,9 @@ func TestExecuteFreezesOutputsBeforeLaterSiblingAndRunsParallelBranches(t *testi
 
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	shared := map[string]any{"name": "Ada"}
 	registerComposition(t, registry, runtime.BindInvocation[map[string]any](runtime.Descriptor{
 		Name: "shared", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,

@@ -16,6 +16,9 @@ import (
 func TestExtensionRegistryFreezesOrderingDiscoveryAndNegotiation(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	events := make([]string, 0, 2)
 	registerExtensionDirective(t, registry, "alphaExt", "com.example.alpha-1", func(runtime.DirectivePlanContext) (runtime.DirectivePlanDecision, error) {
 		events = append(events, "alpha")
@@ -137,6 +140,9 @@ func TestExtensionRegistryRejectsConflictsCyclesAndUnsafeOwnership(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			registry := runtime.NewRegistry(coreTypes(t))
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			test.setup(t, registry)
 			if _, err := registry.Freeze(); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Freeze() = %v, want %q", err, test.want)
@@ -148,6 +154,9 @@ func TestExtensionRegistryRejectsConflictsCyclesAndUnsafeOwnership(t *testing.T)
 func TestExtensionPlannerAdditionalCostIsBoundedAcrossInvocations(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerExtensionDirective(t, registry, "costExt", "com.example.cost-1", func(runtime.DirectivePlanContext) (runtime.DirectivePlanDecision, error) {
 		return runtime.DirectivePlanDecision{AdditionalCost: 2}, nil
 	})
@@ -175,6 +184,9 @@ func TestExtensionPlannerAdditionalCostIsBoundedAcrossInvocations(t *testing.T) 
 func TestSnapshotDecodeOptionsRejectsIncompatibleCallerPolicy(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	mustRegisterExtension(t, registry, runtimeExtension("com.example.audit", "1.0.0", "com.example.audit-1", "com.example.audit.impl-1"))
 	snapshot := frozenRegistry(t, registry)
 	_, err := snapshot.DecodeOptions(protocol.DecodeOptions{Extensions: map[string]protocol.ExtensionSupport{
@@ -202,6 +214,9 @@ func TestPrepareRejectsNegotiatedExtensionOutsideFrozenSnapshot(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			registry := runtime.NewRegistry(coreTypes(t))
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			registerExtensionRoot(t, registry)
 			if test.register != nil {
 				mustRegisterExtension(t, registry, *test.register)
@@ -228,6 +243,9 @@ func TestPrepareRejectsNegotiatedExtensionOutsideFrozenSnapshot(t *testing.T) {
 func TestPrepareRequiresExactTupleForRequestedFrozenExtensionCapability(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	plannerCalled := false
 	registerExtensionDirective(t, registry, "auditExt", "com.example.audit-1", func(runtime.DirectivePlanContext) (runtime.DirectivePlanDecision, error) {
 		plannerCalled = true

@@ -46,6 +46,9 @@ func TestCompilePublishesCanonicalFidelityAndRegistersApprovedOperation(t *testi
 	}
 
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register adapter: %v", err)
 	}
@@ -154,6 +157,9 @@ func TestRuntimePreservesPartialFailureBetweenImportedOperations(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

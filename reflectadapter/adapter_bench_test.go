@@ -47,6 +47,9 @@ func BenchmarkInvoke(b *testing.B) {
 		b.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		b.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		b.Fatal(err)
 	}

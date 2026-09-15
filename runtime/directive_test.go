@@ -19,6 +19,9 @@ import (
 func TestCustomDirectiveCoercesArgumentsAndComposesInSourceOrder(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var events []string
 	var mutex sync.Mutex
 	definition := runtime.DirectiveDefinition{
@@ -94,6 +97,9 @@ func TestCustomDirectiveCoercesArgumentsAndComposesInSourceOrder(t *testing.T) {
 func TestDirectiveResponseAnnotationsAreOrderedAndVersioned(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	definition := runtime.DirectiveDefinition{
 		Descriptor: schema.DirectiveDescriptor{
 			ID: "vendor.note", Name: "note", Version: "2", Capability: "vendor.note-2",
@@ -145,6 +151,9 @@ func TestParallelDirectiveAnnotationsShareRootRecorder(t *testing.T) {
 	descriptor.Locations = []protocol.SelectionKind{protocol.CallSelection}
 	descriptor.Phases = append(descriptor.Phases, schema.DirectiveResponse)
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.RegisterDirective(runtime.DirectiveDefinition{
 		Descriptor: descriptor,
 		Annotator: runtime.DirectiveResponseAnnotatorFunc(func(runtime.DirectiveResponseContext) (json.RawMessage, error) {
@@ -206,6 +215,9 @@ func TestWriteDirectiveElevatesAuthorizationAndEffectAccounting(t *testing.T) {
 	descriptor.Effect = string(runtime.WriteEffect)
 	descriptor.Phases = append(descriptor.Phases, schema.DirectiveExecution)
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.RegisterDirective(runtime.DirectiveDefinition{
 		Descriptor: descriptor, Wrapper: runtime.DirectiveExecutionWrapperFunc(passthroughDirective),
 	}); err != nil {
@@ -319,6 +331,9 @@ func directiveAnnotatorPlan(t *testing.T, annotator runtime.DirectiveResponseAnn
 	descriptor.Arguments = nil
 	descriptor.Phases = append(descriptor.Phases, schema.DirectiveResponse)
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.RegisterDirective(runtime.DirectiveDefinition{Descriptor: descriptor, Annotator: annotator}); err != nil {
 		t.Fatalf("RegisterDirective: %v", err)
 	}
@@ -418,6 +433,9 @@ func TestDirectiveRegistrationCanonicalizesArgumentDefaults(t *testing.T) {
 	descriptor.Arguments[0].Required = false
 	descriptor.Arguments[0].Default = json.RawMessage(`1.0`)
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.RegisterDirective(runtime.DirectiveDefinition{Descriptor: descriptor}); err != nil {
 		t.Fatalf("RegisterDirective: %v", err)
 	}
@@ -563,6 +581,9 @@ func hostileDirectiveSnapshot(t *testing.T, wrapper runtime.DirectiveExecutionWr
 	descriptor.Phases = append(descriptor.Phases, schema.DirectiveExecution)
 	descriptor.Arguments = nil
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	wrapped := runtime.DirectiveExecutionWrapperFunc(func(ctx context.Context, input runtime.DirectiveExecutionContext, next runtime.DirectiveNext) (any, error) {
 		counts.wrappers.Add(1)
 		return wrapper.WrapDirective(ctx, input, next)
@@ -723,6 +744,9 @@ func writeDirectiveTestSnapshot(t *testing.T, planner runtime.DirectivePlanner) 
 func directiveTestSnapshot(t *testing.T, directive runtime.DirectiveDefinition) runtime.Snapshot {
 	t.Helper()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.RegisterDirective(directive); err != nil {
 		t.Fatalf("RegisterDirective: %v", err)
 	}

@@ -105,10 +105,14 @@ func TestPlanCacheRevisionInvalidationAndEvictionPreserveActivePlans(t *testing.
 func TestPlanCacheRevisionFenceRejectsStaleInflightFill(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	first := true
 	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{
+		Mode: runtime.AuthorizationAllowByDefault,
 		PlanningAuthorizer: runtime.PlanningAuthorizerFunc(func(runtime.PlanningAuthorizationRequest) (runtime.AuthorizationDecision, error) {
 			if first {
 				first = false

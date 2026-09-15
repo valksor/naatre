@@ -114,6 +114,9 @@ func assertPartialResultCompleteness(t *testing.T, vector partialResultVector, o
 func runPartialResultVector(t *testing.T, vector partialResultVector) runtime.Outcome {
 	t.Helper()
 	registry := runtime.NewRegistry(partialResultTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerPartialResultMembers(t, registry)
 	registerPartialResultRoots(t, registry, vector)
 	snapshot, err := registry.Freeze()

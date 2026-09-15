@@ -363,6 +363,11 @@ func (r *Registry) RegisterDirective(definition DirectiveDefinition) error {
 }
 
 // Freeze returns an immutable snapshot safe for concurrent planning and calls.
+//
+// Freeze fails closed when no authorization posture was ever chosen: a Registry
+// that never called ConfigureAuthorization cannot silently ship allow-all. The
+// caller must explicitly opt into AuthorizationAllowByDefault or
+// AuthorizationDenyByDefault before the registry can become ready.
 func (r *Registry) Freeze() (Snapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -374,6 +379,9 @@ func (r *Registry) Freeze() (Snapshot, error) {
 		if !interceptorHasRegisteredTarget(registration, r.definitions) {
 			return Snapshot{}, fmt.Errorf("%s interceptor has no registered target", registration.Level)
 		}
+	}
+	if r.authorization.Mode != AuthorizationAllowByDefault && r.authorization.Mode != AuthorizationDenyByDefault {
+		return Snapshot{}, errors.New("authorization posture not configured: call ConfigureAuthorization with AuthorizationAllowByDefault or AuthorizationDenyByDefault before Freeze")
 	}
 	definitions := make(map[string]Definition, len(r.definitions))
 	for key, definition := range r.definitions {

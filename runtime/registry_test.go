@@ -41,6 +41,9 @@ func TestRegistryFreezesTypedRootOperations(t *testing.T) {
 	t.Parallel()
 
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	definition := runtime.Bind(runtime.Descriptor{
 		Name:   "hello",
 		Scope:  runtime.RootScope,
@@ -142,6 +145,9 @@ func rootRegistryCases() []rootRegistryCase {
 func registryWithRootKinds(t *testing.T, tests []rootRegistryCase) *runtime.Registry {
 	t.Helper()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range tests {
 		metadata := completeMetadata(test.effect)
 		metadata.Deterministic = test.kind != protocol.Subscription
@@ -189,6 +195,9 @@ func checkNoError(t *testing.T, operation string, err error) {
 func TestRegistryInvokesExplicitObjectFieldsAndCalls(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(memberTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	field := runtime.Descriptor{
 		Name: "name", Scope: runtime.ObjectScope, Owner: "User", Member: runtime.FieldMember,
 		Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
@@ -368,6 +377,9 @@ func TestRegistryRejectsInvalidRegistrationsAtStartup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			registry := runtime.NewRegistry(coreTypes(t))
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			definition := runtime.Bind(tt.descriptor, func(_ context.Context, value string) (string, error) { return value, nil })
 			if err := registry.Register(definition); err == nil {
 				t.Fatalf("Register(%#v) succeeded, want error", tt.descriptor)
@@ -376,6 +388,9 @@ func TestRegistryRejectsInvalidRegistrationsAtStartup(t *testing.T) {
 	}
 
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := runtime.Descriptor{Name: "nil", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect)}
 	var handler runtime.Handler[string, string]
@@ -512,6 +527,9 @@ func TestDirectInvocationDoesNotAdmitPreCancelledContexts(t *testing.T) {
 			metadata := completeMetadata(runtime.ReadEffect)
 			metadata.ThreadSafety = safety
 			registry := runtime.NewRegistry(coreTypes(t))
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			descriptor := runtime.Descriptor{Name: "cancelled", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: metadata}
 			if err := registry.Register(runtime.Bind(descriptor, func(context.Context, string) (string, error) {
 				calls.Add(1)
@@ -585,6 +603,9 @@ func TestThreadSafeSharedHandlerSupportsConcurrentSnapshots(t *testing.T) {
 	t.Parallel()
 	handler := &sharedRegistryHandler{}
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := runtime.Descriptor{
 		Name: "shared", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
@@ -620,6 +641,9 @@ func TestThreadSafeSharedHandlerSupportsConcurrentSnapshots(t *testing.T) {
 func TestSerialOnlyHandlerDoesNotOverlapAcrossRequests(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.ThreadSafety = runtime.SerialOnly
 	descriptor := runtime.Descriptor{Name: "serial", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: metadata}
@@ -677,6 +701,9 @@ func (c *observedDoneContext) Done() <-chan struct{} {
 func registeredRegistry(t *testing.T, types schema.Snapshot, definition runtime.Definition) *runtime.Registry {
 	t.Helper()
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.Register(definition); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

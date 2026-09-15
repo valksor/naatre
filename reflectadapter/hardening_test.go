@@ -144,6 +144,9 @@ func TestDeepTypedConversionPreservesPresencePointersAndLists(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -177,6 +180,9 @@ func TestDeepTypedOutputConvertsListsPointersAndTaggedStructs(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -203,6 +209,9 @@ func TestHandlerErrorsPropagateWithoutWrapping(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -340,6 +349,9 @@ func TestCompileSnapshotsTaggedFunctionField(t *testing.T) {
 		return reflectedUser{Name: "mutated"}, nil
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -375,6 +387,9 @@ func TestCompileClonesMutableOptions(t *testing.T) {
 	descriptors["unused"] = runtime.Descriptor{}
 
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

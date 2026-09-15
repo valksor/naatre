@@ -187,6 +187,9 @@ func TestOutcomeRequireCompleteSeparatesPartialFromComplete(t *testing.T) {
 		t.Parallel()
 		types := compositionTypes(t)
 		registry := naatreruntime.NewRegistry(types)
+		if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+			t.Fatal(err)
+		}
 		registerComposition(t, registry, naatreruntime.BindInvocation[*string](naatreruntime.Descriptor{
 			Name: "maybe", Scope: naatreruntime.RootScope, Kind: protocol.Query, Member: naatreruntime.CallMember,
 			Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), OutputNullable: true,
@@ -293,6 +296,9 @@ func TestExecuteReportsEffectStateSeparatelyFromErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			registry := naatreruntime.NewRegistry(compositionTypes(t))
+			if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			registerComposition(t, registry, naatreruntime.BindInvocation[string](naatreruntime.Descriptor{
 				Name: "read", Scope: naatreruntime.RootScope, Kind: protocol.Query, Member: naatreruntime.CallMember,
 				Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String),

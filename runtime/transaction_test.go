@@ -74,6 +74,9 @@ func (t fakeTransaction) Savepoint(ctx context.Context, name string) (context.Co
 func TestConfigureTransactionsContainsCapabilityPanic(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	capabilities := runtime.TransactionCapabilities{}
 	provider := &capabilityTransactionProvider{capabilities: &capabilities, panicOnRead: true}
 	if err := registry.ConfigureTransactions(runtime.TransactionConfig{Provider: provider}); err == nil {
@@ -542,6 +545,9 @@ func TestPrepareRejectsNestedAtomicGroupsWithoutSavepoints(t *testing.T) {
 		return nil, nil, nil
 	}}
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.ConfigureTransactions(runtime.TransactionConfig{Provider: provider}); err != nil {
 		t.Fatalf("ConfigureTransactions: %v", err)
 	}
@@ -615,6 +621,9 @@ func TestPrepareEnforcesTransactionParticipationAndSerialBoundaries(t *testing.T
 		},
 	}
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	for _, registration := range []struct {
 		name          string
 		participation runtime.TransactionParticipation
@@ -778,6 +787,9 @@ func operationAtomicDocument() string {
 func transactionPlan(t *testing.T, provider runtime.TransactionProvider, audit runtime.MutationAuditHook, document string, handler func(context.Context) (string, error)) *runtime.Plan {
 	t.Helper()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := runtime.Descriptor{
 		Name: "write", Scope: runtime.RootScope, Kind: protocol.Mutation, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.WriteEffect),

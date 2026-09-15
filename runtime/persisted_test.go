@@ -60,6 +60,9 @@ func TestPersistedResolverRejectsSemanticExtensionPayloadMissingFromDocumentRequ
 	store := runtime.NewMemoryPersistedStore()
 
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerExtensionRoot(t, registry)
 	mustRegisterExtension(t, registry, runtimeExtension("com.example.audit", "1.0.0", "com.example.audit-1", "com.example.audit.impl-1"))
 	snapshot := frozenRegistry(t, registry)
@@ -548,6 +551,9 @@ func persistedCode(err error) string {
 func persistedSnapshot(t *testing.T, cost uint64) (runtime.Snapshot, *atomic.Int64) {
 	t.Helper()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Cost = cost
 	descriptor := runtime.Descriptor{

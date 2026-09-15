@@ -61,7 +61,7 @@
     "defaultSelectionRequiresPublishedEvidence": true
   },
   "evidence": [
-    {"path": "ext/naatre/naatre.c", "sha256": "e1b3b9bdae78ac811f6d9e4b1dda58befddd528a178bad4f0501a2a03384708b"},
+    {"path": "ext/naatre/naatre.c", "sha256": "09579efaeddfa5306830e620666c9e2627a74a87644765700df8a4ff85916cab"},
     {"path": "ext/naatre/php_naatre.h", "sha256": "da3665408900c89f13433629608aca48c3c4e44ecf42ef029645e8a42a5b9159"},
     {"path": "ext/naatre/config.m4", "sha256": "8e9616e70130b49975dd286f5404fa75106760673faf353ec332a3942e193a73"},
     {"path": "ext/naatre/config.w32", "sha256": "4823613aa27d1d40d2880db34874256cea802ca6807ca3c389e18f347a2b9f5f"},
@@ -79,7 +79,7 @@
     {"path": "ext/naatre/fuzz/corpus/malformed.json", "sha256": "a6fb08fda1acb957b6116bd37811a1fe41a01611c0631edbf786d6889a27a55c"},
     {"path": "ext/naatre/fuzz/corpus/nested.json", "sha256": "d247e8af00cfee5f06a02abd130f72b09d29e5ad83093aa37419565e1e5caa03"},
     {"path": "sdk/php/src/Native/Accelerator.php", "sha256": "a5ac28d5c1b97beaab2e71c0dc1367bb64eb01b35f0850813669c72a705ef0dd"},
-    {"path": "sdk/php/src/Native/Limits.php", "sha256": "ed23c39421a7af594484089bff9bcd432a69c83d1a0b169e9ebfe37a8d16ccb1"},
+    {"path": "sdk/php/src/Native/Limits.php", "sha256": "29c03952b471bdc3b6e0d6f713e77723a1b668e81557f63401dfc2ab5cd9d540"},
     {"path": "sdk/php/src/Native/Mode.php", "sha256": "f18b2183159cbe596a02fc2694ad9e2689dcb37bd406e59b57e83893f3b1f7aa"},
     {"path": "sdk/php/src/Native/NativeAdapter.php", "sha256": "8bddc6b13453395d515222e7a96c13de173e8fc30cc1a66cedd2adebbedb2c7c"},
     {"path": "sdk/php/src/Wire/PureJson.php", "sha256": "fb8f0f7d670c02bb3a52f102ed8d7cff0c43dd5c62b8645711bc764336217a4c"},

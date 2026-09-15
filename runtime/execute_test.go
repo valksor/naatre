@@ -137,6 +137,9 @@ func TestExecuteCanonicalizesExtendedScalarOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	for _, definition := range []runtime.Definition{
 		runtime.BindInvocation(runtime.Descriptor{Name: "integer", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.Int64), Metadata: completeMetadata(runtime.ReadEffect)}, func(_ context.Context, _ runtime.Invocation) (string, error) {
 			return "001", nil
@@ -392,6 +395,9 @@ func TestExecuteRejectsInvalidUTF8WithoutRepairingOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	for _, definition := range []runtime.Definition{
 		runtime.BindInvocation(runtime.Descriptor{Name: "scalar", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: metadata}, func(context.Context, runtime.Invocation) (string, error) {
@@ -560,6 +566,9 @@ type registeredCall struct {
 func registryWithCalls(t *testing.T, calls map[string]registeredCall) runtime.Snapshot {
 	t.Helper()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	for name, call := range calls {
 		effect := call.effect
 		if effect == "" {

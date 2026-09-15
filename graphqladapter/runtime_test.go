@@ -71,6 +71,9 @@ func TestConsumerRegistersOnlyNamedResolverAndSanitizesPartialResponse(t *testin
 		t.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -249,6 +252,9 @@ func TestConsumerTransportFailureUsesStablePublicRuntimeError(t *testing.T) {
 	}
 	types, _ := imported.Document().Snapshot()
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatal(err)
 	}
@@ -276,6 +282,9 @@ func TestConsumerCancellationUsesStableCancellationCode(t *testing.T) {
 	}
 	types, _ := imported.Document().Snapshot()
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +316,9 @@ func TestConsumerAdaptationFailureUsesStablePublicCode(t *testing.T) {
 	}
 	types, _ := imported.Document().Snapshot()
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatal(err)
 	}

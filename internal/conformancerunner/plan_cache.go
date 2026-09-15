@@ -94,6 +94,9 @@ func newPlanCacheRuntimeFixture() (*planCacheRuntimeFixture, error) {
 		return nil, err
 	}
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		return nil, err
+	}
 	fixture := &planCacheRuntimeFixture{}
 	metadata := func(effect naatreruntime.Effect) naatreruntime.Metadata {
 		return naatreruntime.Metadata{

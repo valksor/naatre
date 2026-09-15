@@ -85,6 +85,9 @@ func TestExtensionConformanceFixture(t *testing.T) {
 	for _, vector := range fixture.RegistryCases {
 		t.Run(vector.Name, func(t *testing.T) {
 			registry := runtime.NewRegistry(coreTypes(t))
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			for _, id := range vector.Extensions {
 				descriptor, exists := descriptors[id]
 				if !exists {

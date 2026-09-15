@@ -104,6 +104,9 @@ func validationRegistry(t testing.TB) (runtime.Snapshot, *atomic.Int64) {
 		t.Fatalf("freeze types: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int64
 	register := func(definition runtime.Definition, name string) {
 		if err := registry.Register(definition); err != nil {

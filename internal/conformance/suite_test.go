@@ -777,6 +777,9 @@ func parallelCancellationHandler(t *testing.T) (conformancerunner.Handler, <-cha
 		t.Fatal(err)
 	}
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	var startedOnce sync.Once
 	var active, maximum atomic.Int64

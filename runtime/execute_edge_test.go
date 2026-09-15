@@ -18,6 +18,9 @@ func TestExecuteDistinguishesNullMissingSkippedAndUnavailableInputs(t *testing.T
 
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var consumed atomic.Int64
 	registerComposition(t, registry, runtime.BindInvocation[*string](runtime.Descriptor{
 		Name: "nullable", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
@@ -131,6 +134,9 @@ func TestExecuteDoesNotInvokeObjectMemberOnNullCurrentValue(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[*map[string]any](runtime.Descriptor{
 		Name: "nullableUser", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "User", OutputNullable: true,
@@ -167,6 +173,9 @@ func TestExecuteFragmentBindingsRemainInSpreadSequentialScope(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[string](runtime.Descriptor{
 		Name: "load", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
@@ -207,6 +216,9 @@ func TestExecutePreservesNullableCollectionItemsWithoutMemberErrors(t *testing.T
 		{ID: "NullableUsers", Kind: schema.ListType, Output: true, Element: "User", ElementNullable: true},
 	}...)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "NullableUsers", Metadata: completeMetadata(runtime.ReadEffect),
@@ -259,6 +271,9 @@ func TestExecuteCancellationStopsCollectionItemAdmission(t *testing.T) {
 				{ID: "Users", Kind: schema.ListType, Output: true, Element: "User"},
 			}...)
 			registry := runtime.NewRegistry(types)
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 				Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 				Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
@@ -297,6 +312,9 @@ func TestExecuteBatchEligibleCallsRetainCompletionBarrier(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	batchMetadata := completeMetadata(runtime.ReadEffect)
 	batchMetadata.Batching = runtime.BatchEligible
 	registerComposition(t, registry, runtime.BindInvocation[map[string]any](runtime.Descriptor{
@@ -368,6 +386,9 @@ func TestExecuteNestedCompletionFailureKeepsSiblingData(t *testing.T) {
 		}},
 	}...)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[map[string]any](runtime.Descriptor{
 		Name: "person", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Person", Metadata: completeMetadata(runtime.ReadEffect),
@@ -419,6 +440,9 @@ func TestExecuteNestedCompletionFailureKeepsSiblingData(t *testing.T) {
 func TestExecuteDirectCompletionFailureKeepsSiblingMembers(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[map[string]any](runtime.Descriptor{
 		Name: "broken", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "User", Metadata: completeMetadata(runtime.ReadEffect),
@@ -478,6 +502,9 @@ func TestExecuteRejectsOverflowingStaleCursorWithoutPanicking(t *testing.T) {
 		ID: "Users", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.ID),
 	})
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int64
 	registerComposition(t, registry, runtime.BindInvocation[[]string](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,

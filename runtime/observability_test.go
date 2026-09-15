@@ -109,6 +109,9 @@ func TestTelemetryEmitsSafeCausalLifecycleAndContainsHookFailures(t *testing.T) 
 func TestPrepareTelemetryReportsPlanningOutcome(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := runtime.Descriptor{
 		Name: "read", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
@@ -160,6 +163,9 @@ func TestDeniedMutationAuditCarriesSafeCorrelation(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.WriteEffect)
 	metadata.Transaction = runtime.TransactionRequired
 	descriptor := runtime.Descriptor{
@@ -481,6 +487,9 @@ func TestBatchTelemetryPreservesDispatchLifecycle(t *testing.T) {
 func TestParallelTelemetryMatchesCausalFixture(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	release := make(chan struct{})
 	var started atomic.Int64
 	for _, name := range []string{"left", "right"} {

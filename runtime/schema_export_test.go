@@ -34,6 +34,9 @@ func TestRuntimeSnapshotExportsIndependentPortableSchemaByteIdentically(t *testi
 	}
 
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	rootDescriptor := runtime.Descriptor{
 		Name: "user", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "User", Description: "Look up a user",
@@ -119,6 +122,9 @@ func TestRuntimeSnapshotExportsPortableCollectionContract(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.AuthorizationPolicy = "users.read"
 	query := &schema.CollectionQueryDescriptor{
@@ -164,6 +170,9 @@ func TestRuntimeSnapshotExportsPortableCollectionContract(t *testing.T) {
 func TestRuntimeSchemaExportsBuiltInAndCustomDirectiveDescriptors(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := testDirectiveDescriptor("audit", "vendor.audit-1")
 	descriptor.Repeatable = true
 	if err := registry.RegisterDirective(runtime.DirectiveDefinition{Descriptor: descriptor}); err != nil {

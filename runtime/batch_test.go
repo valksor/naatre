@@ -20,6 +20,9 @@ func TestBatchFieldServesMappedItemsInOneInvocation(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
@@ -95,6 +98,9 @@ func TestBatchFieldServesMappedItemsInOneInvocation(t *testing.T) {
 func TestBatchInvocationReceivesOperationContext(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Batching = runtime.BatchEligible
 	registerComposition(t, registry, runtime.BindBatchInvocation(runtime.Descriptor{
@@ -124,6 +130,9 @@ func TestBatchInvocationReceivesOperationContext(t *testing.T) {
 func TestBatchCallCombinesTypedSourceAndInput(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Batching = runtime.BatchEligible
 	registerComposition(t, registry, runtime.BindBatchCall(runtime.Descriptor{
@@ -226,6 +235,9 @@ func TestCacheDeduplicatesParallelReadsAndPartitionsExternalEntries(t *testing.T
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int64
 	registerComposition(t, registry, runtime.Bind[schema.InputValue, string](runtime.Descriptor{
 		Name: "lookupName", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
@@ -306,6 +318,9 @@ func TestBatchMissingAndOutOfOrderResultsKeepItemPaths(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
@@ -349,6 +364,9 @@ func TestBatchDispatchTerminatesAtConcurrencyWidthOne(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
@@ -392,6 +410,9 @@ func TestCancelledRequestCacheWaitersTerminateWithoutExtraHandlers(t *testing.T)
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	var calls atomic.Int64
 	registerComposition(t, registry, runtime.Bind[schema.InputValue, string](runtime.Descriptor{
@@ -441,6 +462,9 @@ func TestNestedBatchLoadersTerminateAndPreserveOuterOrder(t *testing.T) {
 		{ID: "Groups", Kind: schema.ListType, Output: true, Element: "Group"},
 	}...)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "groups", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Groups", Metadata: completeMetadata(runtime.ReadEffect),
@@ -508,6 +532,9 @@ func TestMutationWriteInvalidatesRequestAndApplicationCachesBeforeFollowingRead(
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var state struct {
 		sync.Mutex
 		name string
@@ -578,6 +605,9 @@ func TestReadMetadataMustExplicitlyPermitMemoization(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Cacheable = false
 	var calls atomic.Int64
@@ -654,6 +684,9 @@ func cachePolicyPlan(t testing.TB, fail, nullable bool) (*runtime.Plan, *atomic.
 	t.Helper()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	calls := &atomic.Int64{}
 	descriptor := runtime.Descriptor{
 		Name: "value", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
@@ -702,6 +735,9 @@ func TestParallelBatchCallsShareOneDeterministicDispatch(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Batching = runtime.BatchEligible
 	var invocations atomic.Int64
@@ -746,6 +782,9 @@ func TestParallelBatchCallsShareOneDeterministicDispatch(t *testing.T) {
 func TestAuthorizationNoStoreBypassesRequestAndApplicationCaches(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int64
 	registerComposition(t, registry, runtime.Bind[schema.InputValue, string](runtime.Descriptor{
 		Name: "lookupName", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
@@ -788,6 +827,9 @@ func TestAuthorizationNoStoreBypassesRequestAndApplicationCaches(t *testing.T) {
 func TestBatchMaximumChunksOneParallelWindowDeterministically(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Batching = runtime.BatchEligible
 	var mu sync.Mutex
@@ -834,6 +876,9 @@ func TestBatchWindowDoesNotCrossMappedWriteBarrier(t *testing.T) {
 	t.Parallel()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Mutation, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
@@ -915,6 +960,9 @@ func batchBenchmarkPlan(t testing.TB, maxRuntimeWork uint64, batching ...bool) (
 	t.Helper()
 	types := compositionTypes(t)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	users := make([]map[string]any, 64)
 	for index := range users {
 		users[index] = map[string]any{"name": fmt.Sprintf("user-%03d", index)}

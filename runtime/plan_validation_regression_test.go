@@ -37,6 +37,9 @@ func TestPrepareRejectsPageWithoutSecureCollectionRuntime(t *testing.T) {
 	t.Parallel()
 	types := freezeCompositionTypes(t, schema.TypeDescriptor{ID: "Users", Kind: schema.ListType, Output: true, Element: schema.TypeID(schema.String)})
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, runtime.BindInvocation[[]string](runtime.Descriptor{
 		Name: "users", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Users", Metadata: completeMetadata(runtime.ReadEffect),
@@ -215,6 +218,9 @@ func TestPlanDescriptionTerminatesForBoundedRecursiveCollection(t *testing.T) {
 		t.Fatalf("freeze types: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	descriptor := runtime.Descriptor{
 		Name: "loop", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "LoopList", Metadata: completeMetadata(runtime.ReadEffect),

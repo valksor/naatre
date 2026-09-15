@@ -143,6 +143,9 @@ func TestExecuteNestedWidthOneParallelGroupsDoNotDeadlock(t *testing.T) {
 		},
 	})
 	registry := naatreruntime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(naatreruntime.AuthorizationConfig{Mode: naatreruntime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	registerComposition(t, registry, naatreruntime.BindInvocation[map[string]any](naatreruntime.Descriptor{
 		Name: "root", Scope: naatreruntime.RootScope, Kind: protocol.Query, Member: naatreruntime.CallMember,
 		Input: schema.TypeID(schema.String), Output: "Node", Metadata: completeMetadata(naatreruntime.ReadEffect),

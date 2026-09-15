@@ -116,6 +116,9 @@ func TestCompileConsumesOnlyTrustedRegistrationsAndPolicy(t *testing.T) {
 	}
 
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatal(err)
 	}

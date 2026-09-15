@@ -395,6 +395,9 @@ func TestRegistryRejectsUnsafeCollectionMetadata(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			registry := runtime.NewRegistry(compositionTypes(t))
+			if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+				t.Fatal(err)
+			}
 			metadata := completeMetadata(runtime.ReadEffect)
 			metadata.Collection = &test.collection
 			definition := runtime.BindInvocation[[]map[string]any](runtime.Descriptor{

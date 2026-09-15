@@ -94,7 +94,7 @@ func TestPlanningAuthorizationRejectsMutationBeforeExecution(t *testing.T) {
 	planning := runtime.PlanningAuthorizerFunc(func(request runtime.PlanningAuthorizationRequest) (runtime.AuthorizationDecision, error) {
 		return runtime.AuthorizationDecision{Allowed: request.Operation == protocol.Query}, nil
 	})
-	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{PlanningAuthorizer: planning}); err != nil {
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault, PlanningAuthorizer: planning}); err != nil {
 		t.Fatalf("ConfigureAuthorization: %v", err)
 	}
 	snapshot, err := registry.Freeze()
@@ -420,7 +420,7 @@ func TestAuthorizationCallbacksPanicAndErrorsFailClosedWithoutLeaks(t *testing.T
 
 	var calls atomic.Int64
 	registry := authorizationRegistry(t, &calls)
-	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{PlanningAuthorizer: runtime.PlanningAuthorizerFunc(func(runtime.PlanningAuthorizationRequest) (runtime.AuthorizationDecision, error) {
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault, PlanningAuthorizer: runtime.PlanningAuthorizerFunc(func(runtime.PlanningAuthorizationRequest) (runtime.AuthorizationDecision, error) {
 		panic("planning-secret")
 	})}); err != nil {
 		t.Fatal(err)
@@ -628,7 +628,7 @@ func TestAuthorizationObjectIsIsolatedFromPolicyMutation(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
 	registry := authorizationRegistry(t, &calls)
-	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Authorizer: runtime.AuthorizerFunc(func(_ context.Context, request runtime.AuthorizationRequest) (runtime.AuthorizationDecision, error) {
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault, Authorizer: runtime.AuthorizerFunc(func(_ context.Context, request runtime.AuthorizationRequest) (runtime.AuthorizationDecision, error) {
 		if object, ok := request.Object.(map[string]any); ok {
 			object["value"] = "tampered"
 		}
@@ -708,6 +708,40 @@ func TestFreezeRejectsInterceptorWithoutRegisteredTarget(t *testing.T) {
 	}
 }
 
+func TestFreezeRequiresExplicitAuthorizationPosture(t *testing.T) {
+	t.Parallel()
+	// A registry that never chose an authorization posture must fail closed at
+	// readiness rather than silently ship allow-all.
+	unconfigured := runtime.NewRegistry(coreTypes(t))
+	if _, err := unconfigured.Freeze(); err == nil || !strings.Contains(err.Error(), "authorization posture not configured") {
+		t.Fatalf("Freeze without a posture = %v, want readiness failure", err)
+	}
+	// An unset or unknown mode is rejected rather than silently defaulted.
+	if err := unconfigured.ConfigureAuthorization(runtime.AuthorizationConfig{}); err == nil {
+		t.Fatal("empty authorization mode accepted")
+	}
+	if err := unconfigured.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: "unknown"}); err == nil {
+		t.Fatal("unknown authorization mode accepted")
+	}
+	// Explicit allow-by-default is a valid, auditable opt-in that makes the
+	// registry ready without changing runtime allow semantics.
+	allow := runtime.NewRegistry(coreTypes(t))
+	if err := allow.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatalf("allow-by-default opt-in: %v", err)
+	}
+	if _, err := allow.Freeze(); err != nil {
+		t.Fatalf("Freeze after explicit allow-by-default: %v", err)
+	}
+	// Deny-by-default remains available.
+	deny := runtime.NewRegistry(coreTypes(t))
+	if err := deny.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationDenyByDefault}); err != nil {
+		t.Fatalf("deny-by-default opt-in: %v", err)
+	}
+	if _, err := deny.Freeze(); err != nil {
+		t.Fatalf("Freeze after explicit deny-by-default: %v", err)
+	}
+}
+
 func securityPath(path any) string {
 	return strings.Trim(strings.ReplaceAll(fmt.Sprint(path), " ", "/"), "[]")
 }
@@ -729,6 +763,9 @@ func authorizationRegistry(t testing.TB, calls *atomic.Int64) *runtime.Registry 
 		t.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	registerComposition(t, registry,
 		runtime.BindInvocation[map[string]any](runtime.Descriptor{Name: "secret", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember, Input: schema.TypeID(schema.String), Output: "Secret", Metadata: metadata}, func(context.Context, runtime.Invocation) (map[string]any, error) {

@@ -142,6 +142,9 @@ func TestCompileTaggedFieldsAndFunctionFieldsMatchesExplicitRegistry(t *testing.
 	}
 
 	reflected := runtime.NewRegistry(types)
+	if err := reflected.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	mustRegisterCompiled(t, reflected, compiledService, compiledUser)
 	reflectedSnapshot := mustFreeze(t, reflected)
 	explicitSnapshot := explicitReflectionSnapshot(t, types, greet, name)
@@ -254,6 +257,9 @@ func TestCompileAllowlistedObjectFieldAndCallMethods(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -284,6 +290,9 @@ func TestCompiledAdapterIsConcurrentAndImmutable(t *testing.T) {
 	definitions := compiled.Definitions()
 	definitions[0] = runtime.Definition{}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -415,6 +424,9 @@ func reflectionDescriptors() (runtime.Descriptor, runtime.Descriptor) {
 func explicitReflectionSnapshot(t testing.TB, types schema.Snapshot, greet, name runtime.Descriptor) runtime.Snapshot {
 	t.Helper()
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.Register(runtime.Bind[schema.InputValue, map[string]any](greet, func(_ context.Context, input schema.InputValue) (map[string]any, error) {
 		raw, err := input.MarshalJSON()
 		if err != nil {

@@ -14,8 +14,8 @@
   },
   "evidence": [
     {"path": "runtime/plan_cache.go", "sha256": "b6792a9b0ff375fac2eb22377880dab4dc9f76d83d19a6d4e4671704ecba6c0f"},
-    {"path": "runtime/plan_cache_test.go", "sha256": "005bbf7e58a2a4d798a70f092e561cadd12ede97b5fbe4395df69a285269c8f9"},
-    {"path": "internal/conformancerunner/plan_cache.go", "sha256": "0ffd2c0c2357daca3dac53c8fa32d6e52647dc97dcc151899a8c9d9bfde4a2dd"},
+    {"path": "runtime/plan_cache_test.go", "sha256": "87503bb095b1a31dd4312081f21c52e6bb52a52e9dc2a8c875fab57dc8caca59"},
+    {"path": "internal/conformancerunner/plan_cache.go", "sha256": "b558242119e796a216a8fcf536fd59368f8a80b9a1f551225518ade6ca7dbcfa"},
     {"path": "internal/conformancerunner/plan_cache_test.go", "sha256": "991401b8c2ed6e1f199bff3e07387824d98f59a27dc2275acfbf19444df0a263"},
     {"path": "docs/plan-cache.md", "sha256": "e03ca92bef9e7131b7aead64a5f5d03c12ce308cbf6de69a46aff79f3362521d"}
   ],

@@ -86,7 +86,11 @@ func TestPrepareRejectsUnallocatableConcurrency(t *testing.T) {
 
 func TestPrepareBoundsValidationDiagnostics(t *testing.T) {
 	t.Parallel()
-	snapshot := frozenRegistry(t, runtime.NewRegistry(coreTypes(t)))
+	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := frozenRegistry(t, registry)
 	request := decodeRuntimeRequest(t, `{"version":"1","document":{"operations":[{"name":"Q","kind":"query","select":[{"$call":{"name":"missingOne"}},{"$call":{"name":"missingTwo"}},{"$call":{"name":"missingThree"}}]}]}}`)
 
 	_, err := runtime.PrepareWithOptions(snapshot, request, runtime.PrepareOptions{
@@ -143,6 +147,9 @@ func TestNestedPageMultiplierOverflowFailsValidation(t *testing.T) {
 		schema.TypeDescriptor{ID: "Users", Kind: schema.ListType, Output: true, Element: "User", MaxDepth: 2},
 	)
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	rootMetadata := completeMetadata(runtime.ReadEffect)
 	rootMetadata.Collection = secureCollectionMetadata(t, pageSize, 0)
 	registerComposition(t, registry, runtime.BindInvocation[[]map[string]any](runtime.Descriptor{
@@ -272,6 +279,9 @@ func TestRuntimeCollectionCardinalityFailsBeforeAllocationWork(t *testing.T) {
 func TestNestedParallelGroupsShareConfiguredConcurrency(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var active atomic.Int64
 	var maximum atomic.Int64
 	twoStarted := make(chan struct{})
@@ -311,6 +321,9 @@ func TestNestedParallelGroupsShareConfiguredConcurrency(t *testing.T) {
 func TestExecutionDeadlineIsResourceExhaustion(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.Register(runtime.BindInvocation[string](runtime.Descriptor{
 		Name: "wait", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.ReadEffect),
@@ -335,6 +348,9 @@ func TestExecutionDeadlineIsResourceExhaustion(t *testing.T) {
 func TestExecutionDeadlineDoesNotWaitForUncooperativeHandler(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	observedCancellation := make(chan struct{})
 	release := make(chan struct{})
 	if err := registry.Register(runtime.BindInvocation[string](runtime.Descriptor{
@@ -386,6 +402,9 @@ func TestExecutionDeadlineDoesNotWaitForUncooperativeHandler(t *testing.T) {
 func TestOutputAndErrorBudgetsPreserveTruthfulEffectsAndValidJSON(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.Register(runtime.BindInvocation[string](runtime.Descriptor{
 		Name: "write", Scope: runtime.RootScope, Kind: protocol.Mutation, Member: runtime.CallMember,
 		Input: schema.TypeID(schema.String), Output: schema.TypeID(schema.String), Metadata: completeMetadata(runtime.WriteEffect),
@@ -431,6 +450,9 @@ func TestOutputCompletionResourceLimitsFailBeforeChildHandlers(t *testing.T) {
 func TestErrorBudgetIsRequestWideAndReportsExhaustion(t *testing.T) {
 	t.Parallel()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int64
 	if err := registry.Register(runtime.BindInvocation[string](runtime.Descriptor{
 		Name: "fail", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
@@ -456,6 +478,9 @@ func TestErrorBudgetIsRequestWideAndReportsExhaustion(t *testing.T) {
 func staticResourceSnapshot(t *testing.T, cost uint64) (runtime.Snapshot, *atomic.Int64) {
 	t.Helper()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	calls := &atomic.Int64{}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.Cost = cost
@@ -487,6 +512,9 @@ func collectionResourceSnapshot(t *testing.T) (runtime.Snapshot, *atomic.Int64) 
 func collectionResourceSnapshotWithCost(t *testing.T, fieldCost uint64, configured ...*runtime.CollectionMetadata) (runtime.Snapshot, *atomic.Int64, *atomic.Int64) {
 	t.Helper()
 	registry := runtime.NewRegistry(compositionTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	collectionMetadata := completeMetadata(runtime.ReadEffect)
 	collectionMetadata.Collection = secureCollectionMetadata(t, 5, 5)
 	if len(configured) != 0 {

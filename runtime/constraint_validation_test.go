@@ -33,6 +33,9 @@ func TestPrepareReportsPortableConstraintCodesAndPathsBeforeHandlers(t *testing.
 		t.Fatal(err)
 	}
 	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	var calls atomic.Int64
 	descriptor := runtime.Descriptor{
 		Name: "useTags", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,

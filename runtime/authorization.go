@@ -147,11 +147,10 @@ type registeredInterceptor struct {
 var ErrInterceptorNextCalled = errors.New("interceptor next called more than once")
 
 func (r *Registry) ConfigureAuthorization(config AuthorizationConfig) error {
-	if config.Mode == "" {
-		config.Mode = AuthorizationAllowByDefault
-	}
+	// An unset mode is not silently treated as allow-all: the posture must be
+	// chosen explicitly so a Registry cannot accidentally ship allow-by-default.
 	if config.Mode != AuthorizationAllowByDefault && config.Mode != AuthorizationDenyByDefault {
-		return fmt.Errorf("unknown authorization mode %q", config.Mode)
+		return fmt.Errorf("authorization mode must be explicitly %q or %q, got %q", AuthorizationAllowByDefault, AuthorizationDenyByDefault, config.Mode)
 	}
 	if config.Now == nil {
 		config.Now = time.Now

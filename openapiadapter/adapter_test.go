@@ -55,6 +55,9 @@ func TestCompileImportsApprovedOpenAPIOperationAndPublishesFidelity(t *testing.T
 		t.Fatalf("imported output = %#v, %v", output, ok)
 	}
 	registry := runtime.NewRegistry(compiled.Types())
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if err := compiled.Register(registry); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

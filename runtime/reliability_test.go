@@ -260,6 +260,9 @@ func TestIdempotencyMetadataIsTypedAndValidated(t *testing.T) {
 		runtime.IdempotencyConditional,
 	} {
 		registry := runtime.NewRegistry(coreTypes(t))
+		if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+			t.Fatal(err)
+		}
 		metadata := completeMetadata(runtime.WriteEffect)
 		metadata.Idempotency = policy
 		descriptor := runtime.Descriptor{
@@ -273,6 +276,9 @@ func TestIdempotencyMetadataIsTypedAndValidated(t *testing.T) {
 		}
 	}
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.WriteEffect)
 	metadata.Idempotency = runtime.IdempotencyPolicy("unknown")
 	descriptor := runtime.Descriptor{
@@ -360,6 +366,9 @@ func TestExecuteIdempotencyFingerprintIncludesCanonicalTypedVariables(t *testing
 	t.Parallel()
 	var calls atomic.Int32
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.WriteEffect)
 	metadata.Idempotency = runtime.IdempotencyIdempotent
 	descriptor := runtime.Descriptor{
@@ -702,8 +711,11 @@ func (*completionFailingIdempotencyStore) Complete(context.Context, runtime.Idem
 func reliabilityMutationPlan(t *testing.T, policy runtime.IdempotencyPolicy, authorizer runtime.Authorizer, handler func(context.Context) (string, error)) *runtime.Plan {
 	t.Helper()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	if authorizer != nil {
-		if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Authorizer: authorizer}); err != nil {
+		if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault, Authorizer: authorizer}); err != nil {
 			t.Fatalf("ConfigureAuthorization: %v", err)
 		}
 	}
@@ -733,6 +745,9 @@ func reliabilityMutationPlan(t *testing.T, policy runtime.IdempotencyPolicy, aut
 func reliabilityQueryPlan(t *testing.T, retrySafe bool, policy runtime.IdempotencyPolicy, handler func(context.Context) (string, error)) *runtime.Plan {
 	t.Helper()
 	registry := runtime.NewRegistry(coreTypes(t))
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
 	metadata := completeMetadata(runtime.ReadEffect)
 	metadata.RetrySafe = retrySafe
 	metadata.Idempotency = policy

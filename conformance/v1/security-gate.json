@@ -23,7 +23,7 @@
       },
       {
         "path": "runtime/authorization.go",
-        "sha256": "2d9334c53d4c67349cfd6f74111ab55cbfd6de62490eb7d1855cabfe98ceb2eb"
+        "sha256": "9756bda131bc8f6dce4acb9455de5dad21c2c4de30b29b77d03264e455c7c1ea"
       },
       {
         "path": "runtime/resource.go",
@@ -137,7 +137,7 @@
       "profile": "runtime.go.plan-cache-1",
       "surface": "plan-cache",
       "status": "supported",
-      "fixture": {"path": "conformance/v1/plan-cache.json", "sha256": "3fa978d5f1b5652ac954820e6479d2422e2054370a95a969ff8705bdf4002e50"},
+      "fixture": {"path": "conformance/v1/plan-cache.json", "sha256": "8582eaf58ee027927270ec8939536fad2d98c4f5f245e1db05244ef0ee3582a0"},
       "implementation": [{"path": "runtime/plan_cache.go", "sha256": "b6792a9b0ff375fac2eb22377880dab4dc9f76d83d19a6d4e4671704ecba6c0f"}],
       "classes": ["positive", "negative", "adversarial", "cancellation", "exhaustion"],
       "budgetDimensions": ["entries", "compile-work", "authorization-evaluations"],
