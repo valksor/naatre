@@ -130,13 +130,13 @@
       "path": "v1/go-client.json",
       "profile": "sdk.go.client-1",
       "category": "transport",
-      "sha256": "8771767b405120d0bad6b8ba4555faef9c64c7f410bd757d2d8d87a493e7c275"
+      "sha256": "9fc8c9c959e546ea6d5a808ae5af7b275119b0eeb1cfcf60b29c5c57111c60d5"
     },
     {
       "path": "v1/go-sdk.json",
       "profile": "sdk.go.operations-1",
       "category": "transport",
-      "sha256": "ea2d1879a3a7c5b09160cb011c49cb12b384d11806bf4f9b41dbeee366f218bd"
+      "sha256": "7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"
     },
     {
       "path": "v1/http.json",
@@ -172,7 +172,7 @@
       "path": "v1/operations.json",
       "profile": "operations.lifecycle-1",
       "category": "execution",
-      "sha256": "421d6ee39d18867fe4df738ea1efe93960611f25e2f358025a2cb16a9281814f"
+      "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
     },
     {
       "path": "v1/partial-results.json",
@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "070934f2a8348a157dd75c7208ba223242489c1590e93ab2cfdee011cdf686af"
     },
     {
       "path": "v1/scalars.json",
@@ -268,7 +268,7 @@
       "path": "v1/schema-discovery.json",
       "profile": "schema.discovery.http-1",
       "category": "transport",
-      "sha256": "6869e10218f69b6f5c723288ecd713cdd5ad3e12e8590261f39ea81dbd1ea865"
+      "sha256": "ea7e65f6c3930e27e5f7c10549abc87dee3ae63b80785bd8c0a57af25916dedf"
     },
     {
       "path": "v1/observability-integrations.json",
@@ -280,7 +280,7 @@
       "path": "v1/federation-coordinator.json",
       "profile": "runtime.go.federation-coordinator-1",
       "category": "execution",
-      "sha256": "a445aeca5259939de8e3ad45f881a5bd4ab893a708bec3a8a647a8d0d344f765"
+      "sha256": "b6b607e626a49236c7a9c54d9683323c41a20cd5cc0ff09e832b0ab9808ebcbe"
     },
     {
       "path": "v1/compatibility.json",
@@ -292,7 +292,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "dfb466ace6e8fd12f779a6c4879efd00da12607f47c76d7d94b2fb0b7c6a4693"
+      "sha256": "9f7b014f78e78cef7641548ca7cc1817dcaa82ec0aaad0077de540a619b0f96c"
     },
     {
       "path": "v1/php-sdk.json",
@@ -373,6 +373,12 @@
       "sha256": "4ada331660f6c692fbdfa518e0c70479daf28341d0ee3764d9d6f7a18e1ae28a"
     },
     {
+      "path": "v1/protobuf-grpc-connect.json",
+      "profile": "core.adapters.protobuf-grpc-connect-1",
+      "category": "transport",
+      "sha256": "aff756d78ddca0652bfce79e344ad175ef18f006f089e8e6cd8d274dc53392b5"
+    },
+    {
       "path": "v1/http-digest.json",
       "profile": "core.http.digest-1",
       "category": "transport",
@@ -382,13 +388,13 @@
       "path": "v1/go-http.json",
       "profile": "core.http-1",
       "category": "transport",
-      "sha256": "e2733d3665f24996d639aa396a7a6333d5e0c5ffa7611731a095b2fb314cb086"
+      "sha256": "5ac05ec9309b4d8a3acb53aa0221629ea80fd45e4994e548fa318cb63265b702"
     },
     {
       "path": "v1/plan-cache.json",
       "profile": "runtime.go.plan-cache-1",
       "category": "execution",
-      "sha256": "78ec7291ad0ccf0f8ba2ebfa95e64b1fb6b6d0ec288a14ed2d24c1a06f296272"
+      "sha256": "e98ab63e885c838b6d109bd61bfa9d85e9857c05d70127920f09741fe52442b7"
     },
     {
       "path": "v1/generator-plugin-host-model.json",
@@ -400,13 +406,13 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "b9ef9ab778de270ce28e4d3502c6b397b70a34ee1df54fb3cf4879f6e6c3d8c1"
+      "sha256": "7553c8cd732b707e07b8f3171717ea41c1801d32e005ed65593e890c83964abd"
     },
     {
       "path": "v1/go-quality.json",
       "profile": "quality.go.harness-1",
       "category": "benchmark",
-      "sha256": "5db2616ab5e758409ef1cfc2273832173384e667615cf27d1e303441f8034141"
+      "sha256": "f13e6d0373cee464b87f524995bcc03bb805d297749eec9b9ce364d919c6220d"
     }
   ],
   "normativeSources": [
@@ -7509,6 +7515,11 @@
       "caseId": "issue.95",
       "issue": 95,
       "fixtureRefs": [
+        {
+          "path": "v1/protobuf-grpc-connect.json",
+          "pointer": "/cases",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/95",

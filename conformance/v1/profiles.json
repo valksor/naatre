@@ -1435,7 +1435,7 @@
         {
           "path": "v1/operations.json",
           "profile": "operations.lifecycle-1",
-          "sha256": "421d6ee39d18867fe4df738ea1efe93960611f25e2f358025a2cb16a9281814f"
+          "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
         },
         {
           "path": "v1/protocol.json",
@@ -1827,7 +1827,7 @@
         {
           "path": "v1/generator-plugin-host.json",
           "profile": "sdk.generator-plugin-host-1",
-          "sha256": "b9ef9ab778de270ce28e4d3502c6b397b70a34ee1df54fb3cf4879f6e6c3d8c1"
+          "sha256": "7553c8cd732b707e07b8f3171717ea41c1801d32e005ed65593e890c83964abd"
         },
         {
           "path": "v1/language.json",
@@ -1852,7 +1852,7 @@
         {
           "path": "v1/schema-discovery.json",
           "profile": "schema.discovery.http-1",
-          "sha256": "6869e10218f69b6f5c723288ecd713cdd5ad3e12e8590261f39ea81dbd1ea865"
+          "sha256": "ea7e65f6c3930e27e5f7c10549abc87dee3ae63b80785bd8c0a57af25916dedf"
         },
         {
           "path": "v1/schema.json",
@@ -2463,7 +2463,7 @@
         {
           "path": "v1/operations.json",
           "profile": "operations.lifecycle-1",
-          "sha256": "421d6ee39d18867fe4df738ea1efe93960611f25e2f358025a2cb16a9281814f"
+          "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
         },
         {
           "path": "v1/partial-results.json",

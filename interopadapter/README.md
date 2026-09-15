@@ -29,6 +29,8 @@ the caller context for cancellation and deadlines, rejects redirects, bounds
 both directions, accepts strict JSON responses, forwards only exact configured
 headers, and exposes stable errors without upstream bodies or endpoints.
 
-Full GraphQL, OpenAPI, protobuf/gRPC/Connect, and OpenRPC/JSON-RPC integrations
-belong to #92, #93, #95, and #98 respectively. Multi-SDK execution belongs to
-#69.
+Full GraphQL, OpenAPI, and OpenRPC/JSON-RPC integrations belong to #92, #93,
+and #98 respectively. The opt-in Go protobuf/gRPC/Connect client profile owned
+by #95 is implemented in [`transport/protobufrpc`](../transport/protobufrpc/README.md), with narrower
+runtime and shape boundaries than this protocol-neutral contract. Multi-SDK
+execution belongs to #69.

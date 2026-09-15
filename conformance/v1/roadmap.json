@@ -1128,13 +1128,13 @@
     },
     "95": {
       "issue": 95,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 95,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "go-reference-offline-transport-seams",
       "expected": {
-        "phase": "runner",
-        "code": "UNSUPPORTED",
+        "phase": "execute",
+        "code": "PASS",
         "source": {},
         "path": [],
         "data": null,
