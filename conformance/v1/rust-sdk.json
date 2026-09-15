@@ -37,7 +37,7 @@
     {"path": "sdk/rust/src/scalar.rs", "sha256": "636ce87781aa5edab0aa8b91197e9ca0b9fb6fb3c27f7d866b07346e080b012c"},
     {"path": "sdk/rust/src/transport.rs", "sha256": "d312076dc2bf8b9de213b4ce63f5bd48e48cf93da46ae97921f8b96a384968e5"},
     {"path": "sdk/rust/src/generator.rs", "sha256": "8d68bfeca88f1bac858db3319fba8559e75f28db2a243d4e377a01808c886b1c"},
-    {"path": "sdk/rust/src/bin/generator.rs", "sha256": "5ecfa75234085e340443856d65f24a7c4621b2f5efc3fbbe912063667ff77c57"},
+    {"path": "sdk/rust/src/bin/generator.rs", "sha256": "2e4ac245ee467e78edd843bd3dd2796a07307ebc43a8641c4f911c9e3ecf646e"},
     {"path": "sdk/rust/tests/conformance.rs", "sha256": "bd7c8d641e2e86c08bc4d0ebb28e4d02d558bac85f25330bc17b509016297655"},
     {"path": "conformance/independent/verify-rust-sdk.mjs", "sha256": "9ff391232f0449eda6f73bde524c10f3dad389039d398eb9688bece3e52eea22"}
   ],

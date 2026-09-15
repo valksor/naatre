@@ -17,7 +17,6 @@ use Naatre\Sdk\Scalar\Timestamp;
 use Naatre\Sdk\Scalar\UInt64;
 use Naatre\Sdk\Stream\CloseableStream;
 use Naatre\Sdk\Tests\TestFactory;
-use Naatre\Sdk\Tests\TestHttpClient;
 use Naatre\Sdk\Tests\TestResponse;
 use Naatre\Sdk\Transport\Psr18Client;
 use Naatre\Sdk\Value\ListValue;
@@ -49,7 +48,7 @@ function rejects(callable $function, string $code): void
 $fixturePath = dirname(__DIR__, 3) . '/conformance/v1/php-sdk.json';
 $fixture = json_decode((string) file_get_contents($fixturePath), true, 512, JSON_THROW_ON_ERROR);
 check($fixture['profile'] === 'sdk.php.core-1', 'profile');
-check($fixture['sharedFixtureConsumers'] === ['psr18', 'symfony-issue-79', 'laravel-issue-79'], 'shared integration fixtures');
+check($fixture['sharedFixtureConsumers'] === ['psr18', 'sdk.php.symfony-psr18-1', 'sdk.php.laravel-psr18-1'], 'shared integration fixtures');
 
 check((string) new Int64('-9223372036854775808') === '-9223372036854775808', 'int64 minimum');
 check((string) new UInt64('18446744073709551615') === '18446744073709551615', 'uint64 maximum');
@@ -100,7 +99,7 @@ check($partial->data->later->presence === Presence::Pending, 'pending field');
 $factory = new TestFactory();
 $unaryFixture = $fixture['wireFixtures']['unary4xx'];
 $response = new TestResponse(['content-type' => $unaryFixture['contentType']], $unaryFixture['response'], $unaryFixture['status']);
-$http = new TestHttpClient($response);
+$http = new TestFactory($response);
 $client = new Psr18Client(
     'https://example.test/v1/execute',
     $http,
@@ -115,7 +114,7 @@ check($http->request?->getHeaderLine('Authorization') === 'Bearer local-fixture'
 check(!$response->body->isReadable(), 'response body closed');
 
 $retryResponse = new TestResponse(['content-type' => $unaryFixture['contentType']], $unaryFixture['response'], $unaryFixture['status']);
-$retryHTTP = new TestHttpClient($retryResponse, 1);
+$retryHTTP = new TestFactory($retryResponse, 1);
 $retryClient = new Psr18Client('https://example.test/v1/execute', $retryHTTP, $factory, $factory);
 check($retryClient->execute($operation, maximumAttempts: 2)->complete && $retryHTTP->attempts === 2, 'query retry');
 $mutation = new Operation('UpdateAccount', 'mutation', $operation->persistedDigest, new ObjectValue(), static fn (ObjectValue $data): ObjectValue => $data);

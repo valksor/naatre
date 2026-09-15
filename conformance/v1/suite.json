@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "ce68c446491375cceb53c2f46bc20e8546bed7786dd9db99e92f558b0bd3e1de"
     },
     {
       "path": "v1/scalars.json",
@@ -295,10 +295,16 @@
       "sha256": "dfb466ace6e8fd12f779a6c4879efd00da12607f47c76d7d94b2fb0b7c6a4693"
     },
     {
+      "path": "v1/php-adapters.json",
+      "profile": "sdk.php.adapters-1",
+      "category": "integration",
+      "sha256": "13bfb8ffbbfbd6a496de2df038c22775aa9d44e5ad042d888db5ea1327878cb6"
+    },
+    {
       "path": "v1/php-sdk.json",
       "profile": "sdk.php.core-1",
       "category": "canonical",
-      "sha256": "dc6fffcd53070ffa58c0e542d01feaeb4be43d969ce7fbffb1c7d981cb382df7"
+      "sha256": "249abb2e2e870a19d4b4f535ecdfecab09270da6f44e1a931ee6d3918fedfe73"
     },
     {
       "path": "v1/python-sdk.json",
@@ -310,7 +316,7 @@
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "5cd141f944b69a5741d90565c5e30e341386f69c39dc20ecbcc08a893edb9df8"
+      "sha256": "8424968a09881b9936b4fa42255387795f04ac0b8d3fe47babca538528020620"
     },
     {
       "path": "v1/jvm-sdk.json",
@@ -7333,6 +7339,11 @@
       "caseId": "issue.79",
       "issue": 79,
       "fixtureRefs": [
+        {
+          "path": "v1/php-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/79",

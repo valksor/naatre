@@ -41,8 +41,57 @@ must be reported as active abort, cooperative, or deadline-only.
 error, normal completion, or consumer abandonment. The core profile does not
 advertise an SSE or WebSocket implementation.
 
-Symfony and Laravel adapters, persistent-worker integration, and active-abort
-transport evidence are owned by issue #79. Server-handler and worker bindings
-are owned by issue #58. Those optional integrations must consume
-`conformance/v1/php-sdk.json`; they do not establish a second wire contract.
-The complete official SDK matrix remains owned by issue #69.
+## Framework integration profiles
+
+Issue #79 owns `sdk.php.adapters-1`, which consumes the core fixture instead of
+defining another wire or schema contract. The optional
+`Integration\\Symfony\\NaatreClientFactory` and
+`Integration\\Laravel\\NaatreClientFactory` are long-lived service factories.
+Call `forRequest()` for every FPM request or persistent-worker job and pass only
+that request's authentication callback. The resulting `Psr18Client` is
+request-scoped and must not be stored in a singleton or reused by another job.
+The factories retain only the endpoint, response limit, and shared PSR
+services, so credentials and operation state cannot cross request boundaries.
+
+Both adapters accept application-supplied PSR-18 and PSR-17 services. For
+Symfony, pass the official all-in-one Symfony bridge to `fromPsr18Bridge()`.
+For Laravel, bind the application's selected PSR-18 client and PSR-17
+request/stream factories in the container and call `fromContainer()` during
+singleton registration, then call `forRequest()` from request or job scope.
+The adapters do not call Symfony's native HTTP Client API or Laravel's native
+`PendingRequest` API and do not depend on either framework package.
+
+The supported package/runtime boundary is PHP 8.3, 8.4, and 8.5, Composer 2,
+PSR HTTP Client 1.0.3, PSR HTTP Factory 1.1.0, and PSR HTTP Message 2.0. The
+framework profiles support synchronous unary requests through those PSR
+interfaces. Cancellation is deadline-only: `Naatre-Timeout-Ms` is propagated,
+but pure PSR-18 cannot promise active abort. Responses are read incrementally,
+bounded by `maximumResponseBytes`, and always closed.
+
+Public failures expose only stable `CLIENT_*` codes. Provider exceptions are
+not chained, authentication header values never appear in public messages, and
+authentication cannot override framing, media-type, host, or deadline headers.
+The complete code list is pinned in `conformance/v1/php-adapters.json`.
+
+The adapter profile does not support active abort, Symfony's native HTTP Client
+API, Laravel's native `PendingRequest` API, framework-managed retry or
+authentication state, SSE, WebSocket, server handlers, or worker bindings. It
+cannot enforce redirect or cross-origin credential policy through generic
+PSR-18, so applications must disable redirects in the supplied client. It also
+does not certify native FPM, RoadRunner, FrankenPHP, Swoole, Laravel
+Octane, Symfony Runtime, or framework release matrices; its FPM and persistent
+worker fixtures are deterministic CLI lifecycle models. Server handlers and
+worker bindings remain owned by issue #58, and #69 owns the complete official
+SDK/runtime matrix.
+
+Run the adapter evidence without a listener or network connection:
+
+```sh
+php sdk/php/tests/adapters.php
+node conformance/independent/verify-php-adapters.mjs
+composer --working-dir=sdk/php test-adapters
+```
+
+The machine-readable profile pins the core fixture digest, the exact PSR
+interface revisions modeled by the fixtures, all source evidence digests, and
+positive, negative, boundary, cancellation, and resource-limit vectors.

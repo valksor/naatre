@@ -31,7 +31,8 @@ evidence must be described as planned.
   strict TypeScript operation bindings for `sdk.typescript.core-1`.
 - `sdk/php`: framework-neutral PSR-18 unary client, lossless PHP value model,
   serializer-neutral attributes, and deterministic bindings for
-  `sdk.php.core-1`; framework integrations remain owned by #79.
+  `sdk.php.core-1`, plus request-scoped Symfony and Laravel PSR bridge
+  factories for `sdk.php.adapters-1`.
 - `sdk/python`: dependency-free typed Python 3.11-3.14 client core, sync and
   async transport protocols, lossless scalar wrappers, SSE lifecycle, and
   deterministic dataclass bindings for `sdk.python.core-1`.

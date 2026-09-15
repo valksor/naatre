@@ -139,6 +139,13 @@ PHP generation, canonical persisted requests, the deadline-only PSR-18 unary
 profile, and exact stream-resource ownership. Symfony, Laravel, active-abort,
 SSE, and WebSocket adapters remain explicitly unsupported here and are owned by
 issue #79.
+`v1/php-adapters.json` pins `sdk.php.adapters-1` to the exact PHP core fixture
+and PSR interface revisions. Its listener-free FPM and persistent-worker models
+exercise request isolation, deadline-only cancellation, stable redacted
+failures, missing/null and numeric-map fidelity, and bounded response cleanup
+through the optional Symfony and Laravel PSR bridge factories. Native framework
+HTTP APIs, native worker certification, active abort, SSE, WebSocket, and the
+complete framework/runtime matrix remain explicitly unsupported.
 `v1/dotnet-sdk.json` pins `sdk.dotnet.core-1`: deterministic C# selected-result
 bindings, nullable `net8.0` and `net10.0` builds, an F# consumer build, explicit
 presence and open-variant shapes, lossless extended scalars, persisted request
