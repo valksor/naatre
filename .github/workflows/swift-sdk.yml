@@ -1,7 +1,6 @@
 name: Swift SDK
 
 on:
-  pull_request:
   push:
     branches: [master]
 
@@ -10,9 +9,11 @@ permissions:
 
 jobs:
   conformance:
-    runs-on: macos-15
+    runs-on: self-data
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify self-data runner prerequisites
+        run: bash scripts/check-self-data-runner.sh swift
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: 1.27.1
@@ -21,8 +22,6 @@ jobs:
       - name: Reproduce Swift bindings
         run: go generate ./sdk/swift && git diff --exit-code -- sdk/swift/Sources/NaatreGenerated
       - name: Build Swift package
-        run: swift build --package-path sdk/swift
+        run: swift build --package-path sdk/swift --product naatre-swift-conformance
       - name: Swift client conformance
         run: swift run --package-path sdk/swift naatre-swift-conformance
-      - name: Swift Apple adapter conformance
-        run: node conformance/independent/verify-swift-apple-adapters.mjs

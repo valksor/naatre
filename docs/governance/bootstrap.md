@@ -39,6 +39,7 @@ Breaking changes require a decision record and migration note. v1 compatibility
 and release enforcement move to the permanent governance policy. Components
 version independently and a release manifest binds exact versions.
 
-The server/runtime baseline is Linux amd64 and arm64. Portable libraries and
-first-party clients additionally cover macOS amd64/arm64 and Windows amd64 when
-their ecosystems support those targets.
+The server/runtime baseline is Linux amd64 and arm64. CI executes on Linux
+arm64; portable Go libraries are additionally cross-compiled for Linux amd64,
+macOS amd64/arm64, and Windows amd64. Cross-compilation does not establish
+runtime evidence for those targets.

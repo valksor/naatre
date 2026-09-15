@@ -1,7 +1,6 @@
 name: JVM SDK
 
 on:
-  pull_request:
   push:
     branches: [master]
 
@@ -18,9 +17,11 @@ jobs:
       fail-fast: false
       matrix:
         java: [17, 21, 25]
-    runs-on: macos-15
+    runs-on: self-data
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify self-data runner prerequisites
+        run: bash scripts/check-self-data-runner.sh curl sha256sum unzip
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: 1.27.1
@@ -39,8 +40,8 @@ jobs:
           curl --fail --location --silent --show-error \
             https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.10.2/kotlinx-coroutines-core-jvm-1.10.2.jar \
             --output "$RUNNER_TEMP/kotlinx-coroutines.jar"
-          printf '%s  %s\n' "$KOTLIN_COMPILER_SHA256" "$RUNNER_TEMP/kotlin.zip" | shasum -a 256 --check
-          printf '%s  %s\n' "$KOTLIN_COROUTINES_SHA256" "$RUNNER_TEMP/kotlinx-coroutines.jar" | shasum -a 256 --check
+          printf '%s  %s\n' "$KOTLIN_COMPILER_SHA256" "$RUNNER_TEMP/kotlin.zip" | sha256sum --check
+          printf '%s  %s\n' "$KOTLIN_COROUTINES_SHA256" "$RUNNER_TEMP/kotlinx-coroutines.jar" | sha256sum --check
           unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP/kotlin"
       - name: Verify deterministic JVM generation
         run: |

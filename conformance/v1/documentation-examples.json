@@ -25,7 +25,7 @@
   "contractEvidence": [
     {"path":"conformance/v1/generator-model.json","sha256":"22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
     {"path":"conformance/v1/generator-output.json","sha256":"f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"},
-    {"path":"conformance/v1/profiles.json","sha256":"ec679e966087068ae3aeba0411cdb8a346a6d3fe4b6a5f367406c3b0a8dc03a7"},
+    {"path":"conformance/v1/profiles.json","sha256":"c8daaa5b265a357d377ab30b7fdeb11e6619a5a736509249f06731494228c38d"},
     {"path":"conformance/v1/remote-workers.json","sha256":"f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
     {"path":"conformance/v1/remote-worker-gateway.json","sha256":"308d32ac2904394f6c30ef28b97973b111730ba5a9bc5b63a91a52c7978a20b9"},
     {"path":"conformance/v1/typescript-worker.json","sha256":"697a3496a125ba7c761230ee0faa725dfa8404f7135b2188ec1ea25c1abc403e"},

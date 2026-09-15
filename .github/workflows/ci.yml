@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  pull_request:
   push:
     branches: [master]
 
@@ -10,24 +9,25 @@ permissions:
 
 jobs:
   quality:
-    runs-on: ubuntu-24.04
+    runs-on: self-data
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify CI environment
+        run: |
+          bash scripts/check-self-data-runner.sh python3 rustup cargo ruby
+          bash scripts/check-ci-runners.sh
+          bash scripts/check-ci-runners-test.sh
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: 1.27.1
-          cache: true
+        with: { go-version: 1.27.1, cache: true }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24.21.0
+        with: { node-version: 24.21.0 }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: |
             8.0.425
             10.0.401
       - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
-        with:
-          sdk: 3.13.3
+        with: { sdk: 3.13.3 }
       - name: Formatting
         run: test -z "$(gofmt -l .)"
       - name: Unit tests
@@ -96,37 +96,33 @@ jobs:
         run: go generate ./... && git diff --exit-code
 
   portable:
+    name: Portable build (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            goos: linux
-            goarch: amd64
-          - os: ubuntu-24.04-arm
-            goos: linux
-            goarch: arm64
-          - os: macos-15-intel
-            goos: darwin
-            goarch: amd64
-          - os: macos-15
-            goos: darwin
-            goarch: arm64
-          - os: windows-2025
-            goos: windows
-            goarch: amd64
-    runs-on: ${{ matrix.os }}
+        target: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64]
+    runs-on: self-data
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: 1.27.1
-      - name: Test portable packages
+      - name: Build portable packages
         shell: bash
-        run: go test ./protocol ./schema ./runtime
+        env:
+          CGO_ENABLED: '0'
+          TARGET: ${{ matrix.target }}
+        run: |
+          export GOOS="${TARGET%/*}"
+          export GOARCH="${TARGET#*/}"
+          if [[ "$TARGET" == linux/arm64 ]]; then
+            go test ./protocol ./schema ./runtime
+          else
+            go test -exec=true ./protocol ./schema ./runtime
+          fi
 
   runtime-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: self-data
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6

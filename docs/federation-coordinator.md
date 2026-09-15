@@ -53,11 +53,11 @@ delegation, approved trace parent, and request context.
 
 ## Runtime and platform boundary
 
-The package requires Go 1.27. The repository portable matrix targets Linux
-amd64 and arm64, macOS amd64 and arm64, and Windows amd64. The checked
-coordinator evidence records the exact runtime and platform on which it was
-executed; repository CI must execute the remaining targets before a release can
-claim their evidence. No other native runtime is certified by this profile.
+The package requires Go 1.27. Repository CI executes portable-package tests on
+Linux arm64 and cross-compiles them for Linux amd64, macOS amd64 and arm64, and
+Windows amd64. The checked coordinator evidence records the exact runtime and
+platform on which it was executed; cross-compilation is not runtime evidence
+for another platform. No other native runtime is certified by this profile.
 
 Transport adapters are operator-provided Go implementations of
 `runtime.FederationInvoker`. The coordinator validates their opaque binding and
