@@ -59,6 +59,12 @@ jobs:
           ./configure --enable-naatre
           make -j2
           php -d extension=modules/naatre.so --ri naatre
+      - name: Run phpt suite
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd ext/naatre
+          NO_INTERACTION=1 REPORT_EXIT_STATUS=1 make test TESTS=tests
       - name: Build Windows extension
         if: runner.os == 'Windows'
         shell: pwsh
