@@ -16,6 +16,7 @@ final readonly class RequestContextFactory implements \Naatre\Sdk\Server\Request
     {
     }
 
+    #[\Override]
     public function create(Invocation $invocation): RequestContext
     {
         return new RequestContext($invocation->requestId, $invocation->invocationId, ($this->resolvePrincipal)($invocation->delegatedContext));

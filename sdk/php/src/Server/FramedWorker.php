@@ -9,17 +9,24 @@ use Naatre\Sdk\Wire\Json;
 
 final class FramedWorker
 {
-    /** @param resource $input @param resource $output */
+    /** @var resource */
+    private $input;
+
+    /** @var resource */
+    private $output;
+
     public function __construct(
         private readonly EnvelopeServer $server,
-        private $input,
-        private $output,
+        mixed $input,
+        mixed $output,
         private readonly int $maximumFrameBytes = 65_536,
         private readonly bool $ownsStreams = false,
     ) {
         if (!is_resource($input) || !is_resource($output) || $maximumFrameBytes < 1) {
             throw new ServerException('REMOTE_REGISTRATION_INVALID');
         }
+        $this->input = $input;
+        $this->output = $output;
     }
 
     public function run(): void
@@ -27,7 +34,7 @@ final class FramedWorker
         try {
             while (($header = $this->read(5, true)) !== null) {
                 $parts = unpack('Cflags/Nlength', $header);
-                if (!is_array($parts) || $parts['flags'] !== 0 || $parts['length'] < 1 || $parts['length'] > $this->maximumFrameBytes) {
+                if (!is_array($parts) || $parts['flags'] !== 0 || !is_int($parts['length']) || $parts['length'] < 1 || $parts['length'] > $this->maximumFrameBytes) {
                     throw new ServerException('REMOTE_WORKER_MALFORMED');
                 }
                 $payload = $this->read($parts['length']);
@@ -42,8 +49,10 @@ final class FramedWorker
             }
         } finally {
             if ($this->ownsStreams) {
-                fclose($this->input);
-                fclose($this->output);
+                $input = $this->input;
+                $output = $this->output;
+                fclose($input);
+                fclose($output);
             }
         }
     }
@@ -52,7 +61,7 @@ final class FramedWorker
     {
         $value = '';
         while (strlen($value) < $bytes) {
-            $chunk = fread($this->input, $bytes - strlen($value));
+            $chunk = fread($this->input, max(1, $bytes - strlen($value)));
             if ($chunk === false || ($chunk === '' && !feof($this->input))) {
                 throw new ServerException('REMOTE_WORKER_MALFORMED');
             }

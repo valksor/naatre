@@ -334,7 +334,7 @@
       "path": "v1/php-sdk.json",
       "profile": "sdk.php.core-1",
       "category": "canonical",
-      "sha256": "f3467f1d5474ea65f47e137117e95ce3215cc307c62b5ce456a7253c56f0b4ea"
+      "sha256": "513d59639fdb812eba7ae90e1e571189b5eaec9842c6055404dc1176654961a0"
     },
     {
       "path": "v1/python-sdk.json",
@@ -526,13 +526,13 @@
       "path": "v1/php-adapters.json",
       "profile": "sdk.php.adapters-1",
       "category": "integration",
-      "sha256": "1dc62137610e3748586a6891646ffe5948fb7bcf706353f2b3c153325d2a42dd"
+      "sha256": "be5aac690ba26792d5f644ebb8c6710d7a81cdf454e775257c1959d9f4371eb5"
     },
     {
       "path": "v1/php-server.json",
       "profile": "sdk.php.server-1",
       "category": "integration",
-      "sha256": "1be5eac6747e68dbf58768785e0a512aa16fc106187b46a4a2424fc3e5e74eca"
+      "sha256": "a2c0079f3265061ee3b2d5d0fe755a8b4cf8e0b49ff78db9e44efc53a78f3b57"
     },
     {
       "path": "v1/rust-async-adapters.json",

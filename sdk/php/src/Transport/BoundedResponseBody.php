@@ -22,13 +22,16 @@ final class BoundedResponseBody
                 throw new ClientException('CLIENT_MEDIA_TYPE_INVALID');
             }
             $contents = '';
-            while (!$body->eof()) {
+            while (true) {
                 $chunk = $body->read(min(8192, $maximumBytes - strlen($contents) + 1));
                 $contents .= $chunk;
                 if (strlen($contents) > $maximumBytes) {
                     throw new ClientException('CLIENT_RESPONSE_TOO_LARGE');
                 }
-                if ($chunk === '' && !$body->eof()) {
+                if ($body->eof()) {
+                    break;
+                }
+                if ($chunk === '') {
                     throw new ClientException('CLIENT_RESPONSE_STALLED');
                 }
             }

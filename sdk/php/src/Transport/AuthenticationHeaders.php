@@ -22,7 +22,9 @@ final class AuthenticationHeaders
     ];
 
     /**
-     * @param (callable(AuthContext): array<string, string>)|null $authenticate
+     * The authenticator is caller-supplied, so both it and its return value are
+     * validated at runtime rather than trusted from a declared type.
+     *
      * @return array<string, string>
      */
     public static function resolve(mixed $authenticate, string $endpoint, Operation $operation): array
@@ -30,17 +32,22 @@ final class AuthenticationHeaders
         if ($authenticate === null) {
             return [];
         }
+        if (!is_callable($authenticate)) {
+            throw new ClientException('CLIENT_AUTHENTICATION_ERROR');
+        }
         try {
             $headers = $authenticate(new AuthContext($endpoint, $operation));
             if (!is_array($headers)) {
                 throw new ClientException('CLIENT_AUTHENTICATION_ERROR');
             }
+            $resolved = [];
             foreach ($headers as $name => $value) {
-                if (!self::valid($name, $value)) {
+                if (!is_string($name) || !is_string($value) || !self::valid($name, $value)) {
                     throw new ClientException('CLIENT_AUTH_HEADER_INVALID');
                 }
+                $resolved[$name] = $value;
             }
-            return $headers;
+            return $resolved;
         } catch (Throwable $error) {
             if ($error instanceof ClientException) {
                 throw $error;
@@ -49,11 +56,9 @@ final class AuthenticationHeaders
         }
     }
 
-    private static function valid(mixed $name, mixed $value): bool
+    private static function valid(string $name, string $value): bool
     {
-        return is_string($name)
-            && is_string($value)
-            && preg_match("/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/D", $name) === 1
+        return preg_match("/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/D", $name) === 1
             && !str_contains($value, "\r")
             && !str_contains($value, "\n")
             && !in_array(strtolower($name), self::PROTECTED, true);

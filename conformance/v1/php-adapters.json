@@ -6,7 +6,7 @@
     "core": {
       "profile": "sdk.php.core-1",
       "sourceRevision": "7e66a21c2ac7e4b984642ca2d1e90c077e786437",
-      "fixture": {"path": "conformance/v1/php-sdk.json", "sha256": "f3467f1d5474ea65f47e137117e95ce3215cc307c62b5ce456a7253c56f0b4ea"}
+      "fixture": {"path": "conformance/v1/php-sdk.json", "sha256": "513d59639fdb812eba7ae90e1e571189b5eaec9842c6055404dc1176654961a0"}
     },
     "psr/http-client": "1.0.3",
     "psr/http-factory": "1.1.0",
@@ -87,15 +87,15 @@
   ],
   "evidence": [
     {"path": "sdk/php/README.md", "sha256": "9c6abd4b9e6d6786c6d60fde6df290800c551b448bab59122cec0491cff59a19"},
-    {"path": "sdk/php/composer.json", "sha256": "91416b61a00f95d5a450aba4a0ffbeb2a9aac9697279a9a8628e238415f11d1d"},
-    {"path": "sdk/php/src/Exception/ClientException.php", "sha256": "7521ccdf63a26ce10e9d6d2cfb39d269cdb4f59f8c1a419e58f62d5cd861610c"},
-    {"path": "sdk/php/src/Transport/Psr18Client.php", "sha256": "294d459705877d95ab20329542af78899c63496fe0600c24e18af416712c86ae"},
-    {"path": "sdk/php/src/Transport/AuthenticationHeaders.php", "sha256": "74a24d9d3408f2d97f7b7993ad64daf7007839c930b6090737e86679d737a1b0"},
-    {"path": "sdk/php/src/Transport/BoundedResponseBody.php", "sha256": "b3313708cdc3c94e6f11fb565858fbc216714dd758c9d033b3881c610f9a1171"},
+    {"path": "sdk/php/composer.json", "sha256": "d7186176c8110ad8c013a6039dc87c0d1e99019476477823c1d51757d136cf90"},
+    {"path": "sdk/php/src/Exception/ClientException.php", "sha256": "7399b2e9607a52e4315bd926e7d72ccfdd74b7da8d27e2bdae0fb39aac6500af"},
+    {"path": "sdk/php/src/Transport/Psr18Client.php", "sha256": "e1e6da45387037ea99cd1f94b82c1df216f564164e40d96a23f28014ed5e5297"},
+    {"path": "sdk/php/src/Transport/AuthenticationHeaders.php", "sha256": "1bbaea424cd60633a0c9a667bdc8de7af1d2de436a11e117916b4cd5fd0b1cc9"},
+    {"path": "sdk/php/src/Transport/BoundedResponseBody.php", "sha256": "316825ce3025ea43ed3b46bf98ce3e1ede8d6f6f0e082920f395136a24b014cc"},
     {"path": "sdk/php/src/Integration/RequestScopedClientProvider.php", "sha256": "92df73a172e0df7cc566ba433c130ab68d96fde88cd043aa4efa11ae957e03a2"},
-    {"path": "sdk/php/src/Integration/RequestScopedClientFactory.php", "sha256": "28a51f7b303e302bd40743cd37cd8557017db7677a5e3784ffb31d25f1d4155c"},
-    {"path": "sdk/php/src/Integration/Symfony/NaatreClientFactory.php", "sha256": "73b2f46eed5c843e1248c598fb73843763627633dfe451278261e57daab0bedf"},
-    {"path": "sdk/php/src/Integration/Laravel/NaatreClientFactory.php", "sha256": "baed1a9652e4deb75ad70dfef2590050e2bc31393662d697569a7b2b4b14245b"},
+    {"path": "sdk/php/src/Integration/RequestScopedClientFactory.php", "sha256": "12db51cb5d93076d745fddb3dd2eb8e785b24e86368a7afce055c1f6706a5cb2"},
+    {"path": "sdk/php/src/Integration/Symfony/NaatreClientFactory.php", "sha256": "7552f31f85a56832e92f7581a1563823ac05d4c0343e718409d8b7661f572105"},
+    {"path": "sdk/php/src/Integration/Laravel/NaatreClientFactory.php", "sha256": "7be883959e47e1cc5f42b43afd3202a953259ad0ba28540540179315bf1627e7"},
     {"path": "sdk/php/tests/PsrStubs.php", "sha256": "0e45b63fd2d8d6fdc88cedd8c993a9100308918633eb3105f54b6afee7f44d34"},
     {"path": "sdk/php/tests/adapters.php", "sha256": "24f5fcdb8ede2f8f29772ae25dba20b559dd75ee1f5671ba1b480da48630be8d"},
     {"path": "conformance/independent/verify-php-adapters.mjs", "sha256": "c52b24c1319198999e47f1ce2b12495b70aa2f15e34282c0c6e72fa746c346dd"}

@@ -22,6 +22,7 @@ final readonly class RequestScopedClientFactory implements RequestScopedClientPr
     }
 
     /** @param (callable(AuthContext): array<string, string>)|null $authenticate */
+    #[\Override]
     public function forRequest(mixed $authenticate = null): Psr18Client
     {
         return new Psr18Client(

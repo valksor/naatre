@@ -47,6 +47,7 @@ final readonly class NaatreClientFactory implements RequestScopedClientProvider
     }
 
     /** @param (callable(AuthContext): array<string, string>)|null $authenticate */
+    #[\Override]
     public function forRequest(mixed $authenticate = null): Psr18Client
     {
         return $this->clients->forRequest($authenticate);

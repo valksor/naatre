@@ -17,10 +17,13 @@ final readonly class Psr18Client
     public const REQUEST_MEDIA_TYPE = 'application/vnd.naatre.request+json;version=1';
     public const RESPONSE_MEDIA_TYPE = 'application/vnd.naatre.response+json;version=1';
 
-    /** @var (callable(AuthContext): array<string, string>)|null */
     private mixed $authenticate;
 
-    /** @param (callable(AuthContext): array<string, string>)|null $authenticate */
+    /**
+     * @param mixed $authenticate a caller-supplied
+     *   (callable(AuthContext): array<string, string>)|null authenticator,
+     *   validated at runtime because its type cannot be trusted from the caller
+     */
     public function __construct(
         private string $endpoint,
         private ClientInterface $http,
