@@ -139,6 +139,12 @@
       "sha256": "ea2d1879a3a7c5b09160cb011c49cb12b384d11806bf4f9b41dbeee366f218bd"
     },
     {
+      "path": "v1/governance.json",
+      "profile": "governance.release-1",
+      "category": "evolution",
+      "sha256": "8e0d19beb748f212c4483ea4b85552804e538f4ca3287e42f119e775f5a9bf1f"
+    },
+    {
       "path": "v1/http.json",
       "profile": "core.http-1",
       "category": "transport",
@@ -214,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "863d40304faf9c5460416ed274df588f4e5bf54ac4f19a136b97f99f66c42ed4"
     },
     {
       "path": "v1/scalars.json",
@@ -310,7 +316,7 @@
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "5cd141f944b69a5741d90565c5e30e341386f69c39dc20ecbcc08a893edb9df8"
+      "sha256": "cfab463121993d793a3decc42809f3458d9a182583fd4cf9409fc8093fdaac4b"
     },
     {
       "path": "v1/jvm-sdk.json",
@@ -6939,9 +6945,14 @@
       "issue": 49,
       "fixtureRefs": [
         {
+          "path": "v1/governance.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
+        {
           "path": "v1/roadmap.json",
           "pointer": "/issues/49",
-          "polarity": "mixed"
+          "polarity": "positive"
         }
       ]
     },

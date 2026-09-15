@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naatre.dev/schemas/release-manifest-1.json",
+  "title": "Naatre release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "release", "components", "compatibility", "sources", "support", "artifacts", "conformanceClaims", "decisions", "roadmap"],
+  "properties": {
+    "profile": {"const": "naatre.release-manifest-1"},
+    "release": {"$ref": "#/$defs/release"},
+    "components": {"$ref": "#/$defs/components"},
+    "compatibility": {"$ref": "#/$defs/compatibility"},
+    "sources": {"$ref": "#/$defs/sources"},
+    "support": {
+      "type": "array",
+      "minItems": 3,
+      "items": {"$ref": "#/$defs/supportRow"},
+      "allOf": [
+        {"contains": {"properties": {"surface": {"const": "client"}}, "required": ["surface"]}},
+        {"contains": {"properties": {"surface": {"const": "remote-worker"}}, "required": ["surface"]}},
+        {"contains": {"properties": {"surface": {"const": "native-runtime"}}, "required": ["surface"]}}
+      ]
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "conformanceClaims": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/conformanceClaim"}
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/decision"}
+    },
+    "roadmap": {"$ref": "#/$defs/roadmap"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"release": {"properties": {"status": {"const": "published"}}}}},
+      "then": {
+        "properties": {
+          "release": {"properties": {"publishedAt": {"type": "string"}}},
+          "sources": {
+            "properties": {
+              "normativeReferences": {"minItems": 1},
+              "generatedArtifacts": {"minItems": 1},
+              "thirdPartyNotices": {"minItems": 1}
+            }
+          },
+          "artifacts": {"minItems": 1},
+          "conformanceClaims": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"release": {"properties": {"status": {"const": "revoked"}}}}},
+      "then": {
+        "properties": {
+          "release": {
+            "required": ["replacement"],
+            "properties": {
+              "revokes": {"minItems": 1},
+              "replacement": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"release": {"properties": {"channel": {"const": "security"}}}}},
+      "then": {"properties": {"release": {"properties": {"security": {"const": true}}}}}
+    }
+  ],
+  "$defs": {
+    "semver": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+    "url": {"type": "string", "format": "uri", "pattern": "^https://"},
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "channel", "sourceRevision", "reproducible", "security", "revokes"],
+      "properties": {
+        "id": {"$ref": "#/$defs/semver"},
+        "status": {"enum": ["draft", "published", "revoked"]},
+        "channel": {"enum": ["prerelease", "stable", "security"]},
+        "publishedAt": {"type": ["string", "null"], "format": "date-time"},
+        "sourceRevision": {"type": "string", "pattern": "^[a-f0-9]{40,64}$"},
+        "reproducible": {"const": true},
+        "security": {"type": "boolean"},
+        "revokes": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/semver"}},
+        "replacement": {"type": ["string", "null"]}
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "revision", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"$ref": "#/$defs/semver"},
+        "revision": {"type": "string", "minLength": 1, "maxLength": 128},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specification", "schemaModel", "canonicalization", "fixtures", "conformanceSuite", "goRuntime", "generators", "sdks", "workers"],
+      "properties": {
+        "specification": {"$ref": "#/$defs/component"},
+        "schemaModel": {"$ref": "#/$defs/component"},
+        "canonicalization": {"$ref": "#/$defs/component"},
+        "fixtures": {"$ref": "#/$defs/component"},
+        "conformanceSuite": {"$ref": "#/$defs/component"},
+        "goRuntime": {"$ref": "#/$defs/component"},
+        "generators": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/component"}},
+        "sdks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/component"}},
+        "workers": {"type": "array", "items": {"$ref": "#/$defs/component"}}
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "breaking", "migrationGuidance", "deprecations", "reservedNames", "experimentalPromotions"],
+      "properties": {
+        "classification": {"enum": ["editorial", "compatible", "deprecated", "breaking"]},
+        "breaking": {"type": "boolean"},
+        "migrationGuidance": {"type": "array", "items": {"$ref": "#/$defs/path"}},
+        "deprecations": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "reservedNames": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "experimentalPromotions": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"breaking": {"const": true}}, "required": ["breaking"]},
+          "then": {
+            "properties": {
+              "classification": {"const": "breaking"},
+              "migrationGuidance": {"minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"classification": {"const": "breaking"}}, "required": ["classification"]},
+          "then": {
+            "properties": {
+              "breaking": {"const": true},
+              "migrationGuidance": {"minItems": 1}
+            }
+          }
+        }
+      ]
+    },
+    "externalReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url", "revision", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "url": {"$ref": "#/$defs/url"},
+        "revision": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "generatedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "generator", "generatorVersion", "command"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "generator": {"type": "string", "minLength": 1},
+        "generatorVersion": {"$ref": "#/$defs/semver"},
+        "command": {"type": "string", "minLength": 1}
+      }
+    },
+    "notice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "license", "notice"],
+      "properties": {
+        "component": {"type": "string", "minLength": 1},
+        "license": {"type": "string", "minLength": 1},
+        "notice": {"$ref": "#/$defs/path"}
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normativeReferences", "generatedArtifacts", "thirdPartyNotices"],
+      "properties": {
+        "normativeReferences": {"type": "array", "items": {"$ref": "#/$defs/externalReference"}},
+        "generatedArtifacts": {"type": "array", "items": {"$ref": "#/$defs/generatedArtifact"}},
+        "thirdPartyNotices": {"type": "array", "items": {"$ref": "#/$defs/notice"}}
+      }
+    },
+    "supportRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "component", "version", "maintainer", "status", "ownerIssue", "evidence"],
+      "properties": {
+        "surface": {"enum": ["client", "adapter", "remote-worker", "native-runtime", "sdk"]},
+        "component": {"type": "string", "minLength": 1},
+        "version": {"$ref": "#/$defs/semver"},
+        "maintainer": {"type": "string", "minLength": 1},
+        "status": {"enum": ["planned", "experimental", "implemented"]},
+        "ownerIssue": {"$ref": "#/$defs/url"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "implemented"}}, "required": ["status"]},
+          "then": {"properties": {"evidence": {"minItems": 1}}},
+          "else": {"properties": {"evidence": {"maxItems": 0}}}
+        }
+      ]
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["signed", "not-applicable"]},
+        "bundle": {"$ref": "#/$defs/path"},
+        "identity": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "signed"}}, "required": ["status"]},
+          "then": {"required": ["bundle", "identity"]},
+          "else": {"required": ["rationale"]}
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "ecosystem", "component", "version", "sha256", "sbom", "provenance", "signature"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "ecosystem": {"type": "string", "minLength": 1},
+        "component": {"type": "string", "minLength": 1},
+        "version": {"$ref": "#/$defs/semver"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "sbom": {"$ref": "#/$defs/evidence"},
+        "provenance": {"$ref": "#/$defs/evidence"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "conformanceClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "version", "profile", "report"],
+      "properties": {
+        "component": {"type": "string", "minLength": 1},
+        "version": {"$ref": "#/$defs/semver"},
+        "profile": {"type": "string", "minLength": 1},
+        "report": {"$ref": "#/$defs/evidence"}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "record", "revision"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["proposed", "accepted", "rejected", "superseded", "withdrawn", "security-embargo"]},
+        "record": {"$ref": "#/$defs/path"},
+        "revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "roadmap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inventory", "coverage", "scopeDecision"],
+      "properties": {
+        "inventory": {"const": "conformance/v1/suite.json#/issueMappings"},
+        "coverage": {"const": "every-component-issue-exactly-once"},
+        "scopeDecision": {"$ref": "#/$defs/path"}
+      }
+    }
+  }
+}

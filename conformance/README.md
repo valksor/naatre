@@ -23,10 +23,7 @@ support and unsupported-capability boundaries are documented in
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 535 stable normative clauses and all 110 repository issues to exact
-maps all 525 stable normative clauses and all 110 repository issues to exact
-maps all 520 stable normative clauses and all 110 repository issues to exact
-maps all 524 stable normative clauses and all 110 repository issues to exact
+maps all 626 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -38,6 +35,12 @@ stable-release requirements. `v1/compatibility.json` is the public compatibility
 matrix; unevidenced rows remain planned until #69 executes and publishes them.
 See [PROFILES.md](PROFILES.md) for claim, skip, version-skew, report, and
 publication rules.
+
+`v1/governance.json` defines `governance.release-1`: independent component
+versions, evidence-gated support rows and conformance claims, compatibility and
+reserved-name rules, security embargoes, reproducible supply-chain evidence,
+revocation, and exactly-once roadmap coverage. Release manifests conform to
+[`releases/release-manifest.schema.json`](../releases/release-manifest.schema.json).
 
 `v1/interactions.json` fixes the authorization/cache, conditional/fragment,
 sequential-write/loader, partial-data/generated-type, remote-cancellation, and
