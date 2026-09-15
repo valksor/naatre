@@ -3,7 +3,10 @@
 `schema` and `protocol` are portable public contracts. `runtime` depends on
 them to register and execute operations. The optional `reflectadapter` package
 depends on `runtime` and `schema`, while core packages never import the
-adapter. `transport/http` adapts the runtime to HTTP. `tooling/lsp` adapts the
+adapter. Protocol-specific `graphqladapter`, `openapiadapter`,
+`openrpcadapter`, and `mcpadapter` packages remain outward layer-four
+integrations; `mcpadapter` defines registration and fidelity without owning the
+MCP wire runtime. `transport/http` adapts the runtime to HTTP. `tooling/lsp` adapts the
 protocol-neutral `tooling.EditorAdapter` to LSP 3.17 stdio and never becomes a
 second language or schema authority. SDKs consume protocol and
 schema documents but do not import runtime implementation details. Executable

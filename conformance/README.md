@@ -29,6 +29,11 @@ consume it directly.
 identity, cleanup, range/resume, conditional download, redirect, DNS-rebinding,
 and malicious metadata vectors. The Go reference package consumes all
 transport and egress cases without contacting a network endpoint.
+`v1/mcp-adapter.json` pins the `adapter.mcp-1` MCP `2025-11-25` registration,
+schema-fidelity, trust, session-isolation, lifecycle-outcome, and separate stdio
+and Streamable HTTP claims. The Go reference compiler and dependency-free
+JavaScript verifier run without a listener or network access; concrete MCP wire
+clients and servers remain owned by issue 103.
 `v1/events.json` pins the CloudEvents 1.0.2 envelope and
 `naatre.webhook.rfc9421-1` exact-byte signature profile. The Go reference
 receiver and dependency-free JavaScript receiver both verify whitespace, gzip,
@@ -114,6 +119,7 @@ node conformance/independent/scalars.mjs
 node conformance/independent/canonical.mjs
 node conformance/independent/reliability.mjs
 node conformance/independent/events.mjs
+node conformance/independent/mcp-adapter.mjs
 node conformance/independent/profiles.mjs
 node conformance/independent/verify-generator.mjs
 ```

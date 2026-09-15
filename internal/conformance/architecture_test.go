@@ -44,6 +44,7 @@ var layers = []struct {
 	{"graphqladapter", 4},
 	{"openapiadapter", 4},
 	{"openrpcadapter", 4},
+	{"mcpadapter", 4},
 	{"transport", 4},
 	{"largevalue", 5},
 	{"examples", 5},
