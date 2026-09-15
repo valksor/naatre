@@ -8,6 +8,14 @@ implementation version, platform, and claimed profile.
 Generated fixture changes must be reproducible byte-for-byte. Tests read the
 checked-in files rather than duplicating their expected values in Go source.
 
+`v1/lsp.json` fixes the `tooling.lsp-1` LSP 3.17 stdio profile owned by #94.
+It pins issue #55 and the exact protocol-neutral editor dependency bytes,
+stable failure codes, schema/version isolation, UTF-16 source ranges, finite
+resource limits, supported and unsupported capabilities, the VS Code client,
+and positive, negative, boundary, cancellation, and resource-limit evidence.
+The independent Node probe executes the same framed client used by the
+extension; `tooling.workflow-1` remains the sole normative tooling authority.
+
 `v1/http-digest.json` pins the `core.http.digest-1` RFC 9530 profile with exact
 identity, gzip, range, and transfer-framed bytes; strict negotiation and failure
 vectors; phase outcomes; webhook signature inputs; and explicit trailer

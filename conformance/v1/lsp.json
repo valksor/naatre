@@ -1,0 +1,90 @@
+{
+  "profile": "tooling.lsp-1",
+  "fixtureSuite": "1.0.0",
+  "owner": {
+    "issue": 94,
+    "coreContractIssue": 55,
+    "normativeProfile": "tooling.workflow-1",
+    "protocol": "lsp-3.17"
+  },
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "goVersion": "1.27.0",
+    "packages": ["github.com/valksor/naatre/tooling/lsp", "github.com/valksor/naatre/cmd/naatre-lsp"],
+    "dependencies": [{
+      "issue": 55,
+      "revision": "16aeb4606062207c0fccabb03a348d49e136e5c6",
+      "profile": "tooling.workflow-1",
+      "evidence": [
+        {"path": "tooling/editor.go", "sha256": "1b9dd9915baa2a361d82a3e7f29ffc0d7b7d5456aafd62a82b1a23c1825326e5"},
+        {"path": "conformance/v1/tooling.json", "sha256": "79af36f66265dc58df7fd8bbd83c3d88ab88c230b5a94d75b5696f03ff1bfb78"}
+      ]
+    }]
+  },
+  "runtime": {
+    "server": "go-standard-library",
+    "minimumGo": "1.27.0",
+    "client": "editors/vscode/client.mjs",
+    "executedNode": "26.8.2",
+    "transport": "stdio-content-length",
+    "positionEncoding": "utf-16",
+    "platformProfile": "portable-process-stdio",
+    "certifiedOperatingSystems": []
+  },
+  "limits": {
+    "messageBytes": 4194304,
+    "documentBytes": 1048576,
+    "openDocuments": 64,
+    "changesPerUpdate": 256,
+    "concurrentRequests": 16
+  },
+  "failureCodes": [
+    "LSP_PARSE_ERROR", "LSP_INVALID_REQUEST", "LSP_METHOD_NOT_FOUND", "LSP_INVALID_PARAMS",
+    "LSP_INTERNAL", "LSP_NOT_INITIALIZED", "LSP_DOCUMENT_NOT_OPEN", "LSP_DOCUMENT_VERSION_STALE",
+    "LSP_SCHEMA_REVISION_MISMATCH", "LSP_REQUEST_CANCELLED", "LSP_RESOURCE_LIMIT", "LSP_RENAME_INVALID"
+  ],
+  "fixtures": [
+    {"name": "vscode-stdio-editor-surface", "class": "positive", "tests": ["TestProtocolFixturesPositiveEditorSurface", "conformance/independent/verify-lsp.mjs"]},
+    {"name": "stable-safe-diagnostics", "class": "negative", "tests": ["TestDiagnosticsHaveStableCodesRangesAndSafeMessages", "TestInternalFailureIsContainedBehindStableCode", "TestRenameRejectsLiteralAndInvalidTargets"]},
+    {"name": "schema-and-version-pinning", "class": "boundary", "tests": ["TestIncrementalEditsPinSchemaAndIncreaseVersion"]},
+    {"name": "utf16-incremental-ranges", "class": "boundary", "tests": ["TestUTF16IncrementalRangesAndJSONPointers"]},
+    {"name": "request-cancellation", "class": "cancellation", "tests": ["TestCancellationAndResourceLimitsUsePublicCodes", "TestFramingRejectsOversizedMessagesAndContainsCancellation"]},
+    {"name": "bounded-documents-edits-messages-and-concurrency", "class": "resource-limit", "tests": ["TestCancellationAndResourceLimitsUsePublicCodes", "TestFramingRejectsOversizedMessagesAndContainsCancellation"]}
+  ],
+  "capabilities": {
+    "supported": [
+      "text-document-open-close", "incremental-text-sync", "publish-diagnostics", "pull-document-diagnostics",
+      "completion", "hover", "definition", "prepare-rename", "workspace-edit-rename", "deprecation-diagnostics",
+      "request-cancellation", "immutable-schema-revision", "utf-16-positions", "vscode-node-client"
+    ],
+    "unsupported": [
+      "alternate-position-encodings", "workspace-diagnostics", "diagnostic-related-documents", "diagnostic-related-information",
+      "diagnostic-code-description", "diagnostic-data", "diagnostic-refresh", "completion-resolve", "completion-triggers",
+      "completion-snippets", "completion-insert-replace", "completion-item-defaults", "completion-commit-characters",
+      "completion-commands", "completion-additional-edits", "completion-documentation", "completion-label-details",
+      "hover-markdown", "hover-trusted-commands", "definition-links", "declaration", "type-definition", "implementation", "references",
+      "document-highlight", "document-symbol", "workspace-symbol", "signature-help", "code-action", "code-lens",
+      "document-link", "document-color", "document-formatting", "range-formatting", "on-type-formatting", "folding-range",
+      "selection-range", "call-hierarchy", "semantic-tokens", "linked-editing-range", "moniker", "type-hierarchy",
+      "inline-value", "inlay-hint", "inline-completion", "document-drop-edit", "document-paste-edit", "execute-command",
+      "will-save", "will-save-wait-until", "save-notifications", "dynamic-registration", "workspace-folders",
+      "watched-file-registration", "workspace-file-operations", "notebook-sync", "change-annotations", "progress-reporting",
+      "schema-hot-reload", "remote-schema-fetch", "plugin-execution", "tcp-transport", "unix-socket-transport",
+      "websocket-transport", "browser-host", "native-editor-host", "multi-process-index", "operating-system-certification"
+    ]
+  },
+  "evidence": [
+    {"path": "editors/vscode/client.mjs", "sha256": "6ef3742b6e28605a474631dcf4ce88351baae97fcb80b25911e467a909b48ac6"},
+    {"path": "editors/vscode/extension.mjs", "sha256": "775aa17c8012ebaf26a7d6ae17cc6b70110d8cb1aad6f1425c4e99e4ba742c09"},
+    {"path": "editors/vscode/package.json", "sha256": "8a045bbc5c8e3c67c1aa18bf30eb381db87a77653e594e41afe422771d32331f"},
+    {"path": "conformance/lsp/schema.naatre.json", "sha256": "2f3abefd6ee6c62ed211c0f94e659a05ffc8d31ba1ae8406d1dedb6c2d01b3fa"},
+    {"path": "conformance/lsp/document.naatre.json", "sha256": "e0054be11b34667201f33bd5fb6a4ee6f55a7f68dcb46e8ce24b1f4965a9007b"},
+    {"path": "conformance/independent/verify-lsp.mjs", "sha256": "8e9eaf93e686df659c65097b3aa31956a7df71e2c42682e0c01573332ca37d5c"}
+  ],
+  "commands": [
+    "GOWORK=off go test ./tooling/lsp ./cmd/naatre-lsp -count=1",
+    "GOWORK=off go test ./internal/conformance ./internal/conformancerunner -run 'LSP|Lsp' -count=1",
+    "GOWORK=off go build -o /tmp/naatre-lsp-conformance ./cmd/naatre-lsp",
+    "node conformance/independent/verify-lsp.mjs /tmp/naatre-lsp-conformance"
+  ]
+}

@@ -56,7 +56,9 @@ lowercase SHA-256 digest, and declared input/output boundaries.
 
 `tooling.EditorAdapter` is the shared protocol-neutral implementation for
 diagnostics, completion, hover, definition, rename assistance, and deprecation
-metadata. The LSP transport and packaged integrations belong to issue #94.
+metadata. Issue #94's LSP 3.17 stdio transport, VS Code client, lifecycle,
+runtime evidence, limits, and unsupported capabilities are documented in the
+[LSP integration guide](lsp.md).
 
 Explain and schema-driven mock generation use metadata-only planning snapshots.
 They cannot call application handlers. Explain redacts literals and policy

@@ -21,6 +21,9 @@ evidence must be described as planned.
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
 - `docs/tooling.md`: offline CLI, editor adapter, mocks, and compatibility workflow.
+- `tooling/lsp` and `editors/vscode`: the bounded LSP 3.17 stdio server and
+  reference VS Code client for `tooling.lsp-1`; see the
+  [LSP integration guide](docs/lsp.md).
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `internal/slicesx`: dependency-free slice transformations shared by portable layers.
 - `client`: runtime-independent Go SDK request values, immutable typed
@@ -91,7 +94,9 @@ evidence must be described as planned.
   [Go federation coordinator profile](docs/federation-coordinator.md).
 - `tooling`: shared offline validation, formatting, hashing, explain, editor,
   manifest compatibility, deterministic mocks, and credential-redaction core
-  for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).
+  for `tooling.workflow-1`; `tooling/lsp` adds the issue #94 LSP transport
+  without redefining that core; see the [tooling guide](docs/tooling.md) and
+  [LSP integration guide](docs/lsp.md).
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the

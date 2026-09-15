@@ -1112,18 +1112,20 @@
     "94": {
       "issue": 94,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 94,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "tooling.lsp-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "tooling.lsp-1"
+        ]
       }
     },
     "95": {

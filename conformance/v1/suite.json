@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "e1cd060af15580322096bd9162c8776e5570f3f6295bfb8e88b124b530e4b1cc"
     },
     {
       "path": "v1/scalars.json",
@@ -365,6 +365,12 @@
       "profile": "tooling.workflow-1",
       "category": "evolution",
       "sha256": "79af36f66265dc58df7fd8bbd83c3d88ab88c230b5a94d75b5696f03ff1bfb78"
+    },
+    {
+      "path": "v1/lsp.json",
+      "profile": "tooling.lsp-1",
+      "category": "integration",
+      "sha256": "421c73807521b6370f421148f2e211052c323e905d9492b9d68c65ddb4ec7c8c"
     },
     {
       "path": "v1/adapters.json",

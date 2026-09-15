@@ -1,0 +1,20 @@
+{
+  "profile": "tooling.lsp-1",
+  "fixtureSuite": "1.0.0",
+  "fixtureSha256": "421c73807521b6370f421148f2e211052c323e905d9492b9d68c65ddb4ec7c8c",
+  "recordedAt": "2026-09-15",
+  "status": "passed",
+  "server": {"runtime": "go", "version": "1.27.1", "transport": "stdio-content-length"},
+  "client": {"name": "vscode-node", "runtime": "node", "version": "26.8.2"},
+  "platform": "macos-26.6.2-arm64",
+  "schemaRevision": "lsp-fixture-r1",
+  "dependency": {"issue": 55, "revision": "16aeb4606062207c0fccabb03a348d49e136e5c6", "profile": "tooling.workflow-1"},
+  "commands": [
+    {"command": "GOWORK=off go test ./tooling/lsp ./cmd/naatre-lsp -count=1", "status": "passed"},
+    {"command": "GOWORK=off go test ./internal/conformance ./internal/conformancerunner -run 'LSP|Lsp' -count=1", "status": "passed"},
+    {"command": "GOWORK=off go build -o /tmp/naatre-lsp-conformance ./cmd/naatre-lsp", "status": "passed"},
+    {"command": "node conformance/independent/verify-lsp.mjs /tmp/naatre-lsp-conformance", "status": "passed"}
+  ],
+  "fixtures": ["positive", "negative", "boundary", "cancellation", "resource-limit"],
+  "unsupported": ["vscode-host-ui-execution", "native-editor-hosts", "alternate-transports", "operating-system-certification"]
+}
