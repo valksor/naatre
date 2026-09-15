@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naatre.dev/conformance/release-gate-report-1.schema.json",
+  "title": "Naatre full release-gate evidence report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "status", "sourceRevision", "versions", "inputs", "matrix", "runnerPaths", "sharedVectors", "failures"],
+  "properties": {
+    "protocol": {"const": "naatre.release-gate.report-1"},
+    "status": {"enum": ["passed", "failed"]},
+    "sourceRevision": {"type": "string", "pattern": "^[a-f0-9]{40,64}$"},
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate", "spec", "fixtures", "profiles", "runnerProtocol", "reportProtocol", "canonicalization", "schemaRevision"],
+      "properties": {
+        "gate": {"type": "string", "minLength": 1},
+        "spec": {"type": "string", "minLength": 1},
+        "fixtures": {"type": "string", "minLength": 1},
+        "profiles": {"type": "string", "minLength": 1},
+        "runnerProtocol": {"type": "string", "minLength": 1},
+        "reportProtocol": {"type": "string", "minLength": 1},
+        "canonicalization": {"const": "c14n-1"},
+        "schemaRevision": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "inputs": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+    "matrix": {"type": "array", "items": {"$ref": "#/$defs/matrix"}},
+    "runnerPaths": {"type": "array", "items": {"$ref": "#/$defs/runnerPath"}},
+    "sharedVectors": {"type": "array", "items": {"$ref": "#/$defs/vector"}},
+    "failures": {"type": "array", "items": {"$ref": "#/$defs/failure"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "evidence": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "language"],
+      "properties": {"kind": {"type": "string", "minLength": 1}, "language": {"type": "string", "minLength": 1}}
+    },
+    "path": {
+      "type": "object", "additionalProperties": false, "required": ["source", "destination"],
+      "properties": {"source": {"$ref": "#/$defs/endpoint"}, "destination": {"$ref": "#/$defs/endpoint"}}
+    },
+    "matrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "implementation", "language", "profile", "evidenceRole", "path", "report", "status", "optionalCapabilities"],
+      "properties": {
+        "kind": {"enum": ["implementation", "remote-worker"]},
+        "implementation": {"type": "string", "minLength": 1},
+        "language": {"type": "string", "minLength": 1},
+        "profile": {"type": "string", "minLength": 1},
+        "evidenceRole": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/path"},
+        "report": {"$ref": "#/$defs/evidence"},
+        "status": {"enum": ["passed", "unsupported"]},
+        "optionalCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "status": {"enum": ["passed", "unsupported"]}
+            }
+          }
+        }
+      }
+    },
+    "runnerPath": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "language", "profile", "report", "status"],
+      "properties": {
+        "kind": {"enum": ["sdk-to-go", "gateway-to-worker", "independent-non-go", "security-gate"]},
+        "language": {"type": "string", "minLength": 1},
+        "profile": {"type": "string", "minLength": 1},
+        "report": {"$ref": "#/$defs/evidence"},
+        "status": {"const": "passed"}
+      }
+    },
+    "vector": {
+      "type": "object", "additionalProperties": false, "required": ["name", "sha256", "languages"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "languages": {"type": "array", "minItems": 10, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "failure": {
+      "type": "object", "additionalProperties": false, "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

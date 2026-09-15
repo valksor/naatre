@@ -65,6 +65,9 @@ credentials, arbitrary environment variables, or open metadata objects.
 
 A report records:
 
+- exact specification, schema, canonicalization, fixture, generator, runtime,
+  SDK, and transport revision bindings, with a reasoned `not-applicable` only
+  where that component is outside the evidence role;
 - implementation name and version, language and runtime version;
 - exact spec, fixture, profile, runner, canonicalization, and schema versions;
 - OS, architecture, feature flags, wire and stream transports, scalar

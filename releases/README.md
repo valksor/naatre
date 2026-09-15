@@ -17,3 +17,8 @@ complete the checklist in
 artifacts, and publish the immutable directory. A correction or rebuild gets a
 new release identifier. A compromised release is retained as a `revoked`
 record that names affected digests and replacement guidance.
+
+The issue 69 aggregator links `release.stable-1` only after the complete matrix
+passes. See [`conformance/RELEASE_GATE.md`](../conformance/RELEASE_GATE.md).
+Planned and experimental rows remain unevidenced and cannot be promoted merely
+because their source is present.
