@@ -769,6 +769,9 @@ func validateTypeDeclaration(declaration TypeDeclaration, activeIDs, activeNames
 	if !typeIDPattern.MatchString(string(declaration.ID)) || !typeIDPattern.MatchString(declaration.Name) {
 		return fmt.Errorf("invalid schema type identity %q/%q", declaration.ID, declaration.Name)
 	}
+	if err := validateEntityDeclaration(declaration); err != nil {
+		return err
+	}
 	if err := reserveActiveIdentity(string(declaration.ID), declaration.Name, activeIDs, activeNames); err != nil {
 		return err
 	}
@@ -786,6 +789,26 @@ func validateTypeDeclaration(declaration TypeDeclaration, activeIDs, activeNames
 		return err
 	}
 	return validateNestedRetiredIdentities(declaration, activeIDs, memberNames)
+}
+
+func validateEntityDeclaration(declaration TypeDeclaration) error {
+	if declaration.Entity == nil {
+		return nil
+	}
+	if declaration.Kind != ObjectType || !declaration.Output || declaration.Input || len(declaration.Entity.Keys) == 0 {
+		return fmt.Errorf("schema entity %q must be an output object with identity fields", declaration.ID)
+	}
+	fields := make(map[string]FieldDeclaration, len(declaration.Fields))
+	for _, field := range declaration.Fields {
+		fields[field.Name] = field
+	}
+	for _, key := range declaration.Entity.Keys {
+		field, exists := fields[key]
+		if !exists || field.Nullable {
+			return fmt.Errorf("schema entity %q has absent or nullable identity field %q", declaration.ID, key)
+		}
+	}
+	return nil
 }
 
 func validateFieldDeclarations(declaration TypeDeclaration, activeIDs, memberNames map[string]bool, options ImportOptions) error {

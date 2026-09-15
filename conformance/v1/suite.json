@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "91984a4102a838e70df6f3e3877e3baabfad693ecdf86de57895e17eb057c510"
     },
     {
       "path": "v1/scalars.json",
@@ -268,7 +268,7 @@
       "path": "v1/schema-discovery.json",
       "profile": "schema.discovery.http-1",
       "category": "transport",
-      "sha256": "6869e10218f69b6f5c723288ecd713cdd5ad3e12e8590261f39ea81dbd1ea865"
+      "sha256": "5963e87a60aab05e327a49cea750dc0fe709ba605cbdcda339e6e270eb3cdb08"
     },
     {
       "path": "v1/observability-integrations.json",
@@ -292,7 +292,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "dfb466ace6e8fd12f779a6c4879efd00da12607f47c76d7d94b2fb0b7c6a4693"
+      "sha256": "85940362f63883e95f16906f76e241110edd969b152733f0eaa5b228d62f0965"
     },
     {
       "path": "v1/php-sdk.json",
@@ -310,7 +310,7 @@
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "5cd141f944b69a5741d90565c5e30e341386f69c39dc20ecbcc08a893edb9df8"
+      "sha256": "cfab463121993d793a3decc42809f3458d9a182583fd4cf9409fc8093fdaac4b"
     },
     {
       "path": "v1/jvm-sdk.json",
@@ -359,6 +359,18 @@
       "profile": "mutation.update-1",
       "category": "execution",
       "sha256": "36370d885bc1efcbb3b1f988d1009a2e5d15771449c4df30589598008d79b710"
+    },
+    {
+      "path": "v1/normalized-cache.json",
+      "profile": "sdk.normalized-cache-1",
+      "category": "canonical",
+      "sha256": "793aaa7233b8962d12d6fd2e6e5094428b754077d99219a641c2acba01cee018"
+    },
+    {
+      "path": "v1/normalized-cache.schema.json",
+      "profile": "sdk.normalized-cache.schema-1",
+      "category": "schema",
+      "sha256": "5f50a7b2629254fb13e913aaa8fd41b0460c457ee9d3db82746b0f38f865c4dd"
     },
     {
       "path": "v1/tooling.json",
@@ -5965,6 +5977,82 @@
       ]
     },
     {
+      "caseId": "requirements.normalized-cache.identity",
+      "spec": "spec/v1/normalized-cache.md",
+      "clauses": [
+        "NCACHE-001",
+        "NCACHE-002",
+        "NCACHE-003",
+        "NCACHE-004",
+        "NCACHE-005"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/schemaMetadata",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/mergeCases/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/mergeCases/3",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.normalized-cache.merge",
+      "spec": "spec/v1/normalized-cache.md",
+      "clauses": [
+        "NCACHE-006",
+        "NCACHE-007",
+        "NCACHE-008"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/mergeCases/1",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/mergeCases/5",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/evidenceOwnership",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.normalized-cache.mutations",
+      "spec": "spec/v1/normalized-cache.md",
+      "clauses": [
+        "NCACHE-009",
+        "NCACHE-010",
+        "NCACHE-011",
+        "NCACHE-012"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/optimisticOutcomes/2",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "/optimisticOutcomes/3",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
       "caseId": "requirements.tooling.commands",
       "spec": "spec/v1/tooling.md",
       "clauses": [
@@ -6889,6 +6977,11 @@
       "caseId": "issue.45",
       "issue": 45,
       "fixtureRefs": [
+        {
+          "path": "v1/normalized-cache.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/45",

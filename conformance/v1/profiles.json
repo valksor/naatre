@@ -1852,7 +1852,7 @@
         {
           "path": "v1/schema-discovery.json",
           "profile": "schema.discovery.http-1",
-          "sha256": "6869e10218f69b6f5c723288ecd713cdd5ad3e12e8590261f39ea81dbd1ea865"
+          "sha256": "5963e87a60aab05e327a49cea750dc0fe709ba605cbdcda339e6e270eb3cdb08"
         },
         {
           "path": "v1/schema.json",

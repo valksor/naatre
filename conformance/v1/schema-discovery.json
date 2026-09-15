@@ -14,7 +14,7 @@
     "files": [
       {"path": "transport/http/discovery.go", "sha256": "73f3ed2451dc1c1cab91ad05ea135245f3c62abb2cdbe5bf7737c2641afe4ef7"},
       {"path": "transport/http/discovery_revision.go", "sha256": "0543ade2ff85e6cdb9861679906d2a2d4db7d6e5ae94cb73368dbdce391b991e"},
-      {"path": "schema/document.go", "sha256": "27f4f403cb9a8f4ef179c533ac148f3b6d91ed05e6b99848de4205216599e51c"}
+      {"path": "schema/document.go", "sha256": "0a6c093d9caf0fc972170fa8c73df2ee344fd8a358a008a2d354ec910b2fdaed"}
     ]
   },
   "endpoints": [
