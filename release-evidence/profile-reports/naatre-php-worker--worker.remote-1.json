@@ -1,0 +1,340 @@
+{
+  "protocol": "naatre.conformance.report-1",
+  "run": {
+    "id": "release-gate-69",
+    "operator": "naatre-project",
+    "command": [
+      "node",
+      "conformance/independent/verify-php-worker-adapters.mjs"
+    ],
+    "artifacts": [
+      {
+        "name": "profile-vectors",
+        "sha256": "06c9ccea9b5640c69075e1796eb5e859f64b63a321ab8848bf6719daf79c380f"
+      }
+    ]
+  },
+  "versions": {
+    "spec": "1",
+    "fixtures": "1.0.0",
+    "profiles": "1.0.0",
+    "runnerProtocol": "naatre.conformance.runner-1",
+    "canonicalization": "c14n-1",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "revisions": {
+    "specification": {
+      "version": "1",
+      "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+    },
+    "schema": {
+      "version": "profile-report-1",
+      "sha256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+    },
+    "canonicalization": {
+      "version": "c14n-1",
+      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+    },
+    "fixtures": {
+      "version": "1.0.0",
+      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+    },
+    "generator": {
+      "status": "not-applicable",
+      "reason": "remote worker exposes no code generator surface"
+    },
+    "runtime": {
+      "status": "pinned",
+      "version": "8.5.10",
+      "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
+    },
+    "sdk": {
+      "status": "not-applicable",
+      "reason": "remote worker is a runtime, not an SDK surface"
+    },
+    "transport": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+    }
+  },
+  "implementation": {
+    "name": "naatre-php-worker",
+    "version": "1.0.0",
+    "language": "php",
+    "runtimeVersion": "8.5.10",
+    "specVersion": "1",
+    "fixtureVersion": "1.0.0",
+    "profileVersion": "1.0.0",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "environment": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "featureFlags": [],
+    "wireTransports": [
+      "ndjson"
+    ],
+    "streamTransports": [
+      "ndjson"
+    ],
+    "scalarPrecision": [
+      "arbitrary-precision-decimal"
+    ],
+    "cancellationCapabilities": [
+      "process-signal"
+    ]
+  },
+  "path": {
+    "source": {
+      "kind": "gateway",
+      "language": "go"
+    },
+    "destination": {
+      "kind": "worker",
+      "language": "php"
+    }
+  },
+  "claims": [
+    {
+      "profile": "worker.remote-1",
+      "capabilities": []
+    }
+  ],
+  "results": [
+    {
+      "profile": "worker.remote-1",
+      "evidenceRole": "remote-worker",
+      "status": "passed",
+      "capabilities": [],
+      "executedClauses": [
+        "CORE-100",
+        "CORE-101",
+        "CORE-102",
+        "CORE-103",
+        "CORE-104",
+        "CORE-105",
+        "CORE-106",
+        "CORE-107",
+        "CORE-108",
+        "CORE-200",
+        "CORE-201",
+        "CORE-202",
+        "CORE-203",
+        "CORE-204",
+        "CORE-205",
+        "CORE-206",
+        "CORE-207",
+        "CORE-208",
+        "CORE-300",
+        "CORE-301",
+        "CORE-302",
+        "CORE-303",
+        "CORE-304",
+        "CORE-305",
+        "CORE-306",
+        "CORE-307",
+        "CORE-308",
+        "CORE-400",
+        "CORE-401",
+        "CORE-402",
+        "CORE-500",
+        "CORE-501",
+        "CORE-502",
+        "CORE-503",
+        "CORE-504",
+        "CORE-505",
+        "CORE-506",
+        "CORE-507",
+        "CORE-508",
+        "CORE-509",
+        "CORE-510",
+        "OPS-203",
+        "OPS-301",
+        "OPS-601",
+        "OPS-602",
+        "OPS-603",
+        "OPS-701",
+        "PROTO-001",
+        "PROTO-002",
+        "PROTO-003",
+        "PROTO-004",
+        "PROTO-005",
+        "PROTO-006",
+        "PROTO-007",
+        "PROTO-008",
+        "PROTO-009",
+        "PROTO-010",
+        "PROTO-100",
+        "PROTO-101",
+        "PROTO-102",
+        "PROTO-103",
+        "PROTO-104",
+        "PROTO-105",
+        "PROTO-106",
+        "RW-001",
+        "RW-002",
+        "RW-003",
+        "RW-100",
+        "RW-101",
+        "RW-102",
+        "RW-103",
+        "RW-104",
+        "RW-200",
+        "RW-201",
+        "RW-202",
+        "RW-203",
+        "RW-300",
+        "RW-301",
+        "RW-302",
+        "RW-303",
+        "RW-400",
+        "RW-401",
+        "RW-402",
+        "RW-403",
+        "RW-404",
+        "RW-500",
+        "RW-501",
+        "RW-502",
+        "RW-503",
+        "RW-504",
+        "RW-600",
+        "RW-601",
+        "RW-602",
+        "SEC-001",
+        "SEC-002",
+        "SEC-003",
+        "SEC-100",
+        "SEC-101",
+        "SEC-102",
+        "SEC-103",
+        "SEC-104",
+        "SEC-105",
+        "SEC-106",
+        "SEC-107",
+        "SEC-108",
+        "SEC-109",
+        "SEC-120",
+        "SEC-130",
+        "SEC-131",
+        "SEC-132",
+        "SEC-133",
+        "SEC-134",
+        "SEC-135",
+        "TYPE-001",
+        "TYPE-002",
+        "TYPE-003",
+        "TYPE-004",
+        "TYPE-005",
+        "TYPE-006",
+        "TYPE-100",
+        "TYPE-101",
+        "TYPE-102",
+        "TYPE-103",
+        "TYPE-104",
+        "TYPE-105",
+        "TYPE-106",
+        "TYPE-107",
+        "TYPE-108",
+        "TYPE-109",
+        "TYPE-110",
+        "TYPE-111",
+        "TYPE-112",
+        "TYPE-113",
+        "TYPE-114",
+        "TYPE-115",
+        "TYPE-116",
+        "TYPE-200",
+        "TYPE-201",
+        "TYPE-202",
+        "TYPE-203",
+        "TYPE-204",
+        "TYPE-205",
+        "TYPE-206",
+        "TYPE-207",
+        "TYPE-208",
+        "TYPE-209",
+        "TYPE-210"
+      ],
+      "evidence": [
+        {
+          "fixture": "v1/adversarial.json",
+          "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"
+        },
+        {
+          "fixture": "v1/batching.json",
+          "sha256": "b1c1a4697e43a8914f28407f378155c524be131e7403694743af1c2e8b347ea1"
+        },
+        {
+          "fixture": "v1/canonical.json",
+          "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+        },
+        {
+          "fixture": "v1/extensions.json",
+          "sha256": "2c300bf4304ca5c20b05727a23ee3654710eef085255432aa6824d0ea71243d8"
+        },
+        {
+          "fixture": "v1/http.json",
+          "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+        },
+        {
+          "fixture": "v1/interactions.json",
+          "sha256": "b7991c24473673b1d6a87d7932ac69ab60b227f96208c86f070e5cab29dcc7db"
+        },
+        {
+          "fixture": "v1/language.json",
+          "sha256": "33d491b38568065e4a1439969e96eaf463a4ec7d2d02c8ec094bd5c172965f09"
+        },
+        {
+          "fixture": "v1/mutations.json",
+          "sha256": "e45ecefbbdc12f48cf02e7dae8a3691046fe7b0a794f81b85145591862905726"
+        },
+        {
+          "fixture": "v1/operations.json",
+          "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
+        },
+        {
+          "fixture": "v1/partial-results.json",
+          "sha256": "6f29bc5b79d584f6f9aef796e47f71ccc685449b949af2867afb022824439eeb"
+        },
+        {
+          "fixture": "v1/planning.json",
+          "sha256": "0a95eceafa0b4269a80ef887bf985df254361c0dcacb23fe5ff151309818012f"
+        },
+        {
+          "fixture": "v1/protocol.json",
+          "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+        },
+        {
+          "fixture": "v1/reliability.json",
+          "sha256": "24a0eb39c1094957b41a90b2cf6ce73ea26a233e7252344f23d25a98448cba68"
+        },
+        {
+          "fixture": "v1/remote-workers.json",
+          "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
+        },
+        {
+          "fixture": "v1/resources.json",
+          "sha256": "00e2d7ad6fb2bb168b5556847c08a35293c19f0bcdbc6462ac5124c5f3f3d1c4"
+        },
+        {
+          "fixture": "v1/scalars.json",
+          "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"
+        },
+        {
+          "fixture": "v1/schema.json",
+          "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
+        },
+        {
+          "fixture": "v1/security.json",
+          "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
+        },
+        {
+          "fixture": "v1/values.json",
+          "sha256": "22a2eb0350de94567307ce52936601a495acd7a9332a5d8ed0a46293aa159910"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

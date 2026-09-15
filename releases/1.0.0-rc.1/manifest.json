@@ -1,0 +1,19 @@
+{
+  "conformanceClaims": [
+    {
+      "component": "naatre-release-gate",
+      "version": "1.0.0",
+      "profile": "release.stable-1",
+      "report": {
+        "path": "releases/1.0.0-rc.1/release-gate.json",
+        "sha256": "f20655905d423843425a1bb530f5b8a47d13fa06021d16fd1afcb59bfa62fabd"
+      }
+    }
+  ],
+  "profile": "naatre.release-manifest-1",
+  "release": {
+    "id": "1.0.0-rc.1",
+    "sourceRevision": "435a3f0939d047d148397d4224bc0e47efa01712"
+  },
+  "support": []
+}

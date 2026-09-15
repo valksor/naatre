@@ -1,0 +1,489 @@
+{
+  "protocol": "naatre.conformance.report-1",
+  "run": {
+    "id": "release-gate-69",
+    "operator": "naatre-project",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "./..."
+    ],
+    "artifacts": [
+      {
+        "name": "profile-vectors",
+        "sha256": "5d0410a8220b33554d9edcf2d932a1562759925b744ee17e5c75d74e22fcf7a7"
+      }
+    ]
+  },
+  "versions": {
+    "spec": "1",
+    "fixtures": "1.0.0",
+    "profiles": "1.0.0",
+    "runnerProtocol": "naatre.conformance.runner-1",
+    "canonicalization": "c14n-1",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "revisions": {
+    "specification": {
+      "version": "1",
+      "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+    },
+    "schema": {
+      "version": "profile-report-1",
+      "sha256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+    },
+    "canonicalization": {
+      "version": "c14n-1",
+      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+    },
+    "fixtures": {
+      "version": "1.0.0",
+      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+    },
+    "generator": {
+      "status": "pinned",
+      "version": "naatre.generator-1",
+      "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
+    },
+    "runtime": {
+      "status": "pinned",
+      "version": "go1.27.1",
+      "sha256": "2b4aaa94576a9e7ad5a5a25a0215ca63816d5a6f19aa479de8988676c7c322fb"
+    },
+    "sdk": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"
+    },
+    "transport": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+    }
+  },
+  "implementation": {
+    "name": "naatre-go",
+    "version": "1.0.0",
+    "language": "go",
+    "runtimeVersion": "go1.27.1",
+    "specVersion": "1",
+    "fixtureVersion": "1.0.0",
+    "profileVersion": "1.0.0",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "environment": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "featureFlags": [],
+    "wireTransports": [
+      "ndjson"
+    ],
+    "streamTransports": [
+      "ndjson"
+    ],
+    "scalarPrecision": [
+      "arbitrary-precision-decimal"
+    ],
+    "cancellationCapabilities": [
+      "process-signal"
+    ]
+  },
+  "path": {
+    "source": {
+      "kind": "codec",
+      "language": "go"
+    },
+    "destination": {
+      "kind": "native-runtime",
+      "language": "go"
+    }
+  },
+  "claims": [
+    {
+      "profile": "runtime.execution-1",
+      "capabilities": []
+    }
+  ],
+  "results": [
+    {
+      "profile": "runtime.execution-1",
+      "evidenceRole": "execution-runtime",
+      "status": "passed",
+      "capabilities": [],
+      "executedClauses": [
+        "BATCH-100",
+        "BATCH-101",
+        "BATCH-102",
+        "BATCH-103",
+        "BATCH-200",
+        "BATCH-201",
+        "BATCH-202",
+        "BATCH-203",
+        "CACHE-100",
+        "CACHE-101",
+        "CACHE-102",
+        "CACHE-103",
+        "CACHE-104",
+        "COLL-001",
+        "COLL-002",
+        "COLL-003",
+        "COLL-004",
+        "COLL-005",
+        "COLL-010",
+        "COLL-011",
+        "COLL-012",
+        "COLL-020",
+        "COLL-021",
+        "COLL-022",
+        "COLL-023",
+        "COLL-024",
+        "COLL-030",
+        "COLL-031",
+        "COLL-032",
+        "COLL-100",
+        "COLL-101",
+        "COLL-102",
+        "COLL-103",
+        "COLL-104",
+        "COLL-110",
+        "COLL-111",
+        "COLL-112",
+        "COLL-120",
+        "COLL-121",
+        "COLL-122",
+        "COLL-123",
+        "COLL-130",
+        "COLL-131",
+        "COLL-132",
+        "CORE-001",
+        "CORE-002",
+        "CORE-003",
+        "CORE-004",
+        "CORE-005",
+        "CORE-006",
+        "CORE-007",
+        "CORE-008",
+        "CORE-009",
+        "CORE-010",
+        "CORE-011",
+        "CORE-012",
+        "CORE-013",
+        "CORE-014",
+        "CORE-015",
+        "CORE-016",
+        "CORE-017",
+        "CORE-018",
+        "CORE-019",
+        "CORE-020",
+        "CORE-021",
+        "CORE-100",
+        "CORE-101",
+        "CORE-102",
+        "CORE-103",
+        "CORE-104",
+        "CORE-105",
+        "CORE-106",
+        "CORE-107",
+        "CORE-108",
+        "CORE-200",
+        "CORE-201",
+        "CORE-202",
+        "CORE-203",
+        "CORE-204",
+        "CORE-205",
+        "CORE-206",
+        "CORE-207",
+        "CORE-208",
+        "CORE-300",
+        "CORE-301",
+        "CORE-302",
+        "CORE-303",
+        "CORE-304",
+        "CORE-305",
+        "CORE-306",
+        "CORE-307",
+        "CORE-308",
+        "CORE-400",
+        "CORE-401",
+        "CORE-402",
+        "CORE-500",
+        "CORE-501",
+        "CORE-502",
+        "CORE-503",
+        "CORE-504",
+        "CORE-505",
+        "CORE-506",
+        "CORE-507",
+        "CORE-508",
+        "CORE-509",
+        "CORE-510",
+        "LANG-001",
+        "LANG-002",
+        "LANG-003",
+        "LANG-004",
+        "LANG-005",
+        "LANG-006",
+        "LANG-007",
+        "LANG-008",
+        "LANG-009",
+        "LANG-010",
+        "LANG-011",
+        "LANG-012",
+        "LANG-020",
+        "LANG-021",
+        "LANG-022",
+        "LANG-023",
+        "LANG-100",
+        "LANG-101",
+        "LANG-102",
+        "LANG-103",
+        "LANG-104",
+        "LANG-105",
+        "LANG-106",
+        "LANG-107",
+        "LANG-120",
+        "LANG-121",
+        "LANG-122",
+        "LANG-123",
+        "LANG-124",
+        "LANG-125",
+        "LANG-126",
+        "LANG-200",
+        "LANG-201",
+        "LANG-202",
+        "LANG-203",
+        "LANG-204",
+        "LANG-205",
+        "LANG-206",
+        "LANG-220",
+        "LANG-221",
+        "LANG-222",
+        "LANG-223",
+        "LANG-224",
+        "LANG-225",
+        "LANG-240",
+        "LANG-241",
+        "LANG-242",
+        "LANG-243",
+        "LANG-244",
+        "LANG-245",
+        "LANG-246",
+        "LANG-247",
+        "LANG-248",
+        "LANG-249",
+        "LANG-300",
+        "LANG-301",
+        "LANG-302",
+        "LANG-303",
+        "LANG-304",
+        "MUT-001",
+        "MUT-002",
+        "MUT-003",
+        "MUT-004",
+        "MUT-005",
+        "MUT-006",
+        "MUT-007",
+        "MUT-008",
+        "MUT-009",
+        "OBS-001",
+        "OBS-002",
+        "OBS-003",
+        "OBS-004",
+        "OBS-005",
+        "OBS-006",
+        "REL-001",
+        "REL-002",
+        "REL-003",
+        "REL-004",
+        "REL-005",
+        "REL-006",
+        "REL-007",
+        "REL-008",
+        "SEC-001",
+        "SEC-002",
+        "SEC-003",
+        "SEC-100",
+        "SEC-101",
+        "SEC-102",
+        "SEC-103",
+        "SEC-104",
+        "SEC-105",
+        "SEC-106",
+        "SEC-107",
+        "SEC-108",
+        "SEC-109",
+        "SEC-120",
+        "SEC-130",
+        "SEC-131",
+        "SEC-132",
+        "SEC-133",
+        "SEC-134",
+        "SEC-135",
+        "SEC-200",
+        "SEC-201",
+        "SEC-202",
+        "SEC-203",
+        "SEC-204",
+        "SEC-300",
+        "SEC-301",
+        "SEC-302",
+        "SEC-303",
+        "TYPE-001",
+        "TYPE-002",
+        "TYPE-003",
+        "TYPE-004",
+        "TYPE-005",
+        "TYPE-006",
+        "TYPE-100",
+        "TYPE-101",
+        "TYPE-102",
+        "TYPE-103",
+        "TYPE-104",
+        "TYPE-105",
+        "TYPE-106",
+        "TYPE-107",
+        "TYPE-108",
+        "TYPE-109",
+        "TYPE-110",
+        "TYPE-111",
+        "TYPE-112",
+        "TYPE-113",
+        "TYPE-114",
+        "TYPE-115",
+        "TYPE-116",
+        "TYPE-200",
+        "TYPE-201",
+        "TYPE-202",
+        "TYPE-203",
+        "TYPE-204",
+        "TYPE-205",
+        "TYPE-206",
+        "TYPE-207",
+        "TYPE-208",
+        "TYPE-209",
+        "TYPE-210",
+        "TYPE-300",
+        "TYPE-301",
+        "TYPE-302",
+        "TYPE-303",
+        "TYPE-403",
+        "TYPE-404",
+        "TYPE-405",
+        "TYPE-410",
+        "TYPE-411",
+        "TYPE-412",
+        "TYPE-413",
+        "VALID-001",
+        "VALID-002",
+        "VALID-003",
+        "VALID-004",
+        "VALID-100",
+        "VALID-101",
+        "VALID-102",
+        "VALID-103",
+        "VALID-104",
+        "VALID-110",
+        "VALID-111",
+        "VALID-200",
+        "VALID-201",
+        "VALID-202",
+        "VALID-300",
+        "VALID-301",
+        "VALID-302",
+        "VALID-303"
+      ],
+      "evidence": [
+        {
+          "fixture": "v1/adversarial.json",
+          "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"
+        },
+        {
+          "fixture": "v1/batching.json",
+          "sha256": "b1c1a4697e43a8914f28407f378155c524be131e7403694743af1c2e8b347ea1"
+        },
+        {
+          "fixture": "v1/canonical.json",
+          "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+        },
+        {
+          "fixture": "v1/collections.json",
+          "sha256": "f5da9ca478e63cd763ef5189693a8ba9a83936d074613a769a5eab90b0190349"
+        },
+        {
+          "fixture": "v1/extensions.json",
+          "sha256": "2c300bf4304ca5c20b05727a23ee3654710eef085255432aa6824d0ea71243d8"
+        },
+        {
+          "fixture": "v1/http.json",
+          "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+        },
+        {
+          "fixture": "v1/interactions.json",
+          "sha256": "b7991c24473673b1d6a87d7932ac69ab60b227f96208c86f070e5cab29dcc7db"
+        },
+        {
+          "fixture": "v1/language.json",
+          "sha256": "33d491b38568065e4a1439969e96eaf463a4ec7d2d02c8ec094bd5c172965f09"
+        },
+        {
+          "fixture": "v1/mutations.json",
+          "sha256": "e45ecefbbdc12f48cf02e7dae8a3691046fe7b0a794f81b85145591862905726"
+        },
+        {
+          "fixture": "v1/observability.json",
+          "sha256": "41959e490f3c08a1bfd96c137cf51725bf90148552e9e954a2d3deb32e7770b3"
+        },
+        {
+          "fixture": "v1/partial-results.json",
+          "sha256": "6f29bc5b79d584f6f9aef796e47f71ccc685449b949af2867afb022824439eeb"
+        },
+        {
+          "fixture": "v1/planning.json",
+          "sha256": "0a95eceafa0b4269a80ef887bf985df254361c0dcacb23fe5ff151309818012f"
+        },
+        {
+          "fixture": "v1/protocol.json",
+          "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+        },
+        {
+          "fixture": "v1/reliability.json",
+          "sha256": "24a0eb39c1094957b41a90b2cf6ce73ea26a233e7252344f23d25a98448cba68"
+        },
+        {
+          "fixture": "v1/resources.json",
+          "sha256": "00e2d7ad6fb2bb168b5556847c08a35293c19f0bcdbc6462ac5124c5f3f3d1c4"
+        },
+        {
+          "fixture": "v1/scalars.json",
+          "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"
+        },
+        {
+          "fixture": "v1/schema.json",
+          "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
+        },
+        {
+          "fixture": "v1/security-gate.json",
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
+        },
+        {
+          "fixture": "v1/security.json",
+          "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
+        },
+        {
+          "fixture": "v1/streaming.json",
+          "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
+        },
+        {
+          "fixture": "v1/validation.json",
+          "sha256": "5fc557e491786eb99718f9c559fd38f9fc8f95adf269bdaef99fc55283819ff3"
+        },
+        {
+          "fixture": "v1/values.json",
+          "sha256": "22a2eb0350de94567307ce52936601a495acd7a9332a5d8ed0a46293aa159910"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

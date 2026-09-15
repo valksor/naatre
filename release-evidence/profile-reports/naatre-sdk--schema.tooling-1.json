@@ -1,0 +1,276 @@
+{
+  "protocol": "naatre.conformance.report-1",
+  "run": {
+    "id": "release-gate-69",
+    "operator": "naatre-project",
+    "command": [
+      "node",
+      "conformance/independent/verify-typescript-sdk.mjs"
+    ],
+    "artifacts": [
+      {
+        "name": "profile-vectors",
+        "sha256": "2016e85ba0fbb91632c2132438ffde812038b02c939848423c35ca3b8fcf8403"
+      }
+    ]
+  },
+  "versions": {
+    "spec": "1",
+    "fixtures": "1.0.0",
+    "profiles": "1.0.0",
+    "runnerProtocol": "naatre.conformance.runner-1",
+    "canonicalization": "c14n-1",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "revisions": {
+    "specification": {
+      "version": "1",
+      "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+    },
+    "schema": {
+      "version": "profile-report-1",
+      "sha256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+    },
+    "canonicalization": {
+      "version": "c14n-1",
+      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+    },
+    "fixtures": {
+      "version": "1.0.0",
+      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+    },
+    "generator": {
+      "status": "pinned",
+      "version": "naatre.generator-1",
+      "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
+    },
+    "runtime": {
+      "status": "pinned",
+      "version": "26.8.2",
+      "sha256": "2b4aaa94576a9e7ad5a5a25a0215ca63816d5a6f19aa479de8988676c7c322fb"
+    },
+    "sdk": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "85fba24cf4db5f2a7a1c1601995ff5419fc255c885d7f61f691054c4992f926e"
+    },
+    "transport": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+    }
+  },
+  "implementation": {
+    "name": "@naatre/sdk",
+    "version": "1.0.0",
+    "language": "javascript-typescript",
+    "runtimeVersion": "26.8.2",
+    "specVersion": "1",
+    "fixtureVersion": "1.0.0",
+    "profileVersion": "1.0.0",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "environment": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "featureFlags": [],
+    "wireTransports": [
+      "ndjson"
+    ],
+    "streamTransports": [
+      "ndjson"
+    ],
+    "scalarPrecision": [
+      "arbitrary-precision-decimal"
+    ],
+    "cancellationCapabilities": [
+      "process-signal"
+    ]
+  },
+  "path": {
+    "source": {
+      "kind": "schema-tool",
+      "language": "javascript-typescript"
+    },
+    "destination": {
+      "kind": "schema-tool",
+      "language": "javascript-typescript"
+    }
+  },
+  "claims": [
+    {
+      "profile": "schema.tooling-1",
+      "capabilities": []
+    }
+  ],
+  "results": [
+    {
+      "profile": "schema.tooling-1",
+      "evidenceRole": "schema-tooling",
+      "status": "passed",
+      "capabilities": [],
+      "executedClauses": [
+        "CANON-001",
+        "CANON-002",
+        "CANON-003",
+        "CANON-004",
+        "CANON-005",
+        "CANON-006",
+        "CANON-007",
+        "CANON-008",
+        "CANON-103",
+        "CANON-104",
+        "CANON-105",
+        "CANON-200",
+        "CANON-201",
+        "CANON-202",
+        "CANON-203",
+        "CORE-400",
+        "CORE-401",
+        "CORE-402",
+        "GEN-001",
+        "GEN-002",
+        "GEN-003",
+        "GEN-004",
+        "GEN-005",
+        "GEN-006",
+        "GEN-100",
+        "GEN-101",
+        "GEN-102",
+        "GEN-103",
+        "TYPE-001",
+        "TYPE-002",
+        "TYPE-003",
+        "TYPE-004",
+        "TYPE-005",
+        "TYPE-006",
+        "TYPE-100",
+        "TYPE-101",
+        "TYPE-102",
+        "TYPE-103",
+        "TYPE-104",
+        "TYPE-105",
+        "TYPE-106",
+        "TYPE-107",
+        "TYPE-108",
+        "TYPE-109",
+        "TYPE-110",
+        "TYPE-111",
+        "TYPE-112",
+        "TYPE-113",
+        "TYPE-114",
+        "TYPE-115",
+        "TYPE-116",
+        "TYPE-200",
+        "TYPE-201",
+        "TYPE-202",
+        "TYPE-203",
+        "TYPE-204",
+        "TYPE-205",
+        "TYPE-206",
+        "TYPE-207",
+        "TYPE-208",
+        "TYPE-209",
+        "TYPE-210",
+        "TYPE-300",
+        "TYPE-301",
+        "TYPE-302",
+        "TYPE-303",
+        "TYPE-400",
+        "TYPE-401",
+        "TYPE-402",
+        "TYPE-403",
+        "TYPE-404",
+        "TYPE-405",
+        "TYPE-410",
+        "TYPE-411",
+        "TYPE-412",
+        "TYPE-413",
+        "TYPE-420",
+        "TYPE-421",
+        "TYPE-422",
+        "TYPE-423",
+        "TYPE-424",
+        "TYPE-425",
+        "TYPE-430",
+        "TYPE-431",
+        "TYPE-432",
+        "TYPE-433",
+        "TYPE-434",
+        "VALID-001",
+        "VALID-002",
+        "VALID-003",
+        "VALID-004",
+        "VALID-100",
+        "VALID-101",
+        "VALID-102",
+        "VALID-103",
+        "VALID-104",
+        "VALID-110",
+        "VALID-111",
+        "VALID-200",
+        "VALID-201",
+        "VALID-202",
+        "VALID-300",
+        "VALID-301",
+        "VALID-302",
+        "VALID-303"
+      ],
+      "evidence": [
+        {
+          "fixture": "v1/adversarial.json",
+          "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"
+        },
+        {
+          "fixture": "v1/canonical.json",
+          "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+        },
+        {
+          "fixture": "v1/extensions.json",
+          "sha256": "2c300bf4304ca5c20b05727a23ee3654710eef085255432aa6824d0ea71243d8"
+        },
+        {
+          "fixture": "v1/generation.json",
+          "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
+        },
+        {
+          "fixture": "v1/generator-plugin-host.json",
+          "sha256": "95212808826756e8c8b785709e8499ac3ff7d6026eaa2b4746505b4a726aba87"
+        },
+        {
+          "fixture": "v1/language.json",
+          "sha256": "33d491b38568065e4a1439969e96eaf463a4ec7d2d02c8ec094bd5c172965f09"
+        },
+        {
+          "fixture": "v1/partial-results.json",
+          "sha256": "6f29bc5b79d584f6f9aef796e47f71ccc685449b949af2867afb022824439eeb"
+        },
+        {
+          "fixture": "v1/protocol.json",
+          "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+        },
+        {
+          "fixture": "v1/scalars.json",
+          "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"
+        },
+        {
+          "fixture": "v1/schema-discovery.json",
+          "sha256": "be1b60919c7822e9b85d224aecb47071023b7df63e05bb1e8cf14553915bff36"
+        },
+        {
+          "fixture": "v1/schema.json",
+          "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
+        },
+        {
+          "fixture": "v1/validation.json",
+          "sha256": "5fc557e491786eb99718f9c559fd38f9fc8f95adf269bdaef99fc55283819ff3"
+        },
+        {
+          "fixture": "v1/values.json",
+          "sha256": "22a2eb0350de94567307ce52936601a495acd7a9332a5d8ed0a46293aa159910"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

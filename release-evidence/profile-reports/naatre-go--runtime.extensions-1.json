@@ -1,0 +1,194 @@
+{
+  "protocol": "naatre.conformance.report-1",
+  "run": {
+    "id": "release-gate-69",
+    "operator": "naatre-project",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "./..."
+    ],
+    "artifacts": [
+      {
+        "name": "profile-vectors",
+        "sha256": "e524e4ef404911d09550933bdaedb1563101bb0b7c40ca5a9bc7218c535c2762"
+      }
+    ]
+  },
+  "versions": {
+    "spec": "1",
+    "fixtures": "1.0.0",
+    "profiles": "1.0.0",
+    "runnerProtocol": "naatre.conformance.runner-1",
+    "canonicalization": "c14n-1",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "revisions": {
+    "specification": {
+      "version": "1",
+      "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+    },
+    "schema": {
+      "version": "profile-report-1",
+      "sha256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+    },
+    "canonicalization": {
+      "version": "c14n-1",
+      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+    },
+    "fixtures": {
+      "version": "1.0.0",
+      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+    },
+    "generator": {
+      "status": "pinned",
+      "version": "naatre.generator-1",
+      "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
+    },
+    "runtime": {
+      "status": "pinned",
+      "version": "go1.27.1",
+      "sha256": "2b4aaa94576a9e7ad5a5a25a0215ca63816d5a6f19aa479de8988676c7c322fb"
+    },
+    "sdk": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"
+    },
+    "transport": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+    }
+  },
+  "implementation": {
+    "name": "naatre-go",
+    "version": "1.0.0",
+    "language": "go",
+    "runtimeVersion": "go1.27.1",
+    "specVersion": "1",
+    "fixtureVersion": "1.0.0",
+    "profileVersion": "1.0.0",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "environment": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "featureFlags": [],
+    "wireTransports": [
+      "ndjson"
+    ],
+    "streamTransports": [
+      "ndjson"
+    ],
+    "scalarPrecision": [
+      "arbitrary-precision-decimal"
+    ],
+    "cancellationCapabilities": [
+      "process-signal"
+    ]
+  },
+  "path": {
+    "source": {
+      "kind": "sdk",
+      "language": "go"
+    },
+    "destination": {
+      "kind": "extension-host",
+      "language": "go"
+    }
+  },
+  "claims": [
+    {
+      "profile": "runtime.extensions-1",
+      "capabilities": []
+    }
+  ],
+  "results": [
+    {
+      "profile": "runtime.extensions-1",
+      "evidenceRole": "extensions",
+      "status": "passed",
+      "capabilities": [],
+      "executedClauses": [
+        "CANON-100",
+        "CANON-101",
+        "CANON-102",
+        "CANON-200",
+        "CANON-201",
+        "CANON-202",
+        "CANON-203",
+        "CORE-400",
+        "CORE-401",
+        "CORE-402",
+        "EXT-001",
+        "EXT-002",
+        "EXT-003",
+        "EXT-100",
+        "EXT-101",
+        "EXT-102",
+        "EXT-103",
+        "EXT-104",
+        "EXT-105",
+        "EXT-106",
+        "EXT-200",
+        "EXT-201",
+        "EXT-202",
+        "EXT-203",
+        "EXT-300",
+        "EXT-301",
+        "PROTO-007",
+        "PROTO-008",
+        "SEC-200",
+        "SEC-201",
+        "SEC-202",
+        "SEC-203",
+        "SEC-204",
+        "SEC-300",
+        "SEC-301",
+        "SEC-302",
+        "SEC-303",
+        "TYPE-410",
+        "TYPE-411",
+        "TYPE-412",
+        "TYPE-413"
+      ],
+      "evidence": [
+        {
+          "fixture": "v1/adversarial.json",
+          "sha256": "4237ad2d42968080f07860676fc070593ed32aeae28533d98f6546002cdf8eb5"
+        },
+        {
+          "fixture": "v1/canonical.json",
+          "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+        },
+        {
+          "fixture": "v1/extensions.json",
+          "sha256": "2c300bf4304ca5c20b05727a23ee3654710eef085255432aa6824d0ea71243d8"
+        },
+        {
+          "fixture": "v1/interactions.json",
+          "sha256": "b7991c24473673b1d6a87d7932ac69ab60b227f96208c86f070e5cab29dcc7db"
+        },
+        {
+          "fixture": "v1/protocol.json",
+          "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+        },
+        {
+          "fixture": "v1/schema.json",
+          "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
+        },
+        {
+          "fixture": "v1/security-gate.json",
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
+        },
+        {
+          "fixture": "v1/security.json",
+          "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

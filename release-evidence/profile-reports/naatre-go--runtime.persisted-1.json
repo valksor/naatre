@@ -1,0 +1,198 @@
+{
+  "protocol": "naatre.conformance.report-1",
+  "run": {
+    "id": "release-gate-69",
+    "operator": "naatre-project",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "./..."
+    ],
+    "artifacts": [
+      {
+        "name": "profile-vectors",
+        "sha256": "925249740b3f1f9d6f80821414aa36bd6eae8c7f582777b2f7e3d52f40d5d2b9"
+      }
+    ]
+  },
+  "versions": {
+    "spec": "1",
+    "fixtures": "1.0.0",
+    "profiles": "1.0.0",
+    "runnerProtocol": "naatre.conformance.runner-1",
+    "canonicalization": "c14n-1",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "revisions": {
+    "specification": {
+      "version": "1",
+      "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+    },
+    "schema": {
+      "version": "profile-report-1",
+      "sha256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+    },
+    "canonicalization": {
+      "version": "c14n-1",
+      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+    },
+    "fixtures": {
+      "version": "1.0.0",
+      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+    },
+    "generator": {
+      "status": "pinned",
+      "version": "naatre.generator-1",
+      "sha256": "6c8133ea518ee6f68d15207f2829aa81df667b2406f3983241fce6b38bad8684"
+    },
+    "runtime": {
+      "status": "pinned",
+      "version": "go1.27.1",
+      "sha256": "2b4aaa94576a9e7ad5a5a25a0215ca63816d5a6f19aa479de8988676c7c322fb"
+    },
+    "sdk": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"
+    },
+    "transport": {
+      "status": "pinned",
+      "version": "1.0.0",
+      "sha256": "f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"
+    }
+  },
+  "implementation": {
+    "name": "naatre-go",
+    "version": "1.0.0",
+    "language": "go",
+    "runtimeVersion": "go1.27.1",
+    "specVersion": "1",
+    "fixtureVersion": "1.0.0",
+    "profileVersion": "1.0.0",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "environment": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "featureFlags": [],
+    "wireTransports": [
+      "ndjson"
+    ],
+    "streamTransports": [
+      "ndjson"
+    ],
+    "scalarPrecision": [
+      "arbitrary-precision-decimal"
+    ],
+    "cancellationCapabilities": [
+      "process-signal"
+    ]
+  },
+  "path": {
+    "source": {
+      "kind": "sdk",
+      "language": "go"
+    },
+    "destination": {
+      "kind": "persisted-store",
+      "language": "go"
+    }
+  },
+  "claims": [
+    {
+      "profile": "runtime.persisted-1",
+      "capabilities": []
+    }
+  ],
+  "results": [
+    {
+      "profile": "runtime.persisted-1",
+      "evidenceRole": "persisted-operations",
+      "status": "passed",
+      "capabilities": [],
+      "executedClauses": [
+        "CANON-100",
+        "CANON-101",
+        "CANON-102",
+        "CANON-200",
+        "CANON-201",
+        "CANON-202",
+        "CANON-203",
+        "CANON-220",
+        "CANON-221",
+        "CANON-222",
+        "CANON-223",
+        "CORE-400",
+        "CORE-401",
+        "CORE-402",
+        "PERSIST-001",
+        "PERSIST-002",
+        "PERSIST-003",
+        "PERSIST-004",
+        "PERSIST-005",
+        "PERSIST-100",
+        "PERSIST-101",
+        "PERSIST-102",
+        "PERSIST-103",
+        "PERSIST-104",
+        "PERSIST-110",
+        "PERSIST-111",
+        "PERSIST-112",
+        "PERSIST-113",
+        "PERSIST-114",
+        "PERSIST-200",
+        "PERSIST-201",
+        "PERSIST-202",
+        "PERSIST-203",
+        "PERSIST-300",
+        "PERSIST-301",
+        "PERSIST-302",
+        "PERSIST-303",
+        "PERSIST-304",
+        "PERSIST-400",
+        "PERSIST-401",
+        "REL-001",
+        "REL-002",
+        "REL-003",
+        "REL-004",
+        "REL-005",
+        "REL-006",
+        "REL-007",
+        "REL-008",
+        "SEC-001",
+        "SEC-002",
+        "SEC-003",
+        "SEC-106",
+        "SEC-107"
+      ],
+      "evidence": [
+        {
+          "fixture": "v1/canonical.json",
+          "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+        },
+        {
+          "fixture": "v1/interactions.json",
+          "sha256": "b7991c24473673b1d6a87d7932ac69ab60b227f96208c86f070e5cab29dcc7db"
+        },
+        {
+          "fixture": "v1/persisted.json",
+          "sha256": "b805a6070d17c3ab67b4cbf6e2f41df6f519b2ae86c6bf8aecf99a4dbe95f830"
+        },
+        {
+          "fixture": "v1/protocol.json",
+          "sha256": "aabd0a95f2dbda0ca09730aae2bbe166e0bdd8231062a629eb77448ac1fc4f41"
+        },
+        {
+          "fixture": "v1/reliability.json",
+          "sha256": "24a0eb39c1094957b41a90b2cf6ce73ea26a233e7252344f23d25a98448cba68"
+        },
+        {
+          "fixture": "v1/security.json",
+          "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

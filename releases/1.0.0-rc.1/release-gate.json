@@ -1,0 +1,1213 @@
+{
+  "protocol": "naatre.release-gate.report-1",
+  "status": "passed",
+  "sourceRevision": "435a3f0939d047d148397d4224bc0e47efa01712",
+  "versions": {
+    "gate": "1.0.0",
+    "spec": "1",
+    "fixtures": "1.0.0",
+    "profiles": "1.0.0",
+    "runnerProtocol": "naatre.conformance.runner-1",
+    "reportProtocol": "naatre.conformance.report-1",
+    "canonicalization": "c14n-1",
+    "schemaRevision": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+  },
+  "inputs": [
+    {
+      "path": "conformance/independent/runner.mjs",
+      "sha256": "1bd79ad3390be35c49cdc53da9394ac6a288e3cd4e1c487b14ddc5f60f47d2e8"
+    },
+    {
+      "path": "conformance/profile-report.schema.json",
+      "sha256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94"
+    },
+    {
+      "path": "conformance/release-gate-report.schema.json",
+      "sha256": "2300f122541976d15d0095d93d4b092c4f5f2710b05ec3695e4917cfc5aecfc2"
+    },
+    {
+      "path": "conformance/v1/compatibility.json",
+      "sha256": "e4c411295d265374cb34ba44c043c1cb7a7176d872b98a939e53a337abac84fb"
+    },
+    {
+      "path": "conformance/v1/profiles.json",
+      "sha256": "c8daaa5b265a357d377ab30b7fdeb11e6619a5a736509249f06731494228c38d"
+    },
+    {
+      "path": "conformance/v1/release-gate.json",
+      "sha256": "9977e1badf6ac45cc1fd0bdaad9540a6b61605df9c487b3c598fa34f16009f06"
+    },
+    {
+      "path": "conformance/v1/suite.json",
+      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+    },
+    {
+      "path": "release-evidence/independent-runner.json",
+      "sha256": "48a94c54f8b44d58bff967ce99c33d7dc799693610140506cfcdad0cc103b9bc"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
+      "sha256": "cb41a1b1752c778b4f54e0fb660640364f93c6173936e8ea019cff441b969b88"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-dart--wire.codec-1.json",
+      "sha256": "2ed654fb7b01e80d62594d86d8ad413b75fce0155ae6fd790aca8a815d5cf14f"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-dotnet--sdk.client-1.json",
+      "sha256": "e3698465beadec627fd618dae5d3afe980391042586fba277d55c1af358b2122"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-dotnet--wire.codec-1.json",
+      "sha256": "e302aebdf263921a731e7713484bff41eaa77c3893f19bb4839e200098824c6b"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--runtime.execution-1.json",
+      "sha256": "23083c3d6eb5f652f92dadefc18485101d73d8f9cdd38336d4042b63e9da08b9"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--runtime.extensions-1.json",
+      "sha256": "817c46ae2108c84a32f704978be087de2f60986e28a568ca3dc36dad9da372ec"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--runtime.federation-1.json",
+      "sha256": "dae3d706c0b6abcb49fe217378a921ca8080a1842a243b2db2784d98e48e2c29"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--runtime.persisted-1.json",
+      "sha256": "026865531217f61b94e0b5d85d1570e3f81376c572d7e829e96756357d315e72"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--schema.tooling-1.json",
+      "sha256": "83142751274f36d697c5c803a4d0e035ed7022568bf0a818f2dd1b82ab087158"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--sdk.client-1.json",
+      "sha256": "43d8ef5eda3b35835d81f7428cbefdcbdc5034e5674b5d0334429fe168ff8e1a"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--streaming-optional--core.streaming-handles-1.json",
+      "sha256": "fbdcb06893d246f4154a9bf9b114cae6f0701fe387856f979cbd56a69ccbf372"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--streaming-optional--stream.websocket-1.json",
+      "sha256": "ab841973e68885b689b277d55faf3f3061dc1c8cab2fa0eca4c0106f2efbf31c"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--transport.http.server-1.json",
+      "sha256": "3e05c383008eda7bff971ef9ab41d90697d7b0edae8ad9f7057c17082e454675"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--transport.streaming-1.json",
+      "sha256": "a66ffc646918efa04ece73565c485e1c146290d8ee74023b62aa141fa6c86995"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-go--wire.codec-1.json",
+      "sha256": "4c0db61fefccbc62cbec376b57a7cc6a76532efa0d2aa2660612ea75beb9d065"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-javascript-typescript-worker--worker.remote-1.json",
+      "sha256": "d7ac59663ae3551d7e316c971305675cf63b3bc18156a7e38ae5e035ac513f26"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-jvm--sdk.client-1.json",
+      "sha256": "d2608c4b017fbd09cde1269086b55efe75f77611ca86e0f0af8d8b55e8d45f13"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-jvm--wire.codec-1.json",
+      "sha256": "a88a3698ed8f801af7afbdafca811adb770ed9efd0b0357243d89fd49c44a75e"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-php--sdk.client-1.json",
+      "sha256": "c39a3f81c7b4d6ffc5701e43f14d93b2141b170808269a390a3d55b00a4214d1"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-php--wire.codec-1.json",
+      "sha256": "5e98df1189bc20b35105ad5ca11366b348579b07c355ede709a8e3209b497789"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-php-worker--worker.remote-1.json",
+      "sha256": "bb4a915392fdda75ce21626f885f645efe44f24f0fdceef73ffeeee9c9af32f6"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-python--sdk.client-1.json",
+      "sha256": "7e1c0ce4dcdb052ab08cb5bdd9bf47834da5f0c296e0810f4bbe0b71d50e08f7"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-python--wire.codec-1.json",
+      "sha256": "85e019b59bda54f2c25b858d7f43bcf089e543633323edb4d6088daf800a90e2"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-python-worker--worker.remote-1.json",
+      "sha256": "a46f10b97e259fc6384033dcd3d7c4e8778ad6e016ecd98ede58191dd4252b57"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-ruby--sdk.client-1.json",
+      "sha256": "bd2317f3c7e4be24bbbbed183f12469b5119fea2653f51ba585fa752c5e32fbf"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-ruby--wire.codec-1.json",
+      "sha256": "5fb33bb07e4d7614db25963b31ab8cb39760b109cc0cfc8e7306b196558cc4ce"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-rust--sdk.client-1.json",
+      "sha256": "8fc86350a7e2ab6e78dda2efd07726f5dc3974ca251ff0037715009e7db80c58"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-rust--wire.codec-1.json",
+      "sha256": "94c6edee832c6f9e1da75d5ac8271ab0986704262b918fcd030b3dd4f028ad05"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-rust-worker--worker.remote-1.json",
+      "sha256": "ee15a7b57ebc23ea11678cb1ef27ea59a1d3c661783620d84aac163638763a50"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-sdk--schema.tooling-1.json",
+      "sha256": "7996c716c9618db37348272f9f2d9981ebc16eeaff4f0b72e20ff4b39e566b29"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-sdk--sdk.client-1.json",
+      "sha256": "b64b5a2d2093d850bb0e9d5b97d018555387997246daab93b161782b35c0873d"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-sdk--streaming-optional--core.streaming-handles-1.json",
+      "sha256": "f97325a74f4cadb226477ca500efa7702fdd5e508cd25ea8f5c59e845aed87b1"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-sdk--streaming-optional--stream.websocket-1.json",
+      "sha256": "5bb9c77dd47dd4a493f698fdf0eeba88f382b1243bedf6f2e746444ea9afd238"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-sdk--transport.streaming-1.json",
+      "sha256": "158914129baf3150291b72b5dfea6ae543183df3780db0f59636c529d80f2a6b"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-sdk--wire.codec-1.json",
+      "sha256": "7c726d83f2386779661307d571f49cee9921f5d8b252a59c3e620a9f8ccc256a"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-swift--sdk.client-1.json",
+      "sha256": "be0bb12c9572b64821b3f5d1a52e850e766b1af10106ccb8ea35135ab44cd787"
+    },
+    {
+      "path": "release-evidence/profile-reports/naatre-swift--wire.codec-1.json",
+      "sha256": "d0ad3fb69cd8ebaebdffa173f3c1d5378e6b5d225dbf92d1aee80bcaa036679e"
+    },
+    {
+      "path": "release-evidence/security-gate.json",
+      "sha256": "20debd305eaef83e6c5a1b27af615b1d74ee6ddd0a4ea5e4f3db8cb50af279c7"
+    },
+    {
+      "path": "releases/release-manifest.schema.json",
+      "sha256": "b1f694c316713d3db6edef020dd9138d781bfa4b5d73124309c6df834b110d05"
+    }
+  ],
+  "matrix": [
+    {
+      "kind": "implementation",
+      "implementation": "naatre-dart",
+      "language": "dart",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "dart"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
+        "sha256": "cb41a1b1752c778b4f54e0fb660640364f93c6173936e8ea019cff441b969b88"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-dart",
+      "language": "dart",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "dart"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "dart"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-dart--wire.codec-1.json",
+        "sha256": "2ed654fb7b01e80d62594d86d8ad413b75fce0155ae6fd790aca8a815d5cf14f"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-dotnet",
+      "language": "dotnet",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "dotnet"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-dotnet--sdk.client-1.json",
+        "sha256": "e3698465beadec627fd618dae5d3afe980391042586fba277d55c1af358b2122"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-dotnet",
+      "language": "dotnet",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "dotnet"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "dotnet"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-dotnet--wire.codec-1.json",
+        "sha256": "e302aebdf263921a731e7713484bff41eaa77c3893f19bb4839e200098824c6b"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "runtime.execution-1",
+      "evidenceRole": "execution-runtime",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--runtime.execution-1.json",
+        "sha256": "23083c3d6eb5f652f92dadefc18485101d73d8f9cdd38336d4042b63e9da08b9"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "runtime.extensions-1",
+      "evidenceRole": "extensions",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "extension-host",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--runtime.extensions-1.json",
+        "sha256": "817c46ae2108c84a32f704978be087de2f60986e28a568ca3dc36dad9da372ec"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "runtime.federation-1",
+      "evidenceRole": "federation",
+      "path": {
+        "source": {
+          "kind": "gateway",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "federation-coordinator",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--runtime.federation-1.json",
+        "sha256": "dae3d706c0b6abcb49fe217378a921ca8080a1842a243b2db2784d98e48e2c29"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "runtime.persisted-1",
+      "evidenceRole": "persisted-operations",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "persisted-store",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--runtime.persisted-1.json",
+        "sha256": "026865531217f61b94e0b5d85d1570e3f81376c572d7e829e96756357d315e72"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "schema.tooling-1",
+      "evidenceRole": "schema-tooling",
+      "path": {
+        "source": {
+          "kind": "schema-tool",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "schema-tool",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--schema.tooling-1.json",
+        "sha256": "83142751274f36d697c5c803a4d0e035ed7022568bf0a818f2dd1b82ab087158"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--sdk.client-1.json",
+        "sha256": "43d8ef5eda3b35835d81f7428cbefdcbdc5034e5674b5d0334429fe168ff8e1a"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "transport.http.server-1",
+      "evidenceRole": "http-server",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "http-server",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--transport.http.server-1.json",
+        "sha256": "3e05c383008eda7bff971ef9ab41d90697d7b0edae8ad9f7057c17082e454675"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "transport.streaming-1",
+      "evidenceRole": "streaming-transport",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "stream-transport",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--transport.streaming-1.json",
+        "sha256": "a66ffc646918efa04ece73565c485e1c146290d8ee74023b62aa141fa6c86995"
+      },
+      "status": "passed",
+      "optionalCapabilities": [
+        {
+          "id": "core.streaming-handles-1",
+          "status": "unsupported"
+        },
+        {
+          "id": "stream.websocket-1",
+          "status": "unsupported"
+        }
+      ]
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-go",
+      "language": "go",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--wire.codec-1.json",
+        "sha256": "4c0db61fefccbc62cbec376b57a7cc6a76532efa0d2aa2660612ea75beb9d065"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "@naatre/sdk",
+      "language": "javascript-typescript",
+      "profile": "schema.tooling-1",
+      "evidenceRole": "schema-tooling",
+      "path": {
+        "source": {
+          "kind": "schema-tool",
+          "language": "javascript-typescript"
+        },
+        "destination": {
+          "kind": "schema-tool",
+          "language": "javascript-typescript"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-sdk--schema.tooling-1.json",
+        "sha256": "7996c716c9618db37348272f9f2d9981ebc16eeaff4f0b72e20ff4b39e566b29"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "@naatre/sdk",
+      "language": "javascript-typescript",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "javascript-typescript"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-sdk--sdk.client-1.json",
+        "sha256": "b64b5a2d2093d850bb0e9d5b97d018555387997246daab93b161782b35c0873d"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "@naatre/sdk",
+      "language": "javascript-typescript",
+      "profile": "transport.streaming-1",
+      "evidenceRole": "streaming-transport",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "javascript-typescript"
+        },
+        "destination": {
+          "kind": "stream-transport",
+          "language": "javascript-typescript"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-sdk--transport.streaming-1.json",
+        "sha256": "158914129baf3150291b72b5dfea6ae543183df3780db0f59636c529d80f2a6b"
+      },
+      "status": "passed",
+      "optionalCapabilities": [
+        {
+          "id": "core.streaming-handles-1",
+          "status": "unsupported"
+        },
+        {
+          "id": "stream.websocket-1",
+          "status": "unsupported"
+        }
+      ]
+    },
+    {
+      "kind": "implementation",
+      "implementation": "@naatre/sdk",
+      "language": "javascript-typescript",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "javascript-typescript"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "javascript-typescript"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-sdk--wire.codec-1.json",
+        "sha256": "7c726d83f2386779661307d571f49cee9921f5d8b252a59c3e620a9f8ccc256a"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-jvm",
+      "language": "jvm",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "jvm"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-jvm--sdk.client-1.json",
+        "sha256": "d2608c4b017fbd09cde1269086b55efe75f77611ca86e0f0af8d8b55e8d45f13"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-jvm",
+      "language": "jvm",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "jvm"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "jvm"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-jvm--wire.codec-1.json",
+        "sha256": "a88a3698ed8f801af7afbdafca811adb770ed9efd0b0357243d89fd49c44a75e"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-php",
+      "language": "php",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "php"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-php--sdk.client-1.json",
+        "sha256": "c39a3f81c7b4d6ffc5701e43f14d93b2141b170808269a390a3d55b00a4214d1"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-php",
+      "language": "php",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "php"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "php"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-php--wire.codec-1.json",
+        "sha256": "5e98df1189bc20b35105ad5ca11366b348579b07c355ede709a8e3209b497789"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-python",
+      "language": "python",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "python"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-python--sdk.client-1.json",
+        "sha256": "7e1c0ce4dcdb052ab08cb5bdd9bf47834da5f0c296e0810f4bbe0b71d50e08f7"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-python",
+      "language": "python",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "python"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "python"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-python--wire.codec-1.json",
+        "sha256": "85e019b59bda54f2c25b858d7f43bcf089e543633323edb4d6088daf800a90e2"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-ruby",
+      "language": "ruby",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "ruby"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-ruby--sdk.client-1.json",
+        "sha256": "bd2317f3c7e4be24bbbbed183f12469b5119fea2653f51ba585fa752c5e32fbf"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-ruby",
+      "language": "ruby",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "ruby"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "ruby"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-ruby--wire.codec-1.json",
+        "sha256": "5fb33bb07e4d7614db25963b31ab8cb39760b109cc0cfc8e7306b196558cc4ce"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-rust",
+      "language": "rust",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "rust"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-rust--sdk.client-1.json",
+        "sha256": "8fc86350a7e2ab6e78dda2efd07726f5dc3974ca251ff0037715009e7db80c58"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-rust",
+      "language": "rust",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "rust"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "rust"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-rust--wire.codec-1.json",
+        "sha256": "94c6edee832c6f9e1da75d5ac8271ab0986704262b918fcd030b3dd4f028ad05"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-swift",
+      "language": "swift",
+      "profile": "sdk.client-1",
+      "evidenceRole": "client",
+      "path": {
+        "source": {
+          "kind": "sdk",
+          "language": "swift"
+        },
+        "destination": {
+          "kind": "native-runtime",
+          "language": "go"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-swift--sdk.client-1.json",
+        "sha256": "be0bb12c9572b64821b3f5d1a52e850e766b1af10106ccb8ea35135ab44cd787"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "implementation",
+      "implementation": "naatre-swift",
+      "language": "swift",
+      "profile": "wire.codec-1",
+      "evidenceRole": "wire-codec",
+      "path": {
+        "source": {
+          "kind": "codec",
+          "language": "swift"
+        },
+        "destination": {
+          "kind": "codec",
+          "language": "swift"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-swift--wire.codec-1.json",
+        "sha256": "d0ad3fb69cd8ebaebdffa173f3c1d5378e6b5d225dbf92d1aee80bcaa036679e"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "remote-worker",
+      "implementation": "naatre-javascript-typescript-worker",
+      "language": "javascript-typescript",
+      "profile": "worker.remote-1",
+      "evidenceRole": "remote-worker",
+      "path": {
+        "source": {
+          "kind": "gateway",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "worker",
+          "language": "javascript-typescript"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-javascript-typescript-worker--worker.remote-1.json",
+        "sha256": "d7ac59663ae3551d7e316c971305675cf63b3bc18156a7e38ae5e035ac513f26"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "remote-worker",
+      "implementation": "naatre-php-worker",
+      "language": "php",
+      "profile": "worker.remote-1",
+      "evidenceRole": "remote-worker",
+      "path": {
+        "source": {
+          "kind": "gateway",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "worker",
+          "language": "php"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-php-worker--worker.remote-1.json",
+        "sha256": "bb4a915392fdda75ce21626f885f645efe44f24f0fdceef73ffeeee9c9af32f6"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "remote-worker",
+      "implementation": "naatre-python-worker",
+      "language": "python",
+      "profile": "worker.remote-1",
+      "evidenceRole": "remote-worker",
+      "path": {
+        "source": {
+          "kind": "gateway",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "worker",
+          "language": "python"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-python-worker--worker.remote-1.json",
+        "sha256": "a46f10b97e259fc6384033dcd3d7c4e8778ad6e016ecd98ede58191dd4252b57"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    },
+    {
+      "kind": "remote-worker",
+      "implementation": "naatre-rust-worker",
+      "language": "rust",
+      "profile": "worker.remote-1",
+      "evidenceRole": "remote-worker",
+      "path": {
+        "source": {
+          "kind": "gateway",
+          "language": "go"
+        },
+        "destination": {
+          "kind": "worker",
+          "language": "rust"
+        }
+      },
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-rust-worker--worker.remote-1.json",
+        "sha256": "ee15a7b57ebc23ea11678cb1ef27ea59a1d3c661783620d84aac163638763a50"
+      },
+      "status": "passed",
+      "optionalCapabilities": []
+    }
+  ],
+  "runnerPaths": [
+    {
+      "kind": "gateway-to-worker",
+      "language": "javascript-typescript",
+      "profile": "worker.remote-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-javascript-typescript-worker--worker.remote-1.json",
+        "sha256": "d7ac59663ae3551d7e316c971305675cf63b3bc18156a7e38ae5e035ac513f26"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "gateway-to-worker",
+      "language": "php",
+      "profile": "worker.remote-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-php-worker--worker.remote-1.json",
+        "sha256": "bb4a915392fdda75ce21626f885f645efe44f24f0fdceef73ffeeee9c9af32f6"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "gateway-to-worker",
+      "language": "python",
+      "profile": "worker.remote-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-python-worker--worker.remote-1.json",
+        "sha256": "a46f10b97e259fc6384033dcd3d7c4e8778ad6e016ecd98ede58191dd4252b57"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "gateway-to-worker",
+      "language": "rust",
+      "profile": "worker.remote-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-rust-worker--worker.remote-1.json",
+        "sha256": "ee15a7b57ebc23ea11678cb1ef27ea59a1d3c661783620d84aac163638763a50"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "independent-non-go",
+      "language": "javascript-typescript",
+      "profile": "suite.contract-1",
+      "report": {
+        "path": "release-evidence/independent-runner.json",
+        "sha256": "48a94c54f8b44d58bff967ce99c33d7dc799693610140506cfcdad0cc103b9bc"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "dart",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
+        "sha256": "cb41a1b1752c778b4f54e0fb660640364f93c6173936e8ea019cff441b969b88"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "dotnet",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-dotnet--sdk.client-1.json",
+        "sha256": "e3698465beadec627fd618dae5d3afe980391042586fba277d55c1af358b2122"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "go",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-go--sdk.client-1.json",
+        "sha256": "43d8ef5eda3b35835d81f7428cbefdcbdc5034e5674b5d0334429fe168ff8e1a"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "javascript-typescript",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-sdk--sdk.client-1.json",
+        "sha256": "b64b5a2d2093d850bb0e9d5b97d018555387997246daab93b161782b35c0873d"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "jvm",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-jvm--sdk.client-1.json",
+        "sha256": "d2608c4b017fbd09cde1269086b55efe75f77611ca86e0f0af8d8b55e8d45f13"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "php",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-php--sdk.client-1.json",
+        "sha256": "c39a3f81c7b4d6ffc5701e43f14d93b2141b170808269a390a3d55b00a4214d1"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "python",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-python--sdk.client-1.json",
+        "sha256": "7e1c0ce4dcdb052ab08cb5bdd9bf47834da5f0c296e0810f4bbe0b71d50e08f7"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "ruby",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-ruby--sdk.client-1.json",
+        "sha256": "bd2317f3c7e4be24bbbbed183f12469b5119fea2653f51ba585fa752c5e32fbf"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "rust",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-rust--sdk.client-1.json",
+        "sha256": "8fc86350a7e2ab6e78dda2efd07726f5dc3974ca251ff0037715009e7db80c58"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "sdk-to-go",
+      "language": "swift",
+      "profile": "sdk.client-1",
+      "report": {
+        "path": "release-evidence/profile-reports/naatre-swift--sdk.client-1.json",
+        "sha256": "be0bb12c9572b64821b3f5d1a52e850e766b1af10106ccb8ea35135ab44cd787"
+      },
+      "status": "passed"
+    },
+    {
+      "kind": "security-gate",
+      "language": "go",
+      "profile": "suite.security-gate-1",
+      "report": {
+        "path": "release-evidence/security-gate.json",
+        "sha256": "20debd305eaef83e6c5a1b27af615b1d74ee6ddd0a4ea5e4f3db8cb50af279c7"
+      },
+      "status": "passed"
+    }
+  ],
+  "sharedVectors": [
+    {
+      "name": "canonical-vectors",
+      "sha256": "9cb4469684fb7f0dae266bcd617b324287af2a9c7128034f4cc39515f83fed8b",
+      "languages": [
+        "dart",
+        "dotnet",
+        "go",
+        "javascript-typescript",
+        "jvm",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "swift"
+      ]
+    },
+    {
+      "name": "generated-filter-sort-vectors",
+      "sha256": "4470448395284afc05f7da961ba6d4e5db1bd3f1b7f69b6e178c6d6bbe52b2b0",
+      "languages": [
+        "dart",
+        "dotnet",
+        "go",
+        "javascript-typescript",
+        "jvm",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "swift"
+      ]
+    },
+    {
+      "name": "schema-vectors",
+      "sha256": "ca93615735a257e231743008fe43c04c4e2ad7fcb6bdfb0bb4a1e589e59d6802",
+      "languages": [
+        "dart",
+        "dotnet",
+        "go",
+        "javascript-typescript",
+        "jvm",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "swift"
+      ]
+    },
+    {
+      "name": "validation-vectors",
+      "sha256": "f68020cf8132d02ee14808f3002491c0e83771ddffc37f3a2e839fa1256d7ba8",
+      "languages": [
+        "dart",
+        "dotnet",
+        "go",
+        "javascript-typescript",
+        "jvm",
+        "php",
+        "python",
+        "ruby",
+        "rust",
+        "swift"
+      ]
+    }
+  ],
+  "failures": null
+}
