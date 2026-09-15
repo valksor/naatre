@@ -31,6 +31,12 @@ GET receives `405` with `Allow: POST, OPTIONS`; all POST responses remain
 `no-store`. SSE framing is available separately, but stream lifecycle and
 endpoint ownership remain outside the unary handler.
 
+`Config.EnableCBOR` opts into the deterministic `transport.cbor.unary-1`
+profile and its `cbor-det-1` codec revision. CBOR requests and responses require
+the exact profile media type and matching `Naatre-Capabilities` advertisement;
+wildcard `Accept` values retain JSON. This opt-in is unary only and does not
+enable CBOR sequence framing.
+
 Run the adapter and machine-readable conformance evidence with:
 
 ```sh

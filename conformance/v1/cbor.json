@@ -1,0 +1,96 @@
+{
+  "profile": "transport.cbor.unary-1",
+  "codecRevision": "cbor-det-1",
+  "rfc": "RFC 8949",
+  "capability": "transport.cbor.unary-1",
+  "requestMediaType": "application/vnd.naatre.request+cbor;profile=transport.cbor.unary-1;version=1",
+  "responseMediaType": "application/vnd.naatre.response+cbor;profile=transport.cbor.unary-1;version=1",
+  "allowedTags": [0, 2, 3, 4, 37, 60000, 60001, 60002],
+  "streaming": {
+    "supported": false,
+    "impliedCapabilities": [],
+    "framingOwnerIssue": 23,
+    "requiredFutureFixtures": ["terminal", "truncation"]
+  },
+  "defaultLimits": {
+    "bytes": 1048576,
+    "depth": 64,
+    "arrayItems": 100000,
+    "mapPairs": 10000,
+    "textBytes": 1048576,
+    "byteStringBytes": 1048576,
+    "bignumBytes": 128,
+    "tags": 16,
+    "allocationBytes": 8388608
+  },
+  "vectors": [
+    {"name":"missing-map-member","type":"object","value":{"missing":{"$missing":true},"null":null},"hex":"a1646e756c6cf6"},
+    {"name":"null","type":"Null","value":null,"hex":"f6"},
+    {"name":"boolean","type":"Boolean","value":true,"hex":"f5"},
+    {"name":"string","type":"String","value":"Naatre","hex":"664e6161747265"},
+    {"name":"id","type":"ID","value":"node-1","hex":"666e6f64652d31"},
+    {"name":"int32-min","type":"Int32","value":-2147483648,"hex":"3a7fffffff"},
+    {"name":"int32-max","type":"Int32","value":2147483647,"hex":"1a7fffffff"},
+    {"name":"bounded-safe-max","type":"BoundedInteger","value":"9007199254740991","hex":"1b001fffffffffffff"},
+    {"name":"safe-integer-max","type":"Int64","value":"9007199254740991","hex":"d9ea601b001fffffffffffff"},
+    {"name":"safe-integer-plus-one","type":"Int64","value":"9007199254740992","hex":"d9ea601b0020000000000000"},
+    {"name":"safe-integer-plus-two","type":"Int64","value":"9007199254740993","hex":"d9ea601b0020000000000001"},
+    {"name":"int64-min","type":"Int64","value":"-9223372036854775808","hex":"d9ea603b7fffffffffffffff"},
+    {"name":"uint64-max","type":"UInt64","value":"18446744073709551615","hex":"d9ea611bffffffffffffffff"},
+    {"name":"bigint-positive","type":"BigInt","value":"18446744073709551616","hex":"c249010000000000000000"},
+    {"name":"bigint-negative","type":"BigInt","value":"-18446744073709551617","hex":"c349010000000000000000"},
+    {"name":"decimal","type":"Decimal","value":"1.23","exponent":-2,"mantissa":"123","hex":"c48221187b"},
+    {"name":"binary64","type":"Float64","value":1.5,"hex":"fb3ff8000000000000"},
+    {"name":"negative-zero-canonical","type":"Float64","value":"-0","hex":"fb0000000000000000"},
+    {"name":"timestamp-nanoseconds","type":"Timestamp","value":"2026-09-15T10:11:12.123456789Z","hex":"c0781e323032362d30392d31355431303a31313a31322e3132333435363738395a"},
+    {"name":"duration","type":"Duration","value":"-5","hex":"d9ea6224"},
+    {"name":"uuid","type":"UUID","value":"00112233-4455-6677-8899-aabbccddeeff","hex":"d8255000112233445566778899aabbccddeeff"},
+    {"name":"bytes","type":"Bytes","value":"AP8","hex":"4200ff"},
+    {"name":"empty-list","type":"List","value":[],"hex":"80"},
+    {"name":"empty-map","type":"Map","value":{},"hex":"a0"},
+    {"name":"non-bmp-map-order","type":"Map","value":{"😀":2,"a":1},"hex":"a261610164f09f988002"},
+    {"name":"enum","type":"Enum","value":"READY","hex":"655245414459"},
+    {"name":"tagged-union","type":"Union","value":{"$type":"User","$value":{"id":"1"}},"hex":"a26524747970656455736572662476616c7565a16269646131"},
+    {"name":"decimal-negative-native-edge","type":"Decimal","value":"-93.81051007337771057","exponent":-17,"mantissa":"-9381051007337771057","hex":"c482303b8230303030303030"}
+  ],
+  "rejections": [
+    {"name":"duplicate-key","class":"security","hex":"a2616101616102","code":"DUPLICATE_KEY"},
+    {"name":"forbidden-tag","class":"security","hex":"d82a00","code":"FORBIDDEN_TAG"},
+    {"name":"non-preferred-integer","class":"negative","hex":"1800","code":"NON_PREFERRED_INTEGER"},
+    {"name":"bounded-integer-unsafe","class":"negative","hex":"1b0020000000000000","code":"INTEGER_RANGE"},
+    {"name":"invalid-text","class":"malformed","hex":"61ff","code":"INVALID_UTF8"},
+    {"name":"indefinite-list","class":"negative","hex":"9fff","code":"INDEFINITE_LENGTH"},
+    {"name":"float16","class":"negative","hex":"f93e00","code":"FLOAT_WIDTH"},
+    {"name":"negative-zero","class":"negative","hex":"fb8000000000000000","code":"NON_PREFERRED_FLOAT"},
+    {"name":"non-string-key","class":"security","hex":"a10102","code":"NON_STRING_KEY"},
+    {"name":"map-order","class":"negative","hex":"a264f09f988002616101","code":"MAP_ORDER"},
+    {"name":"truncated","class":"malformed","hex":"a16161","code":"TRUNCATED"},
+    {"name":"excessive-depth","class":"limit","hex":"818180","code":"LIMIT_DEPTH","limits":{"depth":2}},
+    {"name":"oversized-bignum","class":"limit","hex":"c249010000000000000000","code":"LIMIT_BIGNUM","limits":{"bignumBytes":8}},
+    {"name":"cancelled-before-allocation","class":"cancellation","hex":"f6","code":"CANCELLED","cancelled":true}
+  ],
+  "semanticIdentity": {
+    "json": {"operations":[{"kind":"query","name":"Q","select":[]}]},
+    "canonicalJSON":"{\"operations\":[{\"kind\":\"query\",\"name\":\"Q\",\"select\":[]}]}",
+    "cborHex":"a16a6f7065726174696f6e7381a3646b696e64657175657279646e616d6561516673656c65637480",
+    "documentHash":"6a3aa1fc52512e2e1d07fc55acde9bfa922abfc04a27f9c20089cde9e5701459",
+    "jsonRepresentationSHA256":"5afc48b9c7e503271761ada498f161fd429223dc8c8b42e4b8cfb9ae5dbf4d8a",
+    "cborRepresentationSHA256":"5e89e92e3a86e534a78b67297f7aa3fea8cdb7af66e71c3c455e8e9e118a0cc9"
+  },
+  "http": {
+    "requiresExactAccept": true,
+    "requiresCapabilityHeader": true,
+    "wildcardSelectsCBOR": false,
+    "problemMediaType": "application/problem+json",
+    "vary": ["Accept", "Accept-Encoding", "Naatre-Capabilities"]
+  },
+  "persistedOperations": {
+    "semanticIdentityIncludesTransport": false,
+    "profile": "transport.cbor.unary-1",
+    "codecRevision": "cbor-det-1"
+  },
+  "implementations": [
+    {"language":"go","module":"github.com/valksor/naatre/protocol/cbor","codecRevision":"cbor-det-1"},
+    {"language":"javascript-typescript","module":"conformance/independent/cbor.mjs","codecRevision":"cbor-det-1"}
+  ]
+}

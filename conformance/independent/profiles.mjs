@@ -11,6 +11,9 @@ const matrix = readJSON(new URL("../v1/compatibility.json", import.meta.url));
 const reportSchema = readJSON(new URL("../profile-report.schema.json", import.meta.url));
 const requiredFixtureClasses = ["positive", "negative", "malformed", "limit", "cancellation", "security"];
 const resultStatuses = ["passed", "failed", "unsupported", "invalid-skip", "infrastructure-failure"];
+const cborCapability = "transport.cbor.unary-1";
+const cborCodecRevision = "cbor-det-1";
+const cborReportBinding = `${cborCapability}@${cborCodecRevision}`;
 const profilesByID = new Map(registry.profiles.map((profile) => [profile.id, profile]));
 
 function readJSON(location) {
@@ -203,6 +206,10 @@ function validateReportShape(report) {
     for (const diagnostic of result.diagnostics) closedObject(diagnostic, ["code", "message"], "diagnostic");
     if (result.skip !== undefined) closedObject(result.skip, ["fixture", "reason"], "skip");
   }
+  const claimsCBOR = report.results.some((result) => result.status === "passed" && result.evidence.some((entry) => entry.fixture === "v1/cbor.json"));
+  if (claimsCBOR) {
+    requireValue(report.environment.wireTransports.includes(cborReportBinding), "CBOR conformance claim lacks exact profile and codec revision binding");
+  }
 }
 
 function closedObject(value, allowed, label) {
@@ -254,15 +261,16 @@ function rejectSecrets(value, key = "") {
 function exampleReport(profileID, source, destination) {
   const profile = profileByID(profileID);
   const schemaRevision = "0".repeat(64);
+  const capabilities = [];
   return {
     protocol: registry.reportProtocol,
     run: { id: "independent-check", operator: "naatre-project", command: ["node", "conformance/independent/profiles.mjs"], artifacts: [{ name: "source-tree", sha256: "1".repeat(64) }] },
     versions: { spec: registry.specVersion, fixtures: registry.fixtureVersion, profiles: registry.registryVersion, runnerProtocol: registry.runnerProtocol, canonicalization: "c14n-1", schemaRevision },
     implementation: { name: "independent-example", version: "1.0.0", language: "javascript-typescript", runtimeVersion: process.versions.node, specVersion: registry.specVersion, fixtureVersion: registry.fixtureVersion, profileVersion: registry.registryVersion, schemaRevision },
-    environment: { os: "linux", architecture: "amd64", featureFlags: [], wireTransports: ["ndjson"], streamTransports: [], scalarPrecision: ["arbitrary-precision-decimal"], cancellationCapabilities: ["process-signal"] },
+    environment: { os: "linux", architecture: "amd64", featureFlags: [], wireTransports: profileID === "wire.codec-1" ? [cborReportBinding] : ["ndjson"], streamTransports: [], scalarPrecision: ["arbitrary-precision-decimal"], cancellationCapabilities: ["process-signal"] },
     path: { source: { kind: source, language: "javascript-typescript" }, destination: { kind: destination, language: "javascript-typescript" } },
-    claims: [{ profile: profileID, capabilities: [] }],
-    results: [{ profile: profileID, evidenceRole: profile.evidenceRole, status: "passed", capabilities: [], executedClauses: [...profile.requiredClauses], evidence: profile.requiredFixtures.map((fixture) => ({ fixture: fixture.path, sha256: fixture.sha256 })), diagnostics: [] }],
+    claims: [{ profile: profileID, capabilities }],
+    results: [{ profile: profileID, evidenceRole: profile.evidenceRole, status: "passed", capabilities, executedClauses: [...profile.requiredClauses], evidence: profile.requiredFixtures.map((fixture) => ({ fixture: fixture.path, sha256: fixture.sha256 })), diagnostics: [] }],
   };
 }
 
@@ -278,7 +286,16 @@ function expectRejected(name, mutate) {
 }
 
 function selfTest() {
-  validateReport(exampleReport("wire.codec-1", "codec", "codec"));
+  const cborReport = exampleReport("wire.codec-1", "codec", "codec");
+  validateReport(cborReport);
+  const unboundCBORReport = structuredClone(cborReport);
+  unboundCBORReport.environment.wireTransports = [cborCapability];
+  try {
+    validateReport(unboundCBORReport);
+    throw new Error("unbound CBOR report was accepted");
+  } catch (error) {
+    if (error.message === "unbound CBOR report was accepted") throw error;
+  }
   expectRejected("broader profile", (report) => { report.claims[0].profile = "runtime.execution-1"; });
   expectRejected("delegated runtime", (report) => {
     const runtime = profileByID("runtime.execution-1");

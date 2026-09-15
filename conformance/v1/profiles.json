@@ -57,6 +57,10 @@
         "requirements.canonicalization.numbers",
         "requirements.canonicalization.structure",
         "requirements.canonicalization.unicode-order",
+        "requirements.cbor.decode-identity",
+        "requirements.cbor.deterministic",
+        "requirements.cbor.integration",
+        "requirements.cbor.mapping",
         "requirements.core.profiles",
         "requirements.core.vocabulary.absence-errors",
         "requirements.core.vocabulary.envelope",
@@ -103,6 +107,7 @@
       ],
       "requiredSpecs": [
         "spec/v1/canonicalization.md",
+        "spec/v1/cbor.md",
         "spec/v1/core.md",
         "spec/v1/protocol.md",
         "spec/v1/schema.md"
@@ -122,6 +127,23 @@
         "CANON-201",
         "CANON-202",
         "CANON-203",
+        "CBOR-001",
+        "CBOR-002",
+        "CBOR-003",
+        "CBOR-004",
+        "CBOR-005",
+        "CBOR-100",
+        "CBOR-101",
+        "CBOR-102",
+        "CBOR-103",
+        "CBOR-104",
+        "CBOR-200",
+        "CBOR-201",
+        "CBOR-202",
+        "CBOR-300",
+        "CBOR-301",
+        "CBOR-302",
+        "CBOR-303",
         "CORE-001",
         "CORE-002",
         "CORE-003",
@@ -200,6 +222,11 @@
           "path": "v1/canonical.json",
           "profile": "core.interop.c14n-1",
           "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+        },
+        {
+          "path": "v1/cbor.json",
+          "profile": "transport.cbor.unary-1",
+          "sha256": "f8eaa941c69a03dff8001ba154765ee0d9b2c5d1b29b37a2d021f26e528730f4"
         },
         {
           "path": "v1/extensions.json",
@@ -1827,7 +1854,7 @@
         {
           "path": "v1/generator-plugin-host.json",
           "profile": "sdk.generator-plugin-host-1",
-          "sha256": "b9ef9ab778de270ce28e4d3502c6b397b70a34ee1df54fb3cf4879f6e6c3d8c1"
+          "sha256": "053a8268a215f30ae287417f8c48a3dbf765041fe5d108281031599100b12f98"
         },
         {
           "path": "v1/language.json",

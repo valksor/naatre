@@ -18,14 +18,19 @@ import (
 	"time"
 
 	"github.com/valksor/naatre/protocol"
+	naatrecbor "github.com/valksor/naatre/protocol/cbor"
 	"github.com/valksor/naatre/runtime"
 )
 
 const (
-	RequestMediaType  = "application/vnd.naatre.request+json;version=1"
-	ResponseMediaType = "application/vnd.naatre.response+json;version=1"
-	ProblemMediaType  = "application/problem+json"
-	DefaultPath       = "/v1/execute"
+	RequestMediaType      = "application/vnd.naatre.request+json;version=1"
+	ResponseMediaType     = "application/vnd.naatre.response+json;version=1"
+	ProblemMediaType      = "application/problem+json"
+	DefaultPath           = "/v1/execute"
+	CBORRequestMediaType  = naatrecbor.RequestMediaType
+	CBORResponseMediaType = naatrecbor.ResponseMediaType
+	CBORCapability        = naatrecbor.Profile
+	CBORCodecRevision     = naatrecbor.CodecRevision
 )
 
 var errLimitExceeded = errors.New("HTTP body limit exceeded")
@@ -84,6 +89,8 @@ type Config struct {
 	CORS            CORS
 	RequestID       func() string
 	Shutdown        <-chan struct{}
+	EnableCBOR      bool
+	CBORLimits      naatrecbor.Limits
 }
 
 // Handler is a router-free standard-library HTTP adapter for unary POST
@@ -98,6 +105,8 @@ type Handler struct {
 	cors            CORS
 	requestID       func() string
 	shutdown        <-chan struct{}
+	cbor            bool
+	cborLimits      naatrecbor.Limits
 }
 
 // NewHandler validates config and constructs a net/http handler without
@@ -128,10 +137,20 @@ func NewHandler(config Config) (*Handler, error) {
 	if requestID == nil {
 		requestID = randomRequestID
 	}
+	decode := config.Decode
+	if config.EnableCBOR {
+		capabilities := make(map[string]bool, len(decode.Capabilities)+1)
+		for capability, supported := range decode.Capabilities {
+			capabilities[capability] = supported
+		}
+		capabilities[CBORCapability] = true
+		decode.Capabilities = capabilities
+	}
 	return &Handler{
-		path: path, executor: config.Executor, decode: config.Decode, limits: limits,
+		path: path, executor: config.Executor, decode: decode, limits: limits,
 		authenticate: config.Authenticate, wwwAuthenticate: config.WWWAuthenticate,
 		cors: cors, requestID: requestID, shutdown: config.Shutdown,
+		cbor: config.EnableCBOR, cborLimits: config.CBORLimits,
 	}, nil
 }
 
@@ -180,8 +199,10 @@ func (handler *Handler) ServeHTTP(writer stdhttp.ResponseWriter, request *stdhtt
 }
 
 type postRequestOptions struct {
-	encoding string
-	deadline time.Duration
+	encoding       string
+	requestFormat  responseRepresentation
+	responseFormat responseRepresentation
+	deadline       time.Duration
 }
 
 func (handler *Handler) validatePostRequest(request *stdhttp.Request) (postRequestOptions, int, string) {
@@ -191,10 +212,13 @@ func (handler *Handler) validatePostRequest(request *stdhttp.Request) (postReque
 	if request.Header.Get("Naatre-Principal") != "" {
 		return postRequestOptions{}, stdhttp.StatusBadRequest, "UNTRUSTED_IDENTITY_HEADER"
 	}
-	if status, code := validateRequestMedia(request.Header.Get("Content-Type")); code != "" {
+	cborAdvertised := handler.cbor && advertisesCapability(request.Header.Values("Naatre-Capabilities"), CBORCapability)
+	requestFormat, status, code := validateRequestMedia(request.Header.Get("Content-Type"), cborAdvertised)
+	if code != "" {
 		return postRequestOptions{}, status, code
 	}
-	if status, code := validateAccept(request.Header.Values("Accept")); code != "" {
+	responseFormat, status, code := validateAccept(request.Header.Values("Accept"), cborAdvertised)
+	if code != "" {
 		return postRequestOptions{}, status, code
 	}
 	if !validAcceptEncoding(request.Header.Values("Accept-Encoding")) {
@@ -211,7 +235,7 @@ func (handler *Handler) validatePostRequest(request *stdhttp.Request) (postReque
 	if channelClosed(handler.shutdown) {
 		return postRequestOptions{}, stdhttp.StatusServiceUnavailable, "OVERLOADED"
 	}
-	return postRequestOptions{encoding: encoding, deadline: deadline}, 0, ""
+	return postRequestOptions{encoding: encoding, requestFormat: requestFormat, responseFormat: responseFormat, deadline: deadline}, 0, ""
 }
 
 func (handler *Handler) servePost(writer stdhttp.ResponseWriter, request *stdhttp.Request, options postRequestOptions) {
@@ -232,7 +256,7 @@ func (handler *Handler) servePost(writer stdhttp.ResponseWriter, request *stdhtt
 		}
 		ctx = authenticated
 	}
-	decoded, status, code := handler.decodePost(ctx, request, options.encoding)
+	decoded, status, code := handler.decodePost(ctx, request, options.encoding, options.requestFormat)
 	if code != "" {
 		handler.writeProblem(writer, status, code)
 		return
@@ -255,10 +279,10 @@ func (handler *Handler) servePost(writer stdhttp.ResponseWriter, request *stdhtt
 		handler.writeProblem(writer, status, code)
 		return
 	}
-	handler.writeOutcome(writer, request, decoded, outcome)
+	handler.writeOutcome(writer, request, decoded, outcome, options.responseFormat)
 }
 
-func (handler *Handler) decodePost(ctx context.Context, request *stdhttp.Request, encoding string) (*protocol.Request, int, string) {
+func (handler *Handler) decodePost(ctx context.Context, request *stdhttp.Request, encoding string, representation responseRepresentation) (*protocol.Request, int, string) {
 	body, err := readRequestBody(ctx, request.Body, request.ContentLength, encoding, handler.limits)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return nil, stdhttp.StatusRequestTimeout, "REQUEST_TIMEOUT"
@@ -270,13 +294,26 @@ func (handler *Handler) decodePost(ctx context.Context, request *stdhttp.Request
 		return nil, stdhttp.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE"
 	}
 	if err != nil {
-		return nil, stdhttp.StatusBadRequest, "MALFORMED_JSON"
+		return nil, stdhttp.StatusBadRequest, malformedRepresentationCode(representation)
+	}
+	if representation == representationCBOR {
+		body, err = naatrecbor.DecodeJSONContext(ctx, body, handler.cborLimits)
+		if err != nil {
+			return nil, stdhttp.StatusBadRequest, "MALFORMED_CBOR"
+		}
 	}
 	decoded, err := protocol.DecodeRequest(body, handler.decode)
 	if err != nil {
-		return nil, stdhttp.StatusBadRequest, "MALFORMED_JSON"
+		return nil, stdhttp.StatusBadRequest, malformedRepresentationCode(representation)
 	}
 	return decoded, 0, ""
+}
+
+func malformedRepresentationCode(representation responseRepresentation) string {
+	if representation == representationCBOR {
+		return "MALFORMED_CBOR"
+	}
+	return "MALFORMED_JSON"
 }
 
 func resolveLimits(config Limits) (Limits, error) {
@@ -375,80 +412,101 @@ func validateSingletonHeaders(header stdhttp.Header) string {
 	return ""
 }
 
-func validateRequestMedia(value string) (int, string) {
+type responseRepresentation uint8
+
+const (
+	representationJSON responseRepresentation = iota
+	representationCBOR
+)
+
+func validateRequestMedia(value string, cborAllowed bool) (responseRepresentation, int, string) {
 	mediaType, parameters, err := mime.ParseMediaType(value)
-	if err != nil || !strings.EqualFold(mediaType, "application/vnd.naatre.request+json") || parameters["version"] != "1" {
-		return stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
+	if err != nil {
+		return representationJSON, stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
 	}
-	for name, parameter := range parameters {
-		if name == "version" {
-			continue
+	switch strings.ToLower(mediaType) {
+	case "application/vnd.naatre.request+json":
+		if parameters["version"] != "1" {
+			return representationJSON, stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
 		}
-		if name != "charset" || !strings.EqualFold(parameter, "utf-8") {
-			return stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
+		for name, parameter := range parameters {
+			if name != "version" && (name != "charset" || !strings.EqualFold(parameter, "utf-8")) {
+				return representationJSON, stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
+			}
 		}
+		return representationJSON, 0, ""
+	case "application/vnd.naatre.request+cbor":
+		if !cborAllowed || parameters["version"] != "1" || parameters["profile"] != CBORCapability || len(parameters) != 2 {
+			return representationJSON, stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
+		}
+		return representationCBOR, 0, ""
+	default:
+		return representationJSON, stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE"
 	}
-	return 0, ""
 }
 
-func validateAccept(lines []string) (int, string) {
+func validateAccept(lines []string, cborAllowed bool) (responseRepresentation, int, string) {
 	if len(lines) == 0 {
-		return 0, ""
+		return representationJSON, 0, ""
 	}
 	bestSpecificity, bestQuality := -1, -1.0
+	bestRepresentation := representationJSON
 	for _, line := range lines {
 		for _, item := range strings.Split(line, ",") {
-			var err error
-			bestSpecificity, bestQuality, err = preferredAccept(item, bestSpecificity, bestQuality)
+			representation, specificity, quality, compatible, err := acceptPreference(item, cborAllowed)
 			if err != nil {
-				return stdhttp.StatusBadRequest, "MALFORMED_HEADER"
+				return representationJSON, stdhttp.StatusBadRequest, "MALFORMED_HEADER"
+			}
+			if compatible && (quality > bestQuality || (quality == bestQuality && specificity > bestSpecificity)) {
+				bestRepresentation, bestSpecificity, bestQuality = representation, specificity, quality
 			}
 		}
 	}
 	if bestSpecificity < 0 || bestQuality <= 0 {
-		return stdhttp.StatusNotAcceptable, "NOT_ACCEPTABLE"
+		return representationJSON, stdhttp.StatusNotAcceptable, "NOT_ACCEPTABLE"
 	}
-	return 0, ""
+	return bestRepresentation, 0, ""
 }
 
-func preferredAccept(item string, bestSpecificity int, bestQuality float64) (int, float64, error) {
-	specificity, quality, compatible, err := acceptPreference(item)
-	if err != nil || !compatible {
-		return bestSpecificity, bestQuality, err
-	}
-	if specificity > bestSpecificity || (specificity == bestSpecificity && quality > bestQuality) {
-		return specificity, quality, nil
-	}
-	return bestSpecificity, bestQuality, nil
-}
-
-func acceptPreference(item string) (int, float64, bool, error) {
+func acceptPreference(item string, cborAllowed bool) (responseRepresentation, int, float64, bool, error) {
 	mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(item))
 	if err != nil {
-		return 0, 0, false, err
+		return representationJSON, 0, 0, false, err
 	}
 	quality, err := qualityParameter(parameters)
 	if err != nil {
-		return 0, 0, false, err
-	}
-	for name := range parameters {
-		if name != "q" && name != "version" {
-			return 0, quality, false, nil
-		}
+		return representationJSON, 0, 0, false, err
 	}
 	switch strings.ToLower(mediaType) {
 	case "application/vnd.naatre.response+json":
+		for name := range parameters {
+			if name != "q" && name != "version" {
+				return representationJSON, 0, quality, false, nil
+			}
+		}
 		version, present := parameters["version"]
-		return 2, quality, !present || version == "1", nil
+		return representationJSON, 2, quality, !present || version == "1", nil
+	case "application/vnd.naatre.response+cbor":
+		for name := range parameters {
+			if name != "q" && name != "version" && name != "profile" {
+				return representationCBOR, 0, quality, false, nil
+			}
+		}
+		return representationCBOR, 2, quality, cborAllowed && parameters["version"] == "1" && parameters["profile"] == CBORCapability, nil
 	case "application/*":
-		_, versioned := parameters["version"]
-		return 1, quality, !versioned, nil
+		return representationJSON, 1, quality, len(parameters) == boolInt(parameters["q"] != ""), nil
 	case "*/*":
-		_, versioned := parameters["version"]
-		return 0, quality, !versioned, nil
+		return representationJSON, 0, quality, len(parameters) == boolInt(parameters["q"] != ""), nil
 	default:
-		return 0, quality, false, nil
+		return representationJSON, 0, quality, false, nil
 	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func qualityParameter(parameters map[string]string) (float64, error) {
@@ -584,6 +642,17 @@ func matchingCapabilities(lines, envelope []string) bool {
 	return slices.Equal(values, wanted)
 }
 
+func advertisesCapability(lines []string, capability string) bool {
+	for _, line := range lines {
+		for _, value := range strings.Split(line, ",") {
+			if strings.TrimSpace(value) == capability {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (handler *Handler) applyCORS(writer stdhttp.ResponseWriter, request *stdhttp.Request) bool {
 	origin := request.Header.Get("Origin")
 	if origin == "" {
@@ -651,7 +720,7 @@ type publicExecutionError struct {
 	Retryable bool   `json:"retryable"`
 }
 
-func (handler *Handler) writeOutcome(writer stdhttp.ResponseWriter, request *stdhttp.Request, decoded *protocol.Request, outcome runtime.Outcome) {
+func (handler *Handler) writeOutcome(writer stdhttp.ResponseWriter, request *stdhttp.Request, decoded *protocol.Request, outcome runtime.Outcome, representation responseRepresentation) {
 	requestID := handler.safeRequestID()
 	envelope := responseEnvelope{RequestID: requestID, Capabilities: slices.Clone(outcome.Capabilities), Extensions: make(map[string]json.RawMessage)}
 	if id, ok := decoded.ID(); ok {
@@ -668,12 +737,12 @@ func (handler *Handler) writeOutcome(writer stdhttp.ResponseWriter, request *std
 		envelope.Errors = []publicExecutionError{{Code: "INTERNAL", Message: publicMessage("INTERNAL"), Path: []any{}}}
 		status = stdhttp.StatusInternalServerError
 	}
-	payload, err := marshalBounded(envelope, handler.limits.MaxResponseBytes)
+	payload, err := encodeResponseEnvelope(envelope, representation, handler.limits.MaxResponseBytes)
 	if err != nil {
 		envelope.Data = nil
 		envelope.Errors = []publicExecutionError{{Code: "INTERNAL", Message: publicMessage("INTERNAL"), Path: []any{}}}
 		status = stdhttp.StatusInternalServerError
-		payload, _ = marshalBounded(envelope, handler.limits.MaxResponseBytes)
+		payload, _ = encodeResponseEnvelope(envelope, representation, handler.limits.MaxResponseBytes)
 	}
 	encoding := "identity"
 	if len(payload) >= handler.limits.CompressionMinBytes && acceptsGzip(request.Header.Values("Accept-Encoding")) {
@@ -681,11 +750,27 @@ func (handler *Handler) writeOutcome(writer stdhttp.ResponseWriter, request *std
 			payload, encoding = compressed, "gzip"
 		}
 	}
-	writer.Header().Set("Content-Type", ResponseMediaType)
+	contentType := ResponseMediaType
+	if representation == representationCBOR {
+		contentType = CBORResponseMediaType
+	}
+	writer.Header().Set("Content-Type", contentType)
 	writer.Header().Set("Naatre-Request-Id", requestID)
 	writer.Header().Set("Content-Encoding", encoding)
 	writer.WriteHeader(status)
 	_, _ = writer.Write(payload)
+}
+
+func encodeResponseEnvelope(envelope responseEnvelope, representation responseRepresentation, limit int64) ([]byte, error) {
+	payload, err := marshalBounded(envelope, limit)
+	if err != nil || representation != representationCBOR {
+		return payload, err
+	}
+	payload, err = encodeCBORPayload(payload)
+	if err == nil && int64(len(payload)) > limit {
+		return nil, errLimitExceeded
+	}
+	return payload, err
 }
 
 func outcomeStatus(outcome runtime.Outcome) int {
@@ -761,6 +846,14 @@ func marshalBounded(value any, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+}
+
+func encodeCBORPayload(payload []byte) ([]byte, error) {
+	value, err := protocol.DecodeJSONValue(payload)
+	if err != nil {
+		return nil, err
+	}
+	return naatrecbor.Marshal(value)
 }
 
 type boundedBuffer struct {

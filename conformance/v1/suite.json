@@ -443,6 +443,12 @@
       "profile": "worker.remote-1",
       "category": "integration",
       "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
+    },
+    {
+      "path": "v1/cbor.json",
+      "profile": "transport.cbor.unary-1",
+      "category": "transport",
+      "sha256": "f8eaa941c69a03dff8001ba154765ee0d9b2c5d1b29b37a2d021f26e528730f4"
     }
   ],
   "normativeSources": [
@@ -6832,6 +6838,145 @@
           "path": "v1/remote-workers.json",
           "pointer": "/supportMatrix/3",
           "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.cbor.deterministic",
+      "spec": "spec/v1/cbor.md",
+      "clauses": [
+        "CBOR-001",
+        "CBOR-002",
+        "CBOR-003",
+        "CBOR-004",
+        "CBOR-005"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/streaming",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/vectors/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/rejections/0",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/rejections/2",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.cbor.mapping",
+      "spec": "spec/v1/cbor.md",
+      "clauses": [
+        "CBOR-100",
+        "CBOR-101",
+        "CBOR-102",
+        "CBOR-103",
+        "CBOR-104"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/vectors/5",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/vectors/14",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/vectors/15",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/vectors/18",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/vectors/26",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.cbor.decode-identity",
+      "spec": "spec/v1/cbor.md",
+      "clauses": [
+        "CBOR-200",
+        "CBOR-201",
+        "CBOR-202"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/rejections/4",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/rejections/11",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/rejections/13",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/semanticIdentity",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.cbor.integration",
+      "spec": "spec/v1/cbor.md",
+      "clauses": [
+        "CBOR-300",
+        "CBOR-301",
+        "CBOR-302",
+        "CBOR-303"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/http",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/persistedOperations",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/implementations/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/implementations/1",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/cbor.json",
+          "pointer": "/streaming",
+          "polarity": "negative"
         }
       ]
     }

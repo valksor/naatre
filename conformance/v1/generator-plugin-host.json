@@ -47,7 +47,7 @@
     {
       "name": "ci-toolchain",
       "path": ".github/workflows/ci.yml",
-      "sha256": "356661f8c0fa764afa40ee825f70b66bb1c74ee9af9bba821d7b95a078e6b1e5",
+      "sha256": "8a2370143999126e4a2e4fbd7f7770db09cd46955cd3cb5786b3dad02a426e10",
       "revision": "node-24.21.0"
     }
   ],
