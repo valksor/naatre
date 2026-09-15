@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "aee9e679f96e858fd139e56014259d10194a161c97827d4e285c13ac985dd8c8"
     },
     {
       "path": "v1/scalars.json",
@@ -377,6 +377,12 @@
       "profile": "core.http.digest-1",
       "category": "transport",
       "sha256": "72ed0eeb502b14eb3b4369cb8f534bcd71fb1c4df28471ea6e1341bc6b0153f5"
+    },
+    {
+      "path": "v1/events.json",
+      "profile": "core.events-1",
+      "category": "transport",
+      "sha256": "5aa10c1553346e3b66295ff0acaf724277f6ee88b0362a9af08dfcbd7df12fe9"
     },
     {
       "path": "v1/go-http.json",
@@ -6328,6 +6334,114 @@
           "polarity": "positive"
         }
       ]
+    },
+    {
+      "caseId": "requirements.events.envelope",
+      "spec": "spec/v1/events.md",
+      "clauses": [
+        "EVENT-001",
+        "EVENT-002",
+        "EVENT-003",
+        "EVENT-004",
+        "EVENT-005"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/events.json",
+          "pointer": "/envelope",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/versionSkew/0",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.events.registration",
+      "spec": "spec/v1/events.md",
+      "clauses": [
+        "WEBHOOK-001",
+        "WEBHOOK-002",
+        "WEBHOOK-003"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/events.json",
+          "pointer": "/registration",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/keys/0",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.events.signatures",
+      "spec": "spec/v1/events.md",
+      "clauses": [
+        "WEBHOOK-100",
+        "WEBHOOK-101",
+        "WEBHOOK-102"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/events.json",
+          "pointer": "/signaturePolicy",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/signatureVectors/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/negativeSignatures/0",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/replay",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.events.delivery",
+      "spec": "spec/v1/events.md",
+      "clauses": [
+        "DELIVERY-001",
+        "DELIVERY-002",
+        "DELIVERY-003",
+        "DELIVERY-004",
+        "DELIVERY-005"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/events.json",
+          "pointer": "/retry",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/batch",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/recovery/0",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/events.json",
+          "pointer": "/redaction",
+          "polarity": "mixed"
+        }
+      ]
     }
   ],
   "issueMappings": [
@@ -6927,6 +7041,11 @@
       "caseId": "issue.48",
       "issue": 48,
       "fixtureRefs": [
+        {
+          "path": "v1/events.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/48",
