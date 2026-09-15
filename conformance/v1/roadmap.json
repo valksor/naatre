@@ -640,13 +640,13 @@
     },
     "67": {
       "issue": 67,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 67,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "not-applicable-or-covered-elsewhere",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,

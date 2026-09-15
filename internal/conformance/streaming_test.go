@@ -3,9 +3,12 @@ package conformance_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"slices"
 	"sync/atomic"
@@ -18,23 +21,114 @@ import (
 )
 
 type streamingFixture struct {
-	Profile            string                       `json:"profile"`
-	ProtocolVersion    string                       `json:"protocolVersion"`
-	LogicalEvents      []string                     `json:"logicalEvents"`
-	TerminalOutcomes   []string                     `json:"terminalOutcomes"`
-	CursorBindings     []string                     `json:"cursorBindings"`
-	ReplayCapabilities []string                     `json:"replayCapabilities"`
-	SafeHistoryOutcome string                       `json:"safeHistoryOutcome"`
-	HandoffInvariant   string                       `json:"handoffInvariant"`
-	RepairActions      []string                     `json:"repairActions"`
-	Transports         []streamingTransport         `json:"transports"`
-	NegotiationCases   []streamingNamedCase         `json:"negotiationCases"`
-	AdvertisementCases []streamingAdvertisementCase `json:"advertisementCases"`
-	FrameCases         []streamingFrameCase         `json:"frameCases"`
-	SSECases           []streamingSSECase           `json:"sseCases"`
-	ReplayCases        []streamingReplayCase        `json:"replayCases"`
-	HistoryFailures    []streamingNamedCase         `json:"historyFailures"`
-	LifecycleCases     []streamingLifecycle         `json:"lifecycleCases"`
+	Profile              string                        `json:"profile"`
+	ProtocolVersion      string                        `json:"protocolVersion"`
+	LogicalEvents        []string                      `json:"logicalEvents"`
+	TerminalOutcomes     []string                      `json:"terminalOutcomes"`
+	CursorBindings       []string                      `json:"cursorBindings"`
+	ReplayCapabilities   []string                      `json:"replayCapabilities"`
+	SafeHistoryOutcome   string                        `json:"safeHistoryOutcome"`
+	HandoffInvariant     string                        `json:"handoffInvariant"`
+	RepairActions        []string                      `json:"repairActions"`
+	Transports           []streamingTransport          `json:"transports"`
+	NegotiationCases     []streamingNamedCase          `json:"negotiationCases"`
+	AdvertisementCases   []streamingAdvertisementCase  `json:"advertisementCases"`
+	FrameCases           []streamingFrameCase          `json:"frameCases"`
+	SSECases             []streamingSSECase            `json:"sseCases"`
+	ReplayCases          []streamingReplayCase         `json:"replayCases"`
+	HistoryFailures      []streamingNamedCase          `json:"historyFailures"`
+	LifecycleCases       []streamingLifecycle          `json:"lifecycleCases"`
+	HandleBindings       []string                      `json:"handleBindings"`
+	BrowserHandleFixture streamingBrowserHandleFixture `json:"browserHandleFixture"`
+	HandleHTTP           streamingHandleHTTP           `json:"handleHTTP"`
+	BrowserDeliveryPaths []streamingBrowserDelivery    `json:"browserDeliveryPaths"`
+	SafeHandleFailures   []streamingHandleFailure      `json:"safeHandleFailures"`
+	HandleHandoffCases   []streamingHandleHandoff      `json:"handleHandoffCases"`
+	AdapterFixtures      []streamingAdapterFixture     `json:"adapterFixtures"`
+	BrokerFailureCases   []streamingBrokerFailure      `json:"brokerFailureCases"`
+	OperationalCases     []streamingOperationalCase    `json:"operationalCases"`
+}
+
+type streamingBrowserHandleFixture struct {
+	Path        string `json:"path"`
+	SHA256      string `json:"sha256"`
+	Listener    string `json:"listener"`
+	Credentials string `json:"credentials"`
+}
+
+type streamingHandleHTTP struct {
+	EstablishmentCreatedStatus int      `json:"establishmentCreatedStatus"`
+	EstablishmentReusedStatus  int      `json:"establishmentReusedStatus"`
+	ObservationStatus          int      `json:"observationStatus"`
+	RenewalStatus              int      `json:"renewalStatus"`
+	CancellationStatus         int      `json:"cancellationStatus"`
+	MediaType                  string   `json:"mediaType"`
+	DeliveryMediaType          string   `json:"deliveryMediaType"`
+	Location                   string   `json:"location"`
+	LinkRelations              []string `json:"linkRelations"`
+	Fields                     []string `json:"fields"`
+	ExposedHeaders             []string `json:"exposedHeaders"`
+	CacheControl               string   `json:"cacheControl"`
+	ReferrerPolicy             string   `json:"referrerPolicy"`
+	Redirects                  string   `json:"redirects"`
+}
+
+type streamingBrowserDelivery struct {
+	Name              string `json:"name"`
+	Method            string `json:"method"`
+	CredentialCarrier string `json:"credentialCarrier"`
+	CursorCarrier     string `json:"cursorCarrier"`
+	Cookies           string `json:"cookies"`
+	Query             string `json:"query"`
+	CORS              string `json:"cors"`
+}
+
+type streamingHandleFailure struct {
+	Name   string `json:"name"`
+	Status int    `json:"status"`
+	Code   string `json:"code"`
+}
+
+type streamingHandleHandoff struct {
+	Name               string   `json:"name"`
+	SnapshotPosition   uint64   `json:"snapshotPosition"`
+	CommittedPositions []uint64 `json:"committedPositions"`
+	ReplayedPositions  []uint64 `json:"replayedPositions"`
+	LivePositions      []uint64 `json:"livePositions"`
+	ExpectedPositions  []uint64 `json:"expectedPositions"`
+	Duplicates         int      `json:"duplicates"`
+	Gap                bool     `json:"gap"`
+}
+
+type streamingAdapterFixture struct {
+	Name                   string   `json:"name"`
+	Frames                 []string `json:"frames"`
+	Replay                 string   `json:"replay"`
+	PrivateScopedDelivery  bool     `json:"privateScopedDelivery"`
+	ReplayAuthorization    bool     `json:"replayAuthorization"`
+	HistoryLossDetection   bool     `json:"historyLossDetection"`
+	TerminalFrameRetention bool     `json:"terminalFrameRetention"`
+	DuplicateSuppression   bool     `json:"duplicateSuppression"`
+	BoundedRetry           bool     `json:"boundedRetry"`
+	Expected               string   `json:"expected"`
+}
+
+type streamingBrokerFailure struct {
+	Name     string `json:"name"`
+	Expected string `json:"expected"`
+	Retry    string `json:"retry"`
+}
+
+type streamingOperationalCase struct {
+	Name                      string   `json:"name"`
+	MaximumConnectionLifetime string   `json:"maximumConnectionLifetime"`
+	ReconnectStagger          string   `json:"reconnectStagger"`
+	MaximumReconnectAttempts  int      `json:"maximumReconnectAttempts"`
+	Expected                  string   `json:"expected"`
+	Data                      string   `json:"data"`
+	Steps                     []string `json:"steps"`
+	Records                   []string `json:"records"`
+	ForbiddenRecords          []string `json:"forbiddenRecords"`
 }
 
 type streamingTransport struct {
@@ -115,6 +209,76 @@ func TestStreamingFixture(t *testing.T) {
 	}
 	for _, test := range fixture.LifecycleCases {
 		t.Run("lifecycle/"+test.Name, func(t *testing.T) { runStreamingLifecycle(t, test) })
+	}
+	assertSubscriptionHandleFixture(t, fixture)
+}
+
+func assertSubscriptionHandleFixture(t *testing.T, fixture streamingFixture) {
+	t.Helper()
+	assertExactStrings(t, "handle bindings", fixture.HandleBindings, []string{"principal", "tenant", "operationIdentity", "variableIdentity", "schemaRevision", "authorizationRevision", "limits", "createdAt", "expiresAt", "deliveryProfile"})
+	if fixture.BrowserHandleFixture.Path != "conformance/browser/subscription-handles.html" || fixture.BrowserHandleFixture.Listener != "ephemeral-port" || fixture.BrowserHandleFixture.Credentials != "same-origin-memory-only" || len(fixture.BrowserHandleFixture.SHA256) != 64 {
+		t.Fatalf("browser handle fixture = %#v", fixture.BrowserHandleFixture)
+	}
+	browserFixture, err := os.ReadFile("../../" + fixture.BrowserHandleFixture.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(browserFixture)
+	if hex.EncodeToString(digest[:]) != fixture.BrowserHandleFixture.SHA256 {
+		t.Fatalf("browser handle fixture digest = %x, want %s", digest, fixture.BrowserHandleFixture.SHA256)
+	}
+	http := fixture.HandleHTTP
+	if http.EstablishmentCreatedStatus != 201 || http.EstablishmentReusedStatus != 200 || http.ObservationStatus != 200 || http.RenewalStatus != 200 || http.CancellationStatus != 204 ||
+		http.MediaType != "application/vnd.naatre.subscription-handle+json;version=1" || http.DeliveryMediaType != "text/event-stream" || http.Location != "handle-resource" || http.CacheControl != "no-store" || http.ReferrerPolicy != "no-referrer" || http.Redirects != "forbidden" {
+		t.Fatalf("subscription handle HTTP contract = %#v", http)
+	}
+	if len(fixture.BrowserDeliveryPaths) != 2 || fixture.BrowserDeliveryPaths[0].Name != "fetch-bearer" || fixture.BrowserDeliveryPaths[0].Query != "empty" || fixture.BrowserDeliveryPaths[1].Name != "same-origin-cookie" || fixture.BrowserDeliveryPaths[1].Query != "empty" {
+		t.Fatalf("browser delivery paths = %#v", fixture.BrowserDeliveryPaths)
+	}
+	if len(fixture.SafeHandleFailures) != 8 {
+		t.Fatalf("safe handle failures = %#v", fixture.SafeHandleFailures)
+	}
+	for index, failure := range fixture.SafeHandleFailures {
+		if index < 6 && (failure.Status != 409 || failure.Code != "REESTABLISH_REQUIRED") {
+			t.Fatalf("unsafe handle distinction = %#v", failure)
+		}
+	}
+	if len(fixture.HandleHandoffCases) != 1 || fixture.HandleHandoffCases[0].Gap || fixture.HandleHandoffCases[0].Duplicates != 0 || !slices.Equal(fixture.HandleHandoffCases[0].ExpectedPositions, []uint64{2, 3}) {
+		t.Fatalf("handle handoff = %#v", fixture.HandleHandoffCases)
+	}
+	for _, adapter := range fixture.AdapterFixtures {
+		frames := make([]protocol.StreamEventType, len(adapter.Frames))
+		for index, frame := range adapter.Frames {
+			frames[index] = protocol.StreamEventType(frame)
+		}
+		kind := runtime.SubscriptionAdapterMercure
+		if adapter.Name == "in-process" {
+			kind = runtime.SubscriptionAdapterInProcess
+		}
+		report := runtime.ReportSubscriptionBrokerFidelity(runtime.SubscriptionBrokerCapabilities{
+			Adapter: kind, Frames: frames, Replay: protocol.StreamReplayCapability(adapter.Replay),
+			PrivateScopedDelivery: adapter.PrivateScopedDelivery, ReplayAuthorization: adapter.ReplayAuthorization,
+			HistoryLossDetection: adapter.HistoryLossDetection, TerminalFrameRetention: adapter.TerminalFrameRetention,
+			DuplicateSuppression: adapter.DuplicateSuppression, BoundedRetry: adapter.BoundedRetry,
+		})
+		got := "fidelity-failure"
+		if report.Compatible {
+			got = "compatible"
+		}
+		if got != adapter.Expected {
+			t.Fatalf("adapter %q fidelity = %#v, want %s", adapter.Name, report, adapter.Expected)
+		}
+	}
+	if len(fixture.BrokerFailureCases) != 5 {
+		t.Fatalf("broker failures = %#v", fixture.BrokerFailureCases)
+	}
+	for _, failure := range fixture.BrokerFailureCases {
+		if failure.Retry != "bounded" || failure.Expected == "complete" {
+			t.Fatalf("untruthful broker failure = %#v", failure)
+		}
+	}
+	if len(fixture.OperationalCases) != 2 || fixture.OperationalCases[0].MaximumReconnectAttempts <= 0 || fixture.OperationalCases[1].Data != "isolated-synthetic" || len(fixture.OperationalCases[1].ForbiddenRecords) != 5 {
+		t.Fatalf("operational handle cases = %#v", fixture.OperationalCases)
 	}
 }
 

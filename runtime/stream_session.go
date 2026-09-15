@@ -76,6 +76,8 @@ type StreamSourceSessionConfig struct {
 	CheckExecutor           *StreamCheckExecutor
 	Limits                  protocol.StreamLimits
 	Session                 StreamSessionLimits
+	ResumeSnapshot          []byte
+	ResumePosition          uint64
 }
 
 // StreamSourceSession binds source ownership, validation, reauthorization,
@@ -130,7 +132,16 @@ func NewStreamSourceSession(config StreamSourceSessionConfig) (*StreamSourceSess
 	if err := probe.Validate(config.Limits); err != nil {
 		return nil, ErrInvalidStreamSource
 	}
-	receiver, err := protocol.NewStreamReceiver(config.Stream, config.Limits)
+	var receiver *protocol.StreamReceiver
+	var err error
+	if len(config.ResumeSnapshot) != 0 || config.ResumePosition != 0 {
+		if len(config.ResumeSnapshot) == 0 || config.ResumePosition == 0 {
+			return nil, ErrInvalidStreamSource
+		}
+		receiver, err = protocol.NewResumingStreamReceiver(config.Stream, config.ResumeSnapshot, config.ResumePosition, config.Limits)
+	} else {
+		receiver, err = protocol.NewStreamReceiver(config.Stream, config.Limits)
+	}
 	if err != nil {
 		return nil, ErrInvalidStreamSource
 	}
@@ -358,7 +369,7 @@ func runStreamSchemaCheck(ctx context.Context, executor *StreamCheckExecutor, ti
 	if errors.Is(err, errStreamCheckTimeout) {
 		return context.DeadlineExceeded
 	}
-	if errors.Is(err, ErrStreamAuthenticationExpired) || errors.Is(err, ErrStreamSchemaRetired) {
+	if errors.Is(err, ErrStreamAuthenticationExpired) || errors.Is(err, ErrStreamSchemaRetired) || errors.Is(err, ErrStreamAuthorizationRevoked) {
 		return err
 	}
 	return ErrStreamSchemaRetired

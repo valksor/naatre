@@ -14,6 +14,16 @@ explicit deployment policy. `RuntimeExecutor` connects an immutable runtime
 snapshot to the adapter without making the Go implementation a second protocol
 authority.
 
+`NewSubscriptionHandler` separately implements the
+`core.streaming-handles-1` browser binding at `/v1/subscriptions`. It
+authenticates before decoding establishment bodies, delegates complete
+operation/schema/cost authorization to `SubscriptionHandleCoordinator`, and
+returns typed no-store handle metadata. Fetch delivery uses a bearer header and
+singleton `Last-Event-ID`; native EventSource is limited to a same-origin
+cookie with `Sec-Fetch-Site: same-origin` and a server-held initial cursor.
+Cookie-authenticated state changes require exact-origin double-submit CSRF.
+Every route rejects query strings and redirects.
+
 The minimum runtime is Go 1.27. The checked conformance evidence records Go
 1.27.1 on Darwin arm64; other operating-system, architecture, and Go patch
 combinations are not claimed by that evidence. The same handler semantics are
@@ -23,10 +33,11 @@ trailers. Actual HTTP/2 and HTTP/3 listener, TLS, QUIC, proxy, and certificate
 configuration are host responsibilities and are not certified by this package.
 
 Unsupported optional capabilities are persisted-operation GET, private or
-shared response storage, conditional GET and ETag generation, redirects,
-cookie authentication and CSRF policy, response trailers, server push, and
-stream endpoint establishment. Automatic `Retry-After` generation is also
-unsupported; an admission integration that needs it must own a bounded hint.
+shared response storage, conditional GET and ETag generation, response
+trailers, and server push. General-purpose cookie authentication remains a
+host policy; only the narrowly configured subscription-handle path owns its
+same-origin cookie and CSRF boundary. Automatic unary `Retry-After` generation
+is unsupported; the subscription handler emits a bounded delivery retry hint.
 GET receives `405` with `Allow: POST, OPTIONS`; all POST responses remain
 `no-store`. SSE framing is available separately, but stream lifecycle and
 endpoint ownership remain outside the unary handler.
@@ -34,6 +45,6 @@ endpoint ownership remain outside the unary handler.
 Run the adapter and machine-readable conformance evidence with:
 
 ```sh
-go test ./transport/http -count=1
+go test ./transport/http ./runtime -count=1
 printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"http","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["core.http-1"]}' | go run ./cmd/naatre-conformance --require-pass
 ```

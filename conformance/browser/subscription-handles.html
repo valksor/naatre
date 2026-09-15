@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Naatre secure subscription-handle browser fixture</title>
+<body>
+<pre id="result">pending</pre>
+<script type="module">
+const result = document.querySelector("#result");
+const fixture = globalThis.naatreSubscriptionFixture;
+
+if (!fixture || typeof fixture.bearer !== "function" || typeof fixture.csrf !== "function") {
+  result.textContent = "fixture-credentials-unavailable";
+  throw new Error("fixture credentials must be supplied from same-origin memory");
+}
+
+const request = Object.freeze({
+  version: "1",
+  operation: "SyntheticSubscriptionCanary",
+  persisted: Object.freeze({algorithm: "sha-256", canonicalVersion: "c14n-1", digest: fixture.persistedDigest}),
+  variables: Object.freeze({nonce: fixture.syntheticNonce}),
+});
+
+const established = await fetch("/v1/subscriptions", {
+  method: "POST",
+  redirect: "error",
+  credentials: "same-origin",
+  headers: Object.freeze({
+    "Content-Type": "application/vnd.naatre.subscription-establishment+json;version=1",
+    "Naatre-CSRF": fixture.csrf(),
+  }),
+  body: JSON.stringify({request, deliveryAuthentication: ["fetch-bearer", "same-origin-cookie"]}),
+});
+if (!established.ok) throw new Error(`establishment failed ${established.status}`);
+const handle = await established.json();
+const endpoint = new URL(handle.deliveryEndpoint, location.origin);
+if (endpoint.origin !== location.origin || endpoint.search || endpoint.hash) throw new Error("unsafe delivery endpoint");
+
+const fetchDelivery = await fetch(endpoint, {
+  method: "GET",
+  redirect: "error",
+  credentials: "omit",
+  headers: Object.freeze({
+    "Accept": "text/event-stream",
+    "Authorization": `Bearer ${fixture.bearer()}`,
+    "Last-Event-ID": handle.reconciliationCursor,
+  }),
+});
+if (!fetchDelivery.ok) throw new Error(`fetch delivery failed ${fetchDelivery.status}`);
+const reader = fetchDelivery.body.getReader();
+const decoder = new TextDecoder("utf-8", {fatal: true});
+let received = "";
+while (!/event: naatre\.(data|patch|complete|error)\r?\n/.test(received)) {
+  const {done, value} = await reader.read();
+  if (done) throw new Error("fetch delivery ended before a logical event");
+  received += decoder.decode(value, {stream: true});
+  if (received.length > 65536) throw new Error("fetch fixture receive bound exceeded");
+}
+await reader.cancel();
+
+const nativeOutcome = await new Promise((resolve, reject) => {
+  const events = [];
+  const source = new EventSource(endpoint);
+  const timeout = setTimeout(() => { source.close(); reject(new Error("native delivery timeout")); }, fixture.timeoutMilliseconds);
+  for (const type of ["open", "data", "patch", "error", "complete", "keepalive", "resume", "history-unavailable"]) {
+    source.addEventListener(`naatre.${type}`, () => {
+      events.push(type);
+      if (type === "complete" || type === "history-unavailable") {
+        clearTimeout(timeout);
+        source.close();
+        resolve(type);
+      }
+    });
+  }
+  source.onerror = () => {
+    if (events.includes("complete") || events.includes("history-unavailable")) return;
+    clearTimeout(timeout);
+    source.close();
+    reject(new Error("native delivery interrupted"));
+  };
+});
+
+result.textContent = JSON.stringify({established: true, fetch: true, native: nativeOutcome});
+</script>
+</body>
+</html>

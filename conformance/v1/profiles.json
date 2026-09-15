@@ -538,7 +538,7 @@
         {
           "path": "v1/streaming.json",
           "profile": "core.streaming-1",
-          "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"
+          "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
         }
       ],
       "requiredFixtureClasses": [
@@ -1295,7 +1295,7 @@
         {
           "path": "v1/streaming.json",
           "profile": "core.streaming-1",
-          "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"
+          "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
         },
         {
           "path": "v1/validation.json",
@@ -1349,6 +1349,8 @@
         "requirements.security.replay.history",
         "requirements.streaming.assembly",
         "requirements.streaming.frames",
+        "requirements.streaming.handles.http",
+        "requirements.streaming.handles.lifecycle",
         "requirements.streaming.replay",
         "requirements.streaming.resources",
         "requirements.streaming.security",
@@ -1411,6 +1413,16 @@
         "STR-700",
         "STR-701",
         "STR-702",
+        "STR-710",
+        "STR-711",
+        "STR-712",
+        "STR-713",
+        "STR-714",
+        "STR-715",
+        "STR-716",
+        "STR-717",
+        "STR-718",
+        "STR-719",
         "STR-800",
         "STR-801",
         "STR-802",
@@ -1455,7 +1467,7 @@
         {
           "path": "v1/streaming.json",
           "profile": "core.streaming-1",
-          "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"
+          "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
         }
       ],
       "requiredFixtureClasses": [
@@ -1467,6 +1479,11 @@
         "security"
       ],
       "optionalCapabilities": [
+        {
+          "id": "core.streaming-handles-1",
+          "fixture": "v1/streaming.json",
+          "required": false
+        },
         {
           "id": "stream.websocket-1",
           "fixture": "v1/streaming.json",
@@ -3216,7 +3233,7 @@
         {
           "path": "v1/streaming.json",
           "profile": "core.streaming-1",
-          "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"
+          "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
         },
         {
           "path": "v1/validation.json",

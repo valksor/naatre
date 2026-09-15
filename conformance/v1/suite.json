@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "3c3d8d78a9bb46c549a6c39990e147bd511ac08ce543faff423944ab709bb862"
     },
     {
       "path": "v1/scalars.json",
@@ -238,13 +238,13 @@
       "path": "v1/streaming.json",
       "profile": "core.streaming-1",
       "category": "stream",
-      "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"
+      "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
     },
     {
       "path": "v1/typescript-adapters.json",
       "profile": "sdk.typescript.adapters-1",
       "category": "transport",
-      "sha256": "62abbcc1fc35cd7281987e7a05b4421570095c38c2710cb8c0d2a619f988e531"
+      "sha256": "751d9129074ee6736e5c3666c8c2c174f513806e509e9a552d1ac9243e524166"
     },
     {
       "path": "v1/typescript-sdk.json",
@@ -292,7 +292,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "dfb466ace6e8fd12f779a6c4879efd00da12607f47c76d7d94b2fb0b7c6a4693"
+      "sha256": "6ed5f0e49fb552b1c748606bfaa59ac3b20199a76b21aadf52634ba844b8d845"
     },
     {
       "path": "v1/php-sdk.json",
@@ -382,7 +382,7 @@
       "path": "v1/go-http.json",
       "profile": "core.http-1",
       "category": "transport",
-      "sha256": "e2733d3665f24996d639aa396a7a6333d5e0c5ffa7611731a095b2fb314cb086"
+      "sha256": "14807b87501de851ab093468e35cd24883de4474db69d4a07f3b503f6e94c859"
     },
     {
       "path": "v1/plan-cache.json",
@@ -5101,6 +5101,57 @@
       ]
     },
     {
+      "caseId": "requirements.streaming.handles.http",
+      "spec": "spec/v1/streaming.md",
+      "clauses": [
+        "STR-710",
+        "STR-711",
+        "STR-712",
+        "STR-713",
+        "STR-714"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/handleHTTP",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/browserDeliveryPaths/0",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.streaming.handles.lifecycle",
+      "spec": "spec/v1/streaming.md",
+      "clauses": [
+        "STR-715",
+        "STR-716",
+        "STR-717",
+        "STR-718",
+        "STR-719"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/safeHandleFailures/0",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/adapterFixtures/2",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/operationalCases/1",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
       "caseId": "requirements.streaming.version",
       "spec": "spec/v1/streaming.md",
       "clauses": [
@@ -7171,6 +7222,21 @@
       "caseId": "issue.67",
       "issue": 67,
       "fixtureRefs": [
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/handleHandoffCases",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/safeHandleFailures",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/adapterFixtures",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/67",

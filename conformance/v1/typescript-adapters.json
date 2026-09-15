@@ -7,7 +7,7 @@
       "issue": 23,
       "profile": "core.streaming-1",
       "gitCommit": "8d91381f3f88ecc7fe6a9f1512975bf5514f285e",
-      "fixture": {"path": "conformance/v1/streaming.json", "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"}
+      "fixture": {"path": "conformance/v1/streaming.json", "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"}
     }
   ],
   "package": {
@@ -28,7 +28,7 @@
     {"path": "sdk/typescript/runtime/transport.test.mjs", "sha256": "9216550b061d2a4a98e68ccb46ab7d505a8fbdd428b9a17a55b35e67e2c68526"},
     {"path": "sdk/typescript/package.json", "sha256": "75676f70299a1d48f8c5e4d29f25ec1aa1e76855dedb557cff832a40d56a4a79"},
     {"path": "sdk/typescript/package-lock.json", "sha256": "e356c4b3e5b96c03d0427347ad81510f7f2692c735da7b65f4c15dbd31558c41"},
-    {"path": "conformance/independent/typescript-adapter-runtime.mjs", "sha256": "814f8455337fd38fbb90bd2afd9a28409309cc46dd543fdd6cc438b4a3674a9c"},
+    {"path": "conformance/independent/typescript-adapter-runtime.mjs", "sha256": "a37fc6597f0fc3bdb0c4ffb9a2ef884fe319a54bc8aa0180938b4692c2c7c9bd"},
     {"path": "conformance/independent/verify-typescript-adapters.mjs", "sha256": "46029399f6d3a32a120f823b35e8f16a1a0a1632687ea5953b7cc68f9c340920"},
     {"path": "conformance/browser/typescript-adapter-runtime.html", "sha256": "47e97c705ea67736bbf76a8bbb68288846312f27669f6b4e4a0f084954e849b1"},
     {"path": "conformance/browser/run-typescript-adapter-runtime.sh", "sha256": "ce9327c7aeb19ab8e59543256431c4257da956ff5637fbae5bf79f9e3ab64225"},
