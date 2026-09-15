@@ -13,6 +13,10 @@ identity, gzip, range, and transfer-framed bytes; strict negotiation and failure
 vectors; phase outcomes; webhook signature inputs; and explicit trailer
 capability. The Go reference codec and dependency-free JavaScript verifier both
 consume it directly.
+`v1/large-values.json` pins the `core.large-value-1` boundary, capability,
+identity, cleanup, range/resume, conditional download, redirect, DNS-rebinding,
+and malicious metadata vectors. The Go reference package consumes all
+transport and egress cases without contacting a network endpoint.
 `v1/generator-plugin-host.json` binds the public Go host, the exact generator
 model and toolchain revisions, and a dependency-free third-party JavaScript
 fixture. The `sdk.generator-plugin-host-1` profile executes discovery,

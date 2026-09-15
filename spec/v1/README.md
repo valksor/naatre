@@ -32,6 +32,7 @@ Documents:
 19. [Namespaced protocol and runtime extensions](extensions.md)
 20. [JVM Java and Kotlin client core](jvm.md)
 20. [Asynchronous long-running operations](async-operations.md)
+21. [Large values, files, and byte streams](large-values.md)
 8. [Transport batching and request multiplexing](request-batching.md)
 8. [HTTP digest fields](http-digest.md)
 9. [Persisted and allowlisted operations](persisted.md)

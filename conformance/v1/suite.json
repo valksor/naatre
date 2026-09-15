@@ -419,6 +419,12 @@
       "profile": "quality.go.harness-1",
       "category": "benchmark",
       "sha256": "5db2616ab5e758409ef1cfc2273832173384e667615cf27d1e303441f8034141"
+    },
+    {
+      "path": "v1/large-values.json",
+      "profile": "core.large-value-1",
+      "category": "transport",
+      "sha256": "2a3783fdee2236ea27e4617669ef5668425ce4aeb1cd9451e3ab68d4deb14ae3"
     }
   ],
   "normativeSources": [
@@ -6414,6 +6420,112 @@
           "path": "v1/http-digest.json",
           "pointer": "/integrityOutcomes/7",
           "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.identity",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-001",
+        "LARGE-002",
+        "LARGE-003"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/boundary",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/binding",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.capability",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-100",
+        "LARGE-101",
+        "LARGE-102",
+        "LARGE-103"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/capabilities",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/lifecycle",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.transfer",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-200",
+        "LARGE-201",
+        "LARGE-202",
+        "LARGE-203"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/transfer",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/resumeCases/0",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.download",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-300",
+        "LARGE-301"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/rangeCases/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/conditionalCases/0",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.security",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-400",
+        "LARGE-401",
+        "LARGE-402"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/egressCases/5",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/securityCases/0",
+          "polarity": "negative"
         }
       ]
     }
