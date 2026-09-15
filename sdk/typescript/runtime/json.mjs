@@ -34,6 +34,17 @@ export function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+export function ownDataArray(value, invalid) {
+  if (!Array.isArray(value) || Object.getOwnPropertySymbols(value).length !== 0 || Object.keys(value).length !== value.length) invalid("must be a dense array");
+  const result = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !("value" in descriptor)) invalid("contains an accessor");
+    result.push(descriptor.value);
+  }
+  return result;
+}
+
 function safeValue(value, code) {
   if (Array.isArray(value)) return safeArray(value, code);
   if (isRecord(value)) return safeObject(value, code);
@@ -43,14 +54,7 @@ function safeValue(value, code) {
 }
 
 function safeArray(value, code) {
-  if (Object.getOwnPropertySymbols(value).length !== 0 || Object.keys(value).length !== value.length) fail(code);
-  const result = [];
-  for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (!descriptor?.enumerable || !("value" in descriptor)) fail(code);
-    result.push(safeValue(descriptor.value, code));
-  }
-  return result;
+  return ownDataArray(value, () => fail(code)).map((entry) => safeValue(entry, code));
 }
 
 function writeCanonical(value, ancestors) {

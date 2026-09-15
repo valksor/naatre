@@ -256,6 +256,17 @@ rechecks source and dependency digests, Node behavior, package-export
 boundaries, and exact published transport results; the recorded commands
 reproduce the other selected runtimes with ephemeral loopback ports.
 
+`v1/typescript-worker.json` pins `worker.javascript-typescript-1`: explicit
+plain-JavaScript registration, generated TypeScript server interfaces, strict
+input/output validation, per-request authentication and mutable state,
+cooperative cancellation, pull-based stream cleanup, and the listener-free
+Fetch worker adapter. The same framed Go-gateway vectors execute both the
+plain JavaScript and type-checked TypeScript handlers. Node and Bun results are
+recorded independently; Deno and pinned workerd have separate harnesses and are
+deferred to integration because they require unavailable runtime/network
+facilities here. Concrete runtime lifecycle adapters stay owned by #101 and
+the combined publication matrix by #69.
+
 `v1/python-sdk.json` pins `sdk.python.core-1`: dependency-free Python 3.11-3.14
 transport protocols, identical sync/async canonical behavior, frozen generated
 dataclasses, exact Decimal/arbitrary-integer/timestamp/bytes mappings,

@@ -1,4 +1,5 @@
 import { NaatreClientError, canonicalStringify, createFetchAdapter, createOperation, createWebSocketAdapter, parseJSON } from "../../sdk/typescript/runtime/index.mjs";
+import { runtimeID } from "./runtime-id.mjs";
 
 const vectors = [];
 const persisted = Object.freeze({ algorithm: "sha-256", canonicalVersion: "c14n-1", digest: "b".repeat(64) });
@@ -43,7 +44,7 @@ class FakeWebSocket extends EventTarget {
 }
 
 export async function runAdapterRuntime(runtimeOverride) {
-const runtime = runtimeOverride ?? runtimeID();
+const runtime = runtimeOverride ?? runtimeID("NAATRE_RUNTIME_ID", "browser-web");
 vectors.length = 0;
 
 await check("canonical-bigint-sparse-prototype", async () => {
@@ -288,14 +289,6 @@ async function publish(result) {
   globalThis.NAATRE_ADAPTER_RESULT = result;
   if (globalThis.process?.stdout?.write) globalThis.process.stdout.write(`${JSON.stringify(result)}\n`);
   else if (globalThis.Deno?.stdout?.write) await globalThis.Deno.stdout.write(new TextEncoder().encode(`${JSON.stringify(result)}\n`));
-}
-
-function runtimeID() {
-  if (typeof globalThis.NAATRE_RUNTIME_ID === "string") return globalThis.NAATRE_RUNTIME_ID;
-  if (globalThis.Deno?.version?.deno) return `deno-${globalThis.Deno.version.deno}`;
-  if (globalThis.Bun?.version) return `bun-${globalThis.Bun.version}`;
-  if (globalThis.process?.versions?.node) return `node-${globalThis.process.versions.node}`;
-  return "browser-web";
 }
 
 async function check(name, callback) {

@@ -1,8 +1,9 @@
 {
   "name": "@naatre/sdk",
   "version": "0.1.0",
-  "private": true,
+  "license": "Apache-2.0",
   "type": "module",
+  "files": ["examples", "generated", "runtime", "!runtime/*.test.*", "!runtime/fixtures", "README.md"],
   "exports": {
     ".": {
       "types": "./runtime/index.d.mts",
@@ -15,6 +16,10 @@
     "./websocket": {
       "types": "./runtime/stream.d.mts",
       "import": "./runtime/stream.mjs"
+    },
+    "./worker": {
+      "types": "./runtime/server.d.mts",
+      "import": "./runtime/server.mjs"
     },
     "./generated": "./generated/operations.ts"
   },

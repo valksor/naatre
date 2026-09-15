@@ -118,3 +118,5 @@ export function createFetchAdapter(configuration: FetchAdapterConfiguration): Fe
 export function decodeSSEStream(body: ReadableStream<Uint8Array>, options?: Readonly<{ maximumFrameBytes?: number; maximumResponseBytes?: number; signal?: AbortSignal }>): AsyncIterable<StreamFrame>;
 export function createWebSocketAdapter(configuration: WebSocketAdapterConfiguration): WebSocketAdapter;
 export const runtimeVersion: "naatre.typescript.runtime-1";
+export { NaatreWorkerError, createFetchWorkerAdapter, createWorker, defineHandler, workerProtocol, workerRuntimeVersion } from "./server.mjs";
+export type { AnyDefinedHandler, DefinedHandler, Handler, HandlerContext, HandlerDefinition, NaatreWorker, StreamHandler, ValueSchema, WorkerConfiguration, WorkerEffect, WorkerExecutionProfile, WorkerInvocation, WorkerRegistration } from "./server.mjs";

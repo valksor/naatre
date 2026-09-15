@@ -43,6 +43,7 @@ const implementations = new Map([
   ["sdk.ruby.adapters-1", "verify-ruby-adapters.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
+  ["worker.javascript-typescript-1", "verify-typescript-worker.mjs"],
 ]);
 const profileTimeouts = new Map([
   ["sdk.jvm.core-1", 240_000],
