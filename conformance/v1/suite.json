@@ -595,6 +595,12 @@
       "sha256": "c6ccf22fa8162de2698350555d320048d64d2f1e261a388f6e800f81eb482828"
     },
     {
+      "path": "v1/asyncapi-projection.json",
+      "profile": "adapter.asyncapi.projection-1",
+      "category": "integration",
+      "sha256": "3645698a11da8a874e2e4b36728b13f51e7c105df7459ac8242daf3d2d7c72cb"
+    },
+    {
       "path": "v1/mcp-adapter.json",
       "profile": "adapter.mcp-1",
       "category": "integration",
@@ -7381,6 +7387,35 @@
         {"path": "v1/asyncapi.json", "pointer": "/security", "polarity": "mixed"},
         {"path": "v1/asyncapi.json", "pointer": "/compatibility/0", "polarity": "mixed"}
       ]
+    },
+    {
+      "caseId": "requirements.asyncapi-projection.authority",
+      "spec": "spec/v1/asyncapi-projection.md",
+      "clauses": [
+        "ASYNCPROJ-001",
+        "ASYNCPROJ-002",
+        "ASYNCPROJ-003"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/asyncapi-projection.json","pointer":"/owner","polarity":"mixed"},
+        {"path":"v1/asyncapi-projection.json","pointer":"/projection","polarity":"positive"},
+        {"path":"v1/asyncapi-projection.json","pointer":"/fixtures/2","polarity":"negative"}
+      ]
+    },
+    {
+      "caseId": "requirements.asyncapi-projection.evidence",
+      "spec": "spec/v1/asyncapi-projection.md",
+      "clauses": [
+        "ASYNCPROJ-100",
+        "ASYNCPROJ-101",
+        "ASYNCPROJ-200",
+        "ASYNCPROJ-201"
+      ],
+      "fixtureRefs": [
+        {"path":"v1/asyncapi-projection.json","pointer":"/fixtures/5","polarity":"mixed"},
+        {"path":"v1/asyncapi-projection.json","pointer":"/fixtures/3","polarity":"negative"},
+        {"path":"v1/asyncapi-projection.json","pointer":"/capabilities","polarity":"mixed"}
+      ]
     }
   ],
   "issueMappings": [
@@ -8699,6 +8734,11 @@
       "caseId": "issue.102",
       "issue": 102,
       "fixtureRefs": [
+        {
+          "path": "v1/asyncapi-projection.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/102",

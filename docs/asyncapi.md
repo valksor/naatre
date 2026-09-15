@@ -27,3 +27,8 @@ default-deny. The commands never dereference references, connect to servers, or
 invoke handlers. The playground exposes the same inspection model at
 `GET /v1/asyncapi` only when its caller supplies an already exported document
 and the exact server allowlist.
+
+Issue #102's full payload-schema projection is a separate, strictly versioned
+profile so this metadata-only contract does not widen silently. See
+[`asyncapi-projection.md`](asyncapi-projection.md) for its authority, lifecycle,
+runtime, unsupported-capability, and offline conformance boundaries.

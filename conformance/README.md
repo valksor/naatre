@@ -625,3 +625,10 @@ closed supported subset and its unsupported optional capabilities.
 and export directions, revision bindings, evidence-backed transport metadata,
 correlation lifetimes, compatibility classes, default-deny local import, shared
 CLI/documentation/mock/playground consumers, and zero business-handler calls.
+
+`v1/asyncapi-projection.json` pins issue #102's
+`adapter.asyncapi.projection-1` implementation to the exact issue #62 revision
+and dependency digests. It records full Draft 2020-12 payload projection,
+caller-supplied Naatre schema authority, byte-identical supported round trips,
+stable redacted diagnostics, offline cancellation and resource limits, the Go
+runtime boundary, and every unsupported optional capability.
