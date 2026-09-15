@@ -304,7 +304,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "446b2dbe1581ef770f155909072588c16eefeb0b5ad5b40a4b2af4c610da64c3"
+      "sha256": "18f2d5ae772609e64050fecf6a2943d9ca8e6038b0cae6f57ff13398af5acabb"
     },
     {
       "path": "v1/php-sdk.json",
@@ -436,7 +436,7 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "bb6e255f4be927e88467ba0ed4a85dec9a3956479893d8b8d360eb78838d094e"
+      "sha256": "f19f120fae06e3f45a7f993a0b158b7ebed64a7759f06e97cd5491523c92b745"
     },
     {
       "path": "v1/go-quality.json",

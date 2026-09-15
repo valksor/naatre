@@ -16,6 +16,10 @@ specification, runtime, transport, ecosystem, interoperability, operations, and
 conformance roadmap. Capabilities not backed by machine-readable conformance
 evidence must be described as planned.
 
+Start with the [versioned v1 guide](docs/v1/README.md) for executable quick
+starts, domain examples, production security, compatibility, design rationale,
+troubleshooting, and the third-party implementation path.
+
 ## Repository map
 
 - `spec/v1`: normative, language-neutral protocol and schema documents.

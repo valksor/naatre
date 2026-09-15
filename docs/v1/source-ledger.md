@@ -1,0 +1,14 @@
+# Source and decision ledger
+
+| Borrowed idea | Upstream reference/version | Naatre adaptation | Known incompatibility | Issue or fixture |
+| --- | --- | --- | --- | --- |
+| Selection sets and typed schemas | [GraphQL September 2025](https://spec.graphql.org/September2025/) | Ordered tagged JSON selections, separate schema documents, explicit result states | Not GraphQL syntax, introspection, null propagation, or wire protocol | [adapter fixture](../../conformance/v1/graphql-adapter.json) |
+| HTTP API description | [OpenAPI 3.2.0](https://spec.openapis.org/oas/v3.2.0) | Directional bounded import/export with fidelity reports | No automatic lossless mapping or OpenAPI wire compatibility | [#56 adapter contract](../../conformance/v1/adapters.json), [implementation fixture](../../conformance/v1/openapi-adapter.json) |
+| RPC description/envelopes | [JSON-RPC 2.0](https://www.jsonrpc.org/specification), [OpenRPC 1.4.1](https://spec.open-rpc.org/) | Explicitly registered method projections and safe error mapping | Naatre partial data, selection, and stream envelopes differ | [OpenRPC fixture](../../conformance/v1/openrpc-jsonrpc.json) |
+| Generated binary RPC | [protobuf Edition 2024](https://protobuf.dev/editions/), [gRPC](https://grpc.io/docs/what-is-grpc/introduction/), [Connect revision pin](../../conformance/v1/protobuf-grpc-connect.json) | Optional bounded adapter with presence and status fidelity checks | No protobuf, gRPC, or Connect wire compatibility in core | [adapter fixture](../../conformance/v1/protobuf-grpc-connect.json) |
+| Model-first services and traits | [Smithy 2.0](https://smithy.io/2.0/) | Stable type identities, traits, generator model | Different model, protocols, evolution rules, and generated APIs | [generation fixture](../../conformance/v1/generation.json) |
+| API description language | [TypeSpec documentation](https://typespec.io/docs/), no revision adopted | Inspiration for projection-oriented tooling | No TypeSpec emitter or compatibility claim is currently tested | [#56 adapter contract](../../conformance/v1/adapters.json) |
+| JSON graph/path retrieval | [Falcor documentation](https://netflix.github.io/falcor/), no revision adopted | Inspiration for deep collection/path composition | Different path language, type system, caching, mutations, and errors | [language fixture](../../conformance/v1/language.json) |
+| Compositional API ergonomics | Deepr, upstream version not adopted | Inspiration for compositional goals only | No copied version history, wire identity, parser, schema, SDK, or compatibility | [ADAPT-401 fixture](../../conformance/v1/adapters.json) |
+
+Normative Naatre decisions live in [the governance ledger](../governance/decision-ledger.md) and accepted records. This source ledger records provenance and boundaries; it does not make an external specification normative unless a Naatre clause and fixture explicitly pin it.

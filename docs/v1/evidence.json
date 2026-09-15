@@ -1,0 +1,62 @@
+{
+  "profile": "documentation.v1-1",
+  "versions": {
+    "specification": "1",
+    "schema": "core.schema-1",
+    "fixtures": "1.0.0",
+    "runtime": "0.0.0-development.1",
+    "sdkRelease": "unpublished-development-snapshot"
+  },
+  "guides": [
+    "docs/v1/README.md",
+    "docs/v1/quick-starts.md",
+    "docs/v1/domain-examples.md",
+    "docs/v1/security-and-production.md",
+    "docs/v1/model-and-decisions.md",
+    "docs/v1/compatibility-and-comparisons.md",
+    "docs/v1/source-ledger.md",
+    "docs/v1/troubleshooting.md",
+    "docs/v1/third-party-implementation.md",
+    "docs/v1/versions.md"
+  ],
+  "quickStarts": [
+    {"language":"go","surface":"server","source":"examples/v1/server/server.go","verify":"go test ./examples/v1/server ./examples/v1/gateway"},
+    {"language":"go","surface":"client","source":"sdk/go/generated/operations_test.go","verify":"go test ./sdk/go/generated"},
+    {"language":"javascript-typescript","surface":"client","source":"sdk/typescript/sdkgen/generator.test.mjs","verify":"npm --prefix sdk/typescript test && npm --prefix sdk/typescript run typecheck"},
+    {"language":"javascript-typescript","surface":"worker","source":"conformance/independent/remote-worker.mjs","verify":"node conformance/independent/remote-worker.mjs"},
+    {"language":"php","surface":"client","source":"sdk/php/tests/run.php","verify":"php sdk/php/tests/run.php"},
+    {"language":"php","surface":"worker","source":"examples/v1/workers/php.php","verify":"php examples/v1/workers/php.php"},
+    {"language":"python","surface":"client","source":"sdk/python/tests/test_operation.py","verify":"python3 conformance/independent/verify-python-sdk.py"},
+    {"language":"python","surface":"worker","source":"examples/v1/workers/python.py","verify":"PYTHONDONTWRITEBYTECODE=1 python3 examples/v1/workers/python.py"},
+    {"language":"rust","surface":"client","source":"sdk/rust/tests/conformance.rs","verify":"cargo test --manifest-path sdk/rust/Cargo.toml --no-default-features --locked --offline"},
+    {"language":"rust","surface":"worker","source":"sdk/rust/examples/remote_worker.rs","verify":"cargo run --manifest-path sdk/rust/Cargo.toml --example remote_worker --locked --offline"}
+  ],
+  "sharedSchema": {
+    "path": "conformance/v1/generator-model.json",
+    "consumers": ["go", "javascript-typescript", "php", "python", "rust"]
+  },
+  "domainExamples": [
+    {"feature":"deep-calls","fixture":"conformance/v1/language.json","key":"constructs"},
+    {"feature":"collection-operations","fixture":"conformance/v1/collections.json","key":"query"},
+    {"feature":"item-mapping","fixture":"conformance/v1/language.json","key":"constructs"},
+    {"feature":"pipelines","fixture":"conformance/v1/language.json","key":"constructs"},
+    {"feature":"aliases","fixture":"conformance/v1/language.json","key":"constructs"},
+    {"feature":"nesting-unnesting","fixture":"conformance/v1/language.json","key":"constructs"},
+    {"feature":"pagination","fixture":"conformance/v1/collections.json","key":"boundaryCases"},
+    {"feature":"mutations","fixture":"conformance/v1/mutations.json","key":"vectors"},
+    {"feature":"partial-errors","fixture":"conformance/v1/partial-results.json","key":"vectors"},
+    {"feature":"parallel-groups","fixture":"conformance/v1/language.json","key":"constructs"},
+    {"feature":"persisted-operations","fixture":"conformance/v1/persisted.json","key":"identityVectors"},
+    {"feature":"batching","fixture":"conformance/v1/batching.json","key":"dispatchVectors"},
+    {"feature":"subscriptions","fixture":"conformance/v1/streaming.json","key":"frameCases"},
+    {"feature":"federation","fixture":"conformance/v1/federation.json","key":"executionCases"},
+    {"feature":"files","fixture":"conformance/v1/large-values.json","key":"rangeCases"},
+    {"feature":"long-running-operations","fixture":"conformance/v1/async-operations.json","key":"vectors"},
+    {"feature":"conditional-writes","fixture":"conformance/v1/mutation-updates.json","key":"preconditionCodes"},
+    {"feature":"filters","fixture":"conformance/v1/collections.json","key":"query"},
+    {"feature":"validation-constraints","fixture":"conformance/v1/validation.json","key":"cases"},
+    {"feature":"tooling","fixture":"conformance/v1/tooling.json","key":"commands"},
+    {"feature":"adapters","fixture":"conformance/v1/adapters.json","key":"matrix"},
+    {"feature":"deployment-lifecycle","fixture":"conformance/v1/operations.json","key":"states"}
+  ]
+}
