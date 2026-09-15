@@ -48,6 +48,30 @@ func TestSecurityGateRejectsMissingAndFalseEvidence(t *testing.T) {
 	})
 }
 
+func TestSecurityGateDrivesRealRuntimeDecisions(t *testing.T) {
+	_, fixture, _ := loadSecurityGateForTest(t)
+	for _, vector := range fixture.Vectors {
+		vector := vector
+		t.Run(vector.Name, func(t *testing.T) {
+			starts, code, safe, err := runSecurityGateVector(vector)
+			if err != nil {
+				t.Fatalf("runSecurityGateVector: %v", err)
+			}
+			// The observed outcome comes from a real runtime.Prepare/Execute, not
+			// from the fixture's own declared fields.
+			if starts != vector.Expected.HandlerStarts {
+				t.Fatalf("real handler starts = %d, want %d", starts, vector.Expected.HandlerStarts)
+			}
+			if code != vector.Expected.Code {
+				t.Fatalf("real public code = %q, want %q", code, vector.Expected.Code)
+			}
+			if !safe {
+				t.Fatalf("runtime leaked failure metadata for %s", vector.Name)
+			}
+		})
+	}
+}
+
 func loadSecurityGateForTest(t *testing.T) (*Runner, securityGateFixture, Evidence) {
 	t.Helper()
 	runner, err := New(filepath.Join("..", "..", "conformance", "v1", "suite.json"))

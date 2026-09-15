@@ -31,7 +31,7 @@
     },
     {
       "path": "conformance/v1/profiles.json",
-      "sha256": "556f11317b59abcc4ab7c0da48dd9c61482a4887f1ac42e0954ad7f39af2fd3b"
+      "sha256": "37ea4caea5d9bbdcc9aac442ae24786cd80bf025599cbb2a5bcd1dd9b2af0a17"
     },
     {
       "path": "conformance/v1/release-gate.json",
@@ -39,11 +39,11 @@
     },
     {
       "path": "conformance/v1/suite.json",
-      "sha256": "ce6dccb03490ad515d44f9394e5c8edf5e00304b4f6abaaaa2c6674217682606"
+      "sha256": "9e12bca33d764b67290ca89370b7eeefb035a80975d3f8b0452cc097016b8b2e"
     },
     {
       "path": "release-evidence/independent-runner.json",
-      "sha256": "2d239289144f7d7f68c9487c390cfc658ec63584f6b800247e1a0d6f9c1b9748"
+      "sha256": "f2467ad9a3fc2dd639889deb564365471fc6f16fc01b5b34e9b4e700c241d394"
     },
     {
       "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
@@ -63,15 +63,15 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.execution-1.json",
-      "sha256": "2e25ba7c54b4e19595d54b896d17412e009ac68880c5b26acb817192830b9d57"
+      "sha256": "b5d0f99025ef497aeb128d641372c2af54abbaea121ce1e09654868e16cedf4b"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.extensions-1.json",
-      "sha256": "2e6c36419278201891ccb299958c5192ed6bb315c9deceea27428eb854659ae0"
+      "sha256": "87bc6fc1792dc95c118677de06777cbbe5ffd46f849f293805d5f4c0673c386d"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.federation-1.json",
-      "sha256": "eac657b32485df53384c09b38d0b07a1e52ae98c88d390f8a3782aad87893868"
+      "sha256": "ecf19c37345230c1cd52ce103d4f85c06883ba8aae76b2003dee0e685ee4840b"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.persisted-1.json",
@@ -95,7 +95,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--transport.http.server-1.json",
-      "sha256": "9bd2436a3d7111fb6a30edbc81d602921da95d56d5717e4b8ef7407d5cf1a7e3"
+      "sha256": "be2957b73a294ad0ab41da79c2adbb58270ebb0fad15573d5f56dadd9c490dad"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--transport.streaming-1.json",
@@ -195,7 +195,7 @@
     },
     {
       "path": "release-evidence/security-gate.json",
-      "sha256": "85dbbf73eb4ae42caa3b4de81e78f141bd637ca6fe29d9d604d707601b83cbba"
+      "sha256": "c3d9f7ec81a280fc5c7529ac6b7c21422af6894c81d91a2228c6d0ee087f5aab"
     },
     {
       "path": "releases/release-manifest.schema.json",
@@ -313,7 +313,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--runtime.execution-1.json",
-        "sha256": "2e25ba7c54b4e19595d54b896d17412e009ac68880c5b26acb817192830b9d57"
+        "sha256": "b5d0f99025ef497aeb128d641372c2af54abbaea121ce1e09654868e16cedf4b"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -336,7 +336,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--runtime.extensions-1.json",
-        "sha256": "2e6c36419278201891ccb299958c5192ed6bb315c9deceea27428eb854659ae0"
+        "sha256": "87bc6fc1792dc95c118677de06777cbbe5ffd46f849f293805d5f4c0673c386d"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -359,7 +359,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--runtime.federation-1.json",
-        "sha256": "eac657b32485df53384c09b38d0b07a1e52ae98c88d390f8a3782aad87893868"
+        "sha256": "ecf19c37345230c1cd52ce103d4f85c06883ba8aae76b2003dee0e685ee4840b"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -451,7 +451,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--transport.http.server-1.json",
-        "sha256": "9bd2436a3d7111fb6a30edbc81d602921da95d56d5717e4b8ef7407d5cf1a7e3"
+        "sha256": "be2957b73a294ad0ab41da79c2adbb58270ebb0fad15573d5f56dadd9c490dad"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -1028,7 +1028,7 @@
       "profile": "suite.contract-1",
       "report": {
         "path": "release-evidence/independent-runner.json",
-        "sha256": "2d239289144f7d7f68c9487c390cfc658ec63584f6b800247e1a0d6f9c1b9748"
+        "sha256": "f2467ad9a3fc2dd639889deb564365471fc6f16fc01b5b34e9b4e700c241d394"
       },
       "status": "passed"
     },
@@ -1138,7 +1138,7 @@
       "profile": "suite.security-gate-1",
       "report": {
         "path": "release-evidence/security-gate.json",
-        "sha256": "85dbbf73eb4ae42caa3b4de81e78f141bd637ca6fe29d9d604d707601b83cbba"
+        "sha256": "c3d9f7ec81a280fc5c7529ac6b7c21422af6894c81d91a2228c6d0ee087f5aab"
       },
       "status": "passed"
     }

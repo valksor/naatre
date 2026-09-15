@@ -89,6 +89,6 @@
     {"path": "sdk/php/stubs/naatre.php", "sha256": "d6b6a12e58ddf6f5f7e5baaf873598f7f7b1a1122ae9b1381c8cefbd5b97fada"},
     {"path": "conformance/independent/verify-php-native.mjs", "sha256": "aea183bf657e10a19e70c59e0e4ca85170c6bcb434520026edbfeadbb1f48c57"},
     {"path": "docs/php-native-extension.md", "sha256": "a4cdbfc730f54999f6b762eac46f5ab58190567936b3eba7f714dc38bd204c44"},
-    {"path": ".github/workflows/php-native.yml", "sha256": "6609ba72fecb1fb66b7af5b88775fa757a76f548ae71022b1c22bba7895c8f02"}
+    {"path": ".github/workflows/php-native.yml", "sha256": "3e94ec53f62154ad632398bf6e4d2b93cda249930753320c5e28a535113845dd"}
   ]
 }

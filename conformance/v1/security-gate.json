@@ -19,7 +19,7 @@
     "files": [
       {
         "path": "internal/conformancerunner/security_gate.go",
-        "sha256": "8f39bd57061fc01fa6ba6b1cb39cc6b0d6e29c53328b0d113fd783edbf610ed9"
+        "sha256": "3c253a1da098fb0892ca2d7665af2e7f2f32603375af03db463ee3b290091eec"
       },
       {
         "path": "runtime/authorization.go",

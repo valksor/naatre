@@ -777,7 +777,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "b6654c6ec3e9a533f68602dea9c511f699cdd4fdc42f1abe07238c0283e9f135"
+          "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
         },
         {
           "path": "v1/security.json",
@@ -1322,7 +1322,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "b6654c6ec3e9a533f68602dea9c511f699cdd4fdc42f1abe07238c0283e9f135"
+          "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
         },
         {
           "path": "v1/security.json",
@@ -2111,7 +2111,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "b6654c6ec3e9a533f68602dea9c511f699cdd4fdc42f1abe07238c0283e9f135"
+          "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
         },
         {
           "path": "v1/security.json",
@@ -2250,7 +2250,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "b6654c6ec3e9a533f68602dea9c511f699cdd4fdc42f1abe07238c0283e9f135"
+          "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
         },
         {
           "path": "v1/security.json",
@@ -3317,7 +3317,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "b6654c6ec3e9a533f68602dea9c511f699cdd4fdc42f1abe07238c0283e9f135"
+          "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
         },
         {
           "path": "v1/security.json",

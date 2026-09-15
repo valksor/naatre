@@ -244,7 +244,7 @@
       "path": "v1/security-gate.json",
       "profile": "suite.security-gate-1",
       "category": "security",
-      "sha256": "b6654c6ec3e9a533f68602dea9c511f699cdd4fdc42f1abe07238c0283e9f135"
+      "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
     },
     {
       "path": "v1/streaming.json",
@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "020028eceae0692bb066c72e5832475a56122703f6d29830f27c86560b3699b6"
+      "sha256": "8eb24e94c505a0b93f407ad44af030d07619ae4438d633091999e07d25948c08"
     },
     {
       "path": "v1/validation.json",
@@ -340,7 +340,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "556f11317b59abcc4ab7c0da48dd9c61482a4887f1ac42e0954ad7f39af2fd3b"
+      "sha256": "37ea4caea5d9bbdcc9aac442ae24786cd80bf025599cbb2a5bcd1dd9b2af0a17"
     },
     {
       "path": "v1/release-gate.json",
@@ -550,7 +550,7 @@
       "path": "v1/php-native.json",
       "profile": "sdk.php.native-1",
       "category": "integration",
-      "sha256": "bde5456182c8efa52d141149e2c493b6e3880a7f0a3203c7232e5b7632d1bb33"
+      "sha256": "2244effb1da5778bec94afc3ed050ef263065976ad6b7b0f9cb12a52df67629d"
     },
     {
       "path": "v1/php-server.json",

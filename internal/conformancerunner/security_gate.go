@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 )
 
 const securityGateProfile = "suite.security-gate-1"
@@ -250,7 +249,11 @@ func validateSecurityGateProfile(profile securityGateSurface, vectors []security
 			return fmt.Errorf("supported security gate profile %s has incomplete evidence", profile.Profile)
 		}
 		for _, vector := range vectors {
-			if actual := executeSecurityGateVector(profile, vector); actual != vector.Expected {
+			actual, err := executeSecurityGateVector(profile, vector)
+			if err != nil {
+				return fmt.Errorf("security gate profile %s vector %s: %w", profile.Profile, vector.Name, err)
+			}
+			if actual != vector.Expected {
 				return fmt.Errorf("security gate profile %s vector %s: got %#v, want %#v", profile.Profile, vector.Name, actual, vector.Expected)
 			}
 		}
@@ -272,37 +275,26 @@ func passedSecurityGateResult(fixture Evidence, evidence []Evidence) Result {
 	return result
 }
 
-func executeSecurityGateVector(profile securityGateSurface, vector securityGateVector) securityGateOutcome {
-	outcome := securityGateOutcome{Bounded: true}
-	fail := func(code, message string) securityGateOutcome {
-		outcome.Code = code
-		outcome.Message = message
-		for _, hidden := range append(slices.Clone(profile.ProtectedMetadata), vector.HiddenInputs...) {
-			if strings.Contains(code, hidden) || strings.Contains(message, hidden) {
-				outcome.HiddenIdentifiers = true
-			}
-		}
-		return outcome
+// executeSecurityGateVector drives the vector through the real runtime (see
+// security_gate_runtime.go) and reports the observed outcome. The result is
+// derived entirely from production authorization and resource decisions, so a
+// regression in that code fails this profile rather than tautologically
+// matching the fixture's own declared fields.
+func executeSecurityGateVector(profile securityGateSurface, vector securityGateVector) (securityGateOutcome, error) {
+	starts, code, safe, err := runSecurityGateVector(vector)
+	if err != nil {
+		return securityGateOutcome{}, err
 	}
-	if vector.Cancelled {
-		return fail("CANCELLED", "request cancelled")
+	message := securityGateCanonicalMessage(code)
+	outcome := securityGateOutcome{
+		HandlerStarts:             starts,
+		ProviderStarts:            starts,
+		Deliveries:                starts,
+		Code:                      code,
+		Message:                   message,
+		FailureMetadataObservable: !safe,
+		HiddenIdentifiers:         leaksProtectedIdentifier(profile, vector, code, message),
+		Bounded:                   true,
 	}
-	identityAllowed := vector.Authorization.Present && vector.Authorization.Allowed &&
-		vector.Identity.TenantMatches && vector.Identity.CurrentRevision &&
-		!vector.Identity.Expired && !vector.Identity.Revoked
-	if !identityAllowed {
-		return fail("UNAUTHORIZED", "request is not authorized")
-	}
-	if vector.Budget.Limit <= 0 || vector.Budget.Attempts <= 0 {
-		return fail("RESOURCE_EXHAUSTED", "resource budget exhausted")
-	}
-	for range vector.Budget.Attempts {
-		if outcome.HandlerStarts >= vector.Budget.Limit {
-			return fail("RESOURCE_EXHAUSTED", "resource budget exhausted")
-		}
-		outcome.HandlerStarts++
-		outcome.ProviderStarts++
-		outcome.Deliveries++
-	}
-	return outcome
+	return outcome, nil
 }
