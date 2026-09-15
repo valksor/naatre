@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable
+
+import pytest
+from test_worker import Input, Output, TransactionProbe, invocation
+
+from naatre.json import canonical_json, strict_json_loads
+from naatre.worker import (
+    CAPABILITY_CANCELLATION_ACK,
+    CAPABILITY_TRANSACTIONS,
+    CAPABILITY_UNARY,
+    DataclassCodec,
+    Field,
+    HandlerRequest,
+    Registry,
+    ScalarCodec,
+    VerifiedIdentity,
+    Worker,
+)
+from naatre.worker_asgi import WorkerASGI
+
+
+class Resource:
+    def __init__(self, *, fail_start: bool = False) -> None:
+        self.events: list[str] = []
+        self.fail_start = fail_start
+
+    async def start(self) -> None:
+        self.events.append("start")
+        if self.fail_start:
+            raise RuntimeError("private pool startup detail")
+
+    async def drain(self) -> None:
+        self.events.append("drain")
+
+    async def aclose(self) -> None:
+        self.events.append("close")
+
+
+async def verify(_delegation: str) -> VerifiedIdentity:
+    return VerifiedIdentity(subject="subject", tenant="tenant")
+
+
+async def call_asgi(
+    app: WorkerASGI,
+    scope: dict[str, object],
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    sent: list[dict[str, object]] = []
+    queue = asyncio.Queue[dict[str, object]]()
+    for message in messages:
+        queue.put_nowait(message)
+
+    async def receive() -> dict[str, object]:
+        return await queue.get()
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    await app(scope, receive, send)
+    return sent
+
+
+def app_with_handler(
+    handler: Callable[[HandlerRequest[Input]], Awaitable[Output]],
+    resource: Resource | None = None,
+    transaction: TransactionProbe | None = None,
+) -> WorkerASGI:
+    registry = Registry(schema_revision="schema-1")
+    registry.bind_async(
+        "fixture.greet",
+        DataclassCodec(Input, (Field("name", ScalarCodec("String")),)),
+        DataclassCodec(Output, (Field("greeting", ScalarCodec("String")),)),
+        handler,
+        transactional=transaction is not None,
+    )
+    resources = () if resource is None else (resource,)
+    capabilities: tuple[str, ...] = (CAPABILITY_UNARY, CAPABILITY_CANCELLATION_ACK)
+    if transaction is not None:
+        capabilities += (CAPABILITY_TRANSACTIONS,)
+    return WorkerASGI(
+        Worker(
+            registry,
+            verify_identity=verify,
+            resources=resources,
+            capabilities=capabilities,
+            transaction_provider=transaction,
+        )
+    )
+
+
+def test_asgi_lifespan_starts_drains_and_closes_resources() -> None:
+    async def handler(request: HandlerRequest[Input]) -> Output:
+        return Output(request.input.name)
+
+    async def scenario() -> list[str]:
+        resource = Resource()
+        app = app_with_handler(handler, resource)
+        messages = await call_asgi(
+            app,
+            {"type": "lifespan"},
+            [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}],
+        )
+        assert messages == [
+            {"type": "lifespan.startup.complete"},
+            {"type": "lifespan.shutdown.complete"},
+        ]
+        return resource.events
+
+    assert asyncio.run(scenario()) == ["start", "drain", "close"]
+
+
+def test_asgi_unary_and_disconnect_cleanup_without_listener() -> None:
+    cancelled = asyncio.Event()
+
+    async def handler(request: HandlerRequest[Input]) -> Output:
+        if request.input.name == "block":
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        return Output(f"Hello, {request.input.name}")
+
+    async def scenario() -> None:
+        transactions = TransactionProbe()
+        app = app_with_handler(handler, transaction=transactions)
+        body = canonical_json(
+            {
+                "protocol": "naatre.remote-worker.v1",
+                "kind": "invoke",
+                "payload": invocation("asgi"),
+            }
+        )
+        sent = await call_asgi(
+            app,
+            {"type": "http", "method": "POST", "path": "/naatre/worker"},
+            [{"type": "http.request", "body": body, "more_body": False}],
+        )
+        response = strict_json_loads(sent[-1]["body"])  # type: ignore[arg-type]
+        assert isinstance(response, dict)
+        assert response["kind"] == "result"
+        payload = response["payload"]
+        assert isinstance(payload, dict)
+        assert payload["data"] == {"greeting": "Hello, Ada"}
+
+        blocked_body = canonical_json(
+            {
+                "protocol": "naatre.remote-worker.v1",
+                "kind": "invoke",
+                "payload": invocation("disconnect", {"name": "block"}),
+            }
+        )
+        await call_asgi(
+            app,
+            {"type": "http", "method": "POST", "path": "/naatre/worker"},
+            [
+                {"type": "http.request", "body": blocked_body, "more_body": False},
+                {"type": "http.disconnect"},
+            ],
+        )
+        assert cancelled.is_set()
+        assert transactions.entered == transactions.exited == 2
+        assert transactions.failures == 1
+        await app.worker.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_parent_cancellation_closes_handler_transaction_and_disconnect_task() -> None:
+    handler_started = asyncio.Event()
+    handler_cancelled = asyncio.Event()
+    receive_cancelled = asyncio.Event()
+
+    async def block_until_cancelled() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            handler_cancelled.set()
+            raise
+
+    async def handler(_request: HandlerRequest[Input]) -> Output:
+        handler_started.set()
+        await block_until_cancelled()
+        raise AssertionError("unreachable")
+
+    async def scenario() -> None:
+        transactions = TransactionProbe()
+        app = app_with_handler(handler, transaction=transactions)
+        body = canonical_json(
+            {
+                "protocol": "naatre.remote-worker.v1",
+                "kind": "invoke",
+                "payload": invocation("parent-cancel"),
+            }
+        )
+        request_sent = False
+
+        async def receive() -> dict[str, object]:
+            nonlocal request_sent
+            if not request_sent:
+                request_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            try:
+                await asyncio.Event().wait()
+            finally:
+                receive_cancelled.set()
+            raise AssertionError("unreachable")
+
+        async def send(message: dict[str, object]) -> None:
+            raise AssertionError("cancelled request must not send a response")
+
+        request = asyncio.create_task(
+            app(
+                {"type": "http", "method": "POST", "path": "/naatre/worker"},
+                receive,
+                send,
+            )
+        )
+        await handler_started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+        assert handler_cancelled.is_set()
+        assert receive_cancelled.is_set()
+        assert transactions.entered == transactions.exited == 1
+        assert transactions.failures == 1
+        await app.worker.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_asgi_startup_failure_closes_previously_started_pools_without_leaking_detail() -> None:
+    async def handler(request: HandlerRequest[Input]) -> Output:
+        return Output(request.input.name)
+
+    async def scenario() -> tuple[list[dict[str, object]], list[str]]:
+        first = Resource()
+        failing = Resource(fail_start=True)
+        registry = Registry(schema_revision="schema-1")
+        registry.bind_async(
+            "fixture.greet",
+            DataclassCodec(Input, (Field("name", ScalarCodec("String")),)),
+            DataclassCodec(Output, (Field("greeting", ScalarCodec("String")),)),
+            handler,
+        )
+        application = WorkerASGI(
+            Worker(registry, verify_identity=verify, resources=(first, failing))
+        )
+        messages = await call_asgi(
+            application,
+            {"type": "lifespan"},
+            [{"type": "lifespan.startup"}],
+        )
+        return messages, first.events
+
+    messages, events = asyncio.run(scenario())
+    assert messages == [
+        {"type": "lifespan.startup.failed", "message": "WORKER_STARTUP_FAILED"}
+    ]
+    assert events == ["start", "close"]
