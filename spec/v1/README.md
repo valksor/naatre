@@ -60,6 +60,7 @@ Documents:
 23. [HTTP digest fields](http-digest.md)
 24. [Developer tooling](tooling.md)
 25. [Interoperability adapters](adapters.md)
+26. [Remote worker protocol](remote-workers.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

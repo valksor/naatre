@@ -96,10 +96,17 @@ evidence must be described as planned.
   [Go federation coordinator profile](docs/federation-coordinator.md).
   Production distributed
   federation planning and transport integration remain owned by #109.
+- `remoteworker`: the language-neutral length-delimited wire model, bounded
+  Go reference gateway, stdio conformance transport, retry decisions,
+  reference scoping, and stream-credit state for `worker.remote-1`; see the
+  [remote-worker deployment guide](docs/remote-workers.md). Production HTTP/2
+  pool and process integration remains owned by #88.
 - `observability`: optional OpenTelemetry trace, metric, and log export plus
   application-owned transactional audit/outbox admission for
   `operations.observability-integrations-go-1`; see the
-  [integration guide](docs/observability-integrations.md).
+  [integration guide](docs/observability-integrations.md), the
+  [process-hosting guide](docs/process-hosting.md), and the
+  [Go federation coordinator profile](docs/federation-coordinator.md).
 - `tooling`: shared offline validation, formatting, hashing, explain, editor,
   manifest compatibility, deterministic mocks, and credential-redaction core
   for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).

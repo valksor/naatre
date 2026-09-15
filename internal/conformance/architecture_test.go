@@ -30,6 +30,7 @@ var layers = []struct {
 	{"normalizedcache", 2},
 	{"event", 2},
 	{"generator", 2},
+	{"remoteworker", 2},
 	{"runtime", 2},
 	{"tooling", 3},
 	{"generatorplugin", 3},

@@ -437,6 +437,12 @@
       "profile": "governance.release-1",
       "category": "evolution",
       "sha256": "8e0d19beb748f212c4483ea4b85552804e538f4ca3287e42f119e775f5a9bf1f"
+    },
+    {
+      "path": "v1/remote-workers.json",
+      "profile": "worker.remote-1",
+      "category": "integration",
+      "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
     }
   ],
   "normativeSources": [
@@ -6646,6 +6652,186 @@
           "path": "v1/events.json",
           "pointer": "/redaction",
           "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.deployment",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-001",
+        "RW-002",
+        "RW-003"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/supportMatrix/2",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/operations/0",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.transport",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-100",
+        "RW-101",
+        "RW-102",
+        "RW-103",
+        "RW-104"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/transport",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/faultCases/7",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.registration",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-200",
+        "RW-201",
+        "RW-202",
+        "RW-203"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/registration",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/admissionCases/0",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/admissionCases/4",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.identity",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-300",
+        "RW-301",
+        "RW-302",
+        "RW-303"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/admissionCases/1",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/admissionCases/2",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/faultCases/6",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.invocation",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-400",
+        "RW-401",
+        "RW-402",
+        "RW-403",
+        "RW-404"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/operations/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/operations/1",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/faultCases/4",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.retry",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-500",
+        "RW-501",
+        "RW-502",
+        "RW-503",
+        "RW-504"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/retryPolicies/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/retryPolicies/1",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/retryPolicies/2",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/retryPolicies/3",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.remote-workers.ownership",
+      "spec": "spec/v1/remote-workers.md",
+      "clauses": [
+        "RW-600",
+        "RW-601",
+        "RW-602"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/claims",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/remote-workers.json",
+          "pointer": "/supportMatrix/3",
+          "polarity": "positive"
         }
       ]
     }

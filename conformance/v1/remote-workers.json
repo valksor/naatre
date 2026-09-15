@@ -1,0 +1,91 @@
+{
+  "profile": "worker.remote-1",
+  "protocol": "naatre.remote-worker.v1",
+  "fixtureVersion": "1.0.0",
+  "schema": {
+    "revision": "schema-1",
+    "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sharedSchemaProfile": "core.schema-1",
+    "generatorProfile": "sdk.generation-1",
+    "serverInterfaceArtifact": "remote-worker-server-1"
+  },
+  "transport": {
+    "production": "http2-tls-length-delimited-1",
+    "test": "stdio-length-delimited-1",
+    "frame": {"headerBytes": 5, "flagsBytes": 1, "lengthBytes": 4, "byteOrder": "big-endian", "maximumBytes": 65536},
+    "mediaType": "application/naatre-worker+json",
+    "http11": "unary-only-when-advertised"
+  },
+  "registration": {
+    "protocol": "naatre.remote-worker.v1",
+    "workerId": "fixture-worker",
+    "serviceIdentity": "spiffe://example/fixture-worker",
+    "audience": "naatre-gateway",
+    "endpoint": "fixture-stdio",
+    "schemaRevision": "schema-1",
+    "schemaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "capabilities": ["unary-1", "cancellation-ack-1"],
+    "limits": {"maxInFlight": 1, "maxRequestBytes": 4096, "maxResponseBytes": 4096, "maxStreamFrames": 4, "maxStreamBytes": 16384},
+    "handlers": [
+      {"id": "fixture.greet", "inputSchema": "GreetInput", "outputSchema": "GreetOutput", "codec": "naatre.json-1", "effect": "query", "requiredCapabilities": []}
+    ]
+  },
+  "operations": [
+    {
+      "name": "schema-defined-success",
+      "handlerId": "fixture.greet",
+      "input": {"name": "Ada"},
+      "expected": {"data": {"greeting": "Hello, Ada"}, "errors": []}
+    },
+    {
+      "name": "schema-defined-error",
+      "handlerId": "fixture.greet",
+      "input": {"name": "reject"},
+      "expected": {"data": null, "errors": [{"code": "NAME_REJECTED", "message": "name was rejected", "retryable": false}]}
+    }
+  ],
+  "admissionCases": [
+    {"name": "wrong-schema-revision", "stage": "registration", "expectedCode": "REMOTE_SCHEMA_MISMATCH", "executions": 0},
+    {"name": "forged-service-identity", "stage": "registration", "expectedCode": "REMOTE_UNAUTHENTICATED", "executions": 0},
+    {"name": "forged-delegated-context", "stage": "admission", "expectedCode": "UNAUTHORIZED", "executions": 0},
+    {"name": "unknown-handler", "stage": "admission", "expectedCode": "REMOTE_HANDLER_UNKNOWN", "executions": 0},
+    {"name": "unsupported-transaction", "stage": "registration", "expectedCode": "REMOTE_CAPABILITY_MISMATCH", "executions": 0},
+    {"name": "malformed-worker-data", "stage": "completion", "expectedCode": "REMOTE_WORKER_MALFORMED", "publicCompletion": false},
+    {"name": "invalid-worker-output", "stage": "completion", "expectedCode": "OUTPUT_COMPLETION", "publicCompletion": false}
+  ],
+  "faultCases": [
+    {"name": "reconnect-before-write", "effect": "mutation", "delivery": "before-write", "expected": "retry-new-attempt"},
+    {"name": "process-death-after-query-write", "effect": "query", "delivery": "after-write", "expected": "retry-new-attempt"},
+    {"name": "process-death-after-mutation-write", "effect": "mutation", "delivery": "after-write", "idempotencyEvidence": false, "expected": "indeterminate-no-replay"},
+    {"name": "duplicate-invocation", "expected": "reject-before-handler"},
+    {"name": "cancellation-acknowledgement", "expected": "acknowledged-not-effect-proof"},
+    {"name": "worker-overload", "expected": "reject-before-handler"},
+    {"name": "stale-reference", "expected": "reject-before-handler"},
+    {"name": "stream-backpressure", "creditFrames": 2, "creditBytes": 8, "expected": "third-frame-blocked"}
+  ],
+  "retryPolicies": [
+    {"effect": "query", "beforeWrite": "retry-with-budget", "afterWrite": "retry-with-budget"},
+    {"effect": "mutation", "beforeWrite": "retry-with-budget", "afterWrite": "require-idempotency-evidence-else-indeterminate"},
+    {"effect": "transaction", "beforeWrite": "retry-with-budget", "afterWrite": "indeterminate-no-replay"},
+    {"effect": "subscription", "beforeWrite": "retry-with-budget", "afterWrite": "require-resume-capability-and-cursor"}
+  ],
+  "supportMatrix": [
+    {"surface": "client", "status": "separate-profile", "owner": 69},
+    {"surface": "codec", "status": "shared-naatre-json-1", "owner": 35},
+    {"surface": "native-runtime", "status": "not-established-by-worker-profile", "owner": 69},
+    {"surface": "remote-worker", "status": "reference-fixture", "owner": 51},
+    {"surface": "http-server", "status": "separate-profile", "owner": 69},
+    {"surface": "streaming", "status": "capability-negotiated", "owner": 69},
+    {"surface": "transaction", "status": "provider-capability-required", "owner": 69}
+  ],
+  "claims": {
+    "exactlyOnceEffects": false,
+    "processIsolation": false,
+    "hardTermination": false,
+    "nativeRuntime": false,
+    "productionGateway": false,
+    "productionImplementationOwner": 88,
+    "completeMatrixOwner": 69,
+    "languageWorkerOwners": [58, 59, 60, 61]
+  }
+}
