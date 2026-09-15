@@ -23,6 +23,9 @@ evidence must be described as planned.
 - `docs/tooling.md`: offline CLI, editor adapter, mocks, and compatibility workflow.
 - `playground`: opt-in loopback browser and bounded schema-only mock HTTP
   integration; see the [playground guide](docs/playground.md).
+- `tooling/lsp` and `editors/vscode`: the bounded LSP 3.17 stdio server and
+  reference VS Code client for `tooling.lsp-1`; see the
+  [LSP integration guide](docs/lsp.md).
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `protocol/cbor`: dependency-free deterministic unary CBOR codec, strict
   budgets, and JSON semantic projection for `transport.cbor.unary-1`.
@@ -130,7 +133,9 @@ evidence must be described as planned.
   [Go federation coordinator profile](docs/federation-coordinator.md).
 - `tooling`: shared offline validation, formatting, hashing, explain, editor,
   manifest compatibility, deterministic mocks, and credential-redaction core
-  for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).
+  for `tooling.workflow-1`; `tooling/lsp` adds the issue #94 LSP transport
+  without redefining that core; see the [tooling guide](docs/tooling.md) and
+  [LSP integration guide](docs/lsp.md).
 - `playground`: opt-in loopback browser and bounded schema-mock handler for
   `naatre.playground-mock-1`; see the [playground guide](docs/playground.md).
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go

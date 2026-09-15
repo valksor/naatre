@@ -515,6 +515,12 @@
       "profile": "sdk.swift.apple-1",
       "category": "transport",
       "sha256": "1eb0b302ccf288017f88b6e51453a766e73583c45cafc9f2909fb76d3c594a0c"
+    },
+    {
+      "path": "v1/lsp.json",
+      "profile": "tooling.lsp-1",
+      "category": "integration",
+      "sha256": "421c73807521b6370f421148f2e211052c323e905d9492b9d68c65ddb4ec7c8c"
     }
   ],
   "normativeSources": [

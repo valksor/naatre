@@ -1,0 +1,20 @@
+{
+  "name": "naatre-language-support",
+  "displayName": "Naatre Language Support",
+  "description": "Editor client for the Naatre LSP 3.17 stdio server",
+  "version": "1.0.0",
+  "engines": {"vscode": "^1.105.0"},
+  "type": "module",
+  "main": "./extension.mjs",
+  "activationEvents": ["onLanguage:naatre"],
+  "contributes": {
+    "languages": [{"id": "naatre", "aliases": ["Naatre"], "extensions": [".naatre.json"]}],
+    "configuration": {
+      "title": "Naatre",
+      "properties": {
+        "naatre.server": {"type": "string", "default": "naatre-lsp", "description": "Absolute path or command name for the Naatre LSP server."},
+        "naatre.schema": {"type": "string", "default": "", "description": "Absolute path to the trusted local Naatre schema document."}
+      }
+    }
+  }
+}

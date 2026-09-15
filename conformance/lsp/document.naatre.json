@@ -1,0 +1,7 @@
+{
+  "operations": [{
+    "name": "GetAccount",
+    "kind": "query",
+    "select": [{"$call": {"name": "account", "args": {"id": {"$literal": "fixture-id"}}, "select": [{"$field": {"name": "name"}}]}}]
+  }]
+}

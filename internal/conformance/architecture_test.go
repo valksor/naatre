@@ -21,6 +21,7 @@ var layers = []struct {
 	prefix string
 	layer  int
 }{
+	{"tooling/lsp", 4},
 	{"internal/slicesx", -1},
 	{"protocol", 0},
 	{"schema", 1},

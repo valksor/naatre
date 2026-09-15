@@ -12,6 +12,13 @@ checked-in files rather than duplicating their expected values in Go source.
 negative import/export fixtures for every supported form, bounded hostile
 inputs, deterministic round-trip evidence, and the independent canonical
 source binding used to compare JTD with JSON Schema fidelity reports.
+`v1/lsp.json` fixes the `tooling.lsp-1` LSP 3.17 stdio profile owned by #94.
+It pins issue #55 and the exact protocol-neutral editor dependency bytes,
+stable failure codes, schema/version isolation, UTF-16 source ranges, finite
+resource limits, supported and unsupported capabilities, the VS Code client,
+and positive, negative, boundary, cancellation, and resource-limit evidence.
+The independent Node probe executes the same framed client used by the
+extension; `tooling.workflow-1` remains the sole normative tooling authority.
 
 `v1/http-digest.json` pins the `core.http.digest-1` RFC 9530 profile with exact
 identity, gzip, range, and transfer-framed bytes; strict negotiation and failure

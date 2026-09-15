@@ -160,6 +160,7 @@ func New(suitePath string) (*Runner, error) {
 	runner.handlers[goSDKProfile] = runner.verifyGoSDK
 	runner.handlers[coreHTTPProfile] = runner.verifyGoHTTP
 	runner.handlers[toolingProfile] = runner.verifyTooling
+	runner.handlers[lspProfile] = runner.verifyLSP
 	runner.handlers[planCacheProfile] = runner.verifyPlanCache
 	runner.handlers[generatorPluginHostProfile] = runner.verifyGeneratorPluginHost
 	runner.handlers[goQualityProfile] = runner.verifyGoQuality

@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "canonicalVersion": "c14n-1",
+  "revision": "lsp-fixture-r1",
+  "types": [
+    {"id": "LookupInput", "name": "LookupInput", "kind": "input-object", "input": true, "fields": [{"id": "LookupInput.id", "name": "id", "type": "ID", "required": true}]},
+    {"id": "User", "name": "User", "kind": "object", "output": true, "fields": [{"id": "User.name", "name": "name", "type": "String", "description": "Display name"}]}
+  ],
+  "operations": [
+    {"id": "query.account", "name": "account", "kind": "query", "input": "LookupInput", "output": "User", "effect": "read", "deterministic": true, "cacheable": true, "retrySafe": true, "threadSafety": "thread-safe", "batching": "ineligible", "transaction": "none", "authorizationPolicy": "public", "cost": 1, "source": {"uri": "file:///conformance/lsp/schema.naatre.json", "line": 10, "column": 5}}
+  ],
+  "members": [
+    {"id": "User.name.resolver", "name": "name", "owner": "User", "kind": "field", "output": "String", "description": "Display name", "effect": "read", "deterministic": true, "cacheable": true, "retrySafe": true, "threadSafety": "thread-safe", "batching": "ineligible", "transaction": "none", "authorizationPolicy": "public", "cost": 1}
+  ]
+}
