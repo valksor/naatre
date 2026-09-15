@@ -1,0 +1,74 @@
+{
+  "profile": "sdk.php.server-1",
+  "fixtureSuite": "1.0.0",
+  "protocol": "naatre.remote-worker.v1",
+  "runtimeVersion": "naatre.php.server-1",
+  "package": {
+    "distribution": "naatre/sdk",
+    "php": ["8.3", "8.4", "8.5"],
+    "phpstanLevel": "max",
+    "psalmErrorLevel": 1,
+    "externalServerDependencies": []
+  },
+  "profiles": {
+    "fpm": {
+      "id": "php.fpm-unary-1",
+      "capabilities": ["unary-1"],
+      "connectionOwnership": "host-owned",
+      "streaming": "reject-before-dispatch"
+    },
+    "worker": {
+      "id": "php.long-lived-worker-1",
+      "capabilities": ["unary-1", "cancellation-ack-1"],
+      "connectionOwnership": "explicit",
+      "streaming": "adapter-negotiated-only"
+    }
+  },
+  "frameworkFixtureConsumers": ["neutral", "symfony", "laravel"],
+  "generated": {
+    "handlers": {"path": "sdk/php/generated/Handlers.php", "sha256": "38043f9009cf19f8015170630294327f280b630e9d0e3e4e22cea27589eccd5a"}
+  },
+  "vectors": [
+    "shared-go-gateway-success-and-application-error",
+    "request-principal-loader-and-transaction-isolation",
+    "empty-object-list-numeric-key-null-missing-lossless-large-number",
+    "fpm-streaming-rejected-before-source",
+    "mutation-transport-loss-indeterminate-without-replay",
+    "generated-handler-input-output-client-partial-separation",
+    "output-validation-before-transmission",
+    "owned-stream-shutdown"
+  ],
+  "claims": {
+    "nativeRuntime": false,
+    "productionFrameworkAdapters": false,
+    "frameworkAdapterOwner": 97,
+    "completeMatrixOwner": 69,
+    "fpmDisconnectForcesRollback": false,
+    "automaticMethodExposure": false
+  },
+  "evidence": [
+    {"path": "sdk/php/README.md", "sha256": "9c6abd4b9e6d6786c6d60fde6df290800c551b448bab59122cec0491cff59a19"},
+    {"path": "sdk/php/composer.json", "sha256": "91416b61a00f95d5a450aba4a0ffbeb2a9aac9697279a9a8628e238415f11d1d"},
+    {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},
+    {"path": "sdk/php/generated/Operations.php", "sha256": "c9f974128a503c137022edf9c043433fc389a07b53cbfdac8d08316b1cc12246"},
+    {"path": "sdk/php/src/Server/Dispatcher.php", "sha256": "2030de6337abefe74d8f262b4afc836117f6bf1cd822560e2c20c7b9c27e7b7f"},
+    {"path": "sdk/php/src/Server/EnvelopeServer.php", "sha256": "87dbcfe6084b41dfe862be0e4d7fb796eedd2ae8374002ec6408e7b348d5d2c2"},
+    {"path": "sdk/php/src/Server/FramedWorker.php", "sha256": "0889a94aa10655f72c721f4ef4063373cf1ad70839d75075caaba613d7570764"},
+    {"path": "sdk/php/src/Server/RequestContext.php", "sha256": "9c0b17f405c2fc93ab1e9a5654631815eb963e96ec8e02a2ab122a75fdc6175b"},
+    {"path": "sdk/php/src/Server/Integration/Symfony/RequestContextFactory.php", "sha256": "1dc67de5c1a310099c33ebd4d546a36fb3be7a0aef4808e11867a37d5393819f"},
+    {"path": "sdk/php/src/Server/Integration/Laravel/RequestContextFactory.php", "sha256": "976a111cdb5475252355c5199bb31c495929749d1aff4758b9a8b4f17e40c454"},
+    {"path": "sdk/php/tests/server.php", "sha256": "4ebc5d95953b5e7fa267cf78236191a7cfa4c5f169609345aa12b93e4878e717"},
+    {"path": "sdk/php/tests/server-worker.php", "sha256": "8ad9ca6776e6e4fa58403ab42be6bd61a837470127896413780600b142a5be17"},
+    {"path": "sdk/php/examples/symfony-server.php", "sha256": "b7e4517b0f23fccbd42e5bee462b55f0a7831dc75f7e8777d7e6eab3d0ac69d2"},
+    {"path": "sdk/php/examples/laravel-server.php", "sha256": "fb9b3a1199dfec802d4c2163c914c2388dc11b3862467b396e9ef2e3600ade55"},
+    {"path": "internal/conformance/php_server_test.go", "sha256": "5d87cf3935da35e110aaaa7f859d53479ef64abcbb0d723793d2d41755481508"},
+    {"path": "conformance/independent/verify-php-server.mjs", "sha256": "f14636923427bb994b0a9c852085d12d76481813c4f6a1f585127e3bade1ec29"}
+  ],
+  "commands": [
+    "php sdk/php/tests/server.php",
+    "go test ./internal/conformance -run TestPHP -count=1",
+    "node conformance/independent/verify-php-server.mjs",
+    "composer --working-dir=sdk/php phpstan",
+    "composer --working-dir=sdk/php psalm"
+  ]
+}

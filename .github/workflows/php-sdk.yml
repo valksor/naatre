@@ -29,4 +29,5 @@ jobs:
           node conformance/independent/verify-php-sdk.mjs
           node conformance/independent/verify-php-adapters.mjs
           php examples/v1/workers/php.php
+          node conformance/independent/verify-php-server.mjs
           git diff --exit-code -- sdk/php/generated

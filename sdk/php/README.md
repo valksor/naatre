@@ -1,4 +1,4 @@
-# PHP SDK core
+# PHP SDK and server core
 
 `naatre/sdk` is the framework-neutral `sdk.php.core-1` client and generated
 binding package. It supports PHP 8.3, 8.4, and 8.5 with Composer 2, PHPStan at
@@ -95,3 +95,68 @@ composer --working-dir=sdk/php test-adapters
 The machine-readable profile pins the core fixture digest, the exact PSR
 interface revisions modeled by the fixtures, all source evidence digests, and
 positive, negative, boundary, cancellation, and resource-limit vectors.
+
+## Server handler bindings
+
+`sdk.php.server-1` is the framework-neutral remote-worker server core. It is
+separate from the PSR-18 client boundary: an application explicitly adds only
+generated `RegisteredHandler` bindings to `HandlerRegistry`, then gives the
+registry to `Dispatcher`. Public methods, serializer properties, and container
+services are never discovered or exposed automatically.
+
+Generated operations contain three distinct API families. `*Variables` and
+`*Result` are public client request/partial-result types. `*HandlerInput` and
+`*HandlerOutput` are server contracts, and the generated `*Handler` interface
+is the only application implementation surface. `*HandlerBinding::register()`
+owns decoding, output encoding, and output validation before a result reaches
+the transport.
+
+Every dispatch creates a new `RequestContext`. Its principal, tenant, loader
+cache, and optional application-declared transaction are cleared in `close()`
+even when decoding, application code, output validation, or rollback fails.
+Transactions are started only for a handler that declares
+`transaction-provider-1` and only when the dispatcher was given an explicit
+`TransactionProvider`; successful handler return commits and every failure
+before commit rolls back. A disconnect after an application commit still has
+an unknown mutation outcome. FPM cannot forcibly undo committed work, and the
+gateway must not automatically replay such a mutation without idempotency
+evidence.
+
+Two profiles are documented and pinned in
+`conformance/v1/php-server.json`:
+
+- `php.fpm-unary-1` advertises only `unary-1`. Any streaming requirement is
+  rejected before input decoding or source invocation. The host owns the FPM
+  request connection and calls `FpmRequestHandler` once per request.
+- `php.long-lived-worker-1` uses the framed worker contract and adds
+  `cancellation-ack-1`. `FramedWorker` can own its streams or leave them to the
+  host and always runs request cleanup between frames. Streaming capabilities
+  may be added only by an adapter that actually implements their transport;
+  the core reference worker does not advertise them.
+
+The Symfony and Laravel `RequestContextFactory` bridges are deliberately small
+container seams. Register them explicitly and resolve them in request/job
+scope; executable examples live in `examples/symfony-server.php` and
+`examples/laravel-server.php`. Native Symfony controllers, Laravel service
+providers, RoadRunner, FrankenPHP, Swoole, Octane, and framework-specific
+persistent transports remain the independently shippable #97 surface. This
+package therefore makes no native-runtime or production-framework-adapter
+claim.
+
+Run the server evidence without a listener or network connection:
+
+```sh
+php sdk/php/tests/server.php
+go test ./internal/conformance -run TestPHP -count=1
+node conformance/independent/verify-php-server.mjs
+composer --working-dir=sdk/php phpstan
+composer --working-dir=sdk/php psalm
+```
+
+The Go test starts each PHP reference worker over inherited stdio, runs the
+same success/error gateway fixture against neutral, Symfony, and Laravel
+context bindings, and proves that process loss after a mutation write produces
+`REMOTE_OUTCOME_INDETERMINATE` with exactly one invocation attempt. The PHP
+fixture covers cross-request identity/loader/transaction isolation, wire value
+shapes, FPM capability rejection, generated bindings, exception mapping, and
+pre-transmission output validation.

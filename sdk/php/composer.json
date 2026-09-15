@@ -1,6 +1,6 @@
 {
   "name": "naatre/sdk",
-  "description": "Framework-neutral PHP client and generated schema bindings for Naatre",
+  "description": "Framework-neutral PHP client, generated bindings, and remote-worker server core for Naatre",
   "type": "library",
   "license": "Apache-2.0",
   "require": {
@@ -21,19 +21,22 @@
       "Naatre\\Sdk\\": "src/"
     },
     "files": [
-      "generated/Operations.php"
+      "generated/Operations.php",
+      "generated/Handlers.php"
     ]
   },
   "scripts": {
-    "generate": "php sdkgen/generate.php ../../conformance/v1/generator-model.json ../../conformance/v1/generator-output.json generated/Operations.php generated/operations.json",
+    "generate": "php sdkgen/generate.php ../../conformance/v1/generator-model.json ../../conformance/v1/generator-output.json generated/Operations.php generated/operations.json generated/Handlers.php",
     "test": "php tests/run.php",
     "test-adapters": "php tests/adapters.php",
+    "test-server": "php tests/server.php",
     "phpstan": "phpstan analyse --no-progress --memory-limit=1G",
     "psalm": "psalm --no-cache --show-info=false",
     "check": [
       "@generate",
       "@test",
       "@test-adapters",
+      "@test-server",
       "@phpstan",
       "@psalm"
     ]

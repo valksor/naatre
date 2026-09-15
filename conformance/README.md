@@ -207,6 +207,12 @@ failures, missing/null and numeric-map fidelity, and bounded response cleanup
 through the optional Symfony and Laravel PSR bridge factories. Native framework
 HTTP APIs, native worker certification, active abort, SSE, WebSocket, and the
 complete framework/runtime matrix remain explicitly unsupported.
+`v1/php-server.json` pins `sdk.php.server-1`: explicit generated handler
+registration, request-scoped identity/loaders/transaction cleanup, output
+validation, FPM unary capability rejection, and a framed long-lived reference
+worker. The same Go gateway fixture executes neutral, Symfony, and Laravel
+context bindings over stdio. Native framework worker adapters and the complete
+runtime matrix remain owned by #97 and #69 respectively.
 `v1/dotnet-sdk.json` pins `sdk.dotnet.core-1`: deterministic C# selected-result
 bindings, nullable `net8.0` and `net10.0` builds, an F# consumer build, explicit
 presence and open-variant shapes, lossless extended scalars, persisted request
