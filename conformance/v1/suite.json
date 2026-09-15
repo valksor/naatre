@@ -559,6 +559,12 @@
       "sha256": "ad608dc81e2f48680acc2b50e766e867628b7d857ad8e8e5cfb12c14331a8872"
     },
     {
+      "path": "v1/python-worker-adapters.json",
+      "profile": "sdk.python.worker-adapters-1",
+      "category": "integration",
+      "sha256": "aca5bd55d8aeb1a5c1aba6c3ce6f4d47269a492303fcb85af6628185d4514626"
+    },
+    {
       "path": "v1/jvm-adapters.json",
       "profile": "sdk.jvm.adapters-1",
       "category": "transport",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
+from collections.abc import Awaitable, Callable
+from importlib import import_module
+from typing import Protocol, cast
 
 from .errors import NaatreClientError
 from .json import canonical_json, strict_json_loads
@@ -18,8 +20,49 @@ class Send(Protocol):
     async def __call__(self, message: dict[str, object]) -> None: ...
 
 
+class ASGIApplication(Protocol):
+    async def __call__(
+        self,
+        scope: dict[str, object],
+        receive: Receive,
+        send: Send,
+    ) -> None: ...
+
+
+class _WorkerLifespan:
+    def __init__(self, worker: Worker) -> None:
+        self._worker = worker
+        self._lock = asyncio.Lock()
+
+    async def startup(self, send: Send) -> bool:
+        return await self._run(self._worker.start, send, "startup")
+
+    async def shutdown(self, send: Send) -> None:
+        await self._run(self._worker.aclose, send, "shutdown")
+
+    async def _run(
+        self,
+        operation: Callable[[], Awaitable[None]],
+        send: Send,
+        phase: str,
+    ) -> bool:
+        async with self._lock:
+            try:
+                await operation()
+            except Exception:
+                await send(
+                    {
+                        "type": f"lifespan.{phase}.failed",
+                        "message": f"WORKER_{phase.upper()}_FAILED",
+                    }
+                )
+                return False
+            await send({"type": f"lifespan.{phase}.complete"})
+            return True
+
+
 class WorkerASGI:
-    """Dependency-free ASGI worker endpoint; framework adapters remain additive."""
+    """Dependency-free ASGI worker endpoint for the remote-worker protocol."""
 
     def __init__(
         self,
@@ -33,6 +76,7 @@ class WorkerASGI:
         self.worker = worker
         self._path = path
         self._maximum_request_bytes = maximum_request_bytes
+        self._lifecycle = _WorkerLifespan(worker)
 
     async def __call__(self, scope: dict[str, object], receive: Receive, send: Send) -> None:
         scope_type = scope.get("type")
@@ -48,30 +92,10 @@ class WorkerASGI:
             message = await receive()
             kind = message.get("type")
             if kind == "lifespan.startup":
-                try:
-                    await self.worker.start()
-                except Exception:
-                    await send(
-                        {
-                            "type": "lifespan.startup.failed",
-                            "message": "WORKER_STARTUP_FAILED",
-                        }
-                    )
+                if not await self._lifecycle.startup(send):
                     return
-                else:
-                    await send({"type": "lifespan.startup.complete"})
             elif kind == "lifespan.shutdown":
-                try:
-                    await self.worker.aclose()
-                except Exception:
-                    await send(
-                        {
-                            "type": "lifespan.shutdown.failed",
-                            "message": "WORKER_SHUTDOWN_FAILED",
-                        }
-                    )
-                else:
-                    await send({"type": "lifespan.shutdown.complete"})
+                await self._lifecycle.shutdown(send)
                 return
             else:
                 raise WorkerProtocolError("WORKER_ASGI_SCOPE_UNSUPPORTED")
@@ -139,3 +163,99 @@ class WorkerASGI:
             }
         )
         await send({"type": "http.response.body", "body": body, "more_body": False})
+
+
+class FrameworkWorkerASGI:
+    """ASGI wrapper that gives one framework application a safe worker lifespan."""
+
+    def __init__(self, worker_app: WorkerASGI, application: ASGIApplication) -> None:
+        self.worker_app = worker_app
+        self.application = application
+
+    @property
+    def worker(self) -> Worker:
+        return self.worker_app.worker
+
+    async def __call__(self, scope: dict[str, object], receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.worker_app(scope, receive, send)
+            return
+        await self.application(scope, receive, send)
+
+
+_FrameworkSpec = tuple[str, str, dict[str, object]]
+_STARLETTE_FRAMEWORK: _FrameworkSpec = ("starlette.applications", "Starlette", {})
+_FASTAPI_FRAMEWORK: _FrameworkSpec = (
+    "fastapi",
+    "FastAPI",
+    {"openapi_url": None, "docs_url": None, "redoc_url": None},
+)
+
+
+def starlette_worker_app(
+    worker: Worker,
+    *,
+    path: str = "/naatre/worker",
+    maximum_request_bytes: int = 1 << 20,
+) -> FrameworkWorkerASGI:
+    """Build a Starlette application without making Starlette a core dependency."""
+    return _framework_application(
+        _STARLETTE_FRAMEWORK,
+        worker,
+        path=path,
+        maximum_request_bytes=maximum_request_bytes,
+    )
+
+
+def fastapi_worker_app(
+    worker: Worker,
+    *,
+    path: str = "/naatre/worker",
+    maximum_request_bytes: int = 1 << 20,
+) -> FrameworkWorkerASGI:
+    """Build a FastAPI application without making FastAPI a core dependency."""
+    return _framework_application(
+        _FASTAPI_FRAMEWORK,
+        worker,
+        path=path,
+        maximum_request_bytes=maximum_request_bytes,
+    )
+
+
+def _framework_application(
+    framework: _FrameworkSpec,
+    worker: Worker,
+    *,
+    path: str,
+    maximum_request_bytes: int,
+) -> FrameworkWorkerASGI:
+    application_module, application_name, application_options = framework
+    application_factory = _optional_factory(application_module, application_name)
+    mount = _optional_factory("starlette.routing", "Mount")
+    route = _optional_factory("starlette.routing", "Route")
+    if application_factory is None or mount is None or route is None:
+        raise WorkerProtocolError("WORKER_FRAMEWORK_UNAVAILABLE")
+
+    worker_app = WorkerASGI(
+        worker,
+        path=path,
+        maximum_request_bytes=maximum_request_bytes,
+    )
+    application = application_factory(
+        routes=[
+            route(path, endpoint=worker_app, include_in_schema=False),
+            mount("/", app=worker_app),
+        ],
+        **application_options,
+    )
+    return FrameworkWorkerASGI(worker_app, cast(ASGIApplication, application))
+
+
+def _optional_factory(module: str, name: str) -> Callable[..., object] | None:
+    try:
+        value = getattr(import_module(module), name)
+    except Exception:
+        return None
+    if not callable(value):
+        return None
+    return cast(Callable[..., object], value)

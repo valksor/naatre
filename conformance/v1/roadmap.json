@@ -1233,18 +1233,20 @@
     "99": {
       "issue": 99,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 99,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.python.worker-adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.python.worker-adapters-1"
+        ]
       }
     },
     "100": {

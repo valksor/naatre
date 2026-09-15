@@ -316,6 +316,12 @@ commit and fixture digest plus the executed CPython, Pydantic, and
 pydantic-core revisions. Native async sockets, concrete streams, other event
 loops, and unexecuted runtime/platform combinations remain explicitly
 unclaimed.
+`v1/python-worker-adapters.json` pins `sdk.python.worker-adapters-1`: the
+framework-neutral ASGI 3.0 endpoint plus optional FastAPI and Starlette
+composition. It binds the exact #59 worker revision, FastAPI 0.136.1, Starlette
+1.0.0, resource/cancellation/concurrency fixtures, stable redacted failures,
+and the executed CPython platform. It does not certify an ASGI server, HTTP/2,
+TLS, native Python runtime, or production deployment.
 `v1/rust-sdk.json` pins `sdk.rust.core-1`: the Rust 1.85 minimum version and
 feature matrix, serde bindings, exact scalar wrappers, persisted manifest,
 runtime-neutral transport ownership, bounded pagination and fallible streams,
