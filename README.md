@@ -36,7 +36,8 @@ evidence must be described as planned.
   async transport protocols, lossless scalar wrappers, SSE lifecycle, and
   deterministic dataclass bindings for `sdk.python.core-1`.
 - `sdk/rust`: runtime-neutral Rust client ownership traits, lossless scalar
-  wrappers, and deterministic serde operation bindings for `sdk.rust.core-1`.
+  wrappers, deterministic serde operation bindings for `sdk.rust.core-1`, and
+  optional task-local Tokio adapters for `sdk.rust.adapters-1`.
 - `sdk/jvm`: Java 17 wire/client core, deterministic Java and Kotlin bindings,
   and cancellation-safe coroutine and Flow views for `sdk.jvm.core-1`.
 - `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,

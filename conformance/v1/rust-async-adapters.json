@@ -1,0 +1,157 @@
+{
+  "profile": "sdk.rust.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "naatre.rust.task-adapter-1",
+  "dependencies": [
+    {
+      "issue": 39,
+      "profile": "sdk.rust.core-1",
+      "gitCommit": "b66c36c1e86a0a938c7d1ab0c80fac09e79a4d87",
+      "fixture": {
+        "path": "conformance/v1/rust-sdk.json",
+        "sha256": "214c43d115b0e3033ac7386b4585229c6984ca554d899161eca0a0d1f03ac77d"
+      }
+    }
+  ],
+  "package": {
+    "name": "naatre-sdk",
+    "edition": "2024",
+    "minimumRust": "1.85.0",
+    "defaultFeatures": [],
+    "features": {
+      "tokio": {
+        "dependency": null,
+        "boundary": "task-local standard Future and poll adapters",
+        "runtimeOwnership": "caller-selected",
+        "spawnsTasks": false
+      }
+    }
+  },
+  "featureMatrix": [
+    {"id": "current-no-default", "toolchain": "current", "action": "check", "arguments": ["--no-default-features"]},
+    {"id": "current-default", "toolchain": "current", "action": "check", "arguments": []},
+    {"id": "current-generator", "toolchain": "current", "action": "check", "arguments": ["--features", "generator"]},
+    {"id": "current-tokio", "toolchain": "current", "action": "test", "arguments": ["--features", "tokio", "--test", "tokio_adapters"]},
+    {"id": "current-all", "toolchain": "current", "action": "test", "arguments": ["--all-features"]},
+    {"id": "msrv-no-default", "toolchain": "1.85.0", "action": "check", "arguments": ["--no-default-features"]},
+    {"id": "msrv-default", "toolchain": "1.85.0", "action": "check", "arguments": []},
+    {"id": "msrv-generator", "toolchain": "1.85.0", "action": "check", "arguments": ["--features", "generator"]},
+    {"id": "msrv-tokio", "toolchain": "1.85.0", "action": "test", "arguments": ["--features", "tokio", "--test", "tokio_adapters"]},
+    {"id": "msrv-all", "toolchain": "1.85.0", "action": "test", "arguments": ["--all-features"]}
+  ],
+  "evidence": [
+    {
+      "path": "sdk/rust/Cargo.toml",
+      "sha256": "01ea0c125594f3dc1cfde95e68b4a2d883f704609c5f30b62d27f52c904faa16"
+    },
+    {
+      "path": "sdk/rust/Cargo.lock",
+      "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"
+    },
+    {
+      "path": "sdk/rust/README.md",
+      "sha256": "1c0a4756223b9fe33ec28fd9129aae4183384813af29260408034bf2211dcd4c"
+    },
+    {
+      "path": "sdk/rust/src/lib.rs",
+      "sha256": "5be5a8dff42ff9fa4eab1969fc1841e734329bb374d367b9ff231c75201bc1b0"
+    },
+    {
+      "path": "sdk/rust/src/tokio_adapter.rs",
+      "sha256": "638ec2cc6553a17086bf8dcd2bfb2b05bbddf39225dc4f99984b8efbf002fd0f"
+    },
+    {
+      "path": "sdk/rust/tests/common/mod.rs",
+      "sha256": "a14da5762110b1c98dbc71e97b46fd52fbe767621724dd6029c8ac855f646531"
+    },
+    {
+      "path": "sdk/rust/tests/tokio_adapters.rs",
+      "sha256": "f9e61cdcbd76e525cbd2a9205cc07b33e4a9ca1780412ee4b1192b32acc4a711"
+    },
+    {
+      "path": "conformance/independent/verify-rust-async-adapters.mjs",
+      "sha256": "b0da599fc7035f550b8409eb8f1014bea3328164c3e7452d6138feea860661d1"
+    }
+  ],
+  "ownership": {
+    "coreContract": "issue-39",
+    "adapterSlice": "issue-80",
+    "executor": "caller-selected",
+    "runtime": "caller-owned",
+    "future": "returned-handle-owned",
+    "stream": "returned-handle-owned",
+    "drop": "releases-local-io-without-external-effect-claim",
+    "detachedTasks": "unsupported"
+  },
+  "lifecycle": {
+    "fixtureSuite": "1.0.0",
+    "compatibility": "additive-feature",
+    "coreAuthority": "sdk.rust.core-1",
+    "certificationOwnerIssue": 69
+  },
+  "supported": [
+    "rust-1.85-and-newer-edition-2024",
+    "executor-neutral-send-future-and-fallible-stream-contracts",
+    "tokio-task-local-polling-through-standard-future-contract",
+    "unary-closure-adapter",
+    "byte-stream-closure-adapter",
+    "drop-releases-locally-owned-io",
+    "stable-redacted-adapter-errors",
+    "core-response-and-frame-limits"
+  ],
+  "vectors": [
+    "positive-task-local-unary-response",
+    "negative-unary-error-redaction",
+    "negative-stream-error-redaction",
+    "boundary-default-generator-tokio-all-feature-isolation",
+    "cancellation-future-drop-releases-io-ownership",
+    "resource-limit-oversized-stream-frame",
+    "shared-scalar-range-vectors",
+    "shared-missing-null-value-presence-vectors"
+  ],
+  "failureCodes": [
+    "CLIENT_TRANSPORT_FAILED",
+    "CLIENT_STREAM_FAILED",
+    "CLIENT_DEADLINE_EXCEEDED",
+    "CLIENT_RESPONSE_TOO_LARGE",
+    "CLIENT_FRAME_TOO_LARGE"
+  ],
+  "limits": {
+    "maximumResponseBytes": 8388608,
+    "maximumFrameBytes": 1048576,
+    "detachedTasks": 0,
+    "internalQueues": 0
+  },
+  "commands": {
+    "portable": "node conformance/independent/verify-rust-async-adapters.mjs",
+    "msrvNoDefault": "cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --no-default-features --locked --offline",
+    "msrvDefault": "cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --locked --offline",
+    "msrvGenerator": "cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features generator --locked --offline",
+    "msrvTokio": "cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --features tokio --test tokio_adapters --locked --offline",
+    "msrvAll": "cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --all-features --locked --offline"
+  },
+  "unsupported": [
+    "tokio-crate-version-certification",
+    "tokio-runtime-construction",
+    "tokio-spawned-task-ownership",
+    "tokio-localset-and-non-send-futures",
+    "bounded-task-or-message-queues",
+    "http-and-http2-client",
+    "authenticated-post-sse",
+    "websocket",
+    "quic",
+    "compression-and-decompression",
+    "tls-and-certificate-policy",
+    "redirect-and-proxy-policy",
+    "credential-and-tenant-injection",
+    "automatic-retry",
+    "automatic-reconnect-and-replay",
+    "pagination-orchestration",
+    "tower-hyper-reqwest-axum-integration",
+    "panic-containment-for-user-handlers",
+    "wasm-and-embedded-executors",
+    "mobile-bindings",
+    "native-runtime-certification",
+    "deployment-certification"
+  ]
+}

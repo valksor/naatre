@@ -11,6 +11,7 @@ publish = false
 [features]
 default = []
 generator = ["dep:sha2"]
+tokio = []
 
 [dependencies]
 base64 = "=0.22.1"

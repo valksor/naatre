@@ -2,11 +2,16 @@
 
 //! Runtime-neutral Rust client types for the Naatre v1 wire contract.
 //!
-//! The core crate owns no executor and starts no task. Concrete HTTP, SSE,
-//! WebSocket, and Tokio adapters are intentionally outside this profile.
+//! The core crate owns no executor and starts no task. The optional `tokio`
+//! feature adds task-local closure adapters without constructing a runtime or
+//! spawning detached work. Concrete HTTP, SSE, and WebSocket adapters remain
+//! outside this profile.
 
 mod scalar;
 mod transport;
+
+#[cfg(feature = "tokio")]
+mod tokio_adapter;
 
 #[cfg(feature = "generator")]
 pub mod generator;
@@ -28,6 +33,9 @@ pub use transport::{
     Cancellation, Client, FallibleStream, OperationFuture, RequestHandle, RequestOptions,
     StreamHandle, StreamTransport, Transport,
 };
+
+#[cfg(feature = "tokio")]
+pub use tokio_adapter::{TokioByteStream, TokioFuture, TokioStreamTransport, TokioTransport};
 
 pub const MAXIMUM_RESPONSE_BYTES: usize = 8 << 20;
 pub const MAXIMUM_FRAME_BYTES: usize = 1 << 20;

@@ -26,6 +26,7 @@ const implementations = new Map([
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
+  ["sdk.rust.adapters-1", "verify-rust-async-adapters.mjs"],
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
   ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
@@ -37,6 +38,7 @@ const implementations = new Map([
 const profileTimeouts = new Map([
   ["sdk.jvm.core-1", 240_000],
   ["sdk.dotnet.core-1", 120_000],
+  ["sdk.rust.adapters-1", 120_000],
 ]);
 
 class ProtocolError extends Error {
