@@ -18,4 +18,6 @@ The broker boundary preserves Naatre logical frames and publishes explicit
 fidelity. The in-process adapter proves the snapshot/history/live handoff.
 External Mercure integration is acceptable only with private narrow topics and
 an adapter layer retaining Naatre authorization, terminal, replay, loss, and
-schema semantics. Production adapter rollout remains owned by issue 105.
+schema semantics. Issue 105 supplies the separately profiled PostgreSQL, Redis
+Streams, and NATS JetStream delivery-source adapters plus reconnect-safe
+canary/rollback control without changing this decision's protocol authority.

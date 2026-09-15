@@ -301,6 +301,12 @@
       "sha256": "533413595aae7fd9d811fab202942641a1a52c7ae4f8017358ed12a6587adc00"
     },
     {
+      "path": "v1/subscription-broker-adapters.json",
+      "profile": "streaming.broker-adapters-go-1",
+      "category": "integration",
+      "sha256": "85e0efce08e8ea97f0caef2776ad14275213bea995dd8b01ffadd14551e62334"
+    },
+    {
       "path": "v1/federation-coordinator.json",
       "profile": "runtime.go.federation-coordinator-1",
       "category": "execution",
@@ -8720,6 +8726,11 @@
       "caseId": "issue.105",
       "issue": 105,
       "fixtureRefs": [
+        {
+          "path": "v1/subscription-broker-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/105",

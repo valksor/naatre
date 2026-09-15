@@ -590,8 +590,13 @@ metadata, Fetch bearer and same-origin cookie EventSource paths, exclusive
 header cursor precedence, indistinguishable unavailable-handle outcomes,
 snapshot-to-replay handoff, lifecycle cleanup, adapter fidelity, broker failure
 truth, bounded reconnect ramps, and the privacy boundary for a synthetic real-
-ingress canary. The in-process adapter is executable; production Mercure and
-rollout integration remain owned by #105 and the combined matrix by #69.
+ingress canary. The in-process adapter is executable. The separate
+`v1/subscription-broker-adapters.json` profile pins issue #105's PostgreSQL,
+Redis Streams, and NATS JetStream delivery-source boundaries, shared atomic
+handoff fixtures, bounded public errors, reconnect canary/rollback evidence,
+and exact issue #67/runtime/module revisions. Product client/server revisions
+remain deployment-owned, and the combined language matrix remains owned by
+#69.
 
 `v1/federation.json` fixes the `core.federation-1` service manifests, operator
 trust pins, exact composition bytes and federation-domain hash, deterministic
