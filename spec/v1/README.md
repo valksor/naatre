@@ -55,6 +55,11 @@ Documents:
 24. [Events and outbound webhooks](events.md)
 25. [Developer tooling](tooling.md)
 26. [Interoperability adapters](adapters.md)
+21. [Asynchronous long-running operations](async-operations.md)
+22. [Transport batching and request multiplexing](request-batching.md)
+23. [HTTP digest fields](http-digest.md)
+24. [Developer tooling](tooling.md)
+25. [Interoperability adapters](adapters.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

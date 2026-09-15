@@ -88,19 +88,18 @@ evidence must be described as planned.
   coordination, process-wide admission/lifecycle control, bounded
   stream replay and source ownership, a bounded reference federation
   coordinator, deterministic distributed entity-fetch planning, operator-bound
-  transport adapters, planning, and execution; see the
-  coordinator, planning, execution, and the optional bounded
+  transport adapters, planning, execution, and the optional bounded
   `runtime.go.plan-cache-1` plan-template cache; see the
   [Go registry contract](docs/registry.md) and
   [plan-cache profile](docs/plan-cache.md), and
-  [process-hosting guide](docs/process-hosting.md). Production distributed
+  [process-hosting guide](docs/process-hosting.md), plus the
+  [Go federation coordinator profile](docs/federation-coordinator.md).
+  Production distributed
   federation planning and transport integration remain owned by #109.
 - `observability`: optional OpenTelemetry trace, metric, and log export plus
   application-owned transactional audit/outbox admission for
   `operations.observability-integrations-go-1`; see the
   [integration guide](docs/observability-integrations.md).
-  [process-hosting guide](docs/process-hosting.md), plus the
-  [Go federation coordinator profile](docs/federation-coordinator.md).
 - `tooling`: shared offline validation, formatting, hashing, explain, editor,
   manifest compatibility, deterministic mocks, and credential-redaction core
   for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).
@@ -113,8 +112,6 @@ evidence must be described as planned.
   filtered schema discovery for `schema.discovery.http-1`; see the
   [discovery profile](docs/schema-discovery.md). #72 and #73 own the concrete
   streaming and general operation `net/http` adapters.
-  [`core.streaming-1`](spec/v1/streaming.md); #72 and #73 own the concrete
-  streaming and general `net/http` adapters.
 - [`core.transport-batch-1`](spec/v1/request-batching.md) defines the distinct
   finite request-batch envelope, aggregate admission, item correlation,
   independent/fail-fast/atomic policies, and the HTTP-versus-streaming
@@ -127,16 +124,11 @@ evidence must be described as planned.
 - `internal/qualityharness`: Go-only fuzz, repeated-race, owned-resource leak,
   fault-injection, and benchmark instrumentation for `quality.go.harness-1`;
   see the [Go quality harness](docs/go-quality-harness.md).
-- `examples/processhost`: executable minimal `net/http` process host.
-- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`,
-  `sdk/typescript/generated`, and `sdk/dotnet/Naatre.Core/Generated` contain
-  checked-in operation bindings; the final combined compatibility matrix
-  remains owned by #69.
 - `examples/processhost`: bounded `net/http` health, admission, drain, and
   context-driven supervisor integration for `operations.lifecycle-1`.
-- `sdk`: deterministic generated client mapping slices. `sdk/go/generated`
-  contains the checked-in `sdk.go.operations-1` result and operation bindings;
-  full cross-language compatibility certification remains planned.
+- `sdk`: deterministic generated client mapping slices. Checked-in operation
+  bindings cover each SDK's documented core profile; the final combined
+  compatibility matrix remains owned by #69.
 
 Dependencies point inward in that order: client packages use only portable
 protocol contracts; observability and reflection adapters, transports, other
@@ -164,8 +156,8 @@ cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --all-features --locked
 Generated files are committed only when `go generate ./...` reproduces them
 byte-for-byte and `git diff --exit-code` remains clean.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
-[docs/governance/bootstrap.md](docs/governance/bootstrap.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
+[project governance policy](docs/governance/governance.md).
 
 ## License
 

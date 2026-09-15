@@ -45,6 +45,12 @@ matrix; unevidenced rows remain planned until #69 executes and publishes them.
 See [PROFILES.md](PROFILES.md) for claim, skip, version-skew, report, and
 publication rules.
 
+`v1/governance.json` defines `governance.release-1`: independent component
+versions, evidence-gated support rows and conformance claims, compatibility and
+reserved-name rules, security embargoes, reproducible supply-chain evidence,
+revocation, and exactly-once roadmap coverage. Release manifests conform to
+[`releases/release-manifest.schema.json`](../releases/release-manifest.schema.json).
+
 `v1/interactions.json` fixes the authorization/cache, conditional/fragment,
 sequential-write/loader, partial-data/generated-type, remote-cancellation, and
 transaction/idempotency/outbox process-death boundaries. It also specifies a

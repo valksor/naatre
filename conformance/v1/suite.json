@@ -431,6 +431,12 @@
       "profile": "core.events-1",
       "category": "transport",
       "sha256": "5aa10c1553346e3b66295ff0acaf724277f6ee88b0362a9af08dfcbd7df12fe9"
+    },
+    {
+      "path": "v1/governance.json",
+      "profile": "governance.release-1",
+      "category": "evolution",
+      "sha256": "8e0d19beb748f212c4483ea4b85552804e538f4ca3287e42f119e775f5a9bf1f"
     }
   ],
   "normativeSources": [

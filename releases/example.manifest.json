@@ -1,0 +1,61 @@
+{
+  "profile": "naatre.release-manifest-1",
+  "release": {
+    "id": "0.0.0-development.1",
+    "status": "draft",
+    "channel": "prerelease",
+    "publishedAt": null,
+    "sourceRevision": "0000000000000000000000000000000000000000",
+    "reproducible": true,
+    "security": false,
+    "revokes": [],
+    "replacement": null
+  },
+  "components": {
+    "specification": {"name": "naatre-spec", "version": "1.0.0", "revision": "v1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "schemaModel": {"name": "naatre-schema", "version": "1.0.0", "revision": "v1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "canonicalization": {"name": "naatre-canonicalization", "version": "1.0.0", "revision": "c14n-1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "fixtures": {"name": "naatre-fixtures", "version": "1.0.0", "revision": "suite-1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "conformanceSuite": {"name": "naatre-conformance", "version": "1.0.0", "revision": "report-1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "goRuntime": {"name": "naatre-go", "version": "0.0.0-development.1", "revision": "go1.27", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    "generators": [
+      {"name": "naatre-go-generator", "version": "0.0.0-development.1", "revision": "generator-model-1", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "sdks": [
+      {"name": "example-sdk", "version": "0.0.0-development.1", "revision": "draft", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "workers": [
+      {"name": "example-worker", "version": "0.0.0-development.1", "revision": "draft", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ]
+  },
+  "compatibility": {
+    "classification": "compatible",
+    "breaking": false,
+    "migrationGuidance": [],
+    "deprecations": [],
+    "reservedNames": ["example.retired-1"],
+    "experimentalPromotions": []
+  },
+  "sources": {
+    "normativeReferences": [],
+    "generatedArtifacts": [],
+    "thirdPartyNotices": []
+  },
+  "support": [
+    {"surface": "client", "component": "example-client", "version": "0.0.0-development.1", "maintainer": "@k0d3r1s", "status": "planned", "ownerIssue": "https://github.com/valksor/naatre/issues/49", "evidence": []},
+    {"surface": "adapter", "component": "example-adapter", "version": "0.0.0-development.1", "maintainer": "@k0d3r1s", "status": "planned", "ownerIssue": "https://github.com/valksor/naatre/issues/49", "evidence": []},
+    {"surface": "remote-worker", "component": "example-worker", "version": "0.0.0-development.1", "maintainer": "@k0d3r1s", "status": "planned", "ownerIssue": "https://github.com/valksor/naatre/issues/49", "evidence": []},
+    {"surface": "native-runtime", "component": "example-runtime", "version": "0.0.0-development.1", "maintainer": "@k0d3r1s", "status": "planned", "ownerIssue": "https://github.com/valksor/naatre/issues/49", "evidence": []},
+    {"surface": "sdk", "component": "example-sdk", "version": "0.0.0-development.1", "maintainer": "@k0d3r1s", "status": "planned", "ownerIssue": "https://github.com/valksor/naatre/issues/49", "evidence": []}
+  ],
+  "artifacts": [],
+  "conformanceClaims": [],
+  "decisions": [
+    {"id": "bootstrap", "status": "accepted", "record": "docs/governance/bootstrap.md", "revision": "ratified-2026-09-11"}
+  ],
+  "roadmap": {
+    "inventory": "conformance/v1/suite.json#/issueMappings",
+    "coverage": "every-component-issue-exactly-once",
+    "scopeDecision": "docs/governance/decision-ledger.md"
+  }
+}

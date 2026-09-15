@@ -1,0 +1,153 @@
+{
+  "profile": "governance.release-1",
+  "version": "1.0.0",
+  "ownerIssue": 49,
+  "manifest": {
+    "profile": "naatre.release-manifest-1",
+    "schema": "releases/release-manifest.schema.json",
+    "example": "releases/example.manifest.json",
+    "requiredComponents": [
+      "specification",
+      "schemaModel",
+      "canonicalization",
+      "fixtures",
+      "conformanceSuite",
+      "goRuntime",
+      "generators",
+      "sdks",
+      "workers"
+    ],
+    "statusValues": ["draft", "published", "revoked"],
+    "supportStatuses": ["planned", "experimental", "implemented"],
+    "implementedEvidenceRequired": true,
+    "conformanceReportRequiredForClaims": true
+  },
+  "governance": {
+    "interimOwner": "@k0d3r1s",
+    "publicDecisionRequired": true,
+    "normativeApprovalsAfterSecondMaintainer": 2,
+    "interimDecisionFields": [
+      "rationale",
+      "alternatives",
+      "compatibility-class",
+      "conformance-impact"
+    ],
+    "decisionStatuses": ["proposed", "accepted", "rejected", "superseded", "withdrawn", "security-embargo"],
+    "securityEmbargo": {
+      "publicIssueRequired": false,
+      "privateRecordRequired": true,
+      "minimumParticipants": true,
+      "postReleaseDisclosureRequiredWhenSafe": true
+    }
+  },
+  "versioning": {
+    "scheme": "semantic-versioning",
+    "independentComponents": [
+      "specification",
+      "schema-model",
+      "canonicalization",
+      "fixture-suite",
+      "conformance-suite",
+      "go-runtime",
+      "generators",
+      "sdks",
+      "workers"
+    ],
+    "compatibilityClasses": ["editorial", "compatible", "deprecated", "breaking"],
+    "v0BreakingMigrationGuidanceRequired": true,
+    "v1BreakingMajorRequired": true,
+    "stableDeprecation": {
+      "minimumMinorReleases": 2,
+      "minimumMonths": 6,
+      "securityExceptionRequiresDecision": true
+    },
+    "retiredNamesReservedForMajorLifetime": true,
+    "reservedKinds": [
+      "wire-field",
+      "schema-member",
+      "schema-kind",
+      "protocol-identifier",
+      "profile-identifier",
+      "extension-name",
+      "canonicalization-revision",
+      "semantic-hash-purpose"
+    ]
+  },
+  "experimentalPromotion": {
+    "explicitNamespaceOrProfile": true,
+    "mayChangeV1Defaults": false,
+    "requirements": [
+      "accepted-decision",
+      "stable-identifiers",
+      "migration-guidance",
+      "complete-fixtures",
+      "implementation-evidence",
+      "stable-conformance-profile",
+      "explicit-negotiation"
+    ]
+  },
+  "supplyChain": {
+    "artifactEvidence": ["sha256", "sbom", "provenance"],
+    "signedWhereSupported": true,
+    "notApplicableSignatureRequiresRationale": true,
+    "reproducibleBuilds": {
+      "cleanBuilds": 2,
+      "byteIdenticalArtifacts": true,
+      "byteIdenticalGeneration": true,
+      "pinnedToolchain": true
+    },
+    "dependencyUpdates": {
+      "lockfilesRequired": true,
+      "reviewRequired": true,
+      "automationCannotApprove": true,
+      "knownExploitableDependencyRequiresSecurityDecision": true
+    },
+    "revocation": {
+      "silentReplacementForbidden": true,
+      "publishAffectedDigests": true,
+      "replacementReleaseRequired": true,
+      "credentialRotationRequired": true
+    }
+  },
+  "releaseRecords": {
+    "pinNormativeExternalReferences": true,
+    "pinGeneratedArtifacts": true,
+    "pinThirdPartyNotices": true,
+    "pinDecisionStatus": true,
+    "copiedCodeNoticesRequired": true,
+    "borrowedIdeasRequireCompatibilityMode": false
+  },
+  "supportMatrix": {
+    "independentRows": ["client", "remote-worker", "native-runtime"],
+    "maintainerRequired": true,
+    "ownerIssueRequired": true,
+    "unimplementedStatus": "planned",
+    "repositoryPresenceIsEvidence": false
+  },
+  "roadmap": {
+    "inventory": "conformance/v1/suite.json#/issueMappings",
+    "componentIssueRange": {"first": 1, "last": 110},
+    "coverage": "exactly-once",
+    "allowedCoverage": ["implemented-contract", "deferred-to-owner"],
+    "implicitOmissionForbidden": true,
+    "scopeDecisionRequired": true
+  },
+  "dependencies": [
+    {"issue": 1, "url": "https://github.com/valksor/naatre/issues/1", "role": "repository-quality-foundation"},
+    {"issue": 15, "url": "https://github.com/valksor/naatre/issues/15", "role": "schema-evolution-analysis"},
+    {"issue": 36, "url": "https://github.com/valksor/naatre/issues/36", "role": "conformance-profile-certification"},
+    {"issue": 68, "url": "https://github.com/valksor/naatre/issues/68", "role": "ratified-bootstrap-baseline"}
+  ],
+  "releaseChecklist": [
+    "scope-and-roadmap",
+    "decision-and-dependency-ledger",
+    "compatibility-and-migrations",
+    "component-source-toolchain-and-fixture-pins",
+    "implementation-and-conformance-evidence",
+    "reproducible-build-and-generation",
+    "checksums-sboms-provenance-and-signatures",
+    "vulnerability-and-embargo-review",
+    "atomic-publication-and-registry-verification",
+    "release-notes-support-and-revocation-guidance"
+  ]
+}
