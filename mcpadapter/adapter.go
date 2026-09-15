@@ -19,9 +19,12 @@ import (
 var identityPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,127}$`)
 
 type Compiled struct {
-	definitions []runtime.Definition
-	report      FidelityReport
-	manifest    Manifest
+	definitions          []runtime.Definition
+	report               FidelityReport
+	manifest             Manifest
+	transport            TransportConfig
+	requiredCapabilities []string
+	limits               Limits
 }
 
 func Compile(config Config) (*Compiled, FidelityReport, error) {
@@ -50,8 +53,18 @@ func Compile(config Config) (*Compiled, FidelityReport, error) {
 	}
 
 	report.Status = "ready"
-	compiled := &Compiled{definitions: definitions, report: cloneReport(report), manifest: cloneManifest(manifest)}
+	compiled := &Compiled{
+		definitions: definitions, report: cloneReport(report), manifest: cloneManifest(manifest),
+		transport: cloneTransportConfig(config.Transport), requiredCapabilities: slices.Clone(config.RequiredCapabilities),
+		limits: limits,
+	}
 	return compiled, compiled.FidelityReport(), nil
+}
+
+func cloneTransportConfig(input TransportConfig) TransportConfig {
+	result := input
+	result.AllowedOrigins = slices.Clone(input.AllowedOrigins)
+	return result
 }
 
 func compileRegistrations(config Config, limits Limits, report *FidelityReport) (Manifest, []runtime.Definition) {

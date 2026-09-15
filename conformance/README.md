@@ -392,6 +392,15 @@ notifications, bounded batches, unsupported schema semantics, and resource
 limits. Listener, network, framework, non-Go, and certification claims remain
 explicitly unsupported.
 
+`v1/mcp-runtime.json` pins the Go-only `adapter.mcp-go-runtime-1` client/server
+slice to the exact issue #64 commit and `adapter.mcp-1` fixture. Its offline Go
+and dependency-free JavaScript checks cover strict initialization and bounded
+discovery, trusted tool/resource projection, schema instance conversion,
+partial envelope fidelity, stable redacted failures, cancellation, stdio EOF,
+Streamable HTTP origin/auth/session isolation, and resource limits. It records
+the supported runtime/platform boundary and every unsupported optional MCP
+capability; issue #69 still owns the combined certification matrix.
+
 The `core.language-1` vectors cover every core composition tag and expression,
 response shaping, collection edge states, result-reference scopes, and the
 zero-handler boundary for invalid operations. Their document grammar is the

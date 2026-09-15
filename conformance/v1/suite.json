@@ -629,6 +629,12 @@
       "profile": "adapter.mcp-1",
       "category": "integration",
       "sha256": "7856cffa3ea17c64e6d856a30c7b7df97d46874d38ac1218fe628be19262a839"
+    },
+    {
+      "path": "v1/mcp-runtime.json",
+      "profile": "adapter.mcp-go-runtime-1",
+      "category": "integration",
+      "sha256": "a11d584620ece7dad63f484ebb2bcabe084644c60c18de0e15d8baae74ac3dcc"
     }
   ],
   "normativeSources": [
@@ -8789,6 +8795,11 @@
       "caseId": "issue.103",
       "issue": 103,
       "fixtureRefs": [
+        {
+          "path": "v1/mcp-runtime.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/103",
