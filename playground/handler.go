@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/valksor/naatre/asyncapi"
 	"github.com/valksor/naatre/schema"
 	"github.com/valksor/naatre/tooling"
 )
@@ -67,9 +68,11 @@ func DefaultLimits() Limits {
 type Config struct {
 	// Schema is the caller-authorized view. The handler never loads, widens, or
 	// dynamically authorizes schema metadata.
-	Schema         schema.Document
-	AllowedOrigins []string
-	Limits         Limits
+	Schema                 schema.Document
+	AllowedOrigins         []string
+	AsyncAPIDocument       []byte
+	AllowedAsyncAPIServers []string
+	Limits                 Limits
 }
 
 type Handler struct {
@@ -78,6 +81,7 @@ type Handler struct {
 	schemaRevision string
 	schemaDigest   string
 	allowedOrigins []string
+	asyncAPI       *asyncapi.Model
 	limits         Limits
 	mux            *http.ServeMux
 }
@@ -144,9 +148,21 @@ func NewHandler(config Config) (*Handler, error) {
 		schemaDigest: digest.Hex, allowedOrigins: origins, limits: config.Limits,
 		mux: http.NewServeMux(),
 	}
+	if len(config.AsyncAPIDocument) != 0 {
+		model, _, importErr := asyncapi.Import(config.AsyncAPIDocument, asyncapi.ImportOptions{
+			Limits: asyncapi.DefaultLimits(), AllowedServerURLs: slices.Clone(config.AllowedAsyncAPIServers),
+		})
+		if importErr != nil {
+			return nil, errors.New("invalid authorized AsyncAPI view")
+		}
+		handler.asyncAPI = &model
+	}
 	handler.mux.HandleFunc("GET /{$}", handler.serveUI)
 	handler.mux.HandleFunc("GET /v1/profile", handler.serveProfile)
 	handler.mux.HandleFunc("GET /v1/schema", handler.serveSchema)
+	if handler.asyncAPI != nil {
+		handler.mux.HandleFunc("GET /v1/asyncapi", handler.serveAsyncAPI)
+	}
 	handler.mux.HandleFunc("POST /v1/inspect", handler.serveInspect)
 	handler.mux.HandleFunc("POST /v1/mock", handler.serveMock)
 	handler.mux.HandleFunc("/", handler.serveFallback)
@@ -176,13 +192,21 @@ func (h *Handler) serveUI(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) serveFallback(writer http.ResponseWriter, request *http.Request) {
-	for _, path := range []string{"/", "/v1/profile", "/v1/schema", "/v1/inspect", "/v1/mock"} {
+	for _, path := range []string{"/", "/v1/profile", "/v1/schema", "/v1/asyncapi", "/v1/inspect", "/v1/mock"} {
 		if request.URL.Path == path {
 			h.writeProblem(writer, http.StatusMethodNotAllowed, CodeMethodNotAllowed)
 			return
 		}
 	}
 	h.writeProblem(writer, http.StatusNotFound, CodeNotFound)
+}
+
+func (h *Handler) serveAsyncAPI(writer http.ResponseWriter, _ *http.Request) {
+	if h.asyncAPI == nil {
+		h.writeProblem(writer, http.StatusNotFound, CodeNotFound)
+		return
+	}
+	h.writeJSON(writer, http.StatusOK, asyncapi.Inspect(*h.asyncAPI))
 }
 
 func (h *Handler) serveSchema(writer http.ResponseWriter, _ *http.Request) {

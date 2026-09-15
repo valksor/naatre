@@ -42,6 +42,7 @@ Documents:
 29. [Deterministic CBOR transport profile](cbor.md)
 30. [JSON Type Definition projection and fidelity](jtd.md)
 31. [Normalized cache contract](normalized-cache.md)
+32. [AsyncAPI event-description profile](asyncapi.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

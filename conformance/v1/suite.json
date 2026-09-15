@@ -539,6 +539,12 @@
       "profile": "implementation.go.http-digest-1",
       "category": "transport",
       "sha256": "cd240b47471a252d78e404646e6a8cfb4fec8026b437b67a5aefe9edc9f61c39"
+    },
+    {
+      "path": "v1/asyncapi.json",
+      "profile": "adapter.asyncapi-1",
+      "category": "integration",
+      "sha256": "c6ccf22fa8162de2698350555d320048d64d2f1e261a388f6e800f81eb482828"
     }
   ],
   "normativeSources": [
@@ -7169,6 +7175,63 @@
           "polarity": "positive"
         }
       ]
+    },
+    {
+      "caseId": "requirements.asyncapi.identity",
+      "spec": "spec/v1/asyncapi.md",
+      "clauses": [
+        "ASYNCAPI-001",
+        "ASYNCAPI-002",
+        "ASYNCAPI-003",
+        "ASYNCAPI-004"
+      ],
+      "fixtureRefs": [
+        {"path": "v1/asyncapi.json", "pointer": "/fidelity/1", "polarity": "positive"},
+        {"path": "v1/asyncapi.json", "pointer": "/security", "polarity": "negative"}
+      ]
+    },
+    {
+      "caseId": "requirements.asyncapi.mapping",
+      "spec": "spec/v1/asyncapi.md",
+      "clauses": [
+        "ASYNCAPI-100",
+        "ASYNCAPI-101",
+        "ASYNCAPI-200",
+        "ASYNCAPI-201",
+        "ASYNCAPI-202"
+      ],
+      "fixtureRefs": [
+        {"path": "v1/asyncapi.json", "pointer": "/fidelity/0", "polarity": "mixed"},
+        {"path": "v1/asyncapi.json", "pointer": "/transports/1", "polarity": "mixed"}
+      ]
+    },
+    {
+      "caseId": "requirements.asyncapi.trust",
+      "spec": "spec/v1/asyncapi.md",
+      "clauses": [
+        "ASYNCAPI-300",
+        "ASYNCAPI-301",
+        "ASYNCAPI-400",
+        "ASYNCAPI-401",
+        "ASYNCAPI-402"
+      ],
+      "fixtureRefs": [
+        {"path": "v1/asyncapi.json", "pointer": "/correlations/0", "polarity": "mixed"},
+        {"path": "v1/asyncapi.json", "pointer": "/security", "polarity": "negative"}
+      ]
+    },
+    {
+      "caseId": "requirements.asyncapi.tooling",
+      "spec": "spec/v1/asyncapi.md",
+      "clauses": [
+        "ASYNCAPI-403",
+        "ASYNCAPI-500",
+        "ASYNCAPI-501"
+      ],
+      "fixtureRefs": [
+        {"path": "v1/asyncapi.json", "pointer": "/security", "polarity": "mixed"},
+        {"path": "v1/asyncapi.json", "pointer": "/compatibility/0", "polarity": "mixed"}
+      ]
     }
   ],
   "issueMappings": [
@@ -7958,8 +8021,8 @@
       "issue": 62,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/62",
+          "path": "v1/asyncapi.json",
+          "pointer": "/security",
           "polarity": "mixed"
         }
       ]

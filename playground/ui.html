@@ -26,6 +26,12 @@
       <pre id="schema"></pre>
     </section>
     <section>
+      <h2>AsyncAPI channels</h2>
+      <p>Inspect the same redacted, side-effect-free event model used by CLI documentation and mocks.</p>
+      <button id="asyncapi-load">Inspect AsyncAPI model</button>
+      <pre id="asyncapi"></pre>
+    </section>
+    <section>
       <h2>Mock request</h2>
       <label for="target">Target URL for safe inspection</label>
       <input id="target" value="https://example.test/v1/execute">
@@ -50,6 +56,7 @@
   <script>
     const show = (value) => document.querySelector('#result').textContent = JSON.stringify(value, null, 2);
     document.querySelector('#schema-load').onclick = async () => document.querySelector('#schema').textContent = JSON.stringify(await (await fetch('/v1/schema')).json(), null, 2);
+    document.querySelector('#asyncapi-load').onclick = async () => document.querySelector('#asyncapi').textContent = JSON.stringify(await (await fetch('/v1/asyncapi')).json(), null, 2);
     document.querySelector('#run').onclick = async () => {
       try {
         const documentValue = JSON.parse(document.querySelector('#document').value);

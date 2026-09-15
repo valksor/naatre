@@ -1,0 +1,70 @@
+{
+  "profile": "adapter.asyncapi-1",
+  "version": "1.0.0",
+  "issue": 62,
+  "specification": "https://www.asyncapi.com/docs/reference/specification/v3.0.0",
+  "asyncapiVersion": "3.0.0",
+  "exporterVersion": "asyncapi-exporter-1",
+  "directions": ["schema-export", "schema-import"],
+  "revisionBindings": [
+    "schema",
+    "schemaDigest",
+    "capabilities",
+    "canonicalization",
+    "eventEnvelope",
+    "asyncapiProfile",
+    "exporter"
+  ],
+  "fidelity": [
+    {"feature":"authorization-security","classification":"application-supplied"},
+    {"feature":"canonicalization","classification":"lossless"},
+    {"feature":"capability-revision","classification":"lossless"},
+    {"feature":"correlation-identifiers","classification":"lossless"},
+    {"feature":"event-envelope","classification":"explicitly-adapted"},
+    {"feature":"execution-semantics","classification":"application-supplied"},
+    {"feature":"ordering-replay-terminal-errors","classification":"explicitly-adapted"},
+    {"feature":"partial-results","classification":"explicitly-adapted"},
+    {"feature":"retry-delivery","classification":"application-supplied"},
+    {"feature":"schema-identity","classification":"lossless"},
+    {"feature":"transport-bindings","classification":"explicitly-adapted"}
+  ],
+  "transports": [
+    {"name":"subscription","binding":"logical","wireCompatibility":false},
+    {"name":"sse","binding":"evidence-required","wireCompatibility":false},
+    {"name":"websocket","binding":"evidence-required","wireCompatibility":false},
+    {"name":"webhook-http","binding":"evidence-required","wireCompatibility":false},
+    {"name":"worker","binding":"future-evidence-required","wireCompatibility":false}
+  ],
+  "correlations": [
+    {"name":"request-id","lifetime":"request","authorization":false},
+    {"name":"stream-id","lifetime":"logical-stream","authorization":false},
+    {"name":"application-event-id","lifetime":"business-event","authorization":false},
+    {"name":"webhook-delivery-attempt","lifetime":"delivery-attempt","authorization":false}
+  ],
+  "compatibility": [
+    {"domain":"message","contractChange":"breaking"},
+    {"domain":"channel","contractChange":"breaking"},
+    {"domain":"binding","contractChange":"breaking"},
+    {"domain":"security","contractChange":"dangerous"}
+  ],
+  "security": {
+    "remoteReferences": "blocked",
+    "serverURLs": "exact-allowlist-default-deny",
+    "cycleDetection": true,
+    "boundedImport": true,
+    "credentialRedaction": true,
+    "protectedSchemaMetadata": "omitted-by-default"
+  },
+  "consumers": ["go-api", "cli", "documentation", "mock", "playground"],
+  "businessHandlerCalls": 0,
+  "evidence": [
+    "TestExportIsByteStableAndLinksEveryDeclaration",
+    "TestImportRejectsUnsupportedSemanticsAndRemoteReferences",
+    "TestServersRequireExplicitEgressAllowlistWithoutNetworkResolution",
+    "TestFixturesPreserveDistinctCorrelationAndStreamSemantics",
+    "TestCompatibilityClassifiesMessageChannelBindingAndSecurityChanges",
+    "TestViewsUseOneExportedModelAndRedactSecrets",
+    "TestAsyncAPICommandsConsumeOneOfflineModel",
+    "TestPlaygroundConsumesAuthorizedAsyncAPIModelWithoutHandlers"
+  ]
+}

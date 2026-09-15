@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/valksor/naatre/asyncapi"
+	"github.com/valksor/naatre/schema"
 	"github.com/valksor/naatre/tooling"
 )
 
@@ -202,6 +204,43 @@ func TestMockCommandIsDeterministicAndUsesSafeStableFailures(t *testing.T) {
 	bad := []string{"mock", "--schema", schemaPath, "--document", documentPath, "--operation", "GetAccount", "--seed", "42", "--scenario", secretScenario}
 	if status := run(bad, &second, &diagnostic); status != exitDiagnostic || bytes.Contains(diagnostic.Bytes(), []byte(secretScenario)) || !bytes.Contains(diagnostic.Bytes(), []byte("TOOL_COMMAND_FAILED")) {
 		t.Fatalf("safe mock failure = %d, %s", status, diagnostic.String())
+	}
+}
+
+func TestAsyncAPICommandsConsumeOneOfflineModel(t *testing.T) {
+	t.Parallel()
+	schemaDocument, err := schema.ParseDocument([]byte(cliSchema), schema.ImportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := asyncapi.Model{
+		ID: "urn:naatre:cli:events", Title: "CLI events", Version: "1.0.0", Schema: schemaDocument,
+		CapabilityRevision: "cli-events-1", EventEnvelopeRevision: "core.events-1",
+		Servers:    []asyncapi.Server{{ID: "events", NaatreID: "server.events", Revision: "server-1", URL: "https://events.example/v1", Protocol: "https"}},
+		Bindings:   []asyncapi.Binding{{ID: "sse", NaatreID: "binding.sse", Revision: "sse-1", Transport: asyncapi.TransportSSE, Server: "events", Implemented: true, Evidence: []string{"cli-offline-test"}}},
+		Messages:   []asyncapi.Message{{ID: "UserEvent", NaatreID: "event.user", Revision: "event-1", PayloadType: "User", ContentType: "application/json", Correlations: []asyncapi.Correlation{{ID: "request-id", Location: "$message.header#/x-naatre-request-id", Lifetime: "request", Trust: "untrusted"}}}},
+		Channels:   []asyncapi.Channel{{ID: "users", NaatreID: "channel.users", Revision: "channel-1", Address: "/users", Messages: []string{"UserEvent"}, Bindings: []string{"sse"}, Semantics: asyncapi.Semantics{Ordering: "sequence", Replay: "cursor", Terminal: "complete", Errors: "stream-error"}}},
+		Operations: []asyncapi.Operation{{ID: "receiveUsers", NaatreID: "operation.users", Revision: "operation-1", Action: asyncapi.ActionReceive, Channel: "users", Messages: []string{"UserEvent"}, Security: []string{"bearer"}}},
+		Security:   []asyncapi.SecurityScheme{{ID: "bearer", NaatreID: "security.bearer", Revision: "security-1", Type: "http", Scheme: "bearer"}},
+	}
+	exported, _, err := asyncapi.Export(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeTestFile(t, t.TempDir(), "events.asyncapi.json", exported)
+	for _, command := range []string{"validate", "export", "inspect", "mock"} {
+		var output, diagnostic bytes.Buffer
+		arguments := []string{"asyncapi", command, "--document", path, "--allow-server", "https://events.example/v1"}
+		if command == "mock" {
+			arguments = append(arguments, "--seed", "13")
+		}
+		if status := run(arguments, &output, &diagnostic); status != exitOK || output.Len() == 0 || diagnostic.Len() != 0 {
+			t.Fatalf("asyncapi %s = %d, %s, %s", command, status, output.String(), diagnostic.String())
+		}
+	}
+	var output, diagnostic bytes.Buffer
+	if status := run([]string{"asyncapi", "validate", "--document", path}, &output, &diagnostic); status != exitDiagnostic || !bytes.Contains(diagnostic.Bytes(), []byte("ASYNCAPI_SERVER_DENIED")) {
+		t.Fatalf("default-deny validation = %d, %s", status, diagnostic.String())
 	}
 }
 
