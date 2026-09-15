@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "f4e6a0d8001c4edf9fe07fdecc6b0bff574ce2a42358fe50b1df6de7a6c9cf9a"
+      "sha256": "63114d259a3e696835be96117505cd16903343ba700df79497112d89d1d4dc14"
     },
     {
       "path": "v1/validation.json",
