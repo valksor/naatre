@@ -41,7 +41,11 @@ const rustPackage = JSON.parse(metadataResult.stdout).packages.find(
 assert.equal(rustPackage.rust_version, "1.85");
 assert.deepEqual(rustPackage.features.default, fixture.package.defaultFeatures);
 assert.deepEqual(rustPackage.features.tokio, []);
-assert.equal(rustPackage.dependencies.some((dependency) => dependency.name === "tokio"), false);
+// The base SDK stays executor-neutral: tokio is never a mandatory dependency. It
+// may exist only as an optional dependency gated behind opt-in runtime features
+// (added by the Tokio/Axum worker), which cargo metadata surfaces as optional.
+const tokioDependency = rustPackage.dependencies.find((dependency) => dependency.name === "tokio");
+assert.ok(tokioDependency === undefined || tokioDependency.optional === true);
 
 for (const profile of fixture.featureMatrix) {
   if (profile.toolchain !== "current") continue;

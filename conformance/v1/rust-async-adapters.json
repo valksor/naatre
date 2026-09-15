@@ -70,7 +70,7 @@
     },
     {
       "path": "conformance/independent/verify-rust-async-adapters.mjs",
-      "sha256": "b0da599fc7035f550b8409eb8f1014bea3328164c3e7452d6138feea860661d1"
+      "sha256": "0b3e7ffb4d98e31901bbe00077dcbbfe512c9e83b9f55113b0a731983522f344"
     }
   ],
   "ownership": {

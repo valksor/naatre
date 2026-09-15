@@ -556,7 +556,7 @@
       "path": "v1/rust-async-adapters.json",
       "profile": "sdk.rust.adapters-1",
       "category": "transport",
-      "sha256": "c396b6c7936325799463e5a54e20d5ef750768d7b7b8594fa3724e1b0c2db611"
+      "sha256": "22cefed92a9567a8d8f9fb1f75d90564247666a94b11e96c568d3ca41d5a7002"
     },
     {
       "path": "v1/python-sdk-adapters.json",
