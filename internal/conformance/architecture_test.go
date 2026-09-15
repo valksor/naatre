@@ -39,6 +39,7 @@ var layers = []struct {
 	{"asyncoperation", 3},
 	{"reflectadapter", 3},
 	{"interopadapter", 3},
+	{"playground", 4},
 	{"transport", 4},
 	{"largevalue", 5},
 	{"examples", 5},

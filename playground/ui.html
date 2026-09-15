@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Naatre local playground</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.45 system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 1100px; padding: 2rem; }
+    main { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit,minmax(300px,1fr)); }
+    section { border: 1px solid #8888; border-radius: .6rem; padding: 1rem; }
+    label { display: block; font-weight: 650; margin-top: .75rem; }
+    textarea,input,select,button { box-sizing: border-box; font: inherit; width: 100%; }
+    textarea { min-height: 9rem; font-family: ui-monospace,monospace; }
+    button { margin-top: 1rem; padding: .55rem; }
+    pre { overflow: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Naatre local playground</h1>
+  <p>Schema-only mocks. Credentials are redacted before display or copy; no request is sent upstream.</p>
+  <main>
+    <section>
+      <h2>Authorized schema</h2>
+      <button id="schema-load">Browse schema</button>
+      <pre id="schema"></pre>
+    </section>
+    <section>
+      <h2>Mock request</h2>
+      <label for="target">Target URL for safe inspection</label>
+      <input id="target" value="https://example.test/v1/execute">
+      <label for="operation">Operation</label>
+      <input id="operation" value="GetAccount">
+      <label for="seed">Pinned seed</label>
+      <input id="seed" type="number" min="0" value="1">
+      <label for="scenario">Scenario</label>
+      <select id="scenario"><option>success</option><option>null</option><option>missing</option><option>failure</option><option>unknown-variant</option></select>
+      <label for="document">Document</label>
+      <textarea id="document">{"operations":[]}</textarea>
+      <label for="variables">Variables</label>
+      <textarea id="variables">{}</textarea>
+      <button id="run">Generate deterministic mock</button>
+    </section>
+    <section>
+      <h2>Request, errors, pagination, and stream frames</h2>
+      <pre id="result"></pre>
+      <button id="copy">Copy redacted SDK example</button>
+    </section>
+  </main>
+  <script>
+    const show = (value) => document.querySelector('#result').textContent = JSON.stringify(value, null, 2);
+    document.querySelector('#schema-load').onclick = async () => document.querySelector('#schema').textContent = JSON.stringify(await (await fetch('/v1/schema')).json(), null, 2);
+    document.querySelector('#run').onclick = async () => {
+      try {
+        const documentValue = JSON.parse(document.querySelector('#document').value);
+        const variables = JSON.parse(document.querySelector('#variables').value);
+        const inspected = await fetch('/v1/inspect', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target:document.querySelector('#target').value,headers:{authorization:'Bearer example-token'},payload:variables})});
+        const mock = await fetch('/v1/mock', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({document:documentValue,operation:document.querySelector('#operation').value,seed:Number(document.querySelector('#seed').value),scenario:document.querySelector('#scenario').value,variables})});
+        show({inspection:await inspected.json(), mock:await mock.json()});
+      } catch (_) { show({profile:'naatre.playground.problem-1',code:'PLAYGROUND_INVALID_REQUEST',title:'request is invalid'}); }
+    };
+    document.querySelector('#copy').onclick = async () => navigator.clipboard.writeText(document.querySelector('#result').textContent);
+  </script>
+</body>
+</html>

@@ -179,6 +179,32 @@ func TestJTDCLIUsesSharedGenerationValidationImportAndDiff(t *testing.T) {
 	}
 }
 
+func TestMockCommandIsDeterministicAndUsesSafeStableFailures(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	documentPath := writeTestFile(t, directory, "operation.json", []byte(cliDocument))
+	schemaPath := writeTestFile(t, directory, "schema.json", []byte(cliSchema))
+	arguments := []string{"mock", "--schema", schemaPath, "--document", documentPath, "--operation", "GetAccount", "--seed", "42", "--scenario", "success"}
+	var first, second, diagnostic bytes.Buffer
+	if status := run(arguments, &first, &diagnostic); status != exitOK {
+		t.Fatalf("first mock = %d, %s", status, diagnostic.String())
+	}
+	if status := run(arguments, &second, &diagnostic); status != exitOK || first.String() != second.String() {
+		t.Fatalf("second mock = %d, deterministic=%t, %s", status, first.String() == second.String(), diagnostic.String())
+	}
+	for _, required := range []string{`"profile":"naatre.schema-mock-1"`, `"schemaRevision":"tooling-cli-r1"`, `"schemaDigest":"`, `"documentDigest":"`, `"seed":42`} {
+		if !bytes.Contains(first.Bytes(), []byte(required)) {
+			t.Errorf("mock output omits %q: %s", required, first.String())
+		}
+	}
+	diagnostic.Reset()
+	secretScenario := "Bearer-secret-scenario"
+	bad := []string{"mock", "--schema", schemaPath, "--document", documentPath, "--operation", "GetAccount", "--seed", "42", "--scenario", secretScenario}
+	if status := run(bad, &second, &diagnostic); status != exitDiagnostic || bytes.Contains(diagnostic.Bytes(), []byte(secretScenario)) || !bytes.Contains(diagnostic.Bytes(), []byte("TOOL_COMMAND_FAILED")) {
+		t.Fatalf("safe mock failure = %d, %s", status, diagnostic.String())
+	}
+}
+
 func writeTestFile(t testing.TB, directory, name string, content []byte) string {
 	t.Helper()
 	path := filepath.Join(directory, name)

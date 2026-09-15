@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 const Redacted = "<redacted>"
@@ -28,6 +29,28 @@ func RedactCredentials(input string) string {
 	return urlPattern.ReplaceAllStringFunc(input, redactURL)
 }
 
+// RedactAndBound applies the shared credential redactor before enforcing a
+// byte limit. The returned value is always valid UTF-8 and never exceeds
+// maxBytes, including its truncation marker.
+func RedactAndBound(input string, maxBytes int) (string, bool) {
+	redacted := RedactCredentials(input)
+	if maxBytes <= 0 {
+		return "", redacted != ""
+	}
+	if len(redacted) <= maxBytes {
+		return redacted, false
+	}
+	const marker = "<truncated>"
+	if maxBytes < len(marker) {
+		return strings.Repeat(".", maxBytes), true
+	}
+	end := maxBytes - len(marker)
+	for end > 0 && !utf8.ValidString(redacted[:end]) {
+		end--
+	}
+	return redacted[:end] + marker, true
+}
+
 func redactJSON(input string) (string, bool) {
 	var value any
 	if json.Unmarshal([]byte(input), &value) != nil {
@@ -46,7 +69,7 @@ func redactJSONValue(value any) {
 		}
 	case map[string]any:
 		for key, child := range typed {
-			if sensitiveName(key) {
+			if IsCredentialName(key) {
 				typed[key] = Redacted
 				continue
 			}
@@ -65,7 +88,7 @@ func redactURL(raw string) string {
 	}
 	query := parsed.Query()
 	for key := range query {
-		if sensitiveName(key) {
+		if IsCredentialName(key) {
 			query.Set(key, Redacted)
 		}
 	}
@@ -73,7 +96,9 @@ func redactURL(raw string) string {
 	return parsed.String()
 }
 
-func sensitiveName(name string) bool {
+// IsCredentialName reports whether a header, object key, or query parameter
+// belongs to the shared credential-redaction vocabulary.
+func IsCredentialName(name string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
 	switch normalized {
 	case "authorization", "authtoken", "accesstoken", "refreshtoken", "token", "apikey", "api key", "clientsecret", "password", "passwd", "secret", "cookie", "setcookie":

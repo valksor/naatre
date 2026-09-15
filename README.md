@@ -21,6 +21,8 @@ evidence must be described as planned.
 - `spec/v1`: normative, language-neutral protocol and schema documents.
 - `conformance`: portable fixtures and profile manifests.
 - `docs/tooling.md`: offline CLI, editor adapter, mocks, and compatibility workflow.
+- `playground`: opt-in loopback browser and bounded schema-only mock HTTP
+  integration; see the [playground guide](docs/playground.md).
 - `protocol`: strict envelopes, decoding, and typed operation documents.
 - `protocol/cbor`: dependency-free deterministic unary CBOR codec, strict
   budgets, and JSON semantic projection for `transport.cbor.unary-1`.
@@ -121,6 +123,8 @@ evidence must be described as planned.
 - `tooling`: shared offline validation, formatting, hashing, explain, editor,
   manifest compatibility, deterministic mocks, and credential-redaction core
   for `tooling.workflow-1`; see the [tooling guide](docs/tooling.md).
+- `playground`: opt-in loopback browser and bounded schema-mock handler for
+  `naatre.playground-mock-1`; see the [playground guide](docs/playground.md).
 - `reflectadapter`: optional startup-only compilation of explicitly tagged Go
   fields and allowlisted methods into ordinary runtime definitions; explicit
   runtime registration remains the production recommendation. See the

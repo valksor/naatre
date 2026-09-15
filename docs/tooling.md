@@ -73,6 +73,7 @@ identities. Mocks are deterministic fixture generators with explicit null,
 missing, failure, pagination, streaming, and unknown-variant states; successful
 mock output never proves application authorization or business behavior.
 
-The opt-in playground and local mock server belong to issue #91. Every history,
-URL, log, and snippet persistence/export boundary calls
-`tooling.RedactCredentials`; unredacted reveal is explicit and is never saved.
+The opt-in playground and local mock server belong to issue #91 and are
+implemented by the [`playground` package](playground.md). Every history, URL,
+log, and snippet persistence/export boundary calls `tooling.RedactAndBound`;
+unredacted reveal is not implemented and is never saved.
