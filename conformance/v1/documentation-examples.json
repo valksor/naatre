@@ -1,0 +1,148 @@
+{
+  "profile": "documentation.examples-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 77,
+  "dependencyRevision": "83c27723097b4f2b5b00dd0ca3223b54362833df",
+  "dependencyIssues": [28, 29, 31, 37, 38, 39, 40, 41, 42, 43, 44, 51, 58, 59, 60, 61],
+  "lifecycle": {
+    "owner": "Naatre maintainers",
+    "stability": "development-snapshot",
+    "publication": "source-checkout-only",
+    "updateRule": "Update this evidence, the language guide, and executable CI anchors in the same change as any package profile boundary."
+  },
+  "components": [
+    {"language":"go","path":"conformance/v1/go-sdk.json","sha256":"7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"},
+    {"language":"javascript-typescript","path":"conformance/v1/typescript-sdk.json","sha256":"cf4e6f00cf2a208592cf94a4ea4561e283fa384a7ea31f016ccc232a8a6420f4"},
+    {"language":"php","path":"conformance/v1/php-sdk.json","sha256":"513d59639fdb812eba7ae90e1e571189b5eaec9842c6055404dc1176654961a0"},
+    {"language":"python","path":"conformance/v1/python-sdk.json","sha256":"4ad1c7931350de9f889fcfd5a05fdb7e9fb79f1e0ce447dbfc8ef8c0acbceb99"},
+    {"language":"rust","path":"conformance/v1/rust-sdk.json","sha256":"f6c48df6110c97c695acf044727aced1ec54a1f1116efa313b0b46e439e9e51e"},
+    {"language":"jvm","path":"conformance/v1/jvm-sdk.json","sha256":"7b2658c4966bc9dd871668b66e0566ffe569739a80b52866e6f96346c008393c"},
+    {"language":"dotnet","path":"conformance/v1/dotnet-sdk.json","sha256":"783a6b9df42ef1d25adcd380f33b3258f8b5c07f3565bca91a330d9a14f06513"},
+    {"language":"swift","path":"conformance/v1/swift-sdk.json","sha256":"0dad80f4e5b0dfbd8b392002403a1533166ad3facc51dd233e0b0fcae95cd190"},
+    {"language":"dart","path":"conformance/v1/dart-sdk.json","sha256":"b6f1ead1b3d42550724d7f2e89e2313beecb9abd8b702c6dfb14987365722113"},
+    {"language":"ruby","path":"conformance/v1/ruby-sdk.json","sha256":"f9f9c9dd3d80cef1facf598cc105b29a67a8cddcc634ca2ed0e0532557053774"}
+  ],
+  "contractEvidence": [
+    {"path":"conformance/v1/generator-model.json","sha256":"22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+    {"path":"conformance/v1/generator-output.json","sha256":"f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"},
+    {"path":"conformance/v1/profiles.json","sha256":"ec679e966087068ae3aeba0411cdb8a346a6d3fe4b6a5f367406c3b0a8dc03a7"},
+    {"path":"conformance/v1/remote-workers.json","sha256":"f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
+    {"path":"conformance/v1/remote-worker-gateway.json","sha256":"308d32ac2904394f6c30ef28b97973b111730ba5a9bc5b63a91a52c7978a20b9"},
+    {"path":"conformance/v1/typescript-worker.json","sha256":"5efa64e3aa2c473e90fbf198716578842a923c92da829db359662d224c2fe651"},
+    {"path":"conformance/v1/php-server.json","sha256":"a2c0079f3265061ee3b2d5d0fe755a8b4cf8e0b49ff78db9e44efc53a78f3b57"},
+    {"path":"conformance/v1/rust-worker.json","sha256":"79668f28b46f679aec9f2a936f23186984528485fabff5db57f3f79ef39cfbd9"},
+    {"path":"conformance/v1/resources.json","sha256":"00e2d7ad6fb2bb168b5556847c08a35293c19f0bcdbc6462ac5124c5f3f3d1c4"},
+    {"path":"conformance/v1/streaming.json","sha256":"8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"},
+    {"path":"conformance/v1/security.json","sha256":"81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"}
+  ],
+  "languages": [
+    {
+      "language": "go",
+      "package": "github.com/valksor/naatre/sdk/go/generated",
+      "runtimes": ["Go 1.27.1"],
+      "platforms": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"],
+      "client": {"status":"executed","profile":"sdk.go.operations-1","source":"sdk/go/generated/operations_test.go","verify":"go test ./sdk/go/generated","ciAnchor":"./sdk/go/generated"},
+      "remoteWorker": {"status":"not-published"},
+      "nativeRuntime": {"status":"executed","profile":"runtime.execution-1","source":"examples/v1/server/server_test.go","verify":"go test ./examples/v1/server ./examples/v1/gateway","ciAnchor":"./examples/v1/server"}
+    },
+    {
+      "language": "javascript-typescript",
+      "package": "@naatre/sdk",
+      "runtimes": ["Node.js 24.21.0", "TypeScript 7.0.2", "plain ESM JavaScript"],
+      "platforms": ["ubuntu-24.04 CI"],
+      "client": {"status":"executed","profile":"sdk.typescript.core-1","source":"sdk/typescript/sdkgen/generator.test.mjs","verify":"npm --prefix sdk/typescript test && npm --prefix sdk/typescript run typecheck","ciAnchor":"npm --prefix sdk/typescript test"},
+      "remoteWorker": {"status":"executed","profile":"worker.javascript-typescript-1","source":"conformance/independent/remote-worker.mjs","verify":"node conformance/independent/remote-worker.mjs","ciAnchor":"node conformance/independent/remote-worker.mjs"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "php",
+      "package": "naatre/sdk",
+      "runtimes": ["PHP 8.3", "PHP 8.4", "PHP 8.5"],
+      "platforms": ["ubuntu-24.04 CI"],
+      "client": {"status":"executed","profile":"sdk.php.core-1","source":"sdk/php/tests/run.php","verify":"composer --working-dir=sdk/php check","ciAnchor":"composer --working-dir=sdk/php check"},
+      "remoteWorker": {"status":"executed","profile":"sdk.php.server-1","source":"examples/v1/workers/php.php","verify":"php examples/v1/workers/php.php","ciAnchor":"php examples/v1/workers/php.php"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "python",
+      "package": "naatre-sdk",
+      "runtimes": ["CPython 3.11", "CPython 3.12", "CPython 3.13", "CPython 3.14"],
+      "platforms": ["ubuntu-24.04 CI for the published example"],
+      "client": {"status":"executed","profile":"sdk.python.core-1","source":"sdk/python/tests/test_operation.py","verify":"python3 conformance/independent/verify-python-sdk.py","ciAnchor":"python3 conformance/independent/verify-python-sdk.py"},
+      "remoteWorker": {"status":"executed","profile":"worker.remote-1","source":"examples/v1/workers/python.py","verify":"PYTHONDONTWRITEBYTECODE=1 python3 examples/v1/workers/python.py","ciAnchor":"python3 examples/v1/workers/python.py"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "rust",
+      "package": "naatre-sdk",
+      "runtimes": ["Rust 1.85.0 minimum", "Rust stable"],
+      "platforms": ["ubuntu-24.04 CI for the published example"],
+      "client": {"status":"executed","profile":"sdk.rust.core-1","source":"sdk/rust/tests/conformance.rs","verify":"./sdk/rust/ci.sh","ciAnchor":"./sdk/rust/ci.sh"},
+      "remoteWorker": {"status":"executed","profile":"worker.remote-1.rust","source":"sdk/rust/examples/remote_worker.rs","verify":"cargo build --manifest-path sdk/rust/Cargo.toml --features server --example remote_worker --locked --offline","ciAnchor":"--example remote_worker"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "jvm",
+      "package": "io.naatre:naatre-jvm-sdk",
+      "runtimes": ["JDK 17", "JDK 21", "JDK 25", "Kotlin 2.2.20"],
+      "platforms": ["macos-15 CI"],
+      "client": {"status":"executed","profile":"sdk.jvm.core-1","source":"sdk/jvm/src/test/kotlin/io/naatre/sdk/JvmConformance.kt","verify":"node conformance/independent/verify-jvm-sdk.mjs","ciAnchor":"node conformance/independent/verify-jvm-sdk.mjs"},
+      "remoteWorker": {"status":"not-published"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "dotnet",
+      "package": "Valksor.Naatre",
+      "runtimes": [".NET SDK 8.0.425", ".NET SDK 10.0.401", "net8.0", "net10.0"],
+      "platforms": ["ubuntu-24.04 CI"],
+      "client": {"status":"executed","profile":"sdk.dotnet.core-1","source":"sdk/dotnet/Naatre.Conformance/Program.cs","verify":"node conformance/independent/verify-dotnet-sdk.mjs","ciAnchor":"node conformance/independent/verify-dotnet-sdk.mjs"},
+      "remoteWorker": {"status":"not-published"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "swift",
+      "package": "NaatreSDK",
+      "runtimes": ["Swift 6.0 minimum"],
+      "platforms": ["macOS 14+", "iOS 17+", "tvOS 17+", "watchOS 10+", "visionOS 1+", "macos-15 CI execution"],
+      "client": {"status":"executed","profile":"sdk.swift.core-1","source":"sdk/swift/Sources/NaatreConformance/main.swift","verify":"swift run --package-path sdk/swift naatre-swift-conformance","ciAnchor":"swift run --package-path sdk/swift naatre-swift-conformance"},
+      "remoteWorker": {"status":"not-published"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "dart",
+      "package": "naatre",
+      "runtimes": ["Dart 3.13.3", "Dart SDK >=3.10.0 <4.0.0"],
+      "platforms": ["Dart VM", "browser JavaScript", "ubuntu-24.04 CI"],
+      "client": {"status":"executed","profile":"sdk.dart.core-1","source":"sdk/dart/test/operation_client_test.dart","verify":"node conformance/independent/verify-dart-sdk.mjs","ciAnchor":"node conformance/independent/verify-dart-sdk.mjs"},
+      "remoteWorker": {"status":"not-published"},
+      "nativeRuntime": {"status":"not-established"}
+    },
+    {
+      "language": "ruby",
+      "package": "naatre",
+      "runtimes": ["CRuby 2.6.10 report", "GitHub ubuntu-24.04 runner Ruby"],
+      "platforms": ["darwin/arm64 report", "ubuntu-24.04 CI"],
+      "client": {"status":"executed","profile":"sdk.ruby.core-1","source":"sdk/ruby/test/generated_test.rb","verify":"node conformance/independent/verify-ruby-sdk.mjs","ciAnchor":"node conformance/independent/verify-ruby-sdk.mjs"},
+      "remoteWorker": {"status":"not-published"},
+      "nativeRuntime": {"status":"not-established"}
+    }
+  ],
+  "scenarios": [
+    {"class":"positive","fixture":"conformance/v1/generator-output.json","key":"operations","stableCodes":[]},
+    {"class":"negative","fixture":"conformance/v1/security.json","key":"safeDenial","stableCodes":["UNAUTHORIZED"]},
+    {"class":"boundary","fixture":"conformance/v1/streaming.json","key":"safeHandleFailures","stableCodes":["REESTABLISH_REQUIRED","REFETCH_REQUIRED","DELIVERY_CAPABILITY_UNSUPPORTED"]},
+    {"class":"cancellation","fixture":"conformance/v1/remote-worker-gateway.json","key":"cases","stableCodes":["CANCELLED"]},
+    {"class":"resource-limit","fixture":"conformance/v1/resources.json","key":"limitVectors","stableCodes":["LIMIT_BYTES","RESOURCE_EXHAUSTED"]}
+  ],
+  "redaction": {
+    "publicFields": ["code", "phase", "clause", "path", "requestId", "effectState"],
+    "forbiddenFields": ["authorization", "cookie", "credential", "token", "variables", "principal", "tenant", "cause", "stack", "topology", "endpoint", "serviceIdentity", "schemaDigest"]
+  },
+  "safeFailures": [
+    {"code":"UNAUTHORIZED","phase":"authorize","clause":"AUTH-003","requestId":"public-correlation-id"},
+    {"code":"REESTABLISH_REQUIRED","phase":"transport","clause":"STREAM-108","path":["subscription"]},
+    {"code":"CANCELLED","phase":"execute","clause":"EXEC-006","effectState":"not-started"},
+    {"code":"LIMIT_BYTES","phase":"decode","clause":"RES-001","path":["request"]},
+    {"code":"RESOURCE_EXHAUSTED","phase":"execute","clause":"RES-003","path":["account"]}
+  ]
+}

@@ -54,6 +54,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           go test ./internal/doccheck ./examples/v1/server ./examples/v1/gateway ./sdk/go/generated
+          node conformance/independent/documentation.mjs
           node conformance/independent/remote-worker.mjs
           python3 conformance/independent/verify-python-sdk.py
           python3 examples/v1/workers/python.py
