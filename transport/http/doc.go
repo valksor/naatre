@@ -8,5 +8,7 @@
 // deployment-configured CORS. Applications retain listener, TLS, authentication
 // policy, and process-supervisor ownership. Issue #72 owns concrete streaming
 // adapters; issue #73 owns the general net/http handler; issue #104 owns digest
-// middleware and SDK integration.
+// middleware and SDK integration. The implementation.go.http-digest-1 runtime
+// and unsupported-capability boundary is published in
+// docs/http-digest-integration.md.
 package http

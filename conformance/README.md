@@ -13,6 +13,13 @@ identity, gzip, range, and transfer-framed bytes; strict negotiation and failure
 vectors; phase outcomes; webhook signature inputs; and explicit trailer
 capability. The Go reference codec and dependency-free JavaScript verifier both
 consume it directly.
+`v1/http-digest-integration.json` is the separate
+`implementation.go.http-digest-1` middleware and Go SDK evidence manifest. It
+references rather than redefines the #63 contract, pins its exact dependency
+commit and file revisions, and publishes credential-free offline commands plus
+the executed and unsupported runtime boundary.
+The shared `protocol/httpdigest` package is the single inward Go implementation;
+`transport/http` preserves its public compatibility surface for middleware users.
 `v1/generator-plugin-host.json` binds the public Go host, the exact generator
 model and toolchain revisions, and a dependency-free third-party JavaScript
 fixture. The `sdk.generator-plugin-host-1` profile executes discovery,

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/valksor/naatre/protocol"
+	"github.com/valksor/naatre/protocol/httpdigest"
 )
 
 const (
@@ -44,6 +45,32 @@ type Config struct {
 	DecodeOptions        protocol.DecodeOptions
 	MaxCompressedBytes   int64
 	MaxDecompressedBytes int64
+	HTTPDigest           *DigestConfig
+}
+
+// RangeRepresentationSource opens the complete selected representation for a
+// 206 response. The SDK uses it only to verify Repr-Digest; the source is
+// closed before Execute returns. Response body bytes are never passed to it.
+type RangeRepresentationSource func(context.Context, *http.Response) (io.ReadCloser, int64, error)
+
+// DigestConfig enables the core.http.digest-1 SDK completion gate. Both
+// Content-Digest and Repr-Digest are mandatory when enabled. Blank Want fields
+// resolve to the deterministic sha-512 then sha-256 preference below.
+type DigestConfig struct {
+	WantContentDigest   string
+	WantReprDigest      string
+	RangeRepresentation RangeRepresentationSource
+}
+
+// DigestVerification is credential-free evidence retained on a successful
+// result. It never contains body bytes or raw digest values.
+type DigestVerification struct {
+	Profile                 string
+	ContentAlgorithm        httpdigest.DigestAlgorithm
+	RepresentationAlgorithm httpdigest.DigestAlgorithm
+	ContentBytes            int64
+	RepresentationBytes     int64
+	Range                   bool
 }
 
 // Client executes bounded unary requests without importing server runtime
@@ -55,6 +82,9 @@ type Client struct {
 	decodeOptions        protocol.DecodeOptions
 	maxCompressedBytes   int64
 	maxDecompressedBytes int64
+	digest               *DigestConfig
+	contentAlgorithm     httpdigest.DigestAlgorithm
+	reprAlgorithm        httpdigest.DigestAlgorithm
 }
 
 // Error is a safe, stable client failure. Error never includes remote body
@@ -86,6 +116,7 @@ type Result struct {
 	Header     http.Header
 	Envelope   *protocol.Response
 	Problem    *Problem
+	Integrity  *DigestVerification
 }
 
 func (r *Result) Data() (json.RawMessage, bool) {
@@ -124,29 +155,20 @@ func New(config Config) (*Client, error) {
 		httpClient = config.HTTPClient
 	}
 	copy := *httpClient
+	digest, contentAlgorithm, reprAlgorithm, err := resolveDigestConfig(config.HTTPDigest)
+	if err != nil {
+		return nil, clientError("INVALID_CONFIG", 0, nil)
+	}
 	decodeOptions := config.DecodeOptions
 	decodeOptions.Capabilities = maps.Clone(config.DecodeOptions.Capabilities)
 	decodeOptions.Extensions = maps.Clone(config.DecodeOptions.Extensions)
 	decodeOptions.IgnorableExtensionMetadata = maps.Clone(config.DecodeOptions.IgnorableExtensionMetadata)
 	decodeOptions.ExtensionNamespaces = maps.Clone(config.DecodeOptions.ExtensionNamespaces)
-	previousRedirect := copy.CheckRedirect
-	copy.CheckRedirect = func(request *http.Request, via []*http.Request) error {
-		if len(via) > defaultRedirects {
-			return errRedirectLimit
-		}
-		if previousRedirect != nil {
-			if err := previousRedirect(request, via); err != nil {
-				return err
-			}
-		}
-		if len(via) > 0 && !sameOrigin(request.URL, via[len(via)-1].URL) {
-			stripCredentials(request.Header)
-		}
-		return nil
-	}
+	copy.CheckRedirect = redirectPolicy(copy.CheckRedirect, digest != nil)
 	return &Client{
 		endpoint: endpoint, httpClient: &copy, authenticate: config.Authenticate,
 		decodeOptions: decodeOptions, maxCompressedBytes: maxCompressed, maxDecompressedBytes: maxDecompressed,
+		digest: digest, contentAlgorithm: contentAlgorithm, reprAlgorithm: reprAlgorithm,
 	}, nil
 }
 
@@ -155,6 +177,21 @@ func (c *Client) Execute(ctx context.Context, operation Request) (*Result, error
 	if c == nil || ctx == nil {
 		return nil, clientError("INVALID_REQUEST", 0, errors.New("client and context are required"))
 	}
+	request, err := c.newExecutionRequest(ctx, operation)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, classifyTransportError(ctx, err)
+	}
+	if response.Body != nil {
+		defer func() { _ = response.Body.Close() }()
+	}
+	return c.consumeResponse(ctx, response)
+}
+
+func (c *Client) newExecutionRequest(ctx context.Context, operation Request) (*http.Request, error) {
 	body, err := operation.CanonicalJSON()
 	if err != nil {
 		return nil, err
@@ -166,84 +203,113 @@ func (c *Client) Execute(ctx context.Context, operation Request) (*Result, error
 	request.Header.Set("Content-Type", RequestMediaType)
 	request.Header.Set("Accept", ResponseMediaType)
 	request.Header.Set("Accept-Encoding", "gzip")
+	if err := c.applyRequestDigest(request, body); err != nil {
+		return nil, err
+	}
 	if c.authenticate != nil {
 		if err := c.authenticate(ctx, request); err != nil {
 			return nil, clientError("AUTHENTICATION_FAILED", 0, nil)
 		}
 	}
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return nil, classifyTransportError(ctx, err)
-	}
+	return request, nil
+}
+
+func (c *Client) consumeResponse(ctx context.Context, response *http.Response) (*Result, error) {
 	if response.Body == nil {
 		return nil, clientError("MALFORMED_RESPONSE", response.StatusCode, errors.New("response body is missing"))
 	}
-	defer func() { _ = response.Body.Close() }()
+	if err := c.validateDigestHeaders(response); err != nil {
+		return nil, clientError(httpdigest.ErrorCode(err), response.StatusCode, nil)
+	}
 	if response.ContentLength > c.maxCompressedBytes {
-		return nil, clientError("RESPONSE_LIMIT_EXCEEDED", response.StatusCode, errors.New("response exceeds compressed limit"))
+		code := "RESPONSE_LIMIT_EXCEEDED"
+		if c.digest != nil {
+			code = httpdigest.CodeDigestLimitExceeded
+		}
+		return nil, clientError(code, response.StatusCode, nil)
 	}
 	mediaType, err := responseMediaType(response)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := c.readResponseBody(response)
+	payload, content, err := c.readResponseBody(ctx, response)
 	if err != nil {
 		return nil, err
 	}
-	result := &Result{StatusCode: response.StatusCode, Header: response.Header.Clone()}
+	integrity, err := c.verifyResponseDigests(ctx, response, content, payload)
+	if err != nil {
+		return nil, clientError(httpdigest.ErrorCode(err), response.StatusCode, nil)
+	}
+	result := &Result{StatusCode: response.StatusCode, Header: response.Header.Clone(), Integrity: integrity}
+	return c.decodeResult(result, mediaType, payload)
+}
+
+func (c *Client) decodeResult(result *Result, mediaType string, payload []byte) (*Result, error) {
+	var err error
 	switch strings.ToLower(mediaType) {
 	case "application/vnd.naatre.response+json":
 		result.Envelope, err = protocol.DecodeResponse(payload, c.responseDecodeOptions(len(payload)))
 		if err != nil {
-			return result, clientError("MALFORMED_RESPONSE", response.StatusCode, err)
+			return result, clientError("MALFORMED_RESPONSE", result.StatusCode, err)
 		}
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return result, clientError("REMOTE_NAATRE", response.StatusCode, nil)
+		if result.StatusCode < 200 || result.StatusCode >= 300 {
+			return result, clientError("REMOTE_NAATRE", result.StatusCode, nil)
 		}
 		return result, nil
 	case "application/problem+json":
 		result.Problem, err = decodeProblem(payload)
 		if err != nil {
-			return result, clientError("MALFORMED_RESPONSE", response.StatusCode, err)
+			return result, clientError("MALFORMED_RESPONSE", result.StatusCode, err)
 		}
-		return result, clientError("REMOTE_PROBLEM", response.StatusCode, nil)
+		return result, clientError("REMOTE_PROBLEM", result.StatusCode, nil)
 	default:
-		return result, clientError("UNSUPPORTED_MEDIA_TYPE", response.StatusCode, errors.New("unsupported response media type"))
+		return result, clientError("UNSUPPORTED_MEDIA_TYPE", result.StatusCode, errors.New("unsupported response media type"))
 	}
 }
 
-func (c *Client) readResponseBody(response *http.Response) ([]byte, error) {
+func (c *Client) readResponseBody(ctx context.Context, response *http.Response) ([]byte, []byte, error) {
 	encodings := response.Header.Values("Content-Encoding")
 	if len(encodings) > 1 {
-		return nil, clientError("UNSUPPORTED_CONTENT_ENCODING", response.StatusCode, errors.New("duplicate content encoding"))
+		return nil, nil, c.responseBodyError(response, "UNSUPPORTED_CONTENT_ENCODING", httpdigest.CodeDigestContentCodingUnsupported, nil)
 	}
 	encoding := strings.TrimSpace(strings.ToLower(response.Header.Get("Content-Encoding")))
 	if encoding != "" && encoding != "identity" && encoding != "gzip" {
-		return nil, clientError("UNSUPPORTED_CONTENT_ENCODING", response.StatusCode, errors.New("unsupported content encoding"))
+		return nil, nil, c.responseBodyError(response, "UNSUPPORTED_CONTENT_ENCODING", httpdigest.CodeDigestContentCodingUnsupported, nil)
 	}
 	compressed, err := readBounded(response.Body, c.maxCompressedBytes)
 	if err != nil {
-		return nil, clientError(codeForReadError(err), response.StatusCode, err)
+		return nil, nil, c.responseBodyError(response, codeForReadError(err), digestCodeForReadError(ctx, err), err)
 	}
 	if response.ContentLength > 0 && int64(len(compressed)) != response.ContentLength {
-		return nil, clientError("TRUNCATED_RESPONSE", response.StatusCode, errors.New("response content length mismatch"))
+		digestCode := httpdigest.CodeDigestLengthMismatch
+		if int64(len(compressed)) < response.ContentLength {
+			digestCode = httpdigest.CodeDigestTruncated
+		}
+		return nil, nil, c.responseBodyError(response, "TRUNCATED_RESPONSE", digestCode, nil)
 	}
 	if encoding == "" || encoding == "identity" {
 		if int64(len(compressed)) > c.maxDecompressedBytes {
-			return nil, clientError("RESPONSE_LIMIT_EXCEEDED", response.StatusCode, errResponseLimit)
+			return nil, nil, c.responseBodyError(response, "RESPONSE_LIMIT_EXCEEDED", httpdigest.CodeDigestLimitExceeded, errResponseLimit)
 		}
-		return compressed, nil
+		return compressed, compressed, nil
 	}
 	reader, err := gzip.NewReader(bytes.NewReader(compressed))
 	if err != nil {
-		return nil, clientError("MALFORMED_RESPONSE", response.StatusCode, err)
+		return nil, nil, c.responseBodyError(response, "MALFORMED_RESPONSE", httpdigest.CodeDigestContentCodingUnsupported, nil)
 	}
 	defer func() { _ = reader.Close() }()
 	decompressed, err := readBounded(reader, c.maxDecompressedBytes)
 	if err != nil {
-		return nil, clientError(codeForReadError(err), response.StatusCode, err)
+		return nil, nil, c.responseBodyError(response, codeForReadError(err), digestCodeForReadError(ctx, err), err)
 	}
-	return decompressed, nil
+	return decompressed, compressed, nil
+}
+
+func (c *Client) responseBodyError(response *http.Response, regularCode, digestCode string, cause error) error {
+	if c.digest != nil {
+		return clientError(digestCode, response.StatusCode, nil)
+	}
+	return clientError(regularCode, response.StatusCode, cause)
 }
 
 func (c *Client) responseDecodeOptions(payloadBytes int) protocol.DecodeOptions {
@@ -324,6 +390,26 @@ func responseMediaType(response *http.Response) (string, error) {
 
 func sameOrigin(left, right *url.URL) bool {
 	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Hostname(), right.Hostname()) && effectivePort(left) == effectivePort(right)
+}
+
+func redirectPolicy(previous func(*http.Request, []*http.Request) error, digestEnabled bool) func(*http.Request, []*http.Request) error {
+	return func(request *http.Request, via []*http.Request) error {
+		if len(via) > defaultRedirects {
+			return errRedirectLimit
+		}
+		if digestEnabled && len(via) > 0 {
+			return http.ErrUseLastResponse
+		}
+		if previous != nil {
+			if err := previous(request, via); err != nil {
+				return err
+			}
+		}
+		if len(via) > 0 && !sameOrigin(request.URL, via[len(via)-1].URL) {
+			stripCredentials(request.Header)
+		}
+		return nil
+	}
 }
 
 func effectivePort(value *url.URL) string {

@@ -130,7 +130,7 @@
       "path": "v1/go-client.json",
       "profile": "sdk.go.client-1",
       "category": "transport",
-      "sha256": "8771767b405120d0bad6b8ba4555faef9c64c7f410bd757d2d8d87a493e7c275"
+      "sha256": "82e5ceccdaf8c0253a1360caab322a09388d0d7bd06e3a9b64ddeab1b4c68573"
     },
     {
       "path": "v1/go-sdk.json",
@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "15c640f511127fc5e8009fe15ae731237a07cfd9f48e7a836703efe9e052c286"
     },
     {
       "path": "v1/scalars.json",
@@ -379,10 +379,16 @@
       "sha256": "72ed0eeb502b14eb3b4369cb8f534bcd71fb1c4df28471ea6e1341bc6b0153f5"
     },
     {
+      "path": "v1/http-digest-integration.json",
+      "profile": "implementation.go.http-digest-1",
+      "category": "transport",
+      "sha256": "be99cdfa423684a5e32e32ec623318ab9edcd5ab04eb37a270db997fac4a4100"
+    },
+    {
       "path": "v1/go-http.json",
       "profile": "core.http-1",
       "category": "transport",
-      "sha256": "e2733d3665f24996d639aa396a7a6333d5e0c5ffa7611731a095b2fb314cb086"
+      "sha256": "57d9127080992d22769f597e69376e7a19f5934fd8b8ae6bdf570f9d5ff2d5eb"
     },
     {
       "path": "v1/plan-cache.json",
@@ -7613,6 +7619,11 @@
       "caseId": "issue.104",
       "issue": 104,
       "fixtureRefs": [
+        {
+          "path": "v1/http-digest-integration.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/104",

@@ -6,8 +6,11 @@
     "minimumGo": "1.27",
     "goMod": {"path": "go.mod", "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
     "files": [
-      {"path": "client/client.go", "sha256": "752fc6c5d0a7bf07127d7d817d679edbbbacdfce977645441f6e4f8da8cbc447"},
-      {"path": "client/request.go", "sha256": "192d7dd5d4bc1bceaee5044759cbff7eb4cae687aed2c5eb5018819982bcb38f"}
+      {"path": "client/client.go", "sha256": "a5a308086090832c582cb2dbd9bd0698fa6d351d8cdc99c33d4bfe0e358eb99f"},
+      {"path": "client/request.go", "sha256": "192d7dd5d4bc1bceaee5044759cbff7eb4cae687aed2c5eb5018819982bcb38f"},
+      {"path": "client/digest.go", "sha256": "184e50327f2f72b20047fd0cccc01f9c971f0379495313a86c1c905c38e8bf88"},
+      {"path": "protocol/httpdigest/digest.go", "sha256": "2fe7528d928d9172fe442763c9eb66c7d5df7fcfbf3c830a6bb66f8a89eeb76b"},
+      {"path": "protocol/httpdigest/http.go", "sha256": "513aa12e609702ed65746c2d00bc4f39844e373cb9318450f41ab116b81f0b75"}
     ]
   },
   "sources": {

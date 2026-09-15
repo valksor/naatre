@@ -22,6 +22,13 @@ Supported in this core profile:
   plus structured errors;
 - stable safe client error codes and resource closure.
 
+Opt-in `Config.HTTPDigest` adds the `implementation.go.http-digest-1`
+completion gate: request digest generation, response `Content-Digest` and
+`Repr-Digest` verification before parsing or success, downgrade and trailer
+rejection, and explicit complete-representation sourcing for ranges. Its exact
+lifecycle, runtime evidence, and unsupported capabilities are published in
+[`docs/http-digest-integration.md`](../docs/http-digest-integration.md).
+
 The same package also provides the higher-level primitives exercised by the
 separate `sdk.go.operations-1` profile: immutable typed language builders,
 selected-result decoding, strict persisted manifests, query-only finite retry,
