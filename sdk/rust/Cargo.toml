@@ -11,7 +11,15 @@ publish = false
 [features]
 default = []
 generator = ["dep:sha2"]
+server = []
 tokio = []
+
+[profile.release]
+panic = "abort"
+
+[profile.unwind]
+inherits = "dev"
+panic = "unwind"
 
 [dependencies]
 base64 = "=0.22.1"

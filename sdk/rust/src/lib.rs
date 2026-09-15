@@ -8,6 +8,8 @@
 //! outside this profile.
 
 mod scalar;
+#[cfg(feature = "server")]
+mod server;
 mod transport;
 
 #[cfg(feature = "tokio")]
@@ -29,6 +31,14 @@ use std::fmt::{self, Display, Formatter};
 use std::marker::PhantomData;
 
 pub use scalar::{BigInt, Bytes, Decimal, Duration, Int64, Timestamp, UInt64, Uuid};
+#[cfg(feature = "server")]
+pub use server::{
+    CancelRequest, CancellationAck, CancellationDisposition, HandlerContext, HandlerDescriptor,
+    HandlerFuture, InvocationFuture, OwnedWork, Parent, Principal, Registration, RegistrationAck,
+    RequestOutcome, RequestResources, RequestScopeFactory, SchemaValidator, ServerBuilder,
+    ServerError, WorkerCore, WorkerError, WorkerInvocation, WorkerLimits, WorkerResult,
+    decode_worker_frame, encode_worker_frame,
+};
 pub use transport::{
     Cancellation, Client, FallibleStream, OperationFuture, RequestHandle, RequestOptions,
     StreamHandle, StreamTransport, Transport,

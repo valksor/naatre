@@ -8,7 +8,10 @@ cargo +stable clippy --manifest-path sdk/rust/Cargo.toml --all-targets --all-fea
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --no-default-features --locked
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --locked
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features generator --locked
+cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --profile unwind --features server --test server --locked
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features tokio --locked
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --locked
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --all-features --locked
+cargo +1.85.0 build --manifest-path sdk/rust/Cargo.toml --release --features server --example remote_worker --locked
+node conformance/independent/verify-rust-worker.mjs
 printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"rust-sdk","command":"run","path":{"source":{"kind":"sdk","language":"rust"},"destination":{"kind":"native-runtime","language":"rust"}},"profiles":["sdk.rust.core-1","sdk.rust.adapters-1"]}' | node conformance/independent/runner.mjs --require-pass

@@ -1,80 +1,207 @@
-use serde_json::{Value, json};
-use std::io::{self, Read, Write};
+#![cfg(feature = "server")]
 
-const PROTOCOL: &str = "naatre.remote-worker.v1";
+use naatre_sdk::{
+    HandlerContext, HandlerDescriptor, HandlerFuture, Principal, Registration, RequestOutcome,
+    RequestResources, RequestScopeFactory, SchemaValidator, ServerBuilder, WorkerError,
+    WorkerInvocation, decode_worker_frame, encode_worker_frame,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::any::Any;
+use std::io::{Read, Write};
+use std::pin::Pin;
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
-fn handle(envelope: &Value) -> Value {
-    assert_eq!(envelope["protocol"], PROTOCOL);
-    let payload = &envelope["payload"];
-    match envelope["kind"].as_str().expect("kind") {
-        "register" => {
-            json!({"protocol":PROTOCOL,"kind":"registered","payload":{"protocol":PROTOCOL,"workerId":payload["workerId"],"sessionId":"example-session","schemaRevision":payload["schemaRevision"],"acceptedCapabilities":payload["capabilities"]}})
+const MAXIMUM_FRAME_BYTES: usize = 4096;
+
+#[derive(Deserialize)]
+struct GreetInput {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct GreetOutput {
+    greeting: String,
+}
+
+struct Validator;
+
+impl SchemaValidator for Validator {
+    fn validate_input(&self, schema: &str, input: &Value) -> Result<(), WorkerError> {
+        if schema == "GreetInput" && input.get("name").and_then(Value::as_str).is_some() {
+            Ok(())
+        } else {
+            Err(WorkerError::new(
+                "INPUT_INVALID",
+                "invalid greeting input",
+                false,
+            ))
         }
-        "cancel" => {
-            json!({"protocol":PROTOCOL,"kind":"cancelled","payload":{"protocol":PROTOCOL,"invocationId":payload["invocationId"],"disposition":"acknowledged"}})
+    }
+
+    fn validate_output(&self, schema: &str, output: &Value) -> Result<(), WorkerError> {
+        if schema == "GreetOutput" && output.get("greeting").is_some() {
+            Ok(())
+        } else {
+            Err(WorkerError::new(
+                "OUTPUT_COMPLETION",
+                "invalid greeting output",
+                false,
+            ))
         }
-        "invoke" => {
-            let name = payload["input"]["name"].as_str().expect("input name");
-            let rejected = name == "reject";
-            json!({"protocol":PROTOCOL,"kind":"result","payload":{"protocol":PROTOCOL,"invocationId":payload["invocationId"],"attemptId":payload["attemptId"],"schemaRevision":payload["schemaRevision"],"data":if rejected { Value::Null } else { json!({"greeting":format!("Hello, {name}")}) },"errors":if rejected { json!([{"code":"NAME_REJECTED","message":"name was rejected","retryable":false}]) } else { json!([]) }}})
-        }
-        _ => panic!("unsupported envelope"),
     }
 }
 
-fn serve(maximum: u32) {
-    let mut input = io::stdin().lock();
-    let mut output = io::stdout().lock();
-    loop {
-        let mut header = [0_u8; 5];
-        match input.read_exact(&mut header) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return,
-            Err(error) => panic!("read header: {error}"),
+struct Resources {
+    principal: Principal,
+    loader: (),
+}
+
+impl RequestResources for Resources {
+    fn principal(&self) -> &Principal {
+        &self.principal
+    }
+
+    fn loader(&mut self) -> &mut (dyn Any + Send) {
+        &mut self.loader
+    }
+
+    fn transaction(&mut self) -> Option<&mut (dyn Any + Send)> {
+        None
+    }
+
+    fn finish(self: Box<Self>, _outcome: RequestOutcome) {}
+}
+
+struct Scopes;
+
+impl RequestScopeFactory for Scopes {
+    fn begin(
+        &self,
+        invocation: &WorkerInvocation,
+    ) -> Result<Box<dyn RequestResources>, WorkerError> {
+        if invocation.delegated_context != "valid-delegation" {
+            return Err(WorkerError::new(
+                "UNAUTHORIZED",
+                "delegation rejected",
+                false,
+            ));
         }
-        let size = u32::from_be_bytes(header[1..5].try_into().expect("size"));
-        assert!(header[0] == 0 && size > 0 && size <= maximum);
-        let mut payload = vec![0; size as usize];
-        input.read_exact(&mut payload).expect("read frame");
-        let encoded = serde_json::to_vec(&handle(&serde_json::from_slice(&payload).expect("JSON")))
-            .expect("encode");
-        let encoded_size = u32::try_from(encoded.len()).expect("encoded frame fits u32");
-        output.write_all(&[0]).expect("write flags");
-        output
-            .write_all(&encoded_size.to_be_bytes())
-            .expect("write size");
-        output.write_all(&encoded).expect("write payload");
-        output.flush().expect("flush");
+        Ok(Box::new(Resources {
+            principal: Principal {
+                subject: "example-user".to_owned(),
+                tenant: "example-tenant".to_owned(),
+            },
+            loader: (),
+        }))
     }
 }
 
-fn self_test(fixture: &Value) {
-    assert_eq!(fixture["schema"]["sharedSchemaProfile"], "core.schema-1");
-    for operation in fixture["operations"].as_array().expect("operations") {
-        let response = handle(
-            &json!({"protocol":PROTOCOL,"kind":"invoke","payload":{"invocationId":operation["name"],"attemptId":"attempt-1","schemaRevision":fixture["schema"]["revision"],"handlerId":operation["handlerId"],"input":operation["input"]}}),
-        );
-        assert_eq!(
-            json!({"data":response["payload"]["data"],"errors":response["payload"]["errors"]}),
-            operation["expected"]
-        );
-    }
+fn greet(_context: &mut HandlerContext, input: GreetInput) -> HandlerFuture<'_, GreetOutput> {
+    Box::pin(async move {
+        if input.name == "reject" {
+            Err(WorkerError::new(
+                "NAME_REJECTED",
+                "name was rejected",
+                false,
+            ))
+        } else {
+            Ok(GreetOutput {
+                greeting: format!("Hello, {}", input.name),
+            })
+        }
+    })
 }
 
-fn main() {
-    let fixture: Value = serde_json::from_slice(include_bytes!(
+fn read_frame(input: &mut impl Read) -> Result<Vec<u8>, String> {
+    let mut header = [0_u8; 5];
+    input
+        .read_exact(&mut header)
+        .map_err(|error| error.to_string())?;
+    let size = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+    if header[0] != 0 || size == 0 || size > MAXIMUM_FRAME_BYTES {
+        return Err("invalid frame header".to_owned());
+    }
+    let mut frame = Vec::with_capacity(size + 5);
+    frame.extend_from_slice(&header);
+    frame.resize(size + 5, 0);
+    input
+        .read_exact(&mut frame[5..])
+        .map_err(|error| error.to_string())?;
+    Ok(frame)
+}
+
+fn write_frame(output: &mut impl Write, frame: &[u8]) -> Result<(), String> {
+    output.write_all(frame).map_err(|error| error.to_string())?;
+    output.flush().map_err(|error| error.to_string())
+}
+
+fn run() -> Result<(), String> {
+    let expected: Registration = serde_json::from_slice(include_bytes!(
         "../../../conformance/v1/remote-workers.json"
     ))
-    .expect("fixture");
-    if std::env::args().any(|argument| argument == "--serve") {
-        let maximum = u32::try_from(
-            fixture["transport"]["frame"]["maximumBytes"]
-                .as_u64()
-                .expect("maximum"),
+    .and_then(|fixture: Value| serde_json::from_value(fixture["registration"].clone()))
+    .map_err(|error| error.to_string())?;
+    let mut builder = ServerBuilder::new(expected.clone(), Arc::new(Validator), Arc::new(Scopes))
+        .map_err(|error| error.to_string())?;
+    builder
+        .register_handler(
+            HandlerDescriptor::unary("fixture.greet", "GreetInput", "GreetOutput", "query"),
+            (),
+            |(), context, input| greet(context, input),
         )
-        .expect("frame maximum fits u32");
-        serve(maximum);
-    } else {
-        self_test(&fixture);
+        .map_err(|error| error.to_string())?;
+    let worker = builder.build().map_err(|error| error.to_string())?;
+
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    let registration: Registration =
+        decode_worker_frame(&read_frame(&mut input)?, MAXIMUM_FRAME_BYTES)
+            .map_err(|error| error.to_string())?;
+    if registration != expected {
+        return Err("gateway registration does not match worker manifest".to_owned());
+    }
+    write_frame(
+        &mut output,
+        &encode_worker_frame(
+            &worker.registration_ack("example-session"),
+            MAXIMUM_FRAME_BYTES,
+        )
+        .map_err(|error| error.to_string())?,
+    )?;
+
+    loop {
+        let frame = match read_frame(&mut input) {
+            Ok(frame) => frame,
+            Err(error) if error.contains("failed to fill whole buffer") => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let invocation: WorkerInvocation =
+            decode_worker_frame(&frame, MAXIMUM_FRAME_BYTES).map_err(|error| error.to_string())?;
+        let mut future = worker
+            .invoke(invocation)
+            .map_err(|error| error.to_string())?;
+        let mut context = Context::from_waker(Waker::noop());
+        let Poll::Ready(result) = Pin::new(&mut future).poll(&mut context) else {
+            return Err("example handler requires an executor".to_owned());
+        };
+        let result = result.map_err(|error| error.to_string())?;
+        write_frame(
+            &mut output,
+            &encode_worker_frame(&result, MAXIMUM_FRAME_BYTES)
+                .map_err(|error| error.to_string())?,
+        )?;
+    }
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
     }
 }

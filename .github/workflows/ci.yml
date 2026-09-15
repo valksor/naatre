@@ -57,7 +57,8 @@ jobs:
           node conformance/independent/remote-worker.mjs
           python3 conformance/independent/verify-python-sdk.py
           python3 examples/v1/workers/python.py
-          cargo run --manifest-path sdk/rust/Cargo.toml --example remote_worker --locked --offline
+          cargo build --manifest-path sdk/rust/Cargo.toml --features server --example remote_worker --locked --offline
+          go run ./examples/go-gateway-rust-worker ./sdk/rust/target/debug/examples/remote_worker
       - name: Dart SDK conformance
         run: |
           node conformance/independent/verify-dart-sdk.mjs
