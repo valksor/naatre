@@ -1,0 +1,74 @@
+{
+  "profile": "core.large-value-1",
+  "boundary": {
+    "smallCanonicalMaximumBytes": 65536,
+    "largeValuesUseDeclaredSlots": true,
+    "coreBuffersCompleteContent": false
+  },
+  "binding": {
+    "operationIncludes": ["document","slot.name","slot.direction","slot.required","slot.profile","slot.allowedMediaTypes","slot.maximumLength"],
+    "operationExcludes": ["payloadBytes","resolvedReference"],
+    "contentIdentityIncludes": ["operationDigest","reference","representationDigest","length","mediaType"],
+    "differentBytesReuseCachedResult": false
+  },
+  "capabilities": {
+    "profiles": ["direct","presigned","multipart","resumable","application"],
+    "bearer": true,
+    "redacted": true,
+    "scopes": ["subject","tenant","authorizationRevision","operation","slot","direction","methods","metadata","expiry"],
+    "singleUseAtomicClaim": true
+  },
+  "lifecycle": {
+    "authorizationGates": ["issue","stage","finalize","consume","range","redirect"],
+    "preFinalizeCleanupOwner": "coordinator",
+    "postFinalizeCleanupOwner": "store",
+    "postTransactionCleanupOwner": "application",
+    "failure": "abort-staging",
+    "cancellation": "abort-staging-with-independent-bounded-context",
+    "orphan": "store-expiry-sweep"
+  },
+  "transfer": {
+    "streaming": true,
+    "verifiedBeforeFinalization": true,
+    "scanBeforeFinalization": true,
+    "limits": ["encodedBytes","decodedBytes","expansionRatio","parts","chunks","retries","quota","cost"]
+  },
+  "rangeCases": [
+    {"name":"closed","value":"bytes=10-19","total":36,"accepted":true,"status":206,"start":10,"end":19,"contentRange":"bytes 10-19/36"},
+    {"name":"open","value":"bytes=30-","total":36,"accepted":true,"status":206,"start":30,"end":35,"contentRange":"bytes 30-35/36"},
+    {"name":"suffix","value":"bytes=-6","total":36,"accepted":true,"status":206,"start":30,"end":35,"contentRange":"bytes 30-35/36"},
+    {"name":"multiple","value":"bytes=0-1,4-5","total":36,"accepted":false,"status":416,"code":"RANGE_UNSATISFIED"},
+    {"name":"past-end","value":"bytes=99-","total":36,"accepted":false,"status":416,"code":"RANGE_UNSATISFIED"}
+  ],
+  "conditionalCases": [
+    {"name":"if-none-match","method":"GET","etag":"\"v1\"","ifNoneMatch":"\"v1\"","status":304,"contentLength":0},
+    {"name":"if-match-failed","method":"GET","etag":"\"v1\"","ifMatch":"\"v2\"","status":412,"contentLength":0},
+    {"name":"if-range-match","method":"GET","etag":"\"v1\"","ifRange":"\"v1\"","range":"bytes=0-3","status":206,"contentLength":4},
+    {"name":"if-range-miss","method":"GET","etag":"\"v1\"","ifRange":"\"v2\"","range":"bytes=0-3","status":200,"contentLength":36}
+  ],
+  "resumeCases": [
+    {"name":"next-chunk","offset":10,"chunkLength":5,"totalLength":20,"validator":"etag-1","expectedValidator":"etag-1","accepted":true},
+    {"name":"wrong-validator","offset":10,"chunkLength":5,"totalLength":20,"validator":"etag-2","expectedValidator":"etag-1","accepted":false},
+    {"name":"overlap-past-end","offset":18,"chunkLength":5,"totalLength":20,"validator":"etag-1","expectedValidator":"etag-1","accepted":false}
+  ],
+  "egressCases": [
+    {"name":"allowed-documentation-origin","url":"https://upload.example.test/object","addresses":["203.0.113.10"],"accepted":true},
+    {"name":"loopback","url":"https://127.0.0.1/object","addresses":[],"accepted":false},
+    {"name":"metadata","url":"https://169.254.169.254/latest/meta-data","addresses":[],"accepted":false},
+    {"name":"userinfo","url":"https://user:secret@upload.example.test/object","addresses":["203.0.113.10"],"accepted":false},
+    {"name":"redirect-to-private","chain":["https://upload.example.test/a","https://169.254.169.254/b"],"accepted":false},
+    {"name":"dns-rebinding","url":"https://upload.example.test/object","resolutionSequence":[["203.0.113.10"],["169.254.169.254"]],"acceptedSequence":[true,false]}
+  ],
+  "securityCases": [
+    {"name":"path-traversal","field":"filename","value":"../secret","accepted":false},
+    {"name":"windows-path","field":"filename","value":"C:\\secret","accepted":false},
+    {"name":"media-type-confusion","field":"mediaType","value":"text/html","accepted":false},
+    {"name":"negative-length","field":"length","value":-1,"accepted":false},
+    {"name":"compression-bomb","field":"expansionRatio","encodedLength":1,"decodedLength":100,"maximum":8,"accepted":false},
+    {"name":"missing-digest","field":"representationDigest","value":"","accepted":false},
+    {"name":"digest-mismatch","field":"representationDigest","expected":"sha-256","actual":"different-bytes","accepted":false},
+    {"name":"wrong-tenant","field":"tenant","expected":"tenant-a","actual":"tenant-b","handlerRuns":false},
+    {"name":"expired","field":"expiry","relation":"now-equals-expiry","handlerRuns":false},
+    {"name":"revoked","field":"state","value":"revoked","handlerRuns":false}
+  ]
+}

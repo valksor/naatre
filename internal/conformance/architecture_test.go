@@ -36,6 +36,7 @@ var layers = []struct {
 	{"reflectadapter", 3},
 	{"interopadapter", 3},
 	{"transport", 4},
+	{"largevalue", 5},
 	{"examples", 5},
 	{"internal/qualityharness", 5},
 	{"internal", 6},

@@ -56,6 +56,10 @@ evidence must be described as planned.
   composition from operator-pinned service manifests.
 - `collectionquery`: optional provider-neutral typed filter evaluation, stable
   sorting, and parameterized SQLite translation for `collection.query-1`.
+- `largevalue`: transport-neutral signed upload/download capabilities,
+  streaming integrity and scanning gates, deterministic cleanup ownership,
+  payload identity, range/resume decisions, and pinned-dial egress policy for
+  `core.large-value-1`; concrete storage and HTTP adapters remain owned by #87.
 - `mutation`: provider-neutral typed updates, exact-path JSON Patch validation,
   opaque revisions, conditional writes, and declared read-consistency modes for
   `mutation.update-1`.

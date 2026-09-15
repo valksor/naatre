@@ -277,19 +277,21 @@
     },
     "46": {
       "issue": 46,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 46,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "core.large-value-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "core.large-value-1"
+        ]
       }
     },
     "47": {

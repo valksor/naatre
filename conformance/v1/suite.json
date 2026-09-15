@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "d827c7b32c1fea35f4683cf8850251845701bf131ab4b7dc72455872476f6ca3"
     },
     {
       "path": "v1/scalars.json",
@@ -347,6 +347,12 @@
       "profile": "operations.async-1",
       "category": "execution",
       "sha256": "9efe62107f1583f2531fe794272a36f6e899dbbd2273e8cdfbd06dff973f48e0"
+    },
+    {
+      "path": "v1/large-values.json",
+      "profile": "core.large-value-1",
+      "category": "transport",
+      "sha256": "2a3783fdee2236ea27e4617669ef5668425ce4aeb1cd9451e3ab68d4deb14ae3"
     },
     {
       "path": "v1/request-batching.json",
@@ -5192,6 +5198,112 @@
       ]
     },
     {
+      "caseId": "requirements.large-value.identity",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-001",
+        "LARGE-002",
+        "LARGE-003"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/boundary",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/binding",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.capability",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-100",
+        "LARGE-101",
+        "LARGE-102",
+        "LARGE-103"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/capabilities",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/lifecycle",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.transfer",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-200",
+        "LARGE-201",
+        "LARGE-202",
+        "LARGE-203"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/transfer",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/resumeCases/0",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.download",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-300",
+        "LARGE-301"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/rangeCases/0",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/conditionalCases/0",
+          "polarity": "mixed"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.large-value.security",
+      "spec": "spec/v1/large-values.md",
+      "clauses": [
+        "LARGE-400",
+        "LARGE-401",
+        "LARGE-402"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/egressCases/5",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/large-values.json",
+          "pointer": "/securityCases/0",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
       "caseId": "requirements.async.handle",
       "spec": "spec/v1/async-operations.md",
       "clauses": [
@@ -6900,6 +7012,11 @@
       "caseId": "issue.46",
       "issue": 46,
       "fixtureRefs": [
+        {
+          "path": "v1/large-values.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/46",
