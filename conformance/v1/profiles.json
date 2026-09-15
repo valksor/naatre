@@ -775,6 +775,11 @@
           "sha256": "00e2d7ad6fb2bb168b5556847c08a35293c19f0bcdbc6462ac5124c5f3f3d1c4"
         },
         {
+          "path": "v1/security-gate.json",
+          "profile": "suite.security-gate-1",
+          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+        },
+        {
           "path": "v1/security.json",
           "profile": "core.security-1",
           "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
@@ -1313,6 +1318,11 @@
           "path": "v1/schema.json",
           "profile": "core.schema-1",
           "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
+        },
+        {
+          "path": "v1/security-gate.json",
+          "profile": "suite.security-gate-1",
+          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
         },
         {
           "path": "v1/security.json",
@@ -2099,6 +2109,11 @@
           "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
         },
         {
+          "path": "v1/security-gate.json",
+          "profile": "suite.security-gate-1",
+          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+        },
+        {
           "path": "v1/security.json",
           "profile": "core.security-1",
           "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
@@ -2231,6 +2246,11 @@
           "path": "v1/schema.json",
           "profile": "core.schema-1",
           "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
+        },
+        {
+          "path": "v1/security-gate.json",
+          "profile": "suite.security-gate-1",
+          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
         },
         {
           "path": "v1/security.json",
@@ -3295,6 +3315,11 @@
           "sha256": "d18e57fc983eac65cca907d5dd3f7e0ad151a597856f5b1770c85d523700df29"
         },
         {
+          "path": "v1/security-gate.json",
+          "profile": "suite.security-gate-1",
+          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+        },
+        {
           "path": "v1/security.json",
           "profile": "core.security-1",
           "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
@@ -3335,6 +3360,11 @@
           "implementation": "@naatre/sdk",
           "language": "javascript-typescript",
           "profile": "sdk.client-1"
+        },
+        {
+          "implementation": "naatre-go-security-gate",
+          "language": "go",
+          "profile": "suite.security-gate-1"
         }
       ],
       "certificationExecutionOwnerIssue": 69,

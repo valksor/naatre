@@ -93,6 +93,7 @@ function validateRegistry() {
   requireValue(stable?.certificationExecutionOwnerIssue === 69 && stable.publicationOwnerIssue === 69, "stable release ownership must remain with issue 69");
   requireValue(stable.requiredEvidence.some((entry) => entry.language === "go" && entry.profile === "runtime.execution-1"), "stable release omits Go runtime evidence");
   requireValue(stable.requiredEvidence.some((entry) => entry.language === "javascript-typescript" && entry.profile === "sdk.client-1"), "stable release omits JavaScript/TypeScript client evidence");
+  requireValue(stable.requiredEvidence.some((entry) => entry.language === "go" && entry.profile === "suite.security-gate-1"), "stable release omits the cross-profile security gate");
 }
 
 function validateMatrix() {

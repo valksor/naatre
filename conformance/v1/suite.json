@@ -241,6 +241,12 @@
       "sha256": "81e58b72a53ceeaceaa709ac4024f4f9a8a70d944256131db3f82f96590bdcff"
     },
     {
+      "path": "v1/security-gate.json",
+      "profile": "suite.security-gate-1",
+      "category": "security",
+      "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+    },
+    {
       "path": "v1/streaming.json",
       "profile": "core.streaming-1",
       "category": "stream",
@@ -5012,6 +5018,11 @@
           "path": "v1/interactions.json",
           "pointer": "/cases/0",
           "polarity": "negative"
+        },
+        {
+          "path": "v1/security-gate.json",
+          "pointer": "",
+          "polarity": "mixed"
         }
       ]
     },
@@ -8226,6 +8237,11 @@
       "issue": 69,
       "fixtureRefs": [
         {
+          "path": "v1/security-gate.json",
+          "pointer": "/release",
+          "polarity": "positive"
+        },
+        {
           "path": "v1/roadmap.json",
           "pointer": "/issues/69",
           "polarity": "mixed"
@@ -8236,6 +8252,11 @@
       "caseId": "issue.70",
       "issue": 70,
       "fixtureRefs": [
+        {
+          "path": "v1/security-gate.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/70",
