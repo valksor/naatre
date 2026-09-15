@@ -1,0 +1,117 @@
+{
+  "profile": "adapter.asyncapi.projection-1",
+  "fixtureSuite": "1.0.0",
+  "owner": {
+    "issue": 102,
+    "coreContractIssue": 62,
+    "normativeProfile": "adapter.asyncapi-1",
+    "dependencyRevision": "016704948fd8ae551a6623a9c018c31f34e781a6"
+  },
+  "dependencies": [
+    {"profile":"adapter.asyncapi-1-spec","path":"spec/v1/asyncapi.md","sha256":"535b58f2a66a6dfdcc93f4cb261ce1a4ad74d6fbcab310c6032ae9049a41b9b1"},
+    {"profile":"adapter.asyncapi-1-fixture","path":"conformance/v1/asyncapi.json","sha256":"c6ccf22fa8162de2698350555d320048d64d2f1e261a388f6e800f81eb482828"},
+    {"profile":"adapter.asyncapi-1-exporter","path":"asyncapi/export.go","sha256":"76a1562f6935b782938da949241e9dce4a19cabe4b93bf5d4af782c1904cf0c2"},
+    {"profile":"adapter.asyncapi-1-importer","path":"asyncapi/import.go","sha256":"2a6411061ee9ba1acea26e087774452d53dff4b96e8f410e62fd4c7247325453"},
+    {"profile":"adapter.asyncapi-1-model","path":"asyncapi/model.go","sha256":"9754b68bc1ca01570f691edc251ceaf5e8054884af5ea0cf06b2c4df21f1d372"},
+    {"profile":"go.module","path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+    {"profile":"go.module-lock","path":"go.sum","sha256":"0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+  ],
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "package": "github.com/valksor/naatre/asyncapi",
+    "goVersion": "1.27.0",
+    "files": [
+      {"path":"asyncapi/projection.go","sha256":"1d5fc39df961467abb4964fb21f6a86a5e03b81ba4027e70eb3ba05bc7305ed8"},
+      {"path":"asyncapi/projection_conformance.go","sha256":"5236cdbed4bfbfc01e5958e621cb548776965f9873f7a1f21cfb17f065427da2"},
+      {"path":"asyncapi/projection_test.go","sha256":"d833fc79c7e9a9e4837a50084e5d06d94932ec0ae9c383e56d3b4ea3aaf5d930"},
+      {"path":"docs/asyncapi-projection.md","sha256":"9c26812a8b666e671e598e3acbc61d3bdf5ab9a7a88585428a820f6f1bd88a63"}
+    ]
+  },
+  "runtime": {
+    "language": "go",
+    "minimum": "1.27.0",
+    "platformProfile": "portable-offline-library",
+    "certifiedOperatingSystems": [],
+    "businessHandlerCalls": 0
+  },
+  "projection": {
+    "asyncapiVersion": "3.0.0",
+    "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+    "coreProfile": "adapter.asyncapi-1",
+    "coreExporter": "asyncapi-exporter-1",
+    "authority": "caller-authorized-naatre-schema",
+    "roundTrip": "canonical-byte-identical-reexport",
+    "directions": ["schema-export", "schema-import", "validation"]
+  },
+  "fixtures": [
+    {"name":"complete-schema-and-event-model-round-trip","class":"positive","tests":["TestProjectionRoundTripIsByteStableAndKeepsSchemaAuthority"]},
+    {"name":"channel-operation-message-correlation-security-binding-byte-stability","class":"positive","tests":["TestProjectionRoundTripIsByteStableAndKeepsSchemaAuthority"]},
+    {"name":"independent-schema-authority-mismatch","class":"negative","tests":["TestProjectionRejectsSchemaAuthorityAndPolicyRedefinition"]},
+    {"name":"asyncapi-effect-or-authorization-redefinition","class":"negative","tests":["TestProjectionRejectsSchemaAuthorityAndPolicyRedefinition"]},
+    {"name":"exact-document-byte-ceiling","class":"boundary","tests":["TestProjectionCancellationAndResourceBoundaries"]},
+    {"name":"caller-context-cancelled-before-work","class":"cancellation","tests":["TestProjectionCancellationAndResourceBoundaries"]},
+    {"name":"document-byte-limit-minus-one","class":"resource-limit","tests":["TestProjectionCancellationAndResourceBoundaries"]},
+    {"name":"stable-redacted-policy-diagnostic","class":"negative","tests":["TestProjectionRejectsSchemaAuthorityAndPolicyRedefinition"]}
+  ],
+  "stableFailureCodes": [
+    "ASYNCAPI_DOCUMENT_INVALID",
+    "ASYNCAPI_FIDELITY_INVALID",
+    "ASYNCAPI_LIMIT_INVALID",
+    "ASYNCAPI_PROJECTION_CANCELLED",
+    "ASYNCAPI_PROJECTION_DOCUMENT_LIMIT",
+    "ASYNCAPI_PROJECTION_MISMATCH",
+    "ASYNCAPI_PROJECTION_UNSUPPORTED",
+    "ASYNCAPI_REQUIRED_SEMANTIC_UNSUPPORTED",
+    "ASYNCAPI_SCHEMA_AUTHORITY_MISMATCH",
+    "ASYNCAPI_SCHEMA_AUTHORITY_REQUIRED",
+    "ASYNCAPI_SCHEMA_INVALID",
+    "ASYNCAPI_SCHEMA_LIMIT",
+    "ASYNCAPI_SCHEMA_PROJECTION_UNSUPPORTED"
+  ],
+  "capabilities": {
+    "supported": [
+      "asyncapi-3.0.0-json",
+      "json-schema-draft-2020-12-projection",
+      "complete-authorized-naatre-type-declarations",
+      "caller-supplied-schema-authority",
+      "schema-revision-and-semantic-digest-binding",
+      "channel-operation-message-correlation-security-and-binding-round-trip",
+      "canonical-byte-identical-reexport-validation",
+      "closed-local-reference-import",
+      "exact-server-url-allowlist",
+      "context-cancellation",
+      "bounded-document-depth-member-channel-message-reference-and-example-processing",
+      "stable-redacted-public-diagnostics"
+    ],
+    "unsupported": [
+      "yaml-input",
+      "asyncapi-2x-or-floating-3x",
+      "alternate-json-schema-dialects",
+      "remote-file-data-or-dynamic-references",
+      "reference-resolvers-overlays-or-partial-import",
+      "schema-effect-authorization-or-policy-inference",
+      "runtime-registration-or-handler-invocation",
+      "schema-mutation-or-code-generation",
+      "broker-provisioning-or-server-discovery",
+      "client-generation-or-mock-business-behavior",
+      "automatic-compatibility-approval",
+      "native-kafka-amqp-mqtt-nats-redis-pulsar-or-sns-sqs",
+      "native-websocket-sse-webhook-or-worker-wire-interoperability",
+      "dns-http-tls-proxy-socket-listener-or-network-integration",
+      "credential-secret-store-kms-or-hsm-integration",
+      "metrics-tracing-or-audit-exporters",
+      "browser-edge-mobile-wasm-or-non-go-native-runtimes",
+      "framework-or-alternate-json-library-adapters",
+      "operating-system-architecture-container-cluster-or-managed-service-certification",
+      "third-party-asyncapi-certification"
+    ]
+  },
+  "commands": [
+    "GOWORK=off go test ./asyncapi -run 'Projection' -count=1",
+    "GOWORK=off go test ./internal/conformance -run 'AsyncAPI' -count=1",
+    "GOWORK=off go test ./... -count=1",
+    "GOWORK=off go vet ./...",
+    "golangci-lint run --allow-parallel-runners",
+    "go generate ./..."
+  ]
+}
