@@ -53,7 +53,9 @@ troubleshooting, and the third-party implementation path.
   `sdk.python.core-1` and `sdk.python.adapters-1`.
 - `sdk/rust`: runtime-neutral Rust client ownership traits, lossless scalar
   wrappers, deterministic serde operation bindings for `sdk.rust.core-1`, and
-  optional task-local Tokio adapters for `sdk.rust.adapters-1`.
+  optional task-local Tokio adapters for `sdk.rust.adapters-1`, plus bounded
+  Tokio worker ownership and an Axum router for
+  `worker.remote-1.rust-tokio-axum-1`.
 - `sdk/jvm`: Java 17 wire/client core, deterministic Java and Kotlin bindings,
   cancellation-safe coroutine and Flow views, a separate server-only
   `java.net.http` unary adapter, and an Android API-26 D8 compatibility profile.

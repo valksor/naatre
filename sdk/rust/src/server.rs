@@ -967,7 +967,7 @@ fn validate_invocation(
     Ok(())
 }
 
-fn valid_identifier(value: &str) -> bool {
+pub(crate) fn valid_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     value.len() <= 128
         && bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())

@@ -13,6 +13,8 @@ default = []
 generator = ["dep:sha2"]
 server = []
 tokio = []
+tokio-runtime = ["server", "dep:tokio"]
+axum = ["tokio-runtime", "dep:axum"]
 
 [profile.release]
 panic = "abort"
@@ -22,14 +24,17 @@ inherits = "dev"
 panic = "unwind"
 
 [dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "tokio"], optional = true }
 base64 = "=0.22.1"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 sha2 = { version = "=0.10.9", optional = true }
 time = { version = "=0.3.44", features = ["formatting", "parsing"] }
+tokio = { version = "=1.53.1", features = ["net", "rt-multi-thread", "sync"], optional = true }
 
 [dev-dependencies]
 sha2 = "=0.10.9"
+tower = { version = "=0.5.3", features = ["util"] }
 
 [[bin]]
 name = "naatre-rust-sdk-generator"

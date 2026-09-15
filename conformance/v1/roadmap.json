@@ -1252,18 +1252,20 @@
     "100": {
       "issue": 100,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 100,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "worker.remote-1.rust-tokio-axum-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "worker.remote-1.rust-tokio-axum-1"
+        ]
       }
     },
     "101": {

@@ -16,6 +16,14 @@ additive:
 - `tokio`: task-local unary and stream closure adapters for futures polled by a
   caller-selected Tokio runtime. This feature deliberately introduces no Tokio
   crate dependency, runtime construction, task spawning, or network backend.
+- `tokio-runtime`: issue #100's worker-only integration with exact Tokio
+  `1.53.1`. It provides bounded async and blocking work owners for #61's
+  `HandlerContext`; the embedding application still constructs and shuts down
+  the runtime.
+- `axum`: issue #100's worker HTTP integration with exact Axum `0.8.9`. It
+  includes `server` and `tokio-runtime`, exposes an in-memory-testable router,
+  and accepts a caller-bound listener for optional serving. It does not add a
+  client transport or own TLS/process configuration.
 
 The supported build matrix is:
 
@@ -25,7 +33,10 @@ cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml
 cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features generator
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --features server --test server
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --features tokio
+cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features tokio-runtime
+cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --features axum --test axum_worker
 cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --all-features
+cargo +1.85.0 build --manifest-path sdk/rust/Cargo.toml --release --features axum
 cargo +stable fmt --manifest-path sdk/rust/Cargo.toml --check
 cargo +stable clippy --manifest-path sdk/rust/Cargo.toml --all-targets --all-features -- -D warnings
 ```
@@ -38,6 +49,7 @@ root with:
 
 ```sh
 node conformance/independent/verify-rust-async-adapters.mjs
+node conformance/independent/verify-rust-tokio-axum.mjs
 ```
 
 Regenerate the checked artifacts from the repository root:
@@ -91,15 +103,15 @@ it calls no Tokio API, so it neither pins nor certifies a Tokio crate revision.
 The checked conformance harness is platform-independent and uses no listener,
 network, clock, filesystem, or background task.
 
-Unsupported optional capabilities are concrete HTTP and HTTP/2 clients,
+Unsupported optional capabilities in `sdk.rust.adapters-1` are concrete HTTP and HTTP/2 clients,
 authenticated POST SSE, WebSocket, QUIC, compression/decompression, TLS and
 certificate policy, redirects, proxy handling, credential or tenant injection,
 automatic retries, reconnect/replay, pagination orchestration, bounded task or
 message queues, Tokio runtime construction, `tokio::spawn` ownership,
 `LocalSet` and non-`Send` futures, Tower/Hyper/Reqwest/Axum integration, WASM
 and embedded executors, mobile bindings, native-runtime certification, and
-deployment certification. Axum and concrete Tokio/HTTP worker adapters stay
-owned by issue #100; the complete official SDK matrix stays owned by issue #69.
+deployment certification. The complete official SDK matrix stays owned by
+issue #69.
 
 ## Remote-worker server core
 
@@ -157,3 +169,67 @@ published result is `conformance/v1/rust-worker.json`; it claims a Go-gateway
 to Rust-worker path only and explicitly does not claim an independent native
 execution runtime. See the complete supervised-stdio example at
 `examples/go-gateway-rust-worker/README.md`.
+
+## Tokio worker and Axum integration
+
+Issue #61 remains the sole owner of the worker protocol, generated handler
+contract, validation, registration, request resources, and result schema.
+Issue #100 owns only `worker.remote-1.rust-tokio-axum-1`: the optional
+`tokio-runtime` task/blocking-work owner and the optional `axum` HTTP adapter.
+The adapter reuses #61's `Registration`, `WorkerInvocation`, `CancelRequest`,
+strict framed codec, `WorkerCore`, and stable failure codes; it defines no
+second wire shape or dispatch authority.
+
+`TokioWorkerSpawner` binds to an application-owned Tokio runtime handle. Its
+finite async and blocking semaphores reject excess work with `OVERLOADED`
+before spawning. A returned owner must be transferred to `HandlerContext`.
+Async cancellation aborts and joins the task during orderly cleanup. Blocking
+work receives a cooperative `Cancellation` token and remains joined during
+orderly cleanup; Tokio cannot forcibly terminate a blocking syscall or closure
+that ignores that token. Abrupt future/task drop requests cancellation and
+releases core ownership, but cannot promise a blocking closure, external side
+effect, or transaction was rolled back. Detached work and unbounded queues are
+not supported.
+
+`AxumWorker::router` exposes only the normative `Register`, `Invoke`, and
+`Cancel` RPC paths using the exact framed `application/naatre-worker+json`
+transport and `Naatre-Worker-Protocol` negotiation. It starts no task and binds
+no listener. `AxumWorker::serve` accepts an already-bound Tokio `TcpListener`
+and a caller-owned shutdown future; graceful shutdown drains admitted Axum
+requests. The application owns socket address selection, TLS and client
+certificate policy, HTTP/2 ALPN, trusted proxy policy, runtime construction,
+signals, admission opening, and process supervision. Tests call the router
+directly and bind no port.
+
+The source-supported boundary is Rust 1.85+ edition 2024 on `std` targets with
+threads, atomics, Tokio's multithread runtime, and Axum HTTP/1 or HTTP/2 router
+support. The checked profile is an offline, in-memory router/task fixture on
+the recorded host; it does not certify an operating system or architecture.
+The unwind test profile contains panics as a redacted `INTERNAL` response. The
+release-abort profile remains a separate process-failure outcome: destructors,
+cancellation, and HTTP responses are not promised after abort.
+
+Unsupported optional capabilities are runtime construction, implicit task
+ownership, unbounded task/blocking queues, `LocalSet` and non-`Send` handlers,
+hard termination of started blocking work, server streaming, client streaming,
+bidirectional streaming, authenticated POST SSE, WebSocket, QUIC, compression,
+TLS/certificate configuration, proxy trust, credential injection, automatic
+retry/reconnect/replay, pagination orchestration, WASM/no-std/embedded
+executors, mobile bindings, native-runtime certification, deployment
+certification, and a production client transport.
+
+From the repository root, the reproducible profile commands are:
+
+```sh
+cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --no-default-features --locked --offline
+cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features server --locked --offline
+cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --profile unwind --features axum --test axum_worker --locked --offline
+cargo +1.85.0 build --manifest-path sdk/rust/Cargo.toml --release --features axum --locked --offline
+cargo +stable clippy --manifest-path sdk/rust/Cargo.toml --all-targets --all-features --locked --offline -- -D warnings
+node conformance/independent/verify-rust-tokio-axum.mjs
+```
+
+`conformance/v1/rust-tokio-axum.json` pins the exact #61 commit, crate
+revisions/checksums, lockfile digest, evidence digests, feature matrix,
+positive/negative/boundary/cancellation/resource-limit fixtures, and separate
+unwind/abort outcomes. Passing it proves only that published profile.

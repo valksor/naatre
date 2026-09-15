@@ -35,6 +35,7 @@ const implementations = new Map([
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.rust.adapters-1", "verify-rust-async-adapters.mjs"],
+  ["worker.remote-1.rust-tokio-axum-1", "verify-rust-tokio-axum.mjs"],
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
   ["sdk.jvm.adapters-1", "verify-jvm-adapters.mjs"],
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
@@ -53,6 +54,7 @@ const profileTimeouts = new Map([
   ["sdk.jvm.adapters-1", 240_000],
   ["sdk.dotnet.core-1", 120_000],
   ["sdk.rust.adapters-1", 120_000],
+  ["worker.remote-1.rust-tokio-axum-1", 240_000],
   ["sdk.dotnet.adapters-1", 240_000],
   ["sdk.swift.apple-1", 120_000],
 ]);
