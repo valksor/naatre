@@ -83,6 +83,10 @@ evidence must be described as planned.
   [plan-cache profile](docs/plan-cache.md), and
   [process-hosting guide](docs/process-hosting.md). Production distributed
   federation planning and transport integration remain owned by #109.
+- `asyncoperation`: durable SQLite operation storage, private fencing leases,
+  bounded recovery dispatch, lease-renewing workers, and optional post-commit
+  queue hints for `operations.async-adapters-go-1`; see the
+  [durable adapter guide](docs/async-operation-adapters.md).
 - `observability`: optional OpenTelemetry trace, metric, and log export plus
   application-owned transactional audit/outbox admission for
   `operations.observability-integrations-go-1`; see the

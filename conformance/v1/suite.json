@@ -277,6 +277,12 @@
       "sha256": "517eacfc84853cfe70d519313d970db30b715964558aa6f55c681844f592e0c7"
     },
     {
+      "path": "v1/async-operation-adapters.json",
+      "profile": "operations.async-adapters-go-1",
+      "category": "integration",
+      "sha256": "32ddf526340c0e33c29cec08993c4438987ee3b5a00db66b522d1bf571768168"
+    },
+    {
       "path": "v1/federation-coordinator.json",
       "profile": "runtime.go.federation-coordinator-1",
       "category": "execution",
@@ -7443,6 +7449,11 @@
       "caseId": "issue.89",
       "issue": 89,
       "fixtureRefs": [
+        {
+          "path": "v1/async-operation-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/89",
