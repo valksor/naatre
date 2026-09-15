@@ -34,6 +34,13 @@ transport and egress cases without contacting a network endpoint.
 receiver and dependency-free JavaScript receiver both verify whitespace, gzip,
 method and target binding, freshness, exact key selection, duplicate replay,
 retry, batch, version-skew, recovery, revocation, and redaction vectors.
+`v1/http-digest-integration.json` is the separate
+`implementation.go.http-digest-1` middleware and Go SDK evidence manifest. It
+references rather than redefines the #63 contract, pins its exact dependency
+commit and file revisions, and publishes credential-free offline commands plus
+the executed and unsupported runtime boundary.
+The shared `protocol/httpdigest` package is the single inward Go implementation;
+`transport/http` preserves its public compatibility surface for middleware users.
 `v1/generator-plugin-host.json` binds the public Go host, the exact generator
 model and toolchain revisions, and a dependency-free third-party JavaScript
 fixture. The `sdk.generator-plugin-host-1` profile executes discovery,

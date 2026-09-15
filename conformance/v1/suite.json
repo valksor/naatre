@@ -533,6 +533,12 @@
       "profile": "adapter.openrpc-jsonrpc-1",
       "category": "transport",
       "sha256": "9094c084089858fbc70e44eb2381dcf33635effd6ede63a7e2fdd868a7176327"
+    },
+    {
+      "path": "v1/http-digest-integration.json",
+      "profile": "implementation.go.http-digest-1",
+      "category": "transport",
+      "sha256": "be99cdfa423684a5e32e32ec623318ab9edcd5ab04eb37a270db997fac4a4100"
     }
   ],
   "normativeSources": [

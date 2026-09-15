@@ -21,6 +21,7 @@ const implementations = new Map([
   ["core.adapters-1", "adapters.mjs"],
   ["core.http.digest-1", "http-digest.mjs"],
   ["core.events-1", "events.mjs"],
+  ["implementation.go.http-digest-1", "http-digest-integration.mjs"],
   ["collection.query.codegen-1", "verify-collection-query-generation.mjs"],
   ["core.validation-1", "validation.mjs"],
   ["sdk.generation-1", "verify-generator.mjs"],

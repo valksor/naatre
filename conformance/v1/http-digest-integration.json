@@ -1,0 +1,73 @@
+{
+  "profile": "implementation.go.http-digest-1",
+  "contract": {
+    "profile": "core.http.digest-1",
+    "ownerIssue": 63,
+    "gitCommit": "6614b5c970ca8eac7de5dc974a5885bb5226f6ea",
+    "files": [
+      {"path":"spec/v1/http-digest.md","sha256":"ee72dedb2140696764d6928534b3c33d63972393d6ba8269abb3f6432636764a"},
+      {"path":"conformance/v1/http-digest.json","sha256":"72ed0eeb502b14eb3b4369cb8f534bcd71fb1c4df28471ea6e1341bc6b0153f5"},
+      {"path":"conformance/independent/http-digest.mjs","sha256":"d06283197fee292336ccbd2ea80dde5074ad5c67295e0d2c35dc9b0f65763186"}
+    ]
+  },
+  "implementation": {
+    "ownerIssue": 104,
+    "module": "github.com/valksor/naatre",
+    "minimumGo": "1.27",
+    "packages": [
+      "github.com/valksor/naatre/protocol/httpdigest",
+      "github.com/valksor/naatre/transport/http",
+      "github.com/valksor/naatre/client"
+    ],
+    "files": [
+      {"path":"go.mod","sha256":"2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
+      {"path":"protocol/httpdigest/digest.go","sha256":"2fe7528d928d9172fe442763c9eb66c7d5df7fcfbf3c830a6bb66f8a89eeb76b"},
+      {"path":"protocol/httpdigest/http.go","sha256":"513aa12e609702ed65746c2d00bc4f39844e373cb9318450f41ab116b81f0b75"},
+      {"path":"transport/http/digest.go","sha256":"b44004c5f63384ae5f2dccc6e3b310b6dad9ea07a94ad671f9078ff824b03f55"},
+      {"path":"transport/http/integrity.go","sha256":"4c5ca11b8c0eea5f710e23f2ba011b7663b5ebc61653789e173de5cd8e68b7e5"},
+      {"path":"transport/http/integrity_types.go","sha256":"af9d4a9a40b8047e3e8ecdfecdf40ebc7a4f60c646b678ca00ae8468ad44a7fc"},
+      {"path":"client/client.go","sha256":"a5a308086090832c582cb2dbd9bd0698fa6d351d8cdc99c33d4bfe0e358eb99f"},
+      {"path":"client/digest.go","sha256":"184e50327f2f72b20047fd0cccc01f9c971f0379495313a86c1c905c38e8bf88"},
+      {"path":"transport/http/integrity_test.go","sha256":"497ebb5283ce578cd3db30d9dca0a60cb14f2499c1d3b85953b68a660b1957e2"},
+      {"path":"client/digest_test.go","sha256":"bf082c5bb116e26a1697b9b419ca2459247c4083d0f81ce1f55babab120842c8"},
+      {"path":"docs/http-digest-integration.md","sha256":"6a7bfcef4e431a722f2163d764336e88a0c705d128b647bd5a3eca00609d5654"},
+      {"path":"conformance/independent/http-digest-integration.mjs","sha256":"c13eb6927a100e150c5370efd10379d7027a57cbef3aa8de30ce63c223904989"},
+      {"path":"conformance/independent/runner.mjs","sha256":"7cf1cdbe28cf431856f8f1ceb4140e3ae684eac1815dd03da213162904c436eb"}
+    ]
+  },
+  "runtimeBoundary": {
+    "supported": ["Go 1.27 net/http", "identity content coding", "gzip content coding", "single byte ranges", "multipart byte-range outer content"],
+    "executed": {"go":"1.27.1","os":"darwin","arch":"arm64"},
+    "unsupported": ["digest-only trailers", "indefinite SSE whole-stream digests", "WebSocket frame digests", "brotli and zstd representation decoding", "multipart per-part digest parsing", "automatic assembled-range representation retrieval", "automatic digest-protected redirect following", "non-Go SDK transports", "framework certification", "HTTP/3 transport certification"]
+  },
+  "capabilities": [
+    "initial-header-request-verification",
+    "bounded-request-staging",
+    "response-completion-generation",
+    "want-field-negotiation",
+    "all-present-allowed-digest-verification",
+    "explicit-range-representation-source",
+    "go-sdk-success-gate",
+    "active-context-cancellation"
+  ],
+  "cases": [
+    {"name":"identity-request-response","class":"positive","phase":"completion","code":""},
+    {"name":"gzip-request-response","class":"boundary","phase":"completion","code":""},
+    {"name":"single-range-response","class":"boundary","phase":"completion","code":""},
+    {"name":"malformed-field","class":"malformed","phase":"headers","code":"MALFORMED_DIGEST"},
+    {"name":"late-trailer","class":"negative","phase":"headers","code":"DIGEST_TRAILER_UNSUPPORTED"},
+    {"name":"incomplete-content","class":"negative","phase":"content","code":"DIGEST_TRUNCATED"},
+    {"name":"downgraded-algorithm","class":"security","phase":"headers","code":"DIGEST_DOWNGRADE"},
+    {"name":"conflicting-values","class":"security","phase":"content","code":"DIGEST_MISMATCH"},
+    {"name":"intermediary-altered-content","class":"security","phase":"content","code":"DIGEST_MISMATCH"},
+    {"name":"context-canceled","class":"cancellation","phase":"content","code":"DIGEST_CANCELED"},
+    {"name":"content-limit","class":"limit","phase":"content","code":"DIGEST_LIMIT_EXCEEDED"},
+    {"name":"range-representation-unavailable","class":"negative","phase":"representation","code":"DIGEST_REPRESENTATION_UNAVAILABLE"},
+    {"name":"indefinite-flush","class":"negative","phase":"completion","code":"DIGEST_STREAM_UNSUPPORTED"}
+  ],
+  "verificationCommands": [
+    ["go","test","./transport/http","-run","TestDigestMiddleware","-count=1"],
+    ["go","test","./client","-run","TestExecute(VerifiesHTTPDigest|DigestFailures|VerifiesRangeRepresentation)","-count=1"],
+    ["node","conformance/independent/http-digest-integration.mjs"]
+  ]
+}

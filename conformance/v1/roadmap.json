@@ -1310,18 +1310,20 @@
     "104": {
       "issue": 104,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 104,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "implementation.go.http-digest-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "implementation.go.http-digest-1"
+        ]
       }
     },
     "105": {
