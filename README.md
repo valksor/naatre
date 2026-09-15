@@ -129,6 +129,11 @@ evidence must be described as planned.
   bounded recovery dispatch, lease-renewing workers, and optional post-commit
   queue hints for `operations.async-adapters-go-1`; see the
   [durable adapter guide](docs/async-operation-adapters.md).
+- `subscriptionbroker`: PostgreSQL, Redis Streams, and NATS JetStream
+  delivery-source adapters with explicit atomic-driver capability gates,
+  bounded replay, stable redacted failures, and reconnect-safe canary/rollback
+  control for `streaming.broker-adapters-go-1`; see the
+  [broker adapter guide](docs/subscription-broker-adapters.md).
 - `observability`: optional OpenTelemetry trace, metric, and log export plus
   application-owned transactional audit/outbox admission for
   `operations.observability-integrations-go-1`; see the

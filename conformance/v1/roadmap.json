@@ -1329,18 +1329,20 @@
     "105": {
       "issue": 105,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 105,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "streaming.broker-adapters-go-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "streaming.broker-adapters-go-1"
+        ]
       }
     },
     "106": {

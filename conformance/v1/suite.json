@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "77d54079e3429f7135a1d6b045fd7be4cbb5cb6a23e0a0c6b4cbe416a410ffe0"
+      "sha256": "a48784768f9a7f9507bde3bdd41b7fa938aa6d8b5bb92d969aa5bd253025bda3"
     },
     {
       "path": "v1/scalars.json",
@@ -287,6 +287,12 @@
       "profile": "operations.async-adapters-go-1",
       "category": "integration",
       "sha256": "533413595aae7fd9d811fab202942641a1a52c7ae4f8017358ed12a6587adc00"
+    },
+    {
+      "path": "v1/subscription-broker-adapters.json",
+      "profile": "streaming.broker-adapters-go-1",
+      "category": "integration",
+      "sha256": "85e0efce08e8ea97f0caef2776ad14275213bea995dd8b01ffadd14551e62334"
     },
     {
       "path": "v1/federation-coordinator.json",
@@ -8485,6 +8491,11 @@
       "caseId": "issue.105",
       "issue": 105,
       "fixtureRefs": [
+        {
+          "path": "v1/subscription-broker-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/105",

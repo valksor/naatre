@@ -1,0 +1,132 @@
+{
+  "profile": "streaming.broker-adapters-go-1",
+  "fixtureSuite": "1.0.0",
+  "owner": {
+    "issue": 105,
+    "coreContractIssue": 67,
+    "normativeProfile": "core.streaming-handles-1",
+    "dependencyRevision": "19017dc2f362fde82aecab9a3f3242555cf8a203"
+  },
+  "dependencies": [
+    {"profile":"core.streaming-1-spec","path":"spec/v1/streaming.md","sha256":"26f024874a33a697fe59066ed8571b8ecec477a49707aec842787635a14f5441"},
+    {"profile":"core.streaming-1-fixture","path":"conformance/v1/streaming.json","sha256":"8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"},
+    {"profile":"core.streaming-handles-1-runtime","path":"runtime/subscription_handle.go","sha256":"b0c05c17e78aec2619dc1d14f4ebef11698215435b5c9a8e1394224715da3b1a"},
+    {"profile":"core.streaming-handles-1-reference-broker","path":"runtime/subscription_broker.go","sha256":"cba59646e00f821443c61399f142a57b792c193e9f86bc7621e0715617012310"},
+    {"profile":"go.module","path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+    {"profile":"go.module-lock","path":"go.sum","sha256":"0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+  ],
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "package": "github.com/valksor/naatre/subscriptionbroker",
+    "goVersion": "1.27.0",
+    "externalModuleDependencies": [],
+    "files": [
+      {"path":"subscriptionbroker/adapter.go","sha256":"04469917f461c8bd63bfe0af79fdc931b6e6dae8033aaf213948b6160d8a24b4"},
+      {"path":"subscriptionbroker/rollout.go","sha256":"4789e774ccb16476b522fb26873a55cc81423beedd8c81b4ec920630a14972e4"},
+      {"path":"subscriptionbroker/adapter_test.go","sha256":"b1f44582fece00d8a31212fade151ede39d822a59f58b1b0e6d410395555d57a"},
+      {"path":"docs/subscription-broker-adapters.md","sha256":"a3de8802a8c35ea95fea8173a02cf9a00eb182036e127a4c4c800cdb30a950e0"}
+    ]
+  },
+  "runtime": {
+    "language": "go",
+    "minimum": "1.27.0",
+    "platformProfile": "portable-go-library",
+    "certifiedOperatingSystems": [],
+    "certifiedProductVersions": [],
+    "driverContract": "atomic-driver-1",
+    "driverRevisionEvidence": "deployment-required"
+  },
+  "adapters": [
+    {"name":"in-process","implementation":"runtime.MemorySubscriptionBroker","driver":"built-in","replay":"bounded","evidence":"TestSubscriptionHandleSnapshotReplayLiveHandoffAndTerminal"},
+    {"name":"postgresql","implementation":"subscriptionbroker.PostgreSQLAdapter","driver":"application-supplied-postgresql-atomic-driver","replay":"bounded-or-durable","evidence":"TestAdvertisedAdaptersProveAtomicReplayToLiveHandoff/postgresql"},
+    {"name":"redis-streams","implementation":"subscriptionbroker.RedisStreamsAdapter","driver":"application-supplied-redis-streams-atomic-driver","replay":"bounded-or-durable","evidence":"TestAdvertisedAdaptersProveAtomicReplayToLiveHandoff/redis-streams"},
+    {"name":"nats-jetstream","implementation":"subscriptionbroker.NATSJetStreamAdapter","driver":"application-supplied-nats-jetstream-atomic-driver","replay":"bounded-or-durable","evidence":"TestAdvertisedAdaptersProveAtomicReplayToLiveHandoff/nats-jetstream"}
+  ],
+  "limits": {
+    "defaultBindingBytes": 4096,
+    "defaultSnapshotBytes": 262144,
+    "defaultReplayEvents": 1024,
+    "defaultReplayBytes": 8388608,
+    "defaultFrameBytes": 1048576,
+    "defaultPendingEvents": 64
+  },
+  "fixtures": [
+    {"name":"all-adapters-atomic-replay-live","class":"positive","tests":["TestAdvertisedAdaptersProveAtomicReplayToLiveHandoff"]},
+    {"name":"all-adapters-history-loss-revocation-slow-consumer","class":"negative","tests":["TestAdvertisedAdaptersProveHistoryLossRevocationAndSlowConsumer"]},
+    {"name":"replay-event-and-byte-bounds","class":"resource-limit","tests":["TestAdvertisedAdaptersBoundReplayAndRejectMalformedHandoffs"]},
+    {"name":"source-cancellation-and-concurrent-close","class":"cancellation","tests":["TestAdvertisedAdaptersCancellationAndCloseUnblock"]},
+    {"name":"stable-redacted-driver-failures","class":"security","tests":["TestPublicFailuresNeverLeakDriverMetadata"]},
+    {"name":"finite-stagger-and-atomic-rollback","class":"boundary","tests":["TestRolloutStaggersReconnectsAndRollbackStopsCandidateSelection"]},
+    {"name":"incomplete-driver-capability-gate","class":"negative","tests":["TestAdapterRejectsIncompleteDriverCapabilities"]},
+    {"name":"in-process-reference-regression","class":"positive","tests":["TestSubscriptionHandleSnapshotReplayLiveHandoffAndTerminal"]}
+  ],
+  "stableFailureCodes": [
+    "BROKER_ADAPTER_INVALID_CONFIG",
+    "BROKER_ADAPTER_INVALID_RECORD",
+    "BROKER_ADAPTER_UNAVAILABLE",
+    "BROKER_ADAPTER_HISTORY_LOST",
+    "BROKER_ADAPTER_SLOW_CONSUMER",
+    "BROKER_ADAPTER_RESOURCE_EXHAUSTED",
+    "BROKER_ADAPTER_CANCELLED"
+  ],
+  "capabilities": {
+    "supported": [
+      "in-process-reference",
+      "postgresql-delivery-source",
+      "redis-streams-delivery-source",
+      "nats-jetstream-delivery-source",
+      "atomic-snapshot-position",
+      "atomic-replay-live-attach",
+      "bounded-replay-events-and-bytes",
+      "explicit-history-loss",
+      "revocation",
+      "slow-consumer-detachment",
+      "terminal-retention",
+      "duplicate-classification-driver-gate",
+      "stable-redacted-public-errors",
+      "finite-deterministic-reconnect-stagger",
+      "candidate-basis-point-canary",
+      "atomic-process-local-rollback",
+      "aggregate-metadata-safe-rollout-evidence"
+    ],
+    "unsupported": [
+      "bundled-postgresql-client-or-server-version",
+      "bundled-redis-client-or-server-version",
+      "bundled-nats-client-or-server-version",
+      "public-topics-or-subjects",
+      "broker-offset-public-cursors",
+      "bearer-handles-in-urls",
+      "unbounded-replay-or-search",
+      "unlimited-pending-consumers",
+      "infinite-retries",
+      "synchronized-fleet-reconnect",
+      "exactly-once-external-publication",
+      "cross-database-snapshot-transaction",
+      "business-mutation-atomic-commit",
+      "automatic-product-provisioning-or-migration",
+      "replication-failover-backup-or-disaster-recovery",
+      "encryption-key-or-credential-management",
+      "redis-pubsub-or-consumer-group-protocol",
+      "nats-core-kafka-pulsar-rabbitmq-or-mercure",
+      "multi-region-global-order",
+      "history-reconstruction-after-retention-loss",
+      "active-cursor-product-migration",
+      "websocket-or-framework-integration",
+      "ingress-load-balancer-discovery-or-supervision",
+      "non-go-native-runtime",
+      "operating-system-architecture-container-cluster-or-managed-service-certification"
+    ]
+  },
+  "rolloutEvidence": {
+    "profile": "streaming.broker-adapters-go-1",
+    "fields": ["revision","candidateBasisPoints","rolledBack","selections","outcomes"],
+    "outcomes": ["caught-up","history-lost","interrupted","revoked","slow-consumer"],
+    "forbiddenFields": ["credential","handle","cursor","payload","address","subject","key","schemaRevision","authorizationRevision"]
+  },
+  "commands": [
+    "GOWORK=off go test ./subscriptionbroker -count=1",
+    "GOWORK=off go test -race ./subscriptionbroker -count=1",
+    "GOWORK=off go test ./internal/conformance -run 'TestSubscriptionBrokerAdapterProfile' -count=1",
+    "GOWORK=off go vet ./subscriptionbroker ./internal/conformance"
+  ]
+}

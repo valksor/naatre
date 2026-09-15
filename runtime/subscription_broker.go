@@ -16,8 +16,11 @@ import (
 type SubscriptionAdapterKind string
 
 const (
-	SubscriptionAdapterInProcess SubscriptionAdapterKind = "in-process"
-	SubscriptionAdapterMercure   SubscriptionAdapterKind = "mercure"
+	SubscriptionAdapterInProcess     SubscriptionAdapterKind = "in-process"
+	SubscriptionAdapterMercure       SubscriptionAdapterKind = "mercure"
+	SubscriptionAdapterPostgreSQL    SubscriptionAdapterKind = "postgresql"
+	SubscriptionAdapterRedisStreams  SubscriptionAdapterKind = "redis-streams"
+	SubscriptionAdapterNATSJetStream SubscriptionAdapterKind = "nats-jetstream"
 )
 
 // SubscriptionBrokerCapabilities declares semantic facts an adapter proves.
@@ -58,7 +61,9 @@ func ReportSubscriptionBrokerFidelity(capabilities SubscriptionBrokerCapabilitie
 		report.Compatible = false
 		report.Failures = append(report.Failures, SubscriptionFidelityFailure{Capability: capability, Reason: reason})
 	}
-	require(capabilities.Adapter == SubscriptionAdapterInProcess || capabilities.Adapter == SubscriptionAdapterMercure, "adapter", "unsupported adapter kind")
+	require(capabilities.Adapter == SubscriptionAdapterInProcess || capabilities.Adapter == SubscriptionAdapterMercure ||
+		capabilities.Adapter == SubscriptionAdapterPostgreSQL || capabilities.Adapter == SubscriptionAdapterRedisStreams ||
+		capabilities.Adapter == SubscriptionAdapterNATSJetStream, "adapter", "unsupported adapter kind")
 	wantedFrames := []protocol.StreamEventType{
 		protocol.StreamOpen, protocol.StreamData, protocol.StreamPatch, protocol.StreamError,
 		protocol.StreamComplete, protocol.StreamKeepalive, protocol.StreamResume, protocol.StreamHistoryUnavailable,
