@@ -46,6 +46,26 @@ filter/sort mapping. The aggregator requires one digest per artifact to agree
 across all ten languages. Hashing fixture input or expected output instead of
 observed output is not release evidence.
 
+### Trust boundary
+
+The aggregator cannot, by digest alone, distinguish an artifact computed from a
+verifier's observed output from one computed over the input or expected-output
+fixture: a conformant run's observed output is byte-identical to the expected
+output, so the two hash the same. The aggregator therefore enforces only what is
+decidable at aggregation time — report schema validity, evidence completeness,
+version consistency, and cross-language digest agreement. The guarantee that a
+digest reflects *observed* output rests on the `verify-*.mjs`/`verify-*.py`
+scripts, which spawn the real target toolchain (for example `cargo test`,
+`dotnet run`, `python3`, `swift run`) and derive the artifact from that process's
+output. The "hash observed output, not input" rule above is a binding
+requirement on those verifier scripts, not a property the aggregator can
+re-derive. Running the matrix from CI on clean runners provisioned to the exact
+recorded toolchains — rather than from a single developer machine — is what
+would make those verifier runs independently attestable. The release evidence is
+currently produced and self-attested from one environment; a CI workflow that
+reproduces the exact recorded toolchains (each verifier pins its exact toolchain
+build) is a recommended follow-up.
+
 Optional capabilities use one of two explicit forms: include the capability in
 the passing result and claim, or provide a separate report whose result is
 `unsupported` and names that optional capability. Missing optional status,

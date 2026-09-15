@@ -92,7 +92,8 @@ troubleshooting, and the third-party implementation path.
 - `event`: application-neutral CloudEvents envelopes, exact-byte RFC 9421
   webhook verification, replay status, endpoint policy, and durable delivery
   state contracts for `core.events-1`; applications remain responsible for
-  producing business events and #90 owns durable HTTP delivery.
+  producing business events, and the `webhook` package provides durable HTTP
+  delivery.
 - `webhook`: durable SQLite outbox/replay/order state, fenced retry dispatch,
   pinned-address no-redirect HTTPS delivery, rotation-aware signing, and a
   listener-neutral receiver for `events.webhook-adapters-go-1`; see the
@@ -140,13 +141,15 @@ troubleshooting, and the third-party implementation path.
   [plan-cache profile](docs/plan-cache.md), and
   [process-hosting guide](docs/process-hosting.md), plus the
   [Go federation coordinator profile](docs/federation-coordinator.md).
-  Production distributed
-  federation planning and transport integration remain owned by #109.
+  The federation coordinator is a bounded, in-process reference; production
+  distributed federation planning and transport hardening are post-v1 work
+  tracked on the roadmap (#32).
 - `remoteworker`: the language-neutral length-delimited wire model, bounded
   Go reference gateway, stdio conformance transport, retry decisions,
   reference scoping, and stream-credit state for `worker.remote-1`; see the
-  [remote-worker deployment guide](docs/remote-workers.md). Production HTTP/2
-  pool and process integration remains owned by #88.
+  [remote-worker deployment guide](docs/remote-workers.md). A single-endpoint
+  TLS HTTP/2 transport is provided; production HTTP/2 connection pooling and
+  process integration are post-v1 hardening tracked on the roadmap (#32).
 - `sdk/php`: the PHP 8.3-8.5 client plus explicit generated server-handler
   bindings, request-scoped dispatcher, FPM unary profile, and listener-free
   framed worker conformance for `sdk.php.server-1`, plus dependency-free
@@ -182,8 +185,9 @@ troubleshooting, and the third-party implementation path.
 - `transport/http`: strict reusable SSE framing for
   [`core.streaming-1`](spec/v1/streaming.md) and opt-in authenticated,
   filtered schema discovery for `schema.discovery.http-1`; see the
-  [discovery profile](docs/schema-discovery.md). #72 and #73 own the concrete
-  streaming and general operation `net/http` adapters.
+  [discovery profile](docs/schema-discovery.md). The concrete streaming and
+  general-operation `net/http` adapters are delivered as the `net/http` unary and
+  subscription runtime described further below.
 - [`core.transport-batch-1`](spec/v1/request-batching.md) defines the distinct
   finite request-batch envelope, aggregate admission, item correlation,
   independent/fail-fast/atomic policies, and the HTTP-versus-streaming
@@ -200,8 +204,9 @@ troubleshooting, and the third-party implementation path.
 - `examples/processhost`: bounded `net/http` health, admission, drain, and
   context-driven supervisor integration for `operations.lifecycle-1`.
 - `sdk`: deterministic generated client mapping slices. Checked-in operation
-  bindings cover each SDK's documented core profile; the final combined
-  compatibility matrix remains owned by #69.
+  bindings cover each SDK's documented core profile; the combined cross-language
+  compatibility matrix is executed by the release gate
+  (see [`conformance/RELEASE_GATE.md`](conformance/RELEASE_GATE.md)).
 
 Dependencies point inward in that order: client packages use only portable
 protocol contracts; observability and reflection adapters, transports, other

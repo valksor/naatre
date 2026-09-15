@@ -19,5 +19,7 @@ test/process profile. It is not a production-support claim.
 The envelope is Connect-inspired but does not claim Connect wire
 compatibility. Unary, client-streaming, server-streaming, and bidirectional
 capabilities negotiate independently. HTTP/1.1 is unary-only and opt-in.
-Issue #88 owns the production Go HTTP/2 connection manager; this decision and
-`spec/v1/remote-workers.md` own the portable contract.
+Issue #88 delivered the single-endpoint Go HTTP/2 transport; a production
+multi-endpoint connection manager (pooling) is post-v1 hardening tracked on the
+roadmap (#32). This decision and `spec/v1/remote-workers.md` own the portable
+contract.
