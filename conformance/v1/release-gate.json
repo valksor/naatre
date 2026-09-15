@@ -1,0 +1,43 @@
+{
+  "profile": "suite.release-gate-1",
+  "gateVersion": "1.0.0",
+  "specVersion": "1",
+  "fixtureVersion": "1.0.0",
+  "profileRegistryVersion": "1.0.0",
+  "runnerProtocol": "naatre.conformance.runner-1",
+  "reportProtocol": "naatre.conformance.report-1",
+  "aggregateProtocol": "naatre.release-gate.report-1",
+  "compatibilityMatrix": "v1/compatibility.json",
+  "profileRegistry": "v1/profiles.json",
+  "profileReportSchema": "profile-report.schema.json",
+  "profileReportSchemaSHA256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94",
+  "aggregateReportSchema": "release-gate-report.schema.json",
+  "aggregateReportSchemaSHA256": "2300f122541976d15d0095d93d4b092c4f5f2710b05ec3695e4917cfc5aecfc2",
+  "releaseManifestSchema": "../releases/release-manifest.schema.json",
+  "releaseManifestSchemaSHA256": "b1f694c316713d3db6edef020dd9138d781bfa4b5d73124309c6df834b110d05",
+  "securityGate": {
+    "implementation": "naatre-go-security-gate",
+    "language": "go",
+    "profile": "suite.security-gate-1"
+  },
+  "independentRunner": {
+    "name": "naatre-independent-js",
+    "language": "javascript-typescript",
+    "source": "independent/runner.mjs",
+    "sourceSHA256": "1bd79ad3390be35c49cdc53da9394ac6a288e3cd4e1c487b14ddc5f60f47d2e8",
+    "profile": "suite.contract-1"
+  },
+  "sharedVectorArtifacts": [
+    "canonical-vectors",
+    "schema-vectors",
+    "validation-vectors",
+    "generated-filter-sort-vectors"
+  ],
+  "requiredRunnerPaths": [
+    "sdk-to-go",
+    "gateway-to-worker",
+    "independent-non-go"
+  ],
+  "executionOwnerIssue": 69,
+  "publicationOwnerIssue": 69
+}

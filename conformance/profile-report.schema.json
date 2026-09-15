@@ -4,11 +4,12 @@
   "title": "Naatre conformance profile evidence report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["protocol", "run", "versions", "implementation", "environment", "path", "claims", "results"],
+  "required": ["protocol", "run", "versions", "revisions", "implementation", "environment", "path", "claims", "results"],
   "properties": {
     "protocol": {"const": "naatre.conformance.report-1"},
     "run": {"$ref": "#/$defs/run"},
     "versions": {"$ref": "#/$defs/versions"},
+    "revisions": {"$ref": "#/$defs/revisions"},
     "implementation": {"$ref": "#/$defs/implementation"},
     "environment": {"$ref": "#/$defs/environment"},
     "path": {"$ref": "#/$defs/path"},
@@ -25,7 +26,7 @@
     }
   },
   "$defs": {
-    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/+-]*$"},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^@?[A-Za-z0-9][A-Za-z0-9._@/+-]*$"},
     "boundedString": {"type": "string", "minLength": 1, "maxLength": 1024},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "stringSet": {
@@ -74,6 +75,15 @@
         "runnerProtocol": {"const": "naatre.conformance.runner-1"},
         "canonicalization": {"const": "c14n-1"},
         "schemaRevision": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "revisions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["specification", "schema", "canonicalization", "fixtures", "generator", "runtime", "sdk", "transport"],
+      "properties": {"specification": {"$ref": "#/$defs/revisions/$defs/revision"}, "schema": {"$ref": "#/$defs/revisions/$defs/revision"}, "canonicalization": {"$ref": "#/$defs/revisions/$defs/revision"}, "fixtures": {"$ref": "#/$defs/revisions/$defs/revision"}, "generator": {"$ref": "#/$defs/revisions/$defs/applicableRevision"}, "runtime": {"$ref": "#/$defs/revisions/$defs/applicableRevision"}, "sdk": {"$ref": "#/$defs/revisions/$defs/applicableRevision"}, "transport": {"$ref": "#/$defs/revisions/$defs/applicableRevision"}},
+      "$defs": {
+        "revision": {"type": "object", "additionalProperties": false, "required": ["version", "sha256"], "properties": {"version": {"$ref": "#/$defs/identifier"}, "sha256": {"$ref": "#/$defs/sha256"}}},
+        "applicableRevision": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["status", "version", "sha256"], "properties": {"status": {"const": "pinned"}, "version": {"$ref": "#/$defs/identifier"}, "sha256": {"$ref": "#/$defs/sha256"}}}, {"type": "object", "additionalProperties": false, "required": ["status", "reason"], "properties": {"status": {"const": "not-applicable"}, "reason": {"$ref": "#/$defs/boundedString"}}}]}
       }
     },
     "implementation": {

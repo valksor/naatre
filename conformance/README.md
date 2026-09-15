@@ -84,6 +84,12 @@ matrix; unevidenced rows remain planned until #69 executes and publishes them.
 See [PROFILES.md](PROFILES.md) for claim, skip, version-skew, report, and
 publication rules.
 
+`v1/release-gate.json` defines the issue 69 aggregation boundary. The
+[release-gate runbook](RELEASE_GATE.md) lists the full orchestrator command
+matrix, report requirements, fail-closed rules, and release-manifest linking
+command. No passing aggregate is checked in because the full matrix must be
+executed at the exact release revision.
+
 `v1/governance.json` defines `governance.release-1`: independent component
 versions, evidence-gated support rows and conformance claims, compatibility and
 reserved-name rules, security embargoes, reproducible supply-chain evidence,

@@ -340,7 +340,13 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "ec679e966087068ae3aeba0411cdb8a346a6d3fe4b6a5f367406c3b0a8dc03a7"
+      "sha256": "c8daaa5b265a357d377ab30b7fdeb11e6619a5a736509249f06731494228c38d"
+    },
+    {
+      "path": "v1/release-gate.json",
+      "profile": "suite.release-gate-1",
+      "category": "integration",
+      "sha256": "9977e1badf6ac45cc1fd0bdaad9540a6b61605df9c487b3c598fa34f16009f06"
     },
     {
       "path": "v1/php-sdk.json",

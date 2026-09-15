@@ -11,6 +11,7 @@ const matrix = readJSON(new URL("../v1/compatibility.json", import.meta.url));
 const reportSchema = readJSON(new URL("../profile-report.schema.json", import.meta.url));
 const requiredFixtureClasses = ["positive", "negative", "malformed", "limit", "cancellation", "security"];
 const resultStatuses = ["passed", "failed", "unsupported", "invalid-skip", "infrastructure-failure"];
+const endpointKinds = ["sdk", "codec", "gateway", "worker", "http-server", "native-runtime", "stream-transport", "persisted-store", "schema-tool", "federation-coordinator", "extension-host"];
 const cborCapability = "transport.cbor.unary-1";
 const cborCodecRevision = "cbor-det-1";
 const cborReportBinding = `${cborCapability}@${cborCodecRevision}`;
@@ -129,6 +130,10 @@ function validateReport(report) {
   requireValue(report.versions?.profiles === registry.registryVersion, "report profile version skew");
   requireValue(report.versions?.runnerProtocol === registry.runnerProtocol, "report runner version skew");
   requireValue(report.versions?.canonicalization === "c14n-1", "report canonicalization version skew");
+  requireValue(report.revisions?.specification?.version === report.versions.spec, "report specification revision skew");
+  requireValue(report.revisions?.fixtures?.version === report.versions.fixtures, "report fixture revision skew");
+  requireValue(report.revisions?.canonicalization?.version === report.versions.canonicalization, "report canonicalization revision skew");
+  requireValue(report.revisions?.schema?.sha256 === report.versions.schemaRevision, "report schema revision skew");
   requireValue(report.implementation?.specVersion === report.versions.spec, "implementation/spec version skew");
   requireValue(report.implementation?.fixtureVersion === report.versions.fixtures, "implementation/fixture version skew");
   requireValue(report.implementation?.profileVersion === report.versions.profiles, "implementation/profile version skew");
@@ -168,7 +173,7 @@ function validateReport(report) {
 }
 
 function validateReportShape(report) {
-  closedObject(report, ["protocol", "run", "versions", "implementation", "environment", "path", "claims", "results"], "report");
+  closedObject(report, ["protocol", "run", "versions", "revisions", "implementation", "environment", "path", "claims", "results"], "report");
   closedObject(report.run, ["id", "operator", "command", "artifacts"], "run");
   boundedArray(report.run.command, 1, 32, "run.command");
   for (const argument of report.run.command) {
@@ -182,6 +187,9 @@ function validateReportShape(report) {
   }
   closedObject(report.versions, ["spec", "fixtures", "profiles", "runnerProtocol", "canonicalization", "schemaRevision"], "versions");
   requireDigest(report.versions.schemaRevision, "versions.schemaRevision");
+  closedObject(report.revisions, ["specification", "schema", "canonicalization", "fixtures", "generator", "runtime", "sdk", "transport"], "revisions");
+  for (const name of ["specification", "schema", "canonicalization", "fixtures"]) validateRevision(report.revisions[name], name, false);
+  for (const name of ["generator", "runtime", "sdk", "transport"]) validateRevision(report.revisions[name], name, true);
   closedObject(report.implementation, ["name", "version", "language", "runtimeVersion", "specVersion", "fixtureVersion", "profileVersion", "schemaRevision"], "implementation");
   requireDigest(report.implementation.schemaRevision, "implementation.schemaRevision");
   closedObject(report.environment, ["os", "architecture", "featureFlags", "wireTransports", "streamTransports", "scalarPrecision", "cancellationCapabilities"], "environment");
@@ -207,10 +215,59 @@ function validateReportShape(report) {
     for (const diagnostic of result.diagnostics) closedObject(diagnostic, ["code", "message"], "diagnostic");
     if (result.skip !== undefined) closedObject(result.skip, ["fixture", "reason"], "skip");
   }
+  validateReportIdentifiers(report);
   const claimsCBOR = report.results.some((result) => result.status === "passed" && result.evidence.some((entry) => entry.fixture === "v1/cbor.json"));
   if (claimsCBOR) {
     requireValue(report.environment.wireTransports.includes(cborReportBinding), "CBOR conformance claim lacks exact profile and codec revision binding");
   }
+}
+
+function validateReportIdentifiers(report) {
+  requireIdentifier(report.run.id, "run.id");
+  requireIdentifier(report.run.operator, "run.operator");
+  for (const artifact of report.run.artifacts) requireIdentifier(artifact.name, "run artifact name");
+  for (const field of ["name", "version", "language", "runtimeVersion"]) requireIdentifier(report.implementation[field], `implementation.${field}`);
+  requireIdentifier(report.environment.os, "environment.os");
+  requireIdentifier(report.environment.architecture, "environment.architecture");
+  for (const field of ["featureFlags", "wireTransports", "streamTransports", "scalarPrecision", "cancellationCapabilities"]) {
+    for (const value of report.environment[field]) requireIdentifier(value, `environment.${field} value`);
+  }
+  for (const endpoint of [report.path.source, report.path.destination]) {
+    requireValue(endpointKinds.includes(endpoint.kind), "endpoint kind is invalid");
+    requireIdentifier(endpoint.language, "endpoint language");
+  }
+  for (const claim of report.claims) {
+    requireIdentifier(claim.profile, "claim profile");
+    for (const capability of claim.capabilities) requireIdentifier(capability, "claim capability");
+  }
+  for (const result of report.results) {
+    requireIdentifier(result.profile, "result profile");
+    if (result.capability !== undefined) requireIdentifier(result.capability, "result capability");
+    for (const value of [...result.capabilities, ...result.executedClauses]) requireIdentifier(value, "result capability or clause");
+    for (const evidence of result.evidence) boundedString(evidence.fixture, 1024, "evidence fixture");
+    for (const diagnostic of result.diagnostics) {
+      requireValue(typeof diagnostic.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(diagnostic.code), "diagnostic code is invalid");
+      boundedString(diagnostic.message, 1024, "diagnostic message");
+    }
+    if (result.skip !== undefined) {
+      boundedString(result.skip.fixture, 1024, "skip fixture");
+      boundedString(result.skip.reason, 1024, "skip reason");
+    }
+  }
+}
+
+function validateRevision(revision, label, optional) {
+  requireValue(revision && typeof revision === "object" && !Array.isArray(revision), `${label} revision must be an object`);
+  if (optional && revision.status === "not-applicable") {
+    closedObject(revision, ["status", "reason"], `${label} revision`);
+    boundedString(revision.reason, 1024, `${label} revision reason`);
+    return;
+  }
+  const allowed = optional ? ["status", "version", "sha256"] : ["version", "sha256"];
+  closedObject(revision, allowed, `${label} revision`);
+  if (optional) requireValue(revision.status === "pinned", `${label} revision status must be pinned or not-applicable`);
+  boundedString(revision.version, 128, `${label} revision version`);
+  requireDigest(revision.sha256, `${label} revision`);
 }
 
 function closedObject(value, allowed, label) {
@@ -225,6 +282,10 @@ function boundedArray(value, minimum, maximum, label) {
 
 function boundedString(value, maximum, label) {
   requireValue(typeof value === "string" && value.length > 0 && [...value].length <= maximum, `${label} is not a bounded string`);
+}
+
+function requireIdentifier(value, label) {
+  requireValue(typeof value === "string" && [...value].length <= 128 && /^@?[A-Za-z0-9][A-Za-z0-9._@/+-]*$/.test(value), `${label} is not an identifier`);
 }
 
 function requireDigest(value, label) {
@@ -267,6 +328,16 @@ function exampleReport(profileID, source, destination) {
     protocol: registry.reportProtocol,
     run: { id: "independent-check", operator: "naatre-project", command: ["node", "conformance/independent/profiles.mjs"], artifacts: [{ name: "source-tree", sha256: "1".repeat(64) }] },
     versions: { spec: registry.specVersion, fixtures: registry.fixtureVersion, profiles: registry.registryVersion, runnerProtocol: registry.runnerProtocol, canonicalization: "c14n-1", schemaRevision },
+    revisions: {
+      specification: { version: registry.specVersion, sha256: "2".repeat(64) },
+      schema: { version: "schema-1", sha256: schemaRevision },
+      canonicalization: { version: "c14n-1", sha256: "3".repeat(64) },
+      fixtures: { version: registry.fixtureVersion, sha256: "4".repeat(64) },
+      generator: { status: "pinned", version: "generator-1", sha256: "5".repeat(64) },
+      runtime: { status: "pinned", version: process.versions.node, sha256: "6".repeat(64) },
+      sdk: { status: "pinned", version: "1.0.0", sha256: "7".repeat(64) },
+      transport: { status: "pinned", version: "ndjson-1", sha256: "8".repeat(64) },
+    },
     implementation: { name: "independent-example", version: "1.0.0", language: "javascript-typescript", runtimeVersion: process.versions.node, specVersion: registry.specVersion, fixtureVersion: registry.fixtureVersion, profileVersion: registry.registryVersion, schemaRevision },
     environment: { os: "linux", architecture: "amd64", featureFlags: [], wireTransports: profileID === "wire.codec-1" ? [cborReportBinding] : ["ndjson"], streamTransports: [], scalarPrecision: ["arbitrary-precision-decimal"], cancellationCapabilities: ["process-signal"] },
     path: { source: { kind: source, language: "javascript-typescript" }, destination: { kind: destination, language: "javascript-typescript" } },
@@ -306,6 +377,7 @@ function selfTest() {
   });
   expectRejected("fixture skew", (report) => { report.versions.fixtures = "9.9.9"; });
   expectRejected("schema skew", (report) => { report.implementation.schemaRevision = "2".repeat(64); });
+  expectRejected("revision skew", (report) => { report.revisions.fixtures.version = "9.9.9"; });
   expectRejected("partial fixtures", (report) => { report.results[0].evidence.pop(); });
   expectRejected("partial clauses", (report) => { report.results[0].executedClauses.pop(); });
   expectRejected("unsafe metadata", (report) => { report.run.authorization = "Bearer example"; });

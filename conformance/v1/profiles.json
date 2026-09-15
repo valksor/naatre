@@ -6,7 +6,7 @@
   "runnerProtocol": "naatre.conformance.runner-1",
   "reportProtocol": "naatre.conformance.report-1",
   "reportSchema": "profile-report.schema.json",
-  "reportSchemaSHA256": "95c681df75fe484a97ae23b0a923480247fdf0ce70e4b3ad2a9eb0dd3bb73ef2",
+  "reportSchemaSHA256": "3653ba95b18f299dff6e1019062a7783563bfc52de88972d5a3b9ad32977ef94",
   "compatibilityMatrix": "v1/compatibility.json",
   "stabilityLabels": [
     "stable",
