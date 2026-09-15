@@ -1871,7 +1871,7 @@
         {
           "path": "v1/generator-plugin-host.json",
           "profile": "sdk.generator-plugin-host-1",
-          "sha256": "053a8268a215f30ae287417f8c48a3dbf765041fe5d108281031599100b12f98"
+          "sha256": "3a56ae47a0deb02faf8c7c246fc92624516e2bf529a0162ebf43ebd762b85c24"
         },
         {
           "path": "v1/language.json",
@@ -1896,7 +1896,7 @@
         {
           "path": "v1/schema-discovery.json",
           "profile": "schema.discovery.http-1",
-          "sha256": "5963e87a60aab05e327a49cea750dc0fe709ba605cbdcda339e6e270eb3cdb08"
+          "sha256": "be1b60919c7822e9b85d224aecb47071023b7df63e05bb1e8cf14553915bff36"
         },
         {
           "path": "v1/schema.json",

@@ -18,7 +18,7 @@
   },
   "evidence": [
     {"path": "sdk/swift/Package.swift", "sha256": "a21f77bbb0be95d5d05f02b811a2aaf3ded4362c17c99a6da978e5eab04a4fce"},
-    {"path": "sdk/swift/README.md", "sha256": "91bd97fd184b3393d95e846e7ac1903ee51f53132ee21672fa22b5f6bbe757dd"},
+    {"path": "sdk/swift/README.md", "sha256": "72ea0d63b629615dce64f7414d718876963d0e323d625d9a32bfa246315e13fe"},
     {"path": "sdk/swift/Sources/NaatreCore/Client.swift", "sha256": "3f3f8e860d78478714ca39944e2fdaf7f02adf64c0fec8944e477a0ecf410921"},
     {"path": "sdk/swift/Sources/NaatreCore/Errors.swift", "sha256": "c61f4d2b1b5ca46e73b899f598fa0f72f1c5d371709531cff913a694c651a483"},
     {"path": "sdk/swift/Sources/NaatreCore/Operation.swift", "sha256": "23ec21f5c63182a6a08f9d491d3fe9d765bb3bb7cef7ce47a439e58afa10ccb6"},

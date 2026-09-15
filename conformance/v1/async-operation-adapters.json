@@ -11,8 +11,8 @@
     {"profile": "operations.async-1-spec", "path": "spec/v1/async-operations.md", "sha256": "50ebcf2acb174b31fc76cd2b2928f1e9e1703c4e56c7c3757b63b21d1d04d4df"},
     {"profile": "operations.async-1-fixture", "path": "conformance/v1/async-operations.json", "sha256": "9efe62107f1583f2531fe794272a36f6e899dbbd2273e8cdfbd06dff973f48e0"},
     {"profile": "operations.async-1-runtime", "path": "runtime/async_operation.go", "sha256": "a796781fa941fcc25718f2eeaceda534e20d11b2c097b08fd3cf9458e51ccff5"},
-    {"profile": "go.module", "path": "go.mod", "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
-    {"profile": "go.module-lock", "path": "go.sum", "sha256": "4ab1142371fb95281ac0e674e481d95e234eb937bcdcadb686ff4bb11da8c94f"}
+    {"profile": "go.module", "path": "go.mod", "sha256": "e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+    {"profile": "go.module-lock", "path": "go.sum", "sha256": "57755b9e8e537cc6b24f8b8b4390fa5d415cac73806800efb833e0d62b755849"}
   ],
   "implementation": {
     "module": "github.com/valksor/naatre",

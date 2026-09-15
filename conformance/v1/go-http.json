@@ -16,8 +16,8 @@
     ],
     "files": [
       {"path":"transport/http/handler.go","sha256":"808e7b09fda0951a981b81fa2933b775243d246009815fb9cb9aecfe207a667d"},
-      {"path":"transport/http/doc.go","sha256":"99219626776c2b7d81ca25e91a780ad74b74ba93fac7a781599f142fa717b29f"},
-      {"path":"transport/http/README.md","sha256":"3e74ac619d9b245956a4675a4558a743c7a21567f554e72f868760218256a6a5"},
+      {"path":"transport/http/doc.go","sha256":"f43e8c91618e1f1e61b700dea0c88ce1bf328375de3786455079ac8a29bc331b"},
+      {"path":"transport/http/README.md","sha256":"dbefa8f2ba357126d21c544b5a9bfb3d61979308b429faeeb126e74d8bfc7e91"},
       {"path":"transport/http/handler_test.go","sha256":"7c89de0b6fd1ac18d96e42e3e8a305ec57522f3703ab2aac9e669b07637531df"}
     ]
   },

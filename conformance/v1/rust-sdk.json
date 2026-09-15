@@ -29,7 +29,7 @@
     "manifest": {"path": "sdk/rust/generated/operations.json", "sha256": "cb2eaa5054148503dd7fc457ff72809f457d3500919841f61f892e7ab5771b1b"}
   },
   "evidence": [
-    {"path": "sdk/rust/Cargo.toml", "sha256": "01ea0c125594f3dc1cfde95e68b4a2d883f704609c5f30b62d27f52c904faa16"},
+    {"path": "sdk/rust/Cargo.toml", "sha256": "cdc73bba8ab7d67a464c469ee97b4dd5c8b811829f925bd2f89676aa64a9aef5"},
     {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
     {"path": "sdk/rust/ci.sh", "sha256": "ba9b166b3681a2e74b4370ee08483cf37ca2607866243868438093d0ebb9530e"},
     {"path": "sdk/rust/README.md", "sha256": "1c0a4756223b9fe33ec28fd9129aae4183384813af29260408034bf2211dcd4c"},
@@ -38,8 +38,8 @@
     {"path": "sdk/rust/src/scalar.rs", "sha256": "636ce87781aa5edab0aa8b91197e9ca0b9fb6fb3c27f7d866b07346e080b012c"},
     {"path": "sdk/rust/src/transport.rs", "sha256": "d312076dc2bf8b9de213b4ce63f5bd48e48cf93da46ae97921f8b96a384968e5"},
     {"path": "sdk/rust/src/generator.rs", "sha256": "8d68bfeca88f1bac858db3319fba8559e75f28db2a243d4e377a01808c886b1c"},
-    {"path": "sdk/rust/src/bin/generator.rs", "sha256": "1a430a08e2516830bf97557b7534f4c3f239a212b52cb072484624c33fc2928a"},
-    {"path": "sdk/rust/tests/conformance.rs", "sha256": "bd7c8d641e2e86c08bc4d0ebb28e4d02d558bac85f25330bc17b509016297655"},
+    {"path": "sdk/rust/src/bin/generator.rs", "sha256": "5ecfa75234085e340443856d65f24a7c4621b2f5efc3fbbe912063667ff77c57"},
+    {"path": "sdk/rust/tests/conformance.rs", "sha256": "4d872fcb0a56b50d5feabfc595b1983b618135dbd6484ab4db857be8d8fa9bcc"},
     {"path": "conformance/independent/verify-rust-sdk.mjs", "sha256": "9ff391232f0449eda6f73bde524c10f3dad389039d398eb9688bece3e52eea22"}
   ],
   "ownership": {

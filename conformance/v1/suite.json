@@ -130,19 +130,19 @@
       "path": "v1/graphql-adapter.json",
       "profile": "core.adapters.graphql-1",
       "category": "integration",
-      "sha256": "0d54a0375d6315c934f49bd1fc03c89807314197163e4bd710fc6428f5f4a702"
+      "sha256": "b3210fb158abe5a9f6e81536bcfc16a4bc6b77f28dd3c1624c7c12f8a8142918"
     },
     {
       "path": "v1/go-client.json",
       "profile": "sdk.go.client-1",
       "category": "transport",
-      "sha256": "8771767b405120d0bad6b8ba4555faef9c64c7f410bd757d2d8d87a493e7c275"
+      "sha256": "6643adb885ece92efaef56eec234dfab2c9d5c53ccfba209bf1ada70205d20c9"
     },
     {
       "path": "v1/go-sdk.json",
       "profile": "sdk.go.operations-1",
       "category": "transport",
-      "sha256": "ea2d1879a3a7c5b09160cb011c49cb12b384d11806bf4f9b41dbeee366f218bd"
+      "sha256": "7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"
     },
     {
       "path": "v1/http.json",
@@ -178,7 +178,7 @@
       "path": "v1/operations.json",
       "profile": "operations.lifecycle-1",
       "category": "execution",
-      "sha256": "421d6ee39d18867fe4df738ea1efe93960611f25e2f358025a2cb16a9281814f"
+      "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
     },
     {
       "path": "v1/partial-results.json",
@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "91984a4102a838e70df6f3e3877e3baabfad693ecdf86de57895e17eb057c510"
+      "sha256": "77d54079e3429f7135a1d6b045fd7be4cbb5cb6a23e0a0c6b4cbe416a410ffe0"
     },
     {
       "path": "v1/scalars.json",
@@ -244,13 +244,13 @@
       "path": "v1/streaming.json",
       "profile": "core.streaming-1",
       "category": "stream",
-      "sha256": "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c"
+      "sha256": "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"
     },
     {
       "path": "v1/typescript-adapters.json",
       "profile": "sdk.typescript.adapters-1",
       "category": "transport",
-      "sha256": "62abbcc1fc35cd7281987e7a05b4421570095c38c2710cb8c0d2a619f988e531"
+      "sha256": "751d9129074ee6736e5c3666c8c2c174f513806e509e9a552d1ac9243e524166"
     },
     {
       "path": "v1/typescript-sdk.json",
@@ -274,7 +274,7 @@
       "path": "v1/schema-discovery.json",
       "profile": "schema.discovery.http-1",
       "category": "transport",
-      "sha256": "5963e87a60aab05e327a49cea750dc0fe709ba605cbdcda339e6e270eb3cdb08"
+      "sha256": "be1b60919c7822e9b85d224aecb47071023b7df63e05bb1e8cf14553915bff36"
     },
     {
       "path": "v1/observability-integrations.json",
@@ -286,13 +286,13 @@
       "path": "v1/async-operation-adapters.json",
       "profile": "operations.async-adapters-go-1",
       "category": "integration",
-      "sha256": "32ddf526340c0e33c29cec08993c4438987ee3b5a00db66b522d1bf571768168"
+      "sha256": "9f81ea6baf6f3f5d2825ae6b6ffc3614c2617d201bdf4c51cdc8b72966f78423"
     },
     {
       "path": "v1/federation-coordinator.json",
       "profile": "runtime.go.federation-coordinator-1",
       "category": "execution",
-      "sha256": "a445aeca5259939de8e3ad45f881a5bd4ab893a708bec3a8a647a8d0d344f765"
+      "sha256": "b6b607e626a49236c7a9c54d9683323c41a20cd5cc0ff09e832b0ab9808ebcbe"
     },
     {
       "path": "v1/compatibility.json",
@@ -304,31 +304,31 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "85940362f63883e95f16906f76e241110edd969b152733f0eaa5b228d62f0965"
+      "sha256": "ba91515f071084bbcf00be1b7b37aa817e7fe841c867b416ff3b725feb3a9a90"
     },
     {
       "path": "v1/php-sdk.json",
       "profile": "sdk.php.core-1",
       "category": "canonical",
-      "sha256": "dc6fffcd53070ffa58c0e542d01feaeb4be43d969ce7fbffb1c7d981cb382df7"
+      "sha256": "249abb2e2e870a19d4b4f535ecdfecab09270da6f44e1a931ee6d3918fedfe73"
     },
     {
       "path": "v1/python-sdk.json",
       "profile": "sdk.python.core-1",
       "category": "transport",
-      "sha256": "a0ae0d3f80c2ada41481194728388f6bfbaacc37fb6c63605eea4fbde2e77940"
+      "sha256": "4ad1c7931350de9f889fcfd5a05fdb7e9fb79f1e0ce447dbfc8ef8c0acbceb99"
     },
     {
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "cfab463121993d793a3decc42809f3458d9a182583fd4cf9409fc8093fdaac4b"
+      "sha256": "429e5f6cd24d72da0342c58b42542295ab9aa3495464c91b1f433f5973715d38"
     },
     {
       "path": "v1/jvm-sdk.json",
       "profile": "sdk.jvm.core-1",
       "category": "transport",
-      "sha256": "7ed1b105146bb3457fe6d734e4d07542634344b867e89037201987376f65787f"
+      "sha256": "7b2658c4966bc9dd871668b66e0566ffe569739a80b52866e6f96346c008393c"
     },
     {
       "path": "v1/dotnet-sdk.json",
@@ -346,7 +346,7 @@
       "path": "v1/swift-sdk.json",
       "profile": "sdk.swift.core-1",
       "category": "transport",
-      "sha256": "764c10d4907613338ba10670eccabb98d52e51b80945f3b6fd7d04713226b05e"
+      "sha256": "0dad80f4e5b0dfbd8b392002403a1533166ad3facc51dd233e0b0fcae95cd190"
     },
     {
       "path": "v1/dart-sdk.json",
@@ -358,7 +358,7 @@
       "path": "v1/ruby-sdk.json",
       "profile": "sdk.ruby.core-1",
       "category": "canonical",
-      "sha256": "0377f25c7311a08d1fc50bd2187eec35f0e77335014663491d97edb3c10ee85f"
+      "sha256": "f9f9c9dd3d80cef1facf598cc105b29a67a8cddcc634ca2ed0e0532557053774"
     },
     {
       "path": "v1/async-operations.json",
@@ -418,13 +418,13 @@
       "path": "v1/go-http.json",
       "profile": "core.http-1",
       "category": "transport",
-      "sha256": "e2733d3665f24996d639aa396a7a6333d5e0c5ffa7611731a095b2fb314cb086"
+      "sha256": "a4003954a448f69f3313d6d3d7a0942995540cf7062e8aeae1d921518d962bf3"
     },
     {
       "path": "v1/plan-cache.json",
       "profile": "runtime.go.plan-cache-1",
       "category": "execution",
-      "sha256": "78ec7291ad0ccf0f8ba2ebfa95e64b1fb6b6d0ec288a14ed2d24c1a06f296272"
+      "sha256": "e98ab63e885c838b6d109bd61bfa9d85e9857c05d70127920f09741fe52442b7"
     },
     {
       "path": "v1/generator-plugin-host-model.json",
@@ -436,13 +436,13 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "b9ef9ab778de270ce28e4d3502c6b397b70a34ee1df54fb3cf4879f6e6c3d8c1"
+      "sha256": "3a56ae47a0deb02faf8c7c246fc92624516e2bf529a0162ebf43ebd762b85c24"
     },
     {
       "path": "v1/go-quality.json",
       "profile": "quality.go.harness-1",
       "category": "benchmark",
-      "sha256": "5db2616ab5e758409ef1cfc2273832173384e667615cf27d1e303441f8034141"
+      "sha256": "f13e6d0373cee464b87f524995bcc03bb805d297749eec9b9ce364d919c6220d"
     },
     {
       "path": "v1/large-values.json",
@@ -490,7 +490,7 @@
       "path": "v1/rust-async-adapters.json",
       "profile": "sdk.rust.adapters-1",
       "category": "transport",
-      "sha256": "fbe78eee36ec2747df22c6042d4ef314dbffba94c4474979bfd509db4874ca98"
+      "sha256": "f78066fdde02ed6f47e36a29764d8e61a3868ec3595a433d43cc50bfffe87485"
     },
     {
       "path": "v1/python-sdk-adapters.json",
@@ -514,7 +514,7 @@
       "path": "v1/swift-apple-adapters.json",
       "profile": "sdk.swift.apple-1",
       "category": "transport",
-      "sha256": "1eb0b302ccf288017f88b6e51453a766e73583c45cafc9f2909fb76d3c594a0c"
+      "sha256": "e579f65bbbe70a3bd51dd272c67bdd411bf63ac2582e4178918b702fa7e6b962"
     },
     {
       "path": "v1/lsp.json",
@@ -532,13 +532,13 @@
       "path": "v1/openrpc-jsonrpc.json",
       "profile": "adapter.openrpc-jsonrpc-1",
       "category": "transport",
-      "sha256": "9094c084089858fbc70e44eb2381dcf33635effd6ede63a7e2fdd868a7176327"
+      "sha256": "30947dcf815aab2427a8bf6ccf777cd0fae3ad55b057753ca9ac59fca7c048f3"
     },
     {
       "path": "v1/http-digest-integration.json",
       "profile": "implementation.go.http-digest-1",
       "category": "transport",
-      "sha256": "be99cdfa423684a5e32e32ec623318ab9edcd5ab04eb37a270db997fac4a4100"
+      "sha256": "cd240b47471a252d78e404646e6a8cfb4fec8026b437b67a5aefe9edc9f61c39"
     }
   ],
   "normativeSources": [

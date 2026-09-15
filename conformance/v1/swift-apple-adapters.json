@@ -9,7 +9,7 @@
       "gitCommit": "f6b77807cc762893020e726e8ae5221b58bf5309",
       "fixture": {
         "path": "conformance/v1/swift-sdk.json",
-        "sha256": "1d332de53c12606fb8429a27813258c0f67e7dd7add5400781e82e5e930d7295"
+        "sha256": "0dad80f4e5b0dfbd8b392002403a1533166ad3facc51dd233e0b0fcae95cd190"
       }
     }
   ],

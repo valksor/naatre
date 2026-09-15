@@ -22,7 +22,7 @@
     {
       "profile": "go-module-dependencies",
       "path": "go.mod",
-      "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"
+      "sha256": "e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"
     }
   ],
   "directions": ["schema-import", "schema-export", "runtime-consume", "runtime-expose"],

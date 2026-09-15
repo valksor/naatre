@@ -5,7 +5,7 @@
     "ownerIssue": 63,
     "gitCommit": "6614b5c970ca8eac7de5dc974a5885bb5226f6ea",
     "files": [
-      {"path":"spec/v1/http-digest.md","sha256":"ee72dedb2140696764d6928534b3c33d63972393d6ba8269abb3f6432636764a"},
+      {"path":"spec/v1/http-digest.md","sha256":"b5361a2205bb203f2976e96d1c91aff068e573f610f7312fba90d3e32b013b3d"},
       {"path":"conformance/v1/http-digest.json","sha256":"72ed0eeb502b14eb3b4369cb8f534bcd71fb1c4df28471ea6e1341bc6b0153f5"},
       {"path":"conformance/independent/http-digest.mjs","sha256":"d06283197fee292336ccbd2ea80dde5074ad5c67295e0d2c35dc9b0f65763186"}
     ]
@@ -20,7 +20,7 @@
       "github.com/valksor/naatre/client"
     ],
     "files": [
-      {"path":"go.mod","sha256":"2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
+      {"path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
       {"path":"protocol/httpdigest/digest.go","sha256":"2fe7528d928d9172fe442763c9eb66c7d5df7fcfbf3c830a6bb66f8a89eeb76b"},
       {"path":"protocol/httpdigest/http.go","sha256":"513aa12e609702ed65746c2d00bc4f39844e373cb9318450f41ab116b81f0b75"},
       {"path":"transport/http/digest.go","sha256":"b44004c5f63384ae5f2dccc6e3b310b6dad9ea07a94ad671f9078ff824b03f55"},
@@ -32,7 +32,7 @@
       {"path":"client/digest_test.go","sha256":"bf082c5bb116e26a1697b9b419ca2459247c4083d0f81ce1f55babab120842c8"},
       {"path":"docs/http-digest-integration.md","sha256":"6a7bfcef4e431a722f2163d764336e88a0c705d128b647bd5a3eca00609d5654"},
       {"path":"conformance/independent/http-digest-integration.mjs","sha256":"c13eb6927a100e150c5370efd10379d7027a57cbef3aa8de30ce63c223904989"},
-      {"path":"conformance/independent/runner.mjs","sha256":"7cf1cdbe28cf431856f8f1ceb4140e3ae684eac1815dd03da213162904c436eb"}
+      {"path":"conformance/independent/runner.mjs","sha256":"3b60f4ffb7d0d6284e1bc2a303ad6cbcf4b2cd1f92ff7e7ba2e48d3acc2907f2"}
     ]
   },
   "runtimeBoundary": {
