@@ -550,7 +550,7 @@
       "path": "v1/php-worker-adapters.json",
       "profile": "sdk.php.worker-adapters-1",
       "category": "integration",
-      "sha256": "3006278c2f752951af2188be971279db743f801052382f9b2fcf060eb74d80ed"
+      "sha256": "1dd5ea8eb8da012769a97f6d84b7446cd01584af8c8f80f2d7db595f6279421d"
     },
     {
       "path": "v1/rust-async-adapters.json",

@@ -39,35 +39,31 @@ final class LifecycleAdapter
         }
 
         $this->active = true;
-        $result = null;
-        $failure = null;
+        $dispatched = false;
         try {
             $result = $this->dispatcher->dispatch($invocation);
-        } catch (Throwable $error) {
-            $failure = $error;
-        }
-
-        $cleanupFailed = false;
-        try {
-            ($this->afterRequest)();
+            $dispatched = true;
+        } catch (ServerException $failure) {
+            throw $failure;
         } catch (Throwable) {
-            $cleanupFailed = true;
+            throw new ServerException('REMOTE_WORKER_MALFORMED');
         } finally {
+            $cleanupFailed = false;
+            try {
+                ($this->afterRequest)();
+            } catch (Throwable) {
+                $cleanupFailed = true;
+            }
             $this->active = false;
             $this->handledRequests++;
             if ($this->handledRequests >= $this->maximumRequests) {
                 $this->accepting = false;
             }
-        }
-
-        if ($failure instanceof ServerException) {
-            throw $failure;
-        }
-        if ($failure !== null) {
-            throw new ServerException('REMOTE_WORKER_MALFORMED');
-        }
-        if ($cleanupFailed) {
-            throw new ServerException('REMOTE_WORKER_MALFORMED');
+            // A dispatch failure already propagates through this finally and takes
+            // priority; only a successful dispatch is downgraded when cleanup fails.
+            if ($dispatched && $cleanupFailed) {
+                throw new ServerException('REMOTE_WORKER_MALFORMED');
+            }
         }
 
         return $result;

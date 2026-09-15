@@ -223,7 +223,7 @@
     {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
     {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
     {"path": "sdk/php/src/Server/Integration/IntegrationProfile.php", "sha256": "d18f334ea58127b3cf6cb983eed0bdbd1379dc270ec23ede85daf380fc84ec99"},
-    {"path": "sdk/php/src/Server/Integration/LifecycleAdapter.php", "sha256": "f0645731dbe290bf21a125c4e1660067862e943cb638b6a4282ef318777b12df"},
+    {"path": "sdk/php/src/Server/Integration/LifecycleAdapter.php", "sha256": "cf526fa179dd6ad4583d27fa98efa328c14fb3201d1cdd3f79415f52508a7cd9"},
     {"path": "sdk/php/tests/worker-adapters.php", "sha256": "9ba870e88e82c39abf5e5c6e275b5226f8b36472b954696ae732b6aede9b39fc"},
     {"path": "conformance/independent/verify-php-worker-adapters.mjs", "sha256": "e2825c15d62b7c2946d69d72d2d7883600329cb17c846accf27051f5d0406a32"}
   ],
