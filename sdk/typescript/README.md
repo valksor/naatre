@@ -38,11 +38,35 @@ and byte limits enforce backpressure, and `return()` closes both the source and
 request resources.
 
 `createFetchWorkerAdapter` maps the three remote-worker endpoints to a pure
-`Request => Promise<Response>` function and owns no listener. Concrete Node,
-Bun, Deno, and edge process/network lifecycle bindings are extracted to #101.
-The core conformance harness still executes each runtime separately instead of
-inferring support from the presence of global `fetch`. See the framework-neutral
-[`examples/worker.ts`](examples/worker.ts) binding.
+`Request => Promise<Response>` function and owns no listener. Issue #101 adds
+runtime lifecycle adapters without changing that #60 protocol authority:
+`@naatre/sdk/worker/node`, `@naatre/sdk/worker/bun`,
+`@naatre/sdk/worker/deno`, and `@naatre/sdk/worker/edge` export exactly one
+runtime-specific factory each. Every factory returns a Fetch-compatible
+`fetch`, a stable runtime profile, `status()`, and idempotent `shutdown()`.
+
+The adapters begin in `ready`, stop admission in `draining`, propagate a
+lifecycle `AbortSignal` into every admitted invocation, wait for cooperative
+work and cleanup, then enter `stopped`. Calls after drain receive the stable
+`OVERLOADED` code without reflecting request values, credentials, protected
+metadata, causes, or stack details. The host owns calling `shutdown()` and
+then stopping its server or isolate. For example:
+
+```ts
+import { createBunWorkerAdapter } from "@naatre/sdk/worker/bun";
+
+const adapter = createBunWorkerAdapter(worker);
+const server = Bun.serve({ port: 0, fetch: adapter.fetch });
+// On application shutdown:
+await adapter.shutdown();
+await server.stop();
+```
+
+Use the corresponding Node, Deno, or edge factory when mounting the same
+`Request => Promise<Response>` surface in those hosts. No adapter infers
+support merely from the presence of global `fetch`; the conformance harness
+selects and executes each package subpath separately. See the
+framework-neutral [`examples/worker.ts`](examples/worker.ts) binding.
 
 ```sh
 node conformance/independent/typescript-worker-runtime.mjs
@@ -52,10 +76,30 @@ npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read \
 conformance/edge/run-typescript-worker-workerd.sh
 ```
 
-The workerd wrapper pins `1.20260914.1` and binds only an OS-selected ephemeral
-loopback port. The production HTTP/2 listener, runtime shutdown/drain hooks,
-worker-thread/process supervision, framework bindings, and deployment
-certification remain #101/#69 work and are not claimed by this core package.
+The supported source boundary is ESM on Node 22 or newer. Checked conformance
+is revision-specific: Node 26.8.2, Bun 1.4.2, Deno 2.9.6, and workerd package
+1.20260914.1 on Darwin arm64. The selected edge profile is workerd with
+compatibility date `2026-09-14`; other edge implementations require their own
+evidence. The workerd wrapper pins that package revision and binds only an
+OS-selected ephemeral loopback port.
+
+Each runtime independently executes registration, prototype-safety,
+AbortSignal, direct worker streaming, pull backpressure, warm-instance
+isolation, output validation, shutdown, safe-failure, and resource-limit
+vectors. The runtime HTTP subpaths advertise unary Register/Invoke/Cancel only;
+HTTP/2 streaming framing remains transport-owned even though the underlying
+worker streaming contract is exercised in every runtime.
+
+Unsupported optional capabilities are runtime-owned listeners and TLS,
+production HTTP/2 framing, Node `IncomingMessage`/`ServerResponse` conversion,
+automatic process-signal handlers, Bun or Deno server ownership, creation or
+termination of Node worker threads, subprocesses, Bun workers, Deno workers,
+or edge isolates, hard termination of uncooperative inline work, framework
+bindings, background edge work after a response, dynamic stream-credit
+replenishment, client or bidirectional streaming transports, transaction
+providers, deployment/autoscaling policy, runtimes and versions outside the
+recorded matrix, non-Darwin-arm64 certification, and production deployment
+certification. The combined official runtime matrix remains owned by #69.
 
 Regenerate and verify the checked-in bindings with:
 

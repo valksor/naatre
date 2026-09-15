@@ -3,6 +3,12 @@
   "protocol": "naatre.remote-worker.v1",
   "fixtureSuite": "1.0.0",
   "runtimeVersion": "naatre.typescript.worker-1",
+  "runtimeAdapterVersion": "naatre.typescript.worker-adapters-1",
+  "dependencies": {
+    "issue60Commit": "2486b1ce95aeed77391081d00293eb28482a6414",
+    "remoteWorkerContract": {"path": "spec/v1/remote-workers.md", "sha256": "41088211fe0fa7ae95b4fab7239a4e79f3900b63382b192d9d38ebc35038bdad"},
+    "remoteWorkerFixtures": {"path": "conformance/v1/remote-workers.json", "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"}
+  },
   "schema": {
     "sharedSchemaProfile": "core.schema-1",
     "generatorProfile": "sdk.generation-1",
@@ -17,6 +23,12 @@
     "name": "@naatre/sdk",
     "format": "esm",
     "export": "@naatre/sdk/worker",
+    "runtimeExports": {
+      "node": "@naatre/sdk/worker/node",
+      "bun": "@naatre/sdk/worker/bun",
+      "deno": "@naatre/sdk/worker/deno",
+      "edge": "@naatre/sdk/worker/edge"
+    },
     "frameworkNeutralExample": "sdk/typescript/examples/worker.ts",
     "typescript": "7.0.2"
   },
@@ -24,48 +36,72 @@
     {"language": "plain-javascript", "path": "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", "vectors": ["schema-defined-success", "schema-defined-error"]},
     {"language": "typescript", "path": "sdk/typescript/runtime/fixtures/typed-worker-handler.test.ts", "vectors": ["schema-defined-success", "schema-defined-error"]}
   ],
-  "vectors": [
-    "gateway-plain-javascript-and-typescript",
-    "runtime-registration-and-input-validation",
-    "prototype-and-forged-name-rejection",
-    "abort-cleanup-with-active-accounting",
-    "pull-backpressure-and-abandoned-stream-cleanup",
-    "warm-concurrent-request-isolation",
-    "output-undefined",
-    "output-sparse-array",
-    "output-non-finite-number",
-    "output-lossy-integer",
-    "output-unknown-tag",
-    "output-nullability",
-    "fetch-request-response-adapter"
+  "requiredRuntimeVectors": [
+    "registration",
+    "prototype-safety",
+    "abort-signal",
+    "streaming",
+    "backpressure",
+    "warm-instance-isolation",
+    "output-validation",
+    "shutdown",
+    "stable-public-failures",
+    "resource-limits"
   ],
   "runtimes": [
-    {"runtime": "node", "version": "26.8.2", "platform": "darwin-arm64", "status": "supported", "execution": "passed", "handlerImplementations": ["plain-javascript", "typescript"], "command": "node conformance/independent/typescript-worker-runtime.mjs"},
-    {"runtime": "bun", "version": "1.4.2", "platform": "darwin-arm64", "status": "supported", "execution": "passed", "handlerImplementations": ["plain-javascript", "typescript"], "command": "bun conformance/independent/typescript-worker-runtime.mjs"},
-    {"runtime": "deno", "version": "2.9.6", "platform": "darwin-arm64", "status": "supported", "execution": "deferred-to-integration", "handlerImplementations": ["plain-javascript", "typescript"], "command": "npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read conformance/independent/typescript-worker-runtime.mjs"},
-    {"runtime": "workerd", "version": "1.20260914.1", "platform": "darwin-arm64", "status": "supported", "execution": "deferred-to-integration", "handlerImplementations": ["compiled-javascript"], "command": "conformance/edge/run-typescript-worker-workerd.sh"}
+    {"runtime": "node", "profile": "worker.javascript-typescript.node-1", "version": "26.8.2", "platform": "darwin-arm64", "status": "supported", "execution": "passed", "requiredVectors": "requiredRuntimeVectors", "handlerImplementations": ["plain-javascript", "typescript"], "command": "node conformance/independent/typescript-worker-runtime.mjs"},
+    {"runtime": "bun", "profile": "worker.javascript-typescript.bun-1", "version": "1.4.2", "platform": "darwin-arm64", "status": "supported", "execution": "passed", "requiredVectors": "requiredRuntimeVectors", "handlerImplementations": ["plain-javascript", "typescript"], "command": "bun conformance/independent/typescript-worker-runtime.mjs"},
+    {"runtime": "deno", "profile": "worker.javascript-typescript.deno-1", "version": "2.9.6", "platform": "darwin-arm64", "status": "supported", "execution": "integration-required", "requiredVectors": "requiredRuntimeVectors", "handlerImplementations": ["plain-javascript", "typescript"], "command": "npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read conformance/independent/typescript-worker-runtime.mjs"},
+    {"runtime": "workerd", "profile": "worker.javascript-typescript.edge-1", "version": "1.20260914.1", "platform": "darwin-arm64", "status": "supported", "execution": "integration-required", "requiredVectors": "requiredRuntimeVectors", "handlerImplementations": ["compiled-javascript"], "command": "conformance/edge/run-typescript-worker-workerd.sh"}
   ],
+  "commands": {
+    "offline": [
+      "npm --prefix sdk/typescript test",
+      "npm --prefix sdk/typescript run typecheck",
+      "node conformance/independent/verify-typescript-worker.mjs",
+      "node conformance/independent/typescript-worker-runtime.mjs",
+      "bun conformance/independent/typescript-worker-runtime.mjs"
+    ],
+    "integration": [
+      "npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read conformance/independent/typescript-worker-runtime.mjs",
+      "conformance/edge/run-typescript-worker-workerd.sh"
+    ]
+  },
   "evidence": [
-    {"path": "sdk/typescript/runtime/server.mjs", "sha256": "029f563f62d83a89342fdca90b907d2a083a7ac315263ccf7f7e248db5ce44fe"},
-    {"path": "sdk/typescript/runtime/server.d.mts", "sha256": "15db0528465b97bd51c29140a3f7c9c60f2eff33b8c5db3b9017871b8fc56f8f"},
-    {"path": "sdk/typescript/runtime/server.test.mjs", "sha256": "0af31350b9b03e3bb1bf5e70d5621cf237cadb36e4d02dce598d7199c94998d0"},
+    {"path": "sdk/typescript/runtime/server.mjs", "sha256": "97c3469ef77c389792e4fb3ece424363621bffa72c55fc7a1635247ce7dfdff8"},
+    {"path": "sdk/typescript/runtime/server.d.mts", "sha256": "8f8ce5ed8a8929e868c40fa3a1f72cd827a5d4eb3ab18ad901f517e11f8586bc"},
+    {"path": "sdk/typescript/runtime/server.test.mjs", "sha256": "6c40a6699e91c69ab89ec262431938d6634dd073840f4828ad8dc7f77a68866a"},
+    {"path": "sdk/typescript/runtime/worker-runtime.mjs", "sha256": "7a8d87764b4b8a4cf4061225a9a89f4ed95207204b5a1d4f1bf8a9d4e71826f3"},
+    {"path": "sdk/typescript/runtime/worker-runtime.d.mts", "sha256": "76e3400c500d975b23d93d38da28d17f68e4ea8147941f14114e3f1c618f6971"},
+    {"path": "sdk/typescript/runtime/worker-node.mjs", "sha256": "d96158a47f45492705fd082263f1f7b19b7b9c448cb31d14942f192b6f658f19"},
+    {"path": "sdk/typescript/runtime/worker-node.d.mts", "sha256": "30fc19731c1e9d93fabe9b30137b0957d9b5ad99ab8c4188b4dd369a8f1278bb"},
+    {"path": "sdk/typescript/runtime/worker-bun.mjs", "sha256": "811e95a3b4bf88923f36c33679346372298c0cce4994e52da4f296f4ce1fcc1c"},
+    {"path": "sdk/typescript/runtime/worker-bun.d.mts", "sha256": "18d02e9e6b3614a581451c272e1914767ab1267c04673d594c2d6c2ee6ade23b"},
+    {"path": "sdk/typescript/runtime/worker-deno.mjs", "sha256": "d0190fd1bfae597cfc06072ec7db92a59a92bb340cf983815ea6732749603be5"},
+    {"path": "sdk/typescript/runtime/worker-deno.d.mts", "sha256": "5b6b6bfe3a3d6b1ed141b64bc19d79984d241ff12a07882493b94f917b906689"},
+    {"path": "sdk/typescript/runtime/worker-edge.mjs", "sha256": "90203b836c3c647be418916d736f02637ffa9cd642419cf93f8d98c47af81c9a"},
+    {"path": "sdk/typescript/runtime/worker-edge.d.mts", "sha256": "fe8c37b277b7565923b669bfcff6b1544bc1783557c469294d588c97a8cc45a0"},
+    {"path": "sdk/typescript/runtime/worker-runtime-types.test.ts", "sha256": "dbdf8b736c9f8a93ea902d8de44f21da575b514aff0dc77f3f83ee10beca509e"},
     {"path": "sdk/typescript/runtime/json.mjs", "sha256": "734ce2785017e2eaa501b39f94b07d5c8bdf247ebd5d803f3128c883327c30e7"},
     {"path": "sdk/typescript/runtime/server-types.test.ts", "sha256": "7ee5beecd882dffe889947d9ce844a39d773f3b10e1f0232ed6e622ac177f275"},
     {"path": "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", "sha256": "fc91c0be9657e27b8b017f2f6985f0f769ad88c4e28052369c2fe51d2aa22a52"},
+    {"path": "sdk/typescript/runtime/fixtures/worker-test-contract.mjs", "sha256": "51e0dd90b197bb69b6abeb1ec4425a649c3fcc987e8886256a2c5e3e6b753633"},
     {"path": "sdk/typescript/runtime/fixtures/typed-worker-handler.test.ts", "sha256": "7de4d10e7a5ab47c47fd870b87f5bcd170841a6b931c6bfe4e9532629ff08d51"},
     {"path": "sdk/typescript/generated/operations.ts", "sha256": "6ce4d768c62a07dbf11fd1cd5ed550aa7f056eace48cd1c0b433458a1e7c2968"},
     {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "589b7add64f8ed133ff29c2157b782858c1fa89e563d800f61b0158bc06138ad"},
     {"path": "sdk/typescript/examples/worker.ts", "sha256": "4bf66dd45080325b57cc5a4ef8fdddba10d873ec9d60d0e86aa6ca1916a61574"},
-    {"path": "sdk/typescript/package.json", "sha256": "0b9168f0bab0b55a6dc227bc912670efd7e2993803262bf399139b9724a456fe"},
+    {"path": "sdk/typescript/runtime/exports.test.mjs", "sha256": "bd9324ff71162807c361320d5ae645b3198daeac458f8624a88587bc5cf203f0"},
+    {"path": "sdk/typescript/package.json", "sha256": "f83c058c161baca65e20f3f9d8c05358a6290f3f12e2007110981643ff019c13"},
     {"path": "sdk/typescript/package-lock.json", "sha256": "85bc02f2e6dd89e0a74460d457c755932448f176db21156de646db9fae87ddb1"},
     {"path": "sdk/typescript/tsconfig.json", "sha256": "446a73efb92a8d940294018aaaa84873501a8ca76c9232c52fd777c301c57b6f"},
     {"path": "conformance/independent/remote-worker.mjs", "sha256": "cc48a58ae249899d56d726d72ade63fcd4ef5d9bfdb064293cc2ecd250e7a7c4"},
-    {"path": "conformance/independent/typescript-worker-runtime.mjs", "sha256": "1bcdd83bf5c23e1937b04aca7889a5729f12fe34d0c1221cd9f173e17e4273d9"},
+    {"path": "conformance/independent/typescript-worker-runtime.mjs", "sha256": "a4eba90cea49934d45480ce9f135167a7bc16d396c32d58104bb41f983eb5a88"},
     {"path": "conformance/independent/runtime-id.mjs", "sha256": "08da1b542cc7b165252447d59b83757060de86121d1a16fdc277651f38b20138"},
     {"path": "conformance/edge/runtime-evidence.mjs", "sha256": "a0bfe3ec0b83803b7161daa5fd240a8181d98a55e98156cdedf5e28483b5f3ee"},
-    {"path": "conformance/edge/typescript-worker.mjs", "sha256": "0b34e518bc060bfaab099b2af2421c40de4daa81cbd02a0e68bbe336ae17ca80"},
-    {"path": "conformance/edge/typescript-worker-workerd.capnp", "sha256": "720bae51a4f982db082416d40ad1df635be3219cd404d0af48c157efb1490359"},
-    {"path": "conformance/edge/run-typescript-worker-workerd.sh", "sha256": "5be701b42a6824624a672db2e35247214051c02da7cb5dc9ec8ef1b44c319787"},
+    {"path": "conformance/edge/typescript-worker.mjs", "sha256": "a83f634840882a6c4eaa9189c75dbd8d6c55560b48633002ff66ab57e6999f2d"},
+    {"path": "conformance/edge/typescript-worker-workerd.capnp", "sha256": "8e5829bf1e7e9d56b473cb96d25361ad1fe38fba6be9ad68a3ed2788f0eba63e"},
+    {"path": "conformance/edge/run-typescript-worker-workerd.sh", "sha256": "7672c8540cc597b1cefbe78297a47045108976fd02990aee77973ec18f6adcbf"},
+    {"path": "sdk/typescript/README.md", "sha256": "42912226d7dd3c8f1c5169c3fa7060733d5aebaf8b588729e69619e331834210"},
     {"path": "remoteworker/gateway_test.go", "sha256": "252db9b73df95ad13d66502c31be9a2f389f5585afb814c9dd8aaf8b54a547a8"}
   ],
   "claims": {
@@ -74,15 +110,18 @@
     "processIsolation": false,
     "productionHTTP2Server": false,
     "frameworkAdapters": false,
+    "runtimeLifecycleAdapters": true,
     "runtimeAdapterOwnerIssue": 101,
     "combinedMatrixOwnerIssue": 69
   },
   "unsupported": [
     "runtime-owned-http-listeners",
-    "node-worker-thread-lifecycle",
-    "bun-server-lifecycle",
-    "deno-server-lifecycle",
-    "edge-deployment-lifecycle",
+    "production-http2-streaming-framing",
+    "node-incomingmessage-serverresponse-conversion",
+    "automatic-process-signal-handlers",
+    "bun-and-deno-server-ownership",
+    "node-bun-deno-worker-and-process-creation-or-termination",
+    "edge-isolate-and-background-lifecycle",
     "hard-termination-without-explicit-worker-or-process-executor",
     "framework-bindings",
     "production-http2-tls-transport",

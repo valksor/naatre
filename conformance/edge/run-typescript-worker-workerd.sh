@@ -47,6 +47,9 @@ node --input-type=module -e '
   import { readFileSync } from "node:fs";
   const result = JSON.parse(readFileSync(process.argv[1], "utf8"));
   if (result.profile !== "worker.javascript-typescript-1" || result.status !== "passed" || result.runtime !== "workerd-2026-09-14") process.exit(1);
+  if (result.runtimeProfile !== "worker.javascript-typescript.edge-1") process.exit(1);
   if (result.implementations.length !== 1 || result.implementations[0].language !== "plain-javascript") process.exit(1);
+  const required = ["registration", "prototype-safety", "abort-signal", "streaming", "backpressure", "warm-instance-isolation", "output-validation", "shutdown", "stable-public-failures", "resource-limits"];
+  if (JSON.stringify(result.vectors) !== JSON.stringify(required)) process.exit(1);
 ' "$result_file"
 cat "$result_file"
