@@ -527,19 +527,19 @@
     },
     "60": {
       "issue": 60,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 60,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "worker.javascript-typescript-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": ["worker.javascript-typescript-1"]
       }
     },
     "61": {

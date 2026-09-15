@@ -11,6 +11,52 @@ and lossless codecs for integers, decimal values, nanosecond timestamps, and
 bytes. `undefined`, sparse arrays, unsafe JSON integers, direct `BigInt`
 serialization, and `Date` timestamp coercion are rejected.
 
+## Server handlers and remote workers
+
+The `@naatre/sdk/worker` ESM subpath provides the framework-neutral
+`worker.javascript-typescript-1` reference implementation. Handlers are plain
+JavaScript functions; generated TypeScript `Handler` input and server-output
+interfaces come from the same `sdk.generation-1` model as client operations.
+Server outputs are complete schema values and are deliberately distinct from
+client partial-result `Selected` types. Runtime validation always runs before
+handler entry and again before a worker result is returned.
+
+Registration is explicit and stored in `Map`/null-prototype structures.
+`__proto__`, `constructor`, and `prototype` schema or registration names are
+rejected, and invocation dispatch never traverses object properties. Each
+invocation authenticates its delegated context and receives fresh tenant,
+principal, cache, loader, and mutable-state objects. Reusing request-state
+objects across warm or concurrent requests is rejected.
+
+Handler context exposes an `AbortSignal` and `onCleanup`. Cancellation runs
+registered I/O cleanup immediately, but inline synchronous CPU work cannot be
+forcibly interrupted and remains in `metrics().activeInvocations` until it
+settles. CPU isolation must be selected explicitly with a `worker` or `process`
+execution profile and a host-supplied executor. Streaming handlers return an
+`AsyncIterable`; reads are pull-driven, concurrent reads are rejected, frame
+and byte limits enforce backpressure, and `return()` closes both the source and
+request resources.
+
+`createFetchWorkerAdapter` maps the three remote-worker endpoints to a pure
+`Request => Promise<Response>` function and owns no listener. Concrete Node,
+Bun, Deno, and edge process/network lifecycle bindings are extracted to #101.
+The core conformance harness still executes each runtime separately instead of
+inferring support from the presence of global `fetch`. See the framework-neutral
+[`examples/worker.ts`](examples/worker.ts) binding.
+
+```sh
+node conformance/independent/typescript-worker-runtime.mjs
+bun conformance/independent/typescript-worker-runtime.mjs
+npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read \
+  conformance/independent/typescript-worker-runtime.mjs
+conformance/edge/run-typescript-worker-workerd.sh
+```
+
+The workerd wrapper pins `1.20260914.1` and binds only an OS-selected ephemeral
+loopback port. The production HTTP/2 listener, runtime shutdown/drain hooks,
+worker-thread/process supervision, framework bindings, and deployment
+certification remain #101/#69 work and are not claimed by this core package.
+
 Regenerate and verify the checked-in bindings with:
 
 ```sh

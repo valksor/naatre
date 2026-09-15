@@ -5,18 +5,15 @@ const config :Workerd.Config = (
     (name = "main", worker = (
       compatibilityDate = "2026-09-14",
       modules = [
-        (name = "conformance/edge/typescript-adapter-worker.mjs", esModule = embed "typescript-adapter-worker.mjs"),
+        (name = "conformance/edge/typescript-worker.mjs", esModule = embed "typescript-worker.mjs"),
         (name = "conformance/edge/runtime-evidence.mjs", esModule = embed "runtime-evidence.mjs"),
-        (name = "conformance/independent/typescript-adapter-runtime.mjs", esModule = embed "../independent/typescript-adapter-runtime.mjs"),
+        (name = "conformance/independent/typescript-worker-runtime.mjs", esModule = embed "../independent/typescript-worker-runtime.mjs"),
         (name = "conformance/independent/runtime-id.mjs", esModule = embed "../independent/runtime-id.mjs"),
         (name = "sdk/typescript/runtime/error.mjs", esModule = embed "../../sdk/typescript/runtime/error.mjs"),
-        (name = "sdk/typescript/runtime/index.mjs", esModule = embed "../../sdk/typescript/runtime/index.mjs"),
         (name = "sdk/typescript/runtime/json.mjs", esModule = embed "../../sdk/typescript/runtime/json.mjs"),
-        (name = "sdk/typescript/runtime/operation.mjs", esModule = embed "../../sdk/typescript/runtime/operation.mjs"),
-        (name = "sdk/typescript/runtime/result.mjs", esModule = embed "../../sdk/typescript/runtime/result.mjs"),
         (name = "sdk/typescript/runtime/scalars.mjs", esModule = embed "../../sdk/typescript/runtime/scalars.mjs"),
-        (name = "sdk/typescript/runtime/stream.mjs", esModule = embed "../../sdk/typescript/runtime/stream.mjs"),
-        (name = "sdk/typescript/runtime/transport.mjs", esModule = embed "../../sdk/typescript/runtime/transport.mjs")
+        (name = "sdk/typescript/runtime/server.mjs", esModule = embed "../../sdk/typescript/runtime/server.mjs"),
+        (name = "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", esModule = embed "../../sdk/typescript/runtime/fixtures/plain-worker-handler.mjs")
       ]
     ))
   ],

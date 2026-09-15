@@ -5,5 +5,6 @@ export { decodeBoolean, decodeList, decodeNumber, decodeOperationResult, decodeS
 export { createScalarCodecs, decodeBytes, decodeScalar, encodeBigInt, encodeBytes, encodeDecimal, encodeDuration, encodeInt64, encodeScalar, encodeTimestamp, encodeUInt64, encodeUUID } from "./scalars.mjs";
 export { createWebSocketAdapter, decodeSSEStream } from "./stream.mjs";
 export { createFetchAdapter } from "./transport.mjs";
+export { NaatreWorkerError, createFetchWorkerAdapter, createWorker, defineHandler, workerProtocol, workerRuntimeVersion } from "./server.mjs";
 
 export const runtimeVersion = "naatre.typescript.runtime-1";

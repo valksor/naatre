@@ -23,6 +23,9 @@ test("generator reproduces checked artifacts byte for byte", async () => {
   assert.deepEqual(first, second);
   assert.match(first.source, new RegExp(generatorVersion));
   assert.match(first.source, /unknown: string/u);
+  assert.match(first.source, /export interface GetAccountHandlerOutput/u);
+  assert.match(first.source, /export function createGetAccountHandler/u);
+  assert.doesNotMatch(first.source, /type GetAccountHandlerOutput = GetAccountResult/u);
 });
 
 test("generator rejects drift, unmapped scalars, and normalized symbol collisions", async () => {

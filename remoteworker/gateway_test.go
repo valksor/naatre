@@ -44,7 +44,17 @@ func TestFramedIndependentFixtureWorkerProducesEquivalentPublicDataAndErrors(t *
 	if err != nil {
 		t.Skip("node is required for the independent remote-worker fixture")
 	}
+	for _, language := range []string{"plain-javascript", "typescript"} {
+		t.Run(language, func(t *testing.T) {
+			testFramedIndependentFixtureWorker(t, node, language)
+		})
+	}
+}
+
+func testFramedIndependentFixtureWorker(t *testing.T, node, language string) {
+	t.Helper()
 	command := exec.Command(node, filepath.Join("..", "conformance", "independent", "remote-worker.mjs"), "--serve")
+	command.Env = append(os.Environ(), "NAATRE_HANDLER_LANGUAGE="+language)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +79,12 @@ func TestFramedIndependentFixtureWorkerProducesEquivalentPublicDataAndErrors(t *
 		t.Fatal(err)
 	}
 	gateway := newTestGateway(t, transport, 1)
-	registerFixtureWorker(t, gateway)
+	registration := fixtureRegistration()
+	registration.Handlers = registration.Handlers[:1]
+	registration.Handlers[0].RequiredCapabilities = []string{}
+	if err := gateway.Register(context.Background(), registration); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
 
 	fixtureBytes, err := os.ReadFile(filepath.Join("..", "conformance", "v1", "remote-workers.json"))
 	if err != nil {

@@ -14,5 +14,5 @@
     "moduleResolution": "NodeNext",
     "noEmit": true
   },
-  "include": ["generated/**/*.ts", "runtime/**/*.d.mts"]
+  "include": ["examples/**/*.ts", "generated/**/*.ts", "runtime/**/*.d.mts", "runtime/**/*.test.ts"]
 }

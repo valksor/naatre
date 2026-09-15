@@ -14,23 +14,23 @@
     "referenceOutput": {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
   },
   "generated": {
-    "source": {"path": "sdk/typescript/generated/operations.ts", "sha256": "3a6598b3ba8e385b14e4bd04ab188c04fa3bacac3d25878fcd02d021d92ae215"},
+    "source": {"path": "sdk/typescript/generated/operations.ts", "sha256": "6ce4d768c62a07dbf11fd1cd5ed550aa7f056eace48cd1c0b433458a1e7c2968"},
     "manifest": {"path": "sdk/typescript/generated/operations.json", "sha256": "9627895c5ac0bd002aeef1d3fcfbd90fd3f7894e85619734d07420d85038bfb6"}
   },
   "evidence": [
-    {"path": "sdk/typescript/runtime/index.mjs", "sha256": "443221d5a09ca02631bdf5f99df55362b1e780c2d240b9cbdb9f2aec2588829a"},
-    {"path": "sdk/typescript/runtime/json.mjs", "sha256": "6b799ebb5087dbb4c76b715836c55ebfe9ee756d45702f5b72765283c026755c"},
+    {"path": "sdk/typescript/runtime/index.mjs", "sha256": "557755f7baf39a54ce63be6e3e69e86e66a0242033ffc128ef42b32e5e2d749a"},
+    {"path": "sdk/typescript/runtime/json.mjs", "sha256": "734ce2785017e2eaa501b39f94b07d5c8bdf247ebd5d803f3128c883327c30e7"},
     {"path": "sdk/typescript/runtime/scalars.mjs", "sha256": "783edfb181d7dcbce5d786c508918c3f1de67d2024d687a890b81e9242ab7e33"},
     {"path": "sdk/typescript/runtime/result.mjs", "sha256": "3e046e34af27180d34e06531a24859b2af723caec2b5c611b761cba5880b7672"},
     {"path": "sdk/typescript/runtime/operation.mjs", "sha256": "479969bf7fad1842f84c008fb320d7e7b5bc0f903ed04f474c1d140ab404d3e5"},
-    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "c4f007dabd8a96894f7c694cb728f6b78e7a042611087d7c6ebc39e61ea4eb90"},
+    {"path": "sdk/typescript/runtime/index.d.mts", "sha256": "1bfb21812f9d4080f613813e00db387d48a137deb3bdd2c6373718c665bee6d8"},
     {"path": "sdk/typescript/runtime/index.test.mjs", "sha256": "8d0c1d51e697c5dd657f44443d34d8ed7b258962b30b5025d5b1d2e69dfd6068"},
-    {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "df6eb6a63e978b2d04e3bc3f51e4ad9d799659a4c2f3c5755296b447d57fa2f7"},
+    {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "589b7add64f8ed133ff29c2157b782858c1fa89e563d800f61b0158bc06138ad"},
     {"path": "sdk/typescript/sdkgen/cli.mjs", "sha256": "62fbc2a1fbbd1970b7049567b60e33f08a4e9270ce1c65754ccda79a29aab4c0"},
-    {"path": "sdk/typescript/sdkgen/generator.test.mjs", "sha256": "d8694902cfafe8e680c888ce92a1d68929f63f20da9157bdada7abc85b6b3160"},
-    {"path": "sdk/typescript/package.json", "sha256": "75676f70299a1d48f8c5e4d29f25ec1aa1e76855dedb557cff832a40d56a4a79"},
-    {"path": "sdk/typescript/package-lock.json", "sha256": "e356c4b3e5b96c03d0427347ad81510f7f2692c735da7b65f4c15dbd31558c41"},
-    {"path": "sdk/typescript/tsconfig.json", "sha256": "5ecb76178558250c6afc75e8ecb8569c40c96defd2c1a0448d14cabdab6c4f98"},
+    {"path": "sdk/typescript/sdkgen/generator.test.mjs", "sha256": "a8effca696e849345fc0753255cbe0ff504947ac3f1a328663c1f62a4dabb08e"},
+    {"path": "sdk/typescript/package.json", "sha256": "0b9168f0bab0b55a6dc227bc912670efd7e2993803262bf399139b9724a456fe"},
+    {"path": "sdk/typescript/package-lock.json", "sha256": "85bc02f2e6dd89e0a74460d457c755932448f176db21156de646db9fae87ddb1"},
+    {"path": "sdk/typescript/tsconfig.json", "sha256": "446a73efb92a8d940294018aaaa84873501a8ca76c9232c52fd777c301c57b6f"},
     {"path": "conformance/independent/verify-typescript-sdk.mjs", "sha256": "a2c165009746380fabc974b5e92f24d8761a88a658d23b46d58dfc002c869300"}
   ],
   "vectors": [

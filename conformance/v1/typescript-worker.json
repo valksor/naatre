@@ -1,0 +1,91 @@
+{
+  "profile": "worker.javascript-typescript-1",
+  "protocol": "naatre.remote-worker.v1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "naatre.typescript.worker-1",
+  "schema": {
+    "sharedSchemaProfile": "core.schema-1",
+    "generatorProfile": "sdk.generation-1",
+    "serverInterfaceArtifact": "sdk/typescript/generated/operations.ts",
+    "sources": [
+      {"path": "conformance/v1/remote-workers.json", "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
+      {"path": "conformance/v1/generator-model.json", "sha256": "22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
+      {"path": "conformance/v1/generator-output.json", "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"}
+    ]
+  },
+  "package": {
+    "name": "@naatre/sdk",
+    "format": "esm",
+    "export": "@naatre/sdk/worker",
+    "frameworkNeutralExample": "sdk/typescript/examples/worker.ts",
+    "typescript": "7.0.2"
+  },
+  "handlerImplementations": [
+    {"language": "plain-javascript", "path": "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", "vectors": ["schema-defined-success", "schema-defined-error"]},
+    {"language": "typescript", "path": "sdk/typescript/runtime/fixtures/typed-worker-handler.test.ts", "vectors": ["schema-defined-success", "schema-defined-error"]}
+  ],
+  "vectors": [
+    "gateway-plain-javascript-and-typescript",
+    "runtime-registration-and-input-validation",
+    "prototype-and-forged-name-rejection",
+    "abort-cleanup-with-active-accounting",
+    "pull-backpressure-and-abandoned-stream-cleanup",
+    "warm-concurrent-request-isolation",
+    "output-undefined",
+    "output-sparse-array",
+    "output-non-finite-number",
+    "output-lossy-integer",
+    "output-unknown-tag",
+    "output-nullability",
+    "fetch-request-response-adapter"
+  ],
+  "runtimes": [
+    {"runtime": "node", "version": "26.8.2", "platform": "darwin-arm64", "status": "supported", "execution": "passed", "handlerImplementations": ["plain-javascript", "typescript"], "command": "node conformance/independent/typescript-worker-runtime.mjs"},
+    {"runtime": "bun", "version": "1.4.2", "platform": "darwin-arm64", "status": "supported", "execution": "passed", "handlerImplementations": ["plain-javascript", "typescript"], "command": "bun conformance/independent/typescript-worker-runtime.mjs"},
+    {"runtime": "deno", "version": "2.9.6", "platform": "darwin-arm64", "status": "supported", "execution": "deferred-to-integration", "handlerImplementations": ["plain-javascript", "typescript"], "command": "npx --yes --userconfig=/dev/null deno@2.9.6 run --allow-read conformance/independent/typescript-worker-runtime.mjs"},
+    {"runtime": "workerd", "version": "1.20260914.1", "platform": "darwin-arm64", "status": "supported", "execution": "deferred-to-integration", "handlerImplementations": ["compiled-javascript"], "command": "conformance/edge/run-typescript-worker-workerd.sh"}
+  ],
+  "evidence": [
+    {"path": "sdk/typescript/runtime/server.mjs", "sha256": "029f563f62d83a89342fdca90b907d2a083a7ac315263ccf7f7e248db5ce44fe"},
+    {"path": "sdk/typescript/runtime/server.d.mts", "sha256": "15db0528465b97bd51c29140a3f7c9c60f2eff33b8c5db3b9017871b8fc56f8f"},
+    {"path": "sdk/typescript/runtime/server.test.mjs", "sha256": "0af31350b9b03e3bb1bf5e70d5621cf237cadb36e4d02dce598d7199c94998d0"},
+    {"path": "sdk/typescript/runtime/json.mjs", "sha256": "734ce2785017e2eaa501b39f94b07d5c8bdf247ebd5d803f3128c883327c30e7"},
+    {"path": "sdk/typescript/runtime/server-types.test.ts", "sha256": "7ee5beecd882dffe889947d9ce844a39d773f3b10e1f0232ed6e622ac177f275"},
+    {"path": "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", "sha256": "fc91c0be9657e27b8b017f2f6985f0f769ad88c4e28052369c2fe51d2aa22a52"},
+    {"path": "sdk/typescript/runtime/fixtures/typed-worker-handler.test.ts", "sha256": "7de4d10e7a5ab47c47fd870b87f5bcd170841a6b931c6bfe4e9532629ff08d51"},
+    {"path": "sdk/typescript/generated/operations.ts", "sha256": "6ce4d768c62a07dbf11fd1cd5ed550aa7f056eace48cd1c0b433458a1e7c2968"},
+    {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "589b7add64f8ed133ff29c2157b782858c1fa89e563d800f61b0158bc06138ad"},
+    {"path": "sdk/typescript/examples/worker.ts", "sha256": "4bf66dd45080325b57cc5a4ef8fdddba10d873ec9d60d0e86aa6ca1916a61574"},
+    {"path": "sdk/typescript/package.json", "sha256": "0b9168f0bab0b55a6dc227bc912670efd7e2993803262bf399139b9724a456fe"},
+    {"path": "sdk/typescript/package-lock.json", "sha256": "85bc02f2e6dd89e0a74460d457c755932448f176db21156de646db9fae87ddb1"},
+    {"path": "sdk/typescript/tsconfig.json", "sha256": "446a73efb92a8d940294018aaaa84873501a8ca76c9232c52fd777c301c57b6f"},
+    {"path": "conformance/independent/remote-worker.mjs", "sha256": "cc48a58ae249899d56d726d72ade63fcd4ef5d9bfdb064293cc2ecd250e7a7c4"},
+    {"path": "conformance/independent/typescript-worker-runtime.mjs", "sha256": "1bcdd83bf5c23e1937b04aca7889a5729f12fe34d0c1221cd9f173e17e4273d9"},
+    {"path": "conformance/independent/runtime-id.mjs", "sha256": "08da1b542cc7b165252447d59b83757060de86121d1a16fdc277651f38b20138"},
+    {"path": "conformance/edge/runtime-evidence.mjs", "sha256": "a0bfe3ec0b83803b7161daa5fd240a8181d98a55e98156cdedf5e28483b5f3ee"},
+    {"path": "conformance/edge/typescript-worker.mjs", "sha256": "0b34e518bc060bfaab099b2af2421c40de4daa81cbd02a0e68bbe336ae17ca80"},
+    {"path": "conformance/edge/typescript-worker-workerd.capnp", "sha256": "720bae51a4f982db082416d40ad1df635be3219cd404d0af48c157efb1490359"},
+    {"path": "conformance/edge/run-typescript-worker-workerd.sh", "sha256": "5be701b42a6824624a672db2e35247214051c02da7cb5dc9ec8ef1b44c319787"},
+    {"path": "remoteworker/gateway_test.go", "sha256": "cdab858c75dee472033ea720229a1963495f724ded52eabef96195bdfc823b1e"}
+  ],
+  "claims": {
+    "nativeRuntime": false,
+    "hardTermination": false,
+    "processIsolation": false,
+    "productionHTTP2Server": false,
+    "frameworkAdapters": false,
+    "runtimeAdapterOwnerIssue": 101,
+    "combinedMatrixOwnerIssue": 69
+  },
+  "unsupported": [
+    "runtime-owned-http-listeners",
+    "node-worker-thread-lifecycle",
+    "bun-server-lifecycle",
+    "deno-server-lifecycle",
+    "edge-deployment-lifecycle",
+    "hard-termination-without-explicit-worker-or-process-executor",
+    "framework-bindings",
+    "production-http2-tls-transport",
+    "deployment-certification"
+  ]
+}

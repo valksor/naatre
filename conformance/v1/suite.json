@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "77d54079e3429f7135a1d6b045fd7be4cbb5cb6a23e0a0c6b4cbe416a410ffe0"
+      "sha256": "6f6ddb42e1d1497699d01494c2b82a2ce1671e9fde135d7ff93c7d766a82e979"
     },
     {
       "path": "v1/scalars.json",
@@ -250,13 +250,19 @@
       "path": "v1/typescript-adapters.json",
       "profile": "sdk.typescript.adapters-1",
       "category": "transport",
-      "sha256": "751d9129074ee6736e5c3666c8c2c174f513806e509e9a552d1ac9243e524166"
+      "sha256": "7e9e1d41c68359f51fee7df1477e3ee9780986957755158221bec243d4e254d1"
     },
     {
       "path": "v1/typescript-sdk.json",
       "profile": "sdk.typescript.core-1",
       "category": "canonical",
-      "sha256": "3ac337af6791de4aa3a5508a3454c70dd0b2e30fd3c4b5eaad166ed5c33cecb2"
+      "sha256": "cf4e6f00cf2a208592cf94a4ea4561e283fa384a7ea31f016ccc232a8a6420f4"
+    },
+    {
+      "path": "v1/typescript-worker.json",
+      "profile": "worker.javascript-typescript-1",
+      "category": "worker",
+      "sha256": "cdc6d2bbac45c6f4f968bc7c397684352a229f41d987b64587f4bfe7664e2fbb"
     },
     {
       "path": "v1/validation.json",
@@ -304,7 +310,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "446b2dbe1581ef770f155909072588c16eefeb0b5ad5b40a4b2af4c610da64c3"
+      "sha256": "4260e8d326afc4b6497fa61a7735a3c295966e21967214b112beafd06006bb20"
     },
     {
       "path": "v1/php-sdk.json",
@@ -436,7 +442,7 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "bb6e255f4be927e88467ba0ed4a85dec9a3956479893d8b8d360eb78838d094e"
+      "sha256": "9cda74a89c78edac119b096ca0f295c9b6bac44ae6d1d5db79f5432690989309"
     },
     {
       "path": "v1/go-quality.json",
@@ -538,7 +544,7 @@
       "path": "v1/http-digest-integration.json",
       "profile": "implementation.go.http-digest-1",
       "category": "transport",
-      "sha256": "cd240b47471a252d78e404646e6a8cfb4fec8026b437b67a5aefe9edc9f61c39"
+      "sha256": "af5f7b9a9bd8108471766af9b530321f6ec5a18130c28fde01c46cfb12f2d34a"
     }
   ],
   "normativeSources": [
