@@ -777,7 +777,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
         },
         {
           "path": "v1/security.json",
@@ -1322,7 +1322,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
         },
         {
           "path": "v1/security.json",
@@ -1881,7 +1881,7 @@
         {
           "path": "v1/generator-plugin-host.json",
           "profile": "sdk.generator-plugin-host-1",
-          "sha256": "f19f120fae06e3f45a7f993a0b158b7ebed64a7759f06e97cd5491523c92b745"
+          "sha256": "b0e191bc20eb72c29fa1dbe8cd352bfc676bb2d5e2e6a6786cf70ca5f5ead15c"
         },
         {
           "path": "v1/language.json",
@@ -2111,7 +2111,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
         },
         {
           "path": "v1/security.json",
@@ -2250,7 +2250,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
         },
         {
           "path": "v1/security.json",
@@ -3317,7 +3317,7 @@
         {
           "path": "v1/security-gate.json",
           "profile": "suite.security-gate-1",
-          "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+          "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
         },
         {
           "path": "v1/security.json",

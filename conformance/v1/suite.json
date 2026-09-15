@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "858ca3725f5f8fe79e9afe187b1a933d6cabc70ff2826836111be97521c8935e"
+      "sha256": "c7754d3e4a1dafe5888c1448e7c2de727ab83c1759be6115fc9c0f519e62e067"
     },
     {
       "path": "v1/scalars.json",
@@ -244,7 +244,7 @@
       "path": "v1/security-gate.json",
       "profile": "suite.security-gate-1",
       "category": "security",
-      "sha256": "7fdf3aad59d709d4beb16d7565eff93c9bdc1329693d9d77981f28208d4524e2"
+      "sha256": "b3500145e1cf1d938ed494b7011c2d3ef5c83a2f4d010c7f6fc43b57ff79d61e"
     },
     {
       "path": "v1/streaming.json",
@@ -268,7 +268,13 @@
       "path": "v1/typescript-worker.json",
       "profile": "worker.javascript-typescript-1",
       "category": "worker",
-      "sha256": "cdc6d2bbac45c6f4f968bc7c397684352a229f41d987b64587f4bfe7664e2fbb"
+      "sha256": "5efa64e3aa2c473e90fbf198716578842a923c92da829db359662d224c2fe651"
+    },
+    {
+      "path": "v1/rust-worker.json",
+      "profile": "worker.remote-1.rust",
+      "category": "worker",
+      "sha256": "5c7873a7286a86f13957e5d0dd4d09fc18e43a8ef0537ca4b823c510ae2dfa2b"
     },
     {
       "path": "v1/validation.json",
@@ -322,7 +328,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "18f2d5ae772609e64050fecf6a2943d9ca8e6038b0cae6f57ff13398af5acabb"
+      "sha256": "0a607b06ec288ca52f3711c98301e197e756516fa90f9a63b771bad8a107f2c5"
     },
     {
       "path": "v1/php-sdk.json",
@@ -340,7 +346,7 @@
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "b3a42ad290046fe2961e4dd3c166d6e2d60e81aa9c3266eeeb8eab11a3b3d0d6"
+      "sha256": "6dfada119ce755cc60a0b0b1f71b8bb019e45bcf8ff4d96c7241f796cb3bed83"
     },
     {
       "path": "v1/jvm-sdk.json",
@@ -454,7 +460,7 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "f19f120fae06e3f45a7f993a0b158b7ebed64a7759f06e97cd5491523c92b745"
+      "sha256": "b0e191bc20eb72c29fa1dbe8cd352bfc676bb2d5e2e6a6786cf70ca5f5ead15c"
     },
     {
       "path": "v1/go-quality.json",
@@ -502,7 +508,7 @@
       "path": "v1/remote-worker-gateway.json",
       "profile": "implementation.go.remote-worker-1",
       "category": "transport",
-      "sha256": "cc322031f129ff923b58b57a647a2627d813dc21bfa9834275828fda59a21519"
+      "sha256": "308d32ac2904394f6c30ef28b97973b111730ba5a9bc5b63a91a52c7978a20b9"
     },
     {
       "path": "v1/cbor.json",
@@ -526,13 +532,13 @@
       "path": "v1/php-server.json",
       "profile": "sdk.php.server-1",
       "category": "integration",
-      "sha256": "2b61776952cdcf7e1594bc2298816ed0088bfb0219a6b50a81c4ab6664327f68"
+      "sha256": "1be5eac6747e68dbf58768785e0a512aa16fc106187b46a4a2424fc3e5e74eca"
     },
     {
       "path": "v1/rust-async-adapters.json",
       "profile": "sdk.rust.adapters-1",
       "category": "transport",
-      "sha256": "6dbb1f137acac82fb90fbd8a9fbed2b3d3511fd2c858713b0e870f4012acb377"
+      "sha256": "46dae045c251700fad42ea9e7ea31488f882868a0e6defe993f2181a7a558966"
     },
     {
       "path": "v1/python-sdk-adapters.json",
@@ -580,7 +586,7 @@
       "path": "v1/http-digest-integration.json",
       "profile": "implementation.go.http-digest-1",
       "category": "transport",
-      "sha256": "af5f7b9a9bd8108471766af9b530321f6ec5a18130c28fde01c46cfb12f2d34a"
+      "sha256": "7a57d92278f6ca461952ca6c827fb742a371efe3241d5fc7af8b400c613f2c72"
     },
     {
       "path": "v1/asyncapi.json",

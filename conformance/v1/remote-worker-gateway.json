@@ -11,7 +11,7 @@
         {"path":"spec/v1/remote-workers.md","sha256":"41088211fe0fa7ae95b4fab7239a4e79f3900b63382b192d9d38ebc35038bdad"},
         {"path":"spec/v1/remote-worker.schema.json","sha256":"4b5d3aa788e8f84167643201b51f07bfdd20c9bd913f561393a71e32d4ed884a"},
         {"path":"conformance/v1/remote-workers.json","sha256":"f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
-        {"path":"conformance/independent/remote-worker.mjs","sha256":"f6d91b5a5b8225299ef704613624998458ea19a04919a4f01b7907b031d42a80"}
+        {"path":"conformance/independent/remote-worker.mjs","sha256":"cc48a58ae249899d56d726d72ade63fcd4ef5d9bfdb064293cc2ecd250e7a7c4"}
       ]
     },
     {
@@ -38,7 +38,7 @@
       {"path":"remoteworker/types.go","sha256":"f040bcfdc712d806e7e78a089aceafe1b34aaa256d4661b39326a4a53e48b2e2"},
       {"path":"remoteworker/framing.go","sha256":"1ae5cb067df7d85848cbd98aa7b9da9b6f5d1c7112adcee14b296a4db10e6bd9"},
       {"path":"remoteworker/backpressure.go","sha256":"4972d5e63690db5703faf02e0e2d50204d691cb2572d7ba3f45a60bc3b3894d1"},
-      {"path":"remoteworker/gateway_test.go","sha256":"c2f45ba72c2c9562183b979cc8b1fb919276965549b646088d7a964a9a0de9e3"},
+      {"path":"remoteworker/gateway_test.go","sha256":"252db9b73df95ad13d66502c31be9a2f389f5585afb814c9dd8aaf8b54a547a8"},
       {"path":"remoteworker/http_transport_test.go","sha256":"2da1348c23d9820a690389f892bd071553ba5f419bcca2b152d28cd8e4201067"},
       {"path":"remoteworker/framing_test.go","sha256":"07fa41ad21d912c77b63a2041a000c34f4174d66e2df5ea42fed2a6c3b378f17"},
       {"path":"conformance/independent/remote-worker-gateway.mjs","sha256":"eccbbcc1060c7dc6d8e0ceeb9dcc8fca3ee39dc3554f822fd92940f98caadf09"},

@@ -68,7 +68,7 @@
     {"path": "sdk/rust/generated/operations.rs", "sha256": "b2d917ca24c39e22f67b77ce57ee18969605b517f015be6f8d23aa980c4a713b"},
     {"path": "sdk/rust/tests/server.rs", "sha256": "2aff3bc342709ef1e8127de2a4338dd6135b914a0910deb8bfa613a502d96145"},
     {"path": "sdk/rust/examples/remote_worker.rs", "sha256": "6fdeda16635d580f5b40f32efc6c499111c14c719ed85238a76a6847c7aaf035"},
-    {"path": "examples/go-gateway-rust-worker/main.go", "sha256": "4d32467e38ea7ba1c9dd15a335deecb508a6362f41b089cf239ffd6ec8a1640c"},
+    {"path": "examples/go-gateway-rust-worker/main.go", "sha256": "11413da8e02565537ce98df659cd211783b879b9544cc5281e8fc94ce418a58e"},
     {"path": "examples/go-gateway-rust-worker/README.md", "sha256": "2760a9efe142a1de73df3106e0410694f32d4fb55a6382d17db57735249fbc68"},
     {"path": "conformance/v1/remote-workers.json", "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
     {"path": "conformance/independent/verify-rust-worker.mjs", "sha256": "4e57ed1a9181aadbbe9180ccf53e5d71841dfb853846450f2727a0c8e64b0522"}

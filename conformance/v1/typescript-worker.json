@@ -66,7 +66,7 @@
     {"path": "conformance/edge/typescript-worker.mjs", "sha256": "0b34e518bc060bfaab099b2af2421c40de4daa81cbd02a0e68bbe336ae17ca80"},
     {"path": "conformance/edge/typescript-worker-workerd.capnp", "sha256": "720bae51a4f982db082416d40ad1df635be3219cd404d0af48c157efb1490359"},
     {"path": "conformance/edge/run-typescript-worker-workerd.sh", "sha256": "5be701b42a6824624a672db2e35247214051c02da7cb5dc9ec8ef1b44c319787"},
-    {"path": "remoteworker/gateway_test.go", "sha256": "cdab858c75dee472033ea720229a1963495f724ded52eabef96195bdfc823b1e"}
+    {"path": "remoteworker/gateway_test.go", "sha256": "252db9b73df95ad13d66502c31be9a2f389f5585afb814c9dd8aaf8b54a547a8"}
   ],
   "claims": {
     "nativeRuntime": false,

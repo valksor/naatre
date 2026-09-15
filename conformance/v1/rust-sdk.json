@@ -25,19 +25,19 @@
     "scalars": {"path": "conformance/v1/scalars.json", "sha256": "69b110564bc8dd8392d2dcf588f85a12c953c4a1413b25b99a6ff07744fb9560"}
   },
   "generated": {
-    "source": {"path": "sdk/rust/generated/operations.rs", "sha256": "125a8481d2849b9b608720d263f9b9d810ab27ef57cc6c632373547bb39e595f"},
+    "source": {"path": "sdk/rust/generated/operations.rs", "sha256": "b2d917ca24c39e22f67b77ce57ee18969605b517f015be6f8d23aa980c4a713b"},
     "manifest": {"path": "sdk/rust/generated/operations.json", "sha256": "cb2eaa5054148503dd7fc457ff72809f457d3500919841f61f892e7ab5771b1b"}
   },
   "evidence": [
-    {"path": "sdk/rust/Cargo.toml", "sha256": "01ea0c125594f3dc1cfde95e68b4a2d883f704609c5f30b62d27f52c904faa16"},
+    {"path": "sdk/rust/Cargo.toml", "sha256": "cf2db2044e1168793a7881fb52c7ef1b9a178ee69935bb8116ab565572590331"},
     {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
-    {"path": "sdk/rust/ci.sh", "sha256": "ba9b166b3681a2e74b4370ee08483cf37ca2607866243868438093d0ebb9530e"},
-    {"path": "sdk/rust/README.md", "sha256": "1c0a4756223b9fe33ec28fd9129aae4183384813af29260408034bf2211dcd4c"},
+    {"path": "sdk/rust/ci.sh", "sha256": "6f9ed615107b35198e580b9a057db09b41a8feada41253814d70e77c32858831"},
+    {"path": "sdk/rust/README.md", "sha256": "2ac55b67702041af5c77f6d47fddc404822c6abd2836ca9c0d8b420a9172eef1"},
     {"path": "sdk/rust/generate.go", "sha256": "750816eba5d1856ed424b8483976c4dd100cf270f914818acc3a4d322a146b7b"},
-    {"path": "sdk/rust/src/lib.rs", "sha256": "5be5a8dff42ff9fa4eab1969fc1841e734329bb374d367b9ff231c75201bc1b0"},
+    {"path": "sdk/rust/src/lib.rs", "sha256": "32ff92bef81f22e17213408c9c84d3b325e6e4134382d996143b2fb1d3a62cf2"},
     {"path": "sdk/rust/src/scalar.rs", "sha256": "636ce87781aa5edab0aa8b91197e9ca0b9fb6fb3c27f7d866b07346e080b012c"},
     {"path": "sdk/rust/src/transport.rs", "sha256": "d312076dc2bf8b9de213b4ce63f5bd48e48cf93da46ae97921f8b96a384968e5"},
-    {"path": "sdk/rust/src/generator.rs", "sha256": "8d68bfeca88f1bac858db3319fba8559e75f28db2a243d4e377a01808c886b1c"},
+    {"path": "sdk/rust/src/generator.rs", "sha256": "fca697f253a61aeeaa89cf010e3703954320a9b199dba48bc0bc672d09dd2038"},
     {"path": "sdk/rust/src/bin/generator.rs", "sha256": "5ecfa75234085e340443856d65f24a7c4621b2f5efc3fbbe912063667ff77c57"},
     {"path": "sdk/rust/tests/conformance.rs", "sha256": "4d872fcb0a56b50d5feabfc595b1983b618135dbd6484ab4db857be8d8fa9bcc"},
     {"path": "conformance/independent/verify-rust-sdk.mjs", "sha256": "9ff391232f0449eda6f73bde524c10f3dad389039d398eb9688bece3e52eea22"}

@@ -210,7 +210,7 @@
       "surface": "large-values",
       "status": "supported",
       "fixture": {"path": "conformance/v1/large-values.json", "sha256": "2a3783fdee2236ea27e4617669ef5668425ce4aeb1cd9451e3ab68d4deb14ae3"},
-      "implementation": [{"path": "largevalue/coordinator.go", "sha256": "8f466cdcc0d882fd2ca96e4e96a6bcb4a11c11c0e74393feb7582fb65f1d2958"}],
+      "implementation": [{"path": "largevalue/coordinator.go", "sha256": "d2fb8b849f1ef7f976566b41ac26a9f4b6c9e34f4439b5585a4ae7b805929af0"}],
       "classes": ["positive", "negative", "adversarial", "cancellation", "exhaustion"],
       "budgetDimensions": ["upload-bytes", "stream-bytes", "chunks", "concurrency"],
       "protectedMetadata": ["object-key", "upload-id", "storage-location"],
@@ -235,7 +235,7 @@
       "status": "supported",
       "fixture": {"path": "conformance/v1/remote-workers.json", "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
       "implementation": [
-        {"path": "remoteworker/gateway.go", "sha256": "aea62bd1e0d71ed84d96e11a3297c4f06b6057172854428c41497340a9d39dd7"},
+        {"path": "remoteworker/gateway.go", "sha256": "a60a18be7a722c36ea6cb0609dbfbab6f91ef4b9ac34881c359b7b10f18098cb"},
         {"path": "remoteworker/backpressure.go", "sha256": "4972d5e63690db5703faf02e0e2d50204d691cb2572d7ba3f45a60bc3b3894d1"}
       ],
       "classes": ["positive", "negative", "adversarial", "cancellation", "exhaustion"],

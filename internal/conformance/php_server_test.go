@@ -131,6 +131,7 @@ func newPHPGateway(t *testing.T, transport remoteworker.Transport, attempts int,
 		ServiceIdentity: "spiffe://example/fixture-worker", Audience: "naatre-gateway",
 		SchemaRevision: "schema-1", SchemaDigest: strings.Repeat("a", 64),
 		MaxInFlight: 1, MaxAttempts: attempts, MaxRequestBytes: 4096, MaxResponseBytes: 4096,
+		MaxStreamFrames: 4, MaxStreamBytes: 16384, MaxReferences: 16, MaxSeen: 32,
 		Now: func() time.Time { return now },
 		VerifyDelegation: func(_ context.Context, token string, _ remoteworker.DelegationExpectation) error {
 			if !strings.Contains(token, ":") {

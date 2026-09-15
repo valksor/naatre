@@ -21,6 +21,7 @@ func New(transport remoteworker.Transport) (*remoteworker.ReferenceGateway, erro
 		ServiceIdentity: "spiffe://example/fixture-worker", Audience: "naatre-gateway",
 		SchemaRevision: schemaRevision, SchemaDigest: schemaDigest,
 		MaxInFlight: 1, MaxAttempts: 1, MaxRequestBytes: 4096, MaxResponseBytes: 4096,
+		MaxStreamFrames: 4, MaxStreamBytes: 16384, MaxReferences: 16, MaxSeen: 32,
 		VerifyDelegation: func(_ context.Context, token string, _ remoteworker.DelegationExpectation) error {
 			if token != "valid-delegation" {
 				return errDenied

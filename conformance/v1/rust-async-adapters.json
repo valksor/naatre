@@ -9,7 +9,7 @@
       "gitCommit": "b66c36c1e86a0a938c7d1ab0c80fac09e79a4d87",
       "fixture": {
         "path": "conformance/v1/rust-sdk.json",
-        "sha256": "b3a42ad290046fe2961e4dd3c166d6e2d60e81aa9c3266eeeb8eab11a3b3d0d6"
+        "sha256": "6dfada119ce755cc60a0b0b1f71b8bb019e45bcf8ff4d96c7241f796cb3bed83"
       }
     }
   ],
@@ -42,7 +42,7 @@
   "evidence": [
     {
       "path": "sdk/rust/Cargo.toml",
-      "sha256": "01ea0c125594f3dc1cfde95e68b4a2d883f704609c5f30b62d27f52c904faa16"
+      "sha256": "cf2db2044e1168793a7881fb52c7ef1b9a178ee69935bb8116ab565572590331"
     },
     {
       "path": "sdk/rust/Cargo.lock",
@@ -50,11 +50,11 @@
     },
     {
       "path": "sdk/rust/README.md",
-      "sha256": "1c0a4756223b9fe33ec28fd9129aae4183384813af29260408034bf2211dcd4c"
+      "sha256": "2ac55b67702041af5c77f6d47fddc404822c6abd2836ca9c0d8b420a9172eef1"
     },
     {
       "path": "sdk/rust/src/lib.rs",
-      "sha256": "5be5a8dff42ff9fa4eab1969fc1841e734329bb374d367b9ff231c75201bc1b0"
+      "sha256": "32ff92bef81f22e17213408c9c84d3b325e6e4134382d996143b2fb1d3a62cf2"
     },
     {
       "path": "sdk/rust/src/tokio_adapter.rs",

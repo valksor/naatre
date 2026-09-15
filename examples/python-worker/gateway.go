@@ -33,6 +33,7 @@ func main() {
 		ServiceIdentity: "spiffe://example/python-worker", Audience: "naatre-gateway",
 		SchemaRevision: "schema-generator-r1", SchemaDigest: digest,
 		MaxInFlight: 1, MaxAttempts: 1, MaxRequestBytes: 4096, MaxResponseBytes: 4096,
+		MaxStreamFrames: 4, MaxStreamBytes: 16_384, MaxReferences: 16, MaxSeen: 32,
 		VerifyDelegation: func(context.Context, string, remoteworker.DelegationExpectation) error { return nil },
 		Authorize:        func(context.Context, remoteworker.AuthorizationRequest) error { return nil },
 		ValidateInput:    validJSON,

@@ -61,7 +61,7 @@
     {"path": "sdk/php/tests/server-worker.php", "sha256": "8ad9ca6776e6e4fa58403ab42be6bd61a837470127896413780600b142a5be17"},
     {"path": "sdk/php/examples/symfony-server.php", "sha256": "b7e4517b0f23fccbd42e5bee462b55f0a7831dc75f7e8777d7e6eab3d0ac69d2"},
     {"path": "sdk/php/examples/laravel-server.php", "sha256": "fb9b3a1199dfec802d4c2163c914c2388dc11b3862467b396e9ef2e3600ade55"},
-    {"path": "internal/conformance/php_server_test.go", "sha256": "5d87cf3935da35e110aaaa7f859d53479ef64abcbb0d723793d2d41755481508"},
+    {"path": "internal/conformance/php_server_test.go", "sha256": "7cf785a7a399efb4c686b76862e047ef53993511f6fddac60962ccc70dd39308"},
     {"path": "conformance/independent/verify-php-server.mjs", "sha256": "f14636923427bb994b0a9c852085d12d76481813c4f6a1f585127e3bade1ec29"}
   ],
   "commands": [

@@ -139,6 +139,7 @@ func run(ctx context.Context, workerExecutable string) error {
 		ServiceIdentity: "spiffe://example/fixture-worker", Audience: "naatre-gateway",
 		SchemaRevision: "schema-1", SchemaDigest: fixture.Registration.SchemaDigest,
 		MaxInFlight: 1, MaxAttempts: 1, MaxRequestBytes: maximumFrameBytes, MaxResponseBytes: maximumFrameBytes,
+		MaxStreamFrames: 4, MaxStreamBytes: 16384, MaxReferences: 16, MaxSeen: 32,
 		VerifyDelegation: func(context.Context, string, remoteworker.DelegationExpectation) error { return nil },
 		Authorize:        func(context.Context, remoteworker.AuthorizationRequest) error { return nil },
 		ValidateInput:    func(string, json.RawMessage) error { return nil },
