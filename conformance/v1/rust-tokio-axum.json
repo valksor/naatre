@@ -1,0 +1,202 @@
+{
+  "profile": "worker.remote-1.rust-tokio-axum-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 100,
+  "normativeOwnerIssue": 61,
+  "protocol": "naatre.remote-worker.v1",
+  "runtimeVersion": "naatre.rust.tokio-axum-1",
+  "dependencies": {
+    "issue61Commit": "e960c4ff16e5e01372e122cf4e65b3f06f385f10",
+    "workerProfile": "worker.remote-1.rust",
+    "workerFixture": {
+      "path": "conformance/v1/rust-worker.json",
+      "sha256": "7d812af72b361a5c36ca26989913c367af5dd423bdc2feedde27349eea19e58b"
+    },
+    "protocolFixture": {
+      "path": "conformance/v1/remote-workers.json",
+      "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
+    },
+    "cargoLock": {
+      "path": "sdk/rust/Cargo.lock",
+      "sha256": "01826263b9417db54d9f88830ba2f4aced44a8b55756db67c3edda516398f174"
+    },
+    "crates": [
+      {
+        "name": "axum",
+        "version": "0.8.9",
+        "checksum": "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
+      },
+      {
+        "name": "tokio",
+        "version": "1.53.1",
+        "checksum": "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+      },
+      {
+        "name": "tower",
+        "version": "0.5.3",
+        "checksum": "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
+      }
+    ]
+  },
+  "package": {
+    "name": "naatre-sdk",
+    "edition": "2024",
+    "minimumRust": "1.85.0",
+    "defaultFeatures": [],
+    "features": {
+      "tokio-runtime": ["server", "dep:tokio"],
+      "axum": ["tokio-runtime", "dep:axum"]
+    }
+  },
+  "runtime": {
+    "executor": "application-owned-tokio-multithread-runtime",
+    "listener": "application-bound-tokio-tcp-listener",
+    "router": "in-memory-testable-axum-router",
+    "shutdown": "application-owned-future-with-axum-graceful-drain",
+    "asyncTasks": "bounded-abort-and-join-owned-work",
+    "blockingTasks": "bounded-cooperative-cancel-and-orderly-join",
+    "detachedTasks": 0,
+    "internalUnboundedQueues": 0
+  },
+  "transport": {
+    "mediaType": "application/naatre-worker+json",
+    "protocolHeader": "Naatre-Worker-Protocol",
+    "frame": "flag-zero-u32-big-endian-length-delimited-json",
+    "paths": {
+      "register": "/naatre.remote-worker.v1.Worker/Register",
+      "invoke": "/naatre.remote-worker.v1.Worker/Invoke",
+      "cancel": "/naatre.remote-worker.v1.Worker/Cancel"
+    },
+    "http": ["http1", "http2"],
+    "streaming": false
+  },
+  "limits": {
+    "maximumFrameBytes": 67108864,
+    "maximumOwnedAsyncTasks": 65536,
+    "maximumOwnedBlockingTasks": 65536,
+    "defaults": {
+      "ownedAsyncTasks": 64,
+      "ownedBlockingTasks": 8
+    }
+  },
+  "panicProfiles": {
+    "unwind": "contained-by-issue-61-as-redacted-INTERNAL-response",
+    "abort": "process-failure-with-no-destructor-cancellation-or-response-guarantee"
+  },
+  "failureCodes": [
+    "INTERNAL",
+    "OUTPUT_COMPLETION",
+    "OVERLOADED",
+    "REMOTE_CANCELLATION_INVALID",
+    "REMOTE_HANDLER_UNKNOWN",
+    "REMOTE_INVOCATION_DUPLICATE",
+    "REMOTE_INVOCATION_INVALID",
+    "REMOTE_REGISTRATION_INVALID",
+    "REMOTE_WORKER_MALFORMED",
+    "UNAUTHORIZED",
+    "WORKER_CONFIG_INVALID",
+    "WORKER_ROUTE_NOT_FOUND",
+    "WORKER_RUNTIME_UNAVAILABLE"
+  ],
+  "cases": [
+    {
+      "id": "positive-framed-register-and-invoke",
+      "class": "positive",
+      "test": "positive_register_and_invoke_use_the_normative_framed_transport",
+      "status": "passed"
+    },
+    {
+      "id": "negative-stable-redacted-failures",
+      "class": "negative",
+      "test": "negative_failures_are_stable_and_redact_credentials_and_panics",
+      "status": "passed"
+    },
+    {
+      "id": "boundary-routes-negotiation-send-sync-lifetimes-and-profiles",
+      "class": "boundary",
+      "tests": [
+        "boundary_routes_headers_methods_and_frame_sizes_fail_closed",
+        "send_sync_static_and_configuration_boundaries_are_compile_checked",
+        "response_payload_type_is_the_existing_worker_result"
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "cancellation-route-future-drop",
+      "class": "cancellation",
+      "test": "cancellation_drops_the_core_future_and_releases_request_resources",
+      "status": "passed"
+    },
+    {
+      "id": "resource-limit-frame-async-and-blocking-work",
+      "class": "resource-limit",
+      "tests": [
+        "boundary_routes_headers_methods_and_frame_sizes_fail_closed",
+        "resource_limits_bound_async_and_blocking_tokio_work",
+        "dropping_tokio_work_requests_abort_or_cooperative_cancellation"
+      ],
+      "status": "passed"
+    }
+  ],
+  "evidence": [
+    {"path": "sdk/rust/Cargo.toml", "sha256": "257473439740006e6e4eec0a61d3c30c1990a5ed8afef95079d4b648ec98da11"},
+    {"path": "sdk/rust/Cargo.lock", "sha256": "01826263b9417db54d9f88830ba2f4aced44a8b55756db67c3edda516398f174"},
+    {"path": "sdk/rust/README.md", "sha256": "2717e7dc7da6173747186c01a6c6779ba61705bd01fd7e384ecb3e61f6e3e7e7"},
+    {"path": "sdk/rust/src/lib.rs", "sha256": "799180896def124d5a55e96151f9e2ac4d7ce2038f014e6b3435abd1558db65a"},
+    {"path": "sdk/rust/src/tokio_runtime.rs", "sha256": "bb90334c03d5dd128be8d42dff830fe86f654bd1896de217a0002c5956ea780f"},
+    {"path": "sdk/rust/src/axum_worker.rs", "sha256": "0321aad5c513f25fcdc08a3c046234990dec6d694e1428f38042e9be9b0a8957"},
+    {"path": "sdk/rust/tests/axum_worker.rs", "sha256": "09cca1185c96a3babf89960d1353573177619e63f1ed24ae784a98757444fe14"},
+    {"path": "conformance/independent/verify-rust-tokio-axum.mjs", "sha256": "a3aef0daf907194b7e036cfd25c0b8e57a0acefb94eaf96bd7418d4192fd5d8d"}
+  ],
+  "commands": {
+    "metadata": "cargo metadata --manifest-path sdk/rust/Cargo.toml --format-version 1 --no-deps --locked --offline",
+    "msrvCore": "cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --no-default-features --locked --offline",
+    "msrvServer": "cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features server --locked --offline",
+    "msrvTokioRuntime": "cargo +1.85.0 check --manifest-path sdk/rust/Cargo.toml --features tokio-runtime --locked --offline",
+    "msrvAxumUnwind": "cargo +1.85.0 test --manifest-path sdk/rust/Cargo.toml --profile unwind --features axum --test axum_worker --locked --offline",
+    "msrvAxumAbort": "cargo +1.85.0 build --manifest-path sdk/rust/Cargo.toml --release --features axum --locked --offline",
+    "currentClippy": "cargo +stable clippy --manifest-path sdk/rust/Cargo.toml --all-targets --all-features --locked --offline -- -D warnings",
+    "portable": "node conformance/independent/verify-rust-tokio-axum.mjs"
+  },
+  "supported": [
+    "rust-1.85-and-newer-edition-2024",
+    "std-targets-with-threads-and-atomics",
+    "caller-owned-tokio-multithread-runtime",
+    "bounded-owned-async-and-blocking-work",
+    "axum-http1-http2-router",
+    "framed-register-invoke-cancel",
+    "cooperative-request-cancellation",
+    "application-provided-transaction-provider-through-issue-61",
+    "stable-redacted-http-failures",
+    "unwind-and-abort-outcomes-published-separately"
+  ],
+  "unsupported": [
+    "runtime-construction",
+    "listener-address-selection",
+    "implicit-or-detached-task-ownership",
+    "unbounded-task-or-blocking-work-queues",
+    "tokio-localset-and-non-send-handlers",
+    "hard-termination-of-started-blocking-work",
+    "client-streaming",
+    "server-streaming",
+    "bidirectional-streaming",
+    "idempotency-replay",
+    "subscription-resume",
+    "authenticated-post-sse",
+    "websocket",
+    "quic",
+    "compression-and-decompression",
+    "tls-and-certificate-policy",
+    "http2-alpn-policy",
+    "trusted-proxy-policy",
+    "credential-and-tenant-injection",
+    "automatic-retry",
+    "automatic-reconnect-and-replay",
+    "pagination-orchestration",
+    "wasm-no-std-and-embedded-executors",
+    "mobile-bindings",
+    "native-runtime-certification",
+    "deployment-certification",
+    "production-client-transport"
+  ]
+}

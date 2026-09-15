@@ -4,8 +4,10 @@
 //!
 //! The core crate owns no executor and starts no task. The optional `tokio`
 //! feature adds task-local closure adapters without constructing a runtime or
-//! spawning detached work. Concrete HTTP, SSE, and WebSocket adapters remain
-//! outside this profile.
+//! spawning detached work. The additive `tokio-runtime` and `axum` features
+//! integrate the remote-worker server core while keeping listener, TLS, and
+//! process lifecycle ownership in the embedding application. Concrete client
+//! HTTP, SSE, and WebSocket adapters remain outside these profiles.
 
 mod scalar;
 #[cfg(feature = "server")]
@@ -14,6 +16,11 @@ mod transport;
 
 #[cfg(feature = "tokio")]
 mod tokio_adapter;
+#[cfg(feature = "tokio-runtime")]
+mod tokio_runtime;
+
+#[cfg(feature = "axum")]
+mod axum_worker;
 
 #[cfg(feature = "generator")]
 pub mod generator;
@@ -36,16 +43,23 @@ pub use server::{
     CancelRequest, CancellationAck, CancellationDisposition, HandlerContext, HandlerDescriptor,
     HandlerFuture, InvocationFuture, OwnedWork, Parent, Principal, Registration, RegistrationAck,
     RequestOutcome, RequestResources, RequestScopeFactory, SchemaValidator, ServerBuilder,
-    ServerError, WorkerCore, WorkerError, WorkerInvocation, WorkerLimits, WorkerResult,
-    decode_worker_frame, encode_worker_frame,
+    ServerError, WORKER_CODEC, WORKER_PROTOCOL, WorkerCore, WorkerError, WorkerInvocation,
+    WorkerLimits, WorkerResult, decode_worker_frame, encode_worker_frame,
 };
 pub use transport::{
     Cancellation, Client, FallibleStream, OperationFuture, RequestHandle, RequestOptions,
     StreamHandle, StreamTransport, Transport,
 };
 
+#[cfg(feature = "axum")]
+pub use axum_worker::{
+    AXUM_CANCEL_PATH, AXUM_INVOKE_PATH, AXUM_REGISTER_PATH, AXUM_WORKER_MEDIA_TYPE,
+    AXUM_WORKER_PROTOCOL_HEADER, AxumWorker, AxumWorkerConfig, AxumWorkerError,
+};
 #[cfg(feature = "tokio")]
 pub use tokio_adapter::{TokioByteStream, TokioFuture, TokioStreamTransport, TokioTransport};
+#[cfg(feature = "tokio-runtime")]
+pub use tokio_runtime::{TokioWorkerError, TokioWorkerLimits, TokioWorkerSpawner};
 
 pub const MAXIMUM_RESPONSE_BYTES: usize = 8 << 20;
 pub const MAXIMUM_FRAME_BYTES: usize = 1 << 20;

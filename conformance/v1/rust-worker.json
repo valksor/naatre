@@ -58,12 +58,12 @@
     "supervised-stdio-go-gateway-rust-worker-example"
   ],
   "evidence": [
-    {"path": "sdk/rust/Cargo.toml", "sha256": "cf2db2044e1168793a7881fb52c7ef1b9a178ee69935bb8116ab565572590331"},
-    {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
-    {"path": "sdk/rust/README.md", "sha256": "2ac55b67702041af5c77f6d47fddc404822c6abd2836ca9c0d8b420a9172eef1"},
-    {"path": "sdk/rust/ci.sh", "sha256": "6f9ed615107b35198e580b9a057db09b41a8feada41253814d70e77c32858831"},
-    {"path": "sdk/rust/src/lib.rs", "sha256": "32ff92bef81f22e17213408c9c84d3b325e6e4134382d996143b2fb1d3a62cf2"},
-    {"path": "sdk/rust/src/server.rs", "sha256": "51071bfd742274e72091ec219a06deb6a320e17f3cc9a9e84479a6bc8277bf66"},
+    {"path": "sdk/rust/Cargo.toml", "sha256": "257473439740006e6e4eec0a61d3c30c1990a5ed8afef95079d4b648ec98da11"},
+    {"path": "sdk/rust/Cargo.lock", "sha256": "01826263b9417db54d9f88830ba2f4aced44a8b55756db67c3edda516398f174"},
+    {"path": "sdk/rust/README.md", "sha256": "2717e7dc7da6173747186c01a6c6779ba61705bd01fd7e384ecb3e61f6e3e7e7"},
+    {"path": "sdk/rust/ci.sh", "sha256": "742735f3679ddd8803ce4c867e74106105b935fed1bffe745699e9388945927e"},
+    {"path": "sdk/rust/src/lib.rs", "sha256": "799180896def124d5a55e96151f9e2ac4d7ce2038f014e6b3435abd1558db65a"},
+    {"path": "sdk/rust/src/server.rs", "sha256": "cb10a0d6f11ba2462c719cfcdd0c97fdda6240ceafd283f891f64bb684846379"},
     {"path": "sdk/rust/src/generator.rs", "sha256": "fca697f253a61aeeaa89cf010e3703954320a9b199dba48bc0bc672d09dd2038"},
     {"path": "sdk/rust/generated/operations.rs", "sha256": "b2d917ca24c39e22f67b77ce57ee18969605b517f015be6f8d23aa980c4a713b"},
     {"path": "sdk/rust/tests/server.rs", "sha256": "2aff3bc342709ef1e8127de2a4338dd6135b914a0910deb8bfa613a502d96145"},
