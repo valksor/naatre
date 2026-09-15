@@ -48,6 +48,15 @@ jobs:
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"codec","language":"javascript-typescript"},"destination":{"kind":"codec","language":"javascript-typescript"}},"profiles":["suite.contract-1","core.scalar.c14n-1","core.interop.c14n-1","core.http.digest-1"]}' | node conformance/independent/runner.mjs --require-pass
           printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"sdk","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["sdk.typescript.core-1","sdk.typescript.adapters-1"]}' | node conformance/independent/runner.mjs --require-pass
           ./sdk/rust/ci.sh
+      - name: Executable documentation examples
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          go test ./internal/doccheck ./examples/v1/server ./examples/v1/gateway ./sdk/go/generated
+          node conformance/independent/remote-worker.mjs
+          python3 conformance/independent/verify-python-sdk.py
+          python3 examples/v1/workers/python.py
+          cargo run --manifest-path sdk/rust/Cargo.toml --example remote_worker --locked --offline
       - name: Dart SDK conformance
         run: |
           node conformance/independent/verify-dart-sdk.mjs
