@@ -29,6 +29,7 @@ const implementations = new Map([
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
   ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
+  ["sdk.swift.apple-1", "verify-swift-apple-adapters.mjs"],
   ["sdk.dart.core-1", "verify-dart-sdk.mjs"],
   ["sdk.ruby.core-1", "verify-ruby-sdk.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
@@ -37,6 +38,7 @@ const implementations = new Map([
 const profileTimeouts = new Map([
   ["sdk.jvm.core-1", 240_000],
   ["sdk.dotnet.core-1", 120_000],
+  ["sdk.swift.apple-1", 120_000],
 ]);
 
 class ProtocolError extends Error {

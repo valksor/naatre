@@ -24,3 +24,5 @@ jobs:
         run: swift build --package-path sdk/swift
       - name: Swift client conformance
         run: swift run --package-path sdk/swift naatre-swift-conformance
+      - name: Swift Apple adapter conformance
+        run: node conformance/independent/verify-swift-apple-adapters.mjs

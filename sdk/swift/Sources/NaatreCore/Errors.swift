@@ -7,11 +7,17 @@ public struct ClientFailure: Error, Codable, Equatable, Sendable {
         case responseTooLarge = "CLIENT_RESPONSE_TOO_LARGE"
         case frameTooLarge = "CLIENT_FRAME_TOO_LARGE"
         case streamTruncated = "CLIENT_STREAM_TRUNCATED"
+        case streamBufferFull = "CLIENT_STREAM_BUFFER_FULL"
         case protocolInvalid = "CLIENT_PROTOCOL_INVALID"
         case resultInvalid = "CLIENT_RESULT_INVALID"
         case scalarInvalid = "CLIENT_SCALAR_INVALID"
         case valuePrecision = "CLIENT_VALUE_PRECISION"
         case unsupportedCapability = "CLIENT_UNSUPPORTED_CAPABILITY"
+        case endpointInvalid = "CLIENT_ENDPOINT_INVALID"
+        case responseInvalid = "CLIENT_RESPONSE_INVALID"
+        case httpStatus = "CLIENT_HTTP_STATUS"
+        case mediaTypeInvalid = "CLIENT_MEDIA_TYPE_INVALID"
+        case redirectRejected = "CLIENT_REDIRECT_REJECTED"
         case transport = "CLIENT_TRANSPORT"
     }
 

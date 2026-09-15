@@ -42,10 +42,9 @@ evidence must be described as planned.
 - `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,
   F# consumption proof, and cancellable HTTP/SSE reference client for
   `sdk.dotnet.core-1`.
-- `sdk/swift`: reflection-free Swift Package Manager client core, lossless
-  canonical scalar wrappers, async transport/cancellation contract, and
-  deterministic Codable operation bindings for `sdk.swift.core-1`; concrete
-  Apple transport adapters remain owned by #86.
+- `sdk/swift`: reflection-free Swift Package Manager core and generated Codable
+  bindings for `sdk.swift.core-1`, plus the separately profiled HTTPS
+  URLSession, POST-SSE, and lifecycle bridge in `sdk.swift.apple-1`.
 - `sdk/dart`: dependency-free null-safe Dart client core, lossless scalar and
   partial-result models, pluggable transport contracts, and deterministic
   operation bindings for `sdk.dart.core-1`.

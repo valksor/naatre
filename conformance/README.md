@@ -189,6 +189,14 @@ task/sequence cancellation, stream truncation, and redirect credential policy.
 Its platform entries link the executed macOS arm64 report and explicitly leave
 URLSession/SSE/WebSocket and device/simulator adapter evidence to #86 and the
 complete official matrix to #69.
+`v1/swift-apple-adapters.json` pins `sdk.swift.apple-1` to the exact #42 core
+revision. Its independent verifier executes HTTPS URLSession request shaping,
+stable redacted failures, bounded unary and SSE reads, 307/308 credential
+policy, concrete task and stream cancellation, lifecycle cancellation, and the
+shared Codable/scalar/time vectors without a listener. The macOS report is
+executed; iOS and the other declared Apple platforms remain unclaimed until a
+platform report runs the same exact vector entrypoint. WebSocket and every
+other optional capability are listed explicitly in the fixture.
 `v1/dart-sdk.json` pins `sdk.dart.core-1`: null-safe generated variables and
 selected-result shapes, explicit missing/null/pending states, open variants,
 lossless extended numeric scalars, strict bounded JSON, persisted request

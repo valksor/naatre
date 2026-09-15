@@ -976,18 +976,20 @@
     "86": {
       "issue": 86,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 86,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.swift.apple-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.swift.apple-1"
+        ]
       }
     },
     "87": {
