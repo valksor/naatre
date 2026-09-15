@@ -1,0 +1,51 @@
+{
+  "profile": "schema.jtd-1",
+  "fixtureSuite": "1.0.0",
+  "rfc": "https://www.rfc-editor.org/rfc/rfc8927",
+  "mapperRevision": "naatre-jtd-mapper-1",
+  "fidelityProfileRevision": "naatre-jtd-fidelity-1",
+  "root": "Node",
+  "losslessSchema": {
+    "version": "1",
+    "canonicalVersion": "c14n-1",
+    "revision": "jtd-conformance-r1",
+    "types": [
+      {"id":"Address","name":"Address","kind":"object","output":true,"fields":[{"id":"Address.city","name":"city","type":"String","required":true},{"id":"Address.unit","name":"unit","type":"Int32","nullable":true}]},
+      {"id":"Choice","name":"Choice","kind":"union","output":true,"variantMembers":[{"id":"Choice.Address","type":"Address"},{"id":"Choice.Node","type":"Node"}]},
+      {"id":"Color","name":"Color","kind":"enum","input":true,"output":true,"enumMembers":[{"id":"Color.red","name":"red"},{"id":"Color.blue","name":"blue"}]},
+      {"id":"Input","name":"Input","kind":"input-object","input":true,"fields":[{"id":"Input.id","name":"id","type":"ID","required":true},{"id":"Input.note","name":"note","type":"String","nullable":true}]},
+      {"id":"Names","name":"Names","kind":"list","input":true,"output":true,"element":"String","elementNullable":true},
+      {"id":"Node","name":"Node","kind":"object","output":true,"maxDepth":4,"fields":[{"id":"Node.name","name":"name","type":"String","required":true},{"id":"Node.next","name":"next","type":"Node","nullable":true}]},
+      {"id":"Scores","name":"Scores","kind":"map","input":true,"output":true,"element":"Float64"}
+    ],
+    "operations": [],
+    "members": []
+  },
+  "forms": [
+    {"name":"type","definition":"Address","keyword":"properties","nestedKeyword":"type","negativeImport":{"definitions":{"Thing":{"properties":{"value":{"type":"uint32"}}}},"ref":"Thing"},"negativeImportCode":"JTD_SCALAR_UNSUPPORTED","negativeExport":"extended-scalar","negativeExportCode":"JTD_EXTENDED_SCALAR_UNSUPPORTED"},
+    {"name":"elements","definition":"Names","keyword":"elements","negativeImport":{"definitions":{"Thing":{"elements":{"elements":{"type":"string"}}}},"ref":"Thing"},"negativeImportCode":"JTD_INLINE_FORM_UNSUPPORTED","negativeExport":"list-capability","negativeExportCode":"JTD_CAPABILITIES_UNSUPPORTED"},
+    {"name":"values","definition":"Scores","keyword":"values","negativeImport":{"definitions":{"Thing":{"values":{"values":{"type":"string"}}}},"ref":"Thing"},"negativeImportCode":"JTD_INLINE_FORM_UNSUPPORTED","negativeExport":"map-trait","negativeExportCode":"JTD_TYPE_TRAITS_UNSUPPORTED"},
+    {"name":"properties","definition":"Input","keyword":"properties","negativeImport":{"definitions":{"Thing":{"properties":{"value":{"type":"string"}},"optionalProperties":{"value":{"type":"string"}}}},"ref":"Thing"},"negativeImportCode":"JTD_DUPLICATE_PROPERTY","negativeExport":"record-default","negativeExportCode":"JTD_DEFAULT_UNSUPPORTED"},
+    {"name":"enum","definition":"Color","keyword":"enum","negativeImport":{"definitions":{"Thing":{"enum":["same","same"]}},"ref":"Thing"},"negativeImportCode":"JTD_DUPLICATE_ENUM","negativeExport":"open-enum","negativeExportCode":"JTD_OPEN_VARIANT_UNSUPPORTED"},
+    {"name":"discriminator","definition":"Choice","keyword":"discriminator","negativeImport":{"definitions":{"Thing":{"discriminator":"kind","mapping":{"variant":{"properties":{"$value":{"type":"string"}}}}}},"ref":"Thing"},"negativeImportCode":"JTD_DISCRIMINATOR_UNSUPPORTED","negativeExport":"interface","negativeExportCode":"JTD_INTERFACE_UNSUPPORTED"},
+    {"name":"ref","definition":"Node","keyword":"optionalProperties","nestedKeyword":"ref","negativeImport":{"definitions":{"Thing":{"properties":{"value":{"ref":"Missing"}}}},"ref":"Thing"},"negativeImportCode":"JTD_REF_UNKNOWN","negativeExport":"external-reference","negativeExportCode":"JTD_EXTERNAL_REFERENCES_UNSUPPORTED"}
+  ],
+  "negativeExports": [
+    {"name":"extended-scalar","root":"Thing","document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Thing","name":"Thing","kind":"object","output":true,"fields":[{"id":"Thing.value","name":"value","type":"Timestamp"}]}],"operations":[],"members":[]}},
+    {"name":"list-capability","root":"Thing","document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Thing","name":"Thing","kind":"list","output":true,"element":"String","capabilities":["list.extra"]}],"operations":[],"members":[]}},
+    {"name":"map-trait","root":"Thing","supportedTraits":["example.validation-1"],"document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Thing","name":"Thing","kind":"map","output":true,"element":"String","traits":[{"id":"example.validation-1","semantics":"validation","value":{"rule":"required"}}]}],"operations":[],"members":[]}},
+    {"name":"record-default","root":"Thing","document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Thing","name":"Thing","kind":"input-object","input":true,"fields":[{"id":"Thing.value","name":"value","type":"String","default":"safe"}]}],"operations":[],"members":[]}},
+    {"name":"open-enum","root":"Thing","document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Thing","name":"Thing","kind":"enum","input":true,"output":true,"open":true,"enumMembers":[{"id":"Thing.value","name":"value"}]}],"operations":[],"members":[]}},
+    {"name":"interface","root":"Thing","document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Concrete","name":"Concrete","kind":"object","output":true,"fields":[{"id":"Concrete.value","name":"value","type":"String"}]},{"id":"Thing","name":"Thing","kind":"interface","output":true,"fields":[{"id":"Thing.value","name":"value","type":"String"}],"variantMembers":[{"id":"Thing.Concrete","type":"Concrete"}]}],"operations":[],"members":[]}},
+    {"name":"external-reference","root":"Thing","document":{"version":"1","canonicalVersion":"c14n-1","revision":"jtd-negative-r1","types":[{"id":"Thing","name":"Thing","kind":"object","output":true,"fields":[{"id":"Thing.value","name":"value","type":"String"}]}],"operations":[],"members":[],"references":[{"uri":"https://schemas.example.test/pinned","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revision":"upstream-r1"}]}}
+  ],
+  "boundedFailures": [
+    {"name":"metadata-namespace","input":{"definitions":{"Thing":{"metadata":{"evil.example":{"payload":"ignored"}},"properties":{"value":{"type":"string"}}}},"ref":"Thing"},"code":"JTD_METADATA_NAMESPACE"},
+    {"name":"nested-definitions","input":{"definitions":{"Thing":{"definitions":{"Nested":{"type":"string"}},"properties":{"value":{"type":"string"}}}},"ref":"Thing"},"code":"JTD_NESTED_DEFINITIONS"},
+    {"name":"open-record","input":{"definitions":{"Thing":{"properties":{"value":{"type":"string"}},"additionalProperties":true}},"ref":"Thing"},"code":"JTD_OPEN_PROPERTIES_UNSUPPORTED"}
+  ],
+  "commands": [
+    "go test ./schema ./generator ./tooling ./cmd/naatre -count=1",
+    "go test ./internal/conformance -run TestJTDConformanceFixture -count=1"
+  ]
+}

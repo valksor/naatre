@@ -30,6 +30,10 @@ naatre canonicalize --document FILE
 naatre hash --document FILE
 naatre schema export --schema FILE
 naatre schema diff --before FILE --after FILE
+naatre schema jtd export --schema FILE --root TYPE --report FILE
+naatre schema jtd validate --jtd FILE --approve-embedded-identities
+naatre schema jtd import --jtd FILE --approve-embedded-identities
+naatre schema jtd diff --before FILE --after FILE --approve-embedded-identities
 naatre generate --language reference --model FILE --out FILE
 naatre explain --schema FILE --document FILE --operation NAME
 naatre mock --schema FILE --document FILE --operation NAME --seed N --scenario success|null|missing|failure|unknown-variant
@@ -39,6 +43,11 @@ naatre conformance --fixture conformance/v1/tooling.json
 All diagnostic commands emit `naatre.tooling.diagnostics-1`. Exit statuses are
 0 success, 1 diagnostic or incompatibility, 2 usage, 3 input/output, and 4
 internal failure.
+
+The JTD commands use the same RFC 8927 mapper for generation, validation,
+import, and diffing. See the [JTD projection workflow](jtd.md) for explicit
+identity assignment when importing third-party JTD and for the strict fidelity
+boundary.
 
 ## Offline configuration and trust
 
