@@ -890,19 +890,21 @@
     },
     "81": {
       "issue": 81,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 81,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.python.adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.python.adapters-1"
+        ]
       }
     },
     "82": {

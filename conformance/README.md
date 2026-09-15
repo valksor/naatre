@@ -173,8 +173,18 @@ transport protocols, identical sync/async canonical behavior, frozen generated
 dataclasses, exact Decimal/arbitrary-integer/timestamp/bytes mappings,
 missing/null preservation, strict JSON, persisted hashes, pagination, bounded
 retry, SSE cleanup, `py.typed`, and reproducible package metadata. Concrete
-async HTTP and optional Pydantic integration remain owned by #81; ASGI server
-handling remains owned by #59 and the complete official SDK matrix by #69.
+async HTTP and optional Pydantic integration are the separate
+`sdk.python.adapters-1` profile; ASGI server handling remains owned by #59 and
+the complete official SDK matrix by #69.
+
+`v1/python-sdk-adapters.json` pins `sdk.python.adapters-1`: stdlib unary HTTP,
+the bounded thread-backed asyncio bridge, cancellation/thread ownership,
+per-request context isolation, stable redacted failures, response and executor
+limits, and the optional strict Pydantic bridge. It records the exact #38 core
+commit and fixture digest plus the executed CPython, Pydantic, and
+pydantic-core revisions. Native async sockets, concrete streams, other event
+loops, and unexecuted runtime/platform combinations remain explicitly
+unclaimed.
 `v1/rust-sdk.json` pins `sdk.rust.core-1`: the Rust 1.85 minimum version and
 feature matrix, serde bindings, exact scalar wrappers, persisted manifest,
 runtime-neutral transport ownership, bounded pagination and fallible streams,

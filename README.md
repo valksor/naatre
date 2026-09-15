@@ -32,9 +32,9 @@ evidence must be described as planned.
 - `sdk/php`: framework-neutral PSR-18 unary client, lossless PHP value model,
   serializer-neutral attributes, and deterministic bindings for
   `sdk.php.core-1`; framework integrations remain owned by #79.
-- `sdk/python`: dependency-free typed Python 3.11-3.14 client core, sync and
-  async transport protocols, lossless scalar wrappers, SSE lifecycle, and
-  deterministic dataclass bindings for `sdk.python.core-1`.
+- `sdk/python`: dependency-free typed Python 3.11-3.14 client core plus bounded
+  stdlib HTTP/threaded-async and optional strict Pydantic adapters for
+  `sdk.python.core-1` and `sdk.python.adapters-1`.
 - `sdk/rust`: runtime-neutral Rust client ownership traits, lossless scalar
   wrappers, and deterministic serde operation bindings for `sdk.rust.core-1`.
 - `sdk/jvm`: Java 17 wire/client core, deterministic Java and Kotlin bindings,

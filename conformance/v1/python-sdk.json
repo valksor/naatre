@@ -21,10 +21,10 @@
     "manifest": {"path": "sdk/python/src/naatre/generated/operations.json", "sha256": "9bc5f1ef963157940ca225cebdd6f270be1a6111f793455d7bfae334be495438"}
   },
   "evidence": [
-    {"path": "sdk/python/README.md", "sha256": "e14ac502cd2094a7ca17f7969fd4b433f3d126b162c8e7908e0c1c9af4c30d71"},
+    {"path": "sdk/python/README.md", "sha256": "d7f94eeca4719bb26d3c03ba80ee3dd18dc5dafcde2e0061d96aa7ce2da9fa75"},
     {"path": "sdk/python/pyproject.toml", "sha256": "086ef18b7d069f46750592a0eb6a6ca9ba66b1ee68d41b2f4ec1e6df07c8fc92"},
     {"path": "sdk/python/uv.lock", "sha256": "8766d46fa76c215273bee63c5115240fdd0912d516fe2bc61e36e2493253085d"},
-    {"path": "sdk/python/src/naatre/__init__.py", "sha256": "e5ceeae59a04566c75857ff24dc4a30372831ab9b576d3a40ccf9cfcaa1ada65"},
+    {"path": "sdk/python/src/naatre/__init__.py", "sha256": "64c7cb41f1f74b5d0fe3bc648f0bd94317f86930ede99f01eaf3f789bfb4543a"},
     {"path": "sdk/python/src/naatre/asgi.py", "sha256": "48252cb334e099cb4f193f6dce6ad9ce2d4c5f18ec995bf20366061e5bf60cea"},
     {"path": "sdk/python/src/naatre/client.py", "sha256": "b188132fe498a91a1c91e9168d5aee8c54fe4d93f80d48a2ac230448ee87a72b"},
     {"path": "sdk/python/src/naatre/errors.py", "sha256": "07022daa73373441178b696e058614be75637ccc49bbd67fde8a78d7ab78b5af"},
@@ -84,8 +84,8 @@
     "asyncCancellation": "propagate-cancelled-error-and-close-owned-stream"
   },
   "unsupported": [
-    "pydantic-integration-owned-by-81",
-    "concrete-async-http-transport-owned-by-81",
+    "pydantic-integration-is-separate-sdk.python.adapters-1-profile",
+    "concrete-async-http-is-separate-sdk.python.adapters-1-profile",
     "asgi-server-handler-owned-by-59",
     "websocket-adapter",
     "official-sdk-matrix-certification-owned-by-69"
