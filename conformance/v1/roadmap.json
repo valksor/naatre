@@ -1299,18 +1299,20 @@
     "103": {
       "issue": 103,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 103,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "adapter.mcp-go-runtime-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.mcp-go-runtime-1"
+        ]
       }
     },
     "104": {

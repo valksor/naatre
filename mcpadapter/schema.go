@@ -2,6 +2,7 @@ package mcpadapter
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,10 +11,15 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/valksor/naatre/protocol"
 )
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 var schemaKeywords = map[string]bool{
 	"$schema": true, "type": true, "properties": true, "required": true,
@@ -51,6 +57,261 @@ func ValidateSchema(input []byte, limits Limits) ([]byte, error) {
 		return nil, adapterError("MCP_SCHEMA_INVALID", err)
 	}
 	return canonical, nil
+}
+
+// ValidateInstance validates and canonicalizes one value against the bounded
+// JSON Schema subset accepted by ValidateSchema. It intentionally implements
+// only that subset, so registration remains the sole schema authority.
+func ValidateInstance(schemaInput, input []byte, limits Limits) ([]byte, error) {
+	limits = withDefaultLimits(limits)
+	canonicalSchema, err := ValidateSchema(schemaInput, limits)
+	if err != nil {
+		return nil, err
+	}
+	if len(input) == 0 || len(input) > limits.MaxContentBytes {
+		return nil, adapterError("MCP_VALUE_LIMIT", errors.New("value is absent or exceeds the configured byte limit"))
+	}
+	valueLimits := protocol.Limits{
+		MaxBytes:       limits.MaxContentBytes,
+		MaxDepth:       limits.MaxSchemaDepth,
+		MaxMembers:     limits.MaxEntries,
+		MaxArrayItems:  limits.MaxEntries,
+		MaxStringBytes: limits.MaxContentBytes,
+		MaxNumberBytes: 128,
+	}
+	if err := protocol.ValidateJSON(input, valueLimits); err != nil {
+		return nil, adapterError("MCP_VALUE_INVALID", err)
+	}
+	canonical, err := protocol.CanonicalizeJSON(input, valueLimits)
+	if err != nil {
+		return nil, adapterError("MCP_VALUE_INVALID", err)
+	}
+	schemaValue, err := protocol.DecodeJSONValue(canonicalSchema)
+	if err != nil {
+		return nil, adapterError("MCP_SCHEMA_INVALID", err)
+	}
+	value, err := protocol.DecodeJSONValue(canonical)
+	if err != nil {
+		return nil, adapterError("MCP_VALUE_INVALID", err)
+	}
+	if err := validateInstanceNode(schemaValue.(map[string]any), value, limits, 0); err != nil {
+		return nil, err
+	}
+	return canonical, nil
+}
+
+func validateInstanceNode(node map[string]any, value any, limits Limits, depth int) error {
+	if depth > limits.MaxSchemaDepth {
+		return adapterError("MCP_VALUE_LIMIT", errors.New("value depth exceeds the configured limit"))
+	}
+	if alternatives, ok := node["oneOf"].([]any); ok {
+		matches := 0
+		for _, alternative := range alternatives {
+			if validateInstanceNode(alternative.(map[string]any), value, limits, depth+1) == nil {
+				matches++
+			}
+		}
+		if matches != 1 {
+			return adapterError("MCP_VALUE_INVALID", errors.New("value must match exactly one closed variant"))
+		}
+	}
+	if constant, ok := node["const"]; ok && !equalJSONValue(value, constant) {
+		return adapterError("MCP_VALUE_INVALID", errors.New("value does not match the required constant"))
+	}
+	if values, ok := node["enum"].([]any); ok {
+		matched := false
+		for _, candidate := range values {
+			matched = matched || equalJSONValue(value, candidate)
+		}
+		if !matched {
+			return adapterError("MCP_VALUE_INVALID", errors.New("value is outside the declared enumeration"))
+		}
+	}
+	types, err := schemaTypes(node["type"])
+	if err != nil {
+		return err
+	}
+	if len(types) != 0 && !matchesSchemaType(types, value) {
+		return adapterError("MCP_VALUE_INVALID", errors.New("value has the wrong JSON type"))
+	}
+	if object, ok := value.(map[string]any); ok && slices.Contains(types, "object") {
+		if err := validateObjectInstance(node, object, limits, depth); err != nil {
+			return err
+		}
+	}
+	if values, ok := value.([]any); ok && slices.Contains(types, "array") {
+		if err := validateArrayInstance(node, values, limits, depth); err != nil {
+			return err
+		}
+	}
+	if text, ok := value.(string); ok && slices.Contains(types, "string") {
+		if err := validateStringInstance(node, text); err != nil {
+			return err
+		}
+	}
+	if number, ok := value.(json.Number); ok && (slices.Contains(types, "number") || slices.Contains(types, "integer")) {
+		return validateNumberInstance(node, number, slices.Contains(types, "integer"))
+	}
+	return nil
+}
+
+func validateObjectInstance(node, value map[string]any, limits Limits, depth int) error {
+	properties := node["properties"].(map[string]any)
+	if len(value) > limits.MaxEntries {
+		return adapterError("MCP_VALUE_LIMIT", errors.New("object member count exceeds the configured limit"))
+	}
+	for name, member := range value {
+		child, ok := properties[name].(map[string]any)
+		if !ok {
+			return adapterError("MCP_VALUE_INVALID", errors.New("object contains an undeclared member"))
+		}
+		if err := validateInstanceNode(child, member, limits, depth+1); err != nil {
+			return err
+		}
+	}
+	if required, ok := node["required"].([]any); ok {
+		for _, entry := range required {
+			if _, present := value[entry.(string)]; !present {
+				return adapterError("MCP_VALUE_INVALID", errors.New("object omits a required member"))
+			}
+		}
+	}
+	return nil
+}
+
+func validateArrayInstance(node map[string]any, values []any, limits Limits, depth int) error {
+	if len(values) > limits.MaxEntries {
+		return adapterError("MCP_VALUE_LIMIT", errors.New("array length exceeds the configured limit"))
+	}
+	minimum, _ := nonNegativeInteger(node["minItems"])
+	maximum, maximumPresent := nonNegativeInteger(node["maxItems"])
+	if len(values) < minimum || maximumPresent && len(values) > maximum {
+		return adapterError("MCP_VALUE_INVALID", errors.New("array length is outside the declared bounds"))
+	}
+	child := node["items"].(map[string]any)
+	for _, value := range values {
+		if err := validateInstanceNode(child, value, limits, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateStringInstance(node map[string]any, value string) error {
+	length := utf8.RuneCountInString(value)
+	minimum, _ := nonNegativeInteger(node["minLength"])
+	maximum, maximumPresent := nonNegativeInteger(node["maxLength"])
+	if length < minimum || maximumPresent && length > maximum {
+		return adapterError("MCP_VALUE_INVALID", errors.New("string length is outside the declared bounds"))
+	}
+	if pattern, ok := node["pattern"].(string); ok && !regexp.MustCompile(pattern).MatchString(value) {
+		return adapterError("MCP_VALUE_INVALID", errors.New("string does not match the declared pattern"))
+	}
+	if scalar, ok := node["x-naatre-scalar"].(string); ok && !validExtendedScalar(scalar, value) {
+		return adapterError("MCP_VALUE_INVALID", errors.New("string is not a valid extended scalar"))
+	}
+	return nil
+}
+
+func validateNumberInstance(node map[string]any, value json.Number, integer bool) error {
+	parsed, ok := jsonNumber(value)
+	if !ok || integer && !parsed.IsInt() {
+		return adapterError("MCP_VALUE_INVALID", errors.New("number is not in the declared numeric domain"))
+	}
+	minimum, _ := jsonNumber(node["minimum"])
+	maximum, _ := jsonNumber(node["maximum"])
+	if parsed.Cmp(minimum) < 0 || parsed.Cmp(maximum) > 0 {
+		return adapterError("MCP_VALUE_INVALID", errors.New("number is outside the declared bounds"))
+	}
+	return nil
+}
+
+func matchesSchemaType(types []string, value any) bool {
+	for _, name := range types {
+		switch name {
+		case "null":
+			if value == nil {
+				return true
+			}
+		case "boolean":
+			_, ok := value.(bool)
+			if ok {
+				return true
+			}
+		case "string":
+			_, ok := value.(string)
+			if ok {
+				return true
+			}
+		case "number":
+			_, ok := value.(json.Number)
+			if ok {
+				return true
+			}
+		case "integer":
+			number, ok := value.(json.Number)
+			parsed, valid := jsonNumber(number)
+			if ok && valid && parsed.IsInt() {
+				return true
+			}
+		case "object":
+			_, ok := value.(map[string]any)
+			if ok {
+				return true
+			}
+		case "array":
+			_, ok := value.([]any)
+			if ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validExtendedScalar(kind, value string) bool {
+	switch kind {
+	case "int64":
+		_, err := strconv.ParseInt(value, 10, 64)
+		return err == nil
+	case "uint64":
+		_, err := strconv.ParseUint(value, 10, 64)
+		return err == nil
+	case "bigint":
+		_, ok := new(big.Int).SetString(value, 10)
+		return ok
+	case "decimal":
+		_, _, err := big.ParseFloat(value, 10, 256, big.ToNearestEven)
+		return err == nil
+	case "timestamp":
+		_, err := time.Parse(time.RFC3339Nano, value)
+		return err == nil
+	case "uuid":
+		return uuidPattern.MatchString(value)
+	case "bytes":
+		_, err := base64.StdEncoding.Strict().DecodeString(value)
+		return err == nil
+	default:
+		return false
+	}
+}
+
+func equalJSONValue(left, right any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
+}
+
+func nonNegativeInteger(value any) (int, bool) {
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	integer, err := number.Int64()
+	if err != nil || integer < 0 || int64(int(integer)) != integer {
+		return 0, false
+	}
+	return int(integer), true
 }
 
 func validateSchemaNode(node map[string]any, limits Limits, depth int, path string) error {

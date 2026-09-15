@@ -20,6 +20,7 @@ const implementations = new Map([
   ["core.interop.c14n-1", "canonical.mjs"],
   ["core.adapters-1", "adapters.mjs"],
   ["adapter.mcp-1", "mcp-adapter.mjs"],
+  ["adapter.mcp-go-runtime-1", "mcp-runtime.mjs"],
   ["core.http.digest-1", "http-digest.mjs"],
   ["core.events-1", "events.mjs"],
   ["implementation.go.http-digest-1", "http-digest-integration.mjs"],

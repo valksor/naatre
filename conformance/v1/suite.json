@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "c7754d3e4a1dafe5888c1448e7c2de727ab83c1759be6115fc9c0f519e62e067"
+      "sha256": "e73c2273ecdd206fbd26e9d420c38b0b3fae1854a890a9f6d7f0c834d39e2cd4"
     },
     {
       "path": "v1/scalars.json",
@@ -599,6 +599,12 @@
       "profile": "adapter.mcp-1",
       "category": "integration",
       "sha256": "7856cffa3ea17c64e6d856a30c7b7df97d46874d38ac1218fe628be19262a839"
+    },
+    {
+      "path": "v1/mcp-runtime.json",
+      "profile": "adapter.mcp-go-runtime-1",
+      "category": "integration",
+      "sha256": "a11d584620ece7dad63f484ebb2bcabe084644c60c18de0e15d8baae74ac3dcc"
     }
   ],
   "normativeSources": [
@@ -8710,6 +8716,11 @@
       "caseId": "issue.103",
       "issue": 103,
       "fixtureRefs": [
+        {
+          "path": "v1/mcp-runtime.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/103",

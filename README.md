@@ -117,10 +117,9 @@ troubleshooting, and the third-party implementation path.
   bounded JSON-RPC 2.0 consume/expose integration for
   `adapter.openrpc-jsonrpc-1`; see the
   [profile boundary and lifecycle](openrpcadapter/README.md).
-- `mcpadapter`: MCP `2025-11-25` trusted registration, lossless structured
-  result subset, session isolation, and separate stdio/Streamable HTTP
-  fidelity reports for `adapter.mcp-1`; concrete MCP wire clients and servers
-  remain owned by #103. See the [MCP adapter core](mcpadapter/README.md).
+- `mcpadapter`: MCP `2025-11-25` trusted registration and schema-fidelity core
+  plus bounded Go stdio and Streamable HTTP client/server adapters for
+  `adapter.mcp-go-runtime-1`. See the [MCP adapter guide](mcpadapter/README.md).
 - `generatorplugin`: explicit generator-plugin discovery, bounded process
   hosting, safe diagnostics, and reproducible third-party fixture execution for
   `sdk.generator-plugin-host-1`; see the
