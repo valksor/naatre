@@ -35,13 +35,13 @@
     {
       "name": "go-module",
       "path": "go.mod",
-      "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206",
+      "sha256": "e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39",
       "revision": "go-1.27.0"
     },
     {
       "name": "go-dependency-lock",
       "path": "go.sum",
-      "sha256": "4ab1142371fb95281ac0e674e481d95e234eb937bcdcadb686ff4bb11da8c94f",
+      "sha256": "57755b9e8e537cc6b24f8b8b4390fa5d415cac73806800efb833e0d62b755849",
       "revision": "go.sum-sha256"
     },
     {

@@ -1,0 +1,63 @@
+{
+  "profile": "core.adapters.protobuf-grpc-connect-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 95,
+  "coreContract": "core.adapters-1",
+  "dependencies": {
+    "coreAdaptersCommit": "a93f33dffa5b351c04b4f229df91d098ed4df1b4",
+    "protobuf": "google.golang.org/protobuf@v1.36.11",
+    "grpc": "google.golang.org/grpc@v1.82.1",
+    "connectProtocol": "connectrpc/connect@fac060371d74da4205f28ef504d078d2d2ce286f"
+  },
+  "package": "github.com/valksor/naatre/transport/protobufrpc",
+  "lifecycle": "experimental-opt-in-client",
+  "supported": {
+    "runtime": "go1.27",
+    "platforms": ["darwin", "linux", "windows"],
+    "protobuf": ["descriptor-driven-explicit-presence", "oneof", "int32", "uint32", "int64", "uint64", "finite-float32", "finite-float64", "enum", "string", "timestamp", "duration", "declared-field-mask"],
+    "grpc": ["unary-client", "server-streaming-client", "caller-context-cancellation", "caller-deadline", "allowlisted-text-metadata", "canonical-status-code"],
+    "connect": ["unary-protobuf-post", "server-streaming-protobuf-post", "caller-context-cancellation", "connect-timeout-ms", "allowlisted-text-metadata", "canonical-status-code"]
+  },
+  "unsupported": [
+    "schema-or-operation-policy-authority",
+    "protobuf-reflection-or-remote-discovery",
+    "protobuf-map-fields",
+    "protobuf-bytes-base64-adaptation",
+    "implicit-presence-request-scalars",
+    "non-finite-floating-point-values",
+    "protobuf-any-struct-value-listvalue-and-wrapper-well-known-types",
+    "unknown-protobuf-fields",
+    "client-streaming",
+    "bidirectional-streaming",
+    "grpc-or-connect-server-runtime-exposure",
+    "grpc-web",
+    "connect-get",
+    "connect-json-codec",
+    "request-or-response-compression",
+    "binary-metadata",
+    "response-header-or-trailer-forwarding",
+    "status-details",
+    "automatic-retry-load-balancing-or-credential-construction",
+    "browser-native-mobile-or-framework-certification"
+  ],
+  "commands": {
+    "focused": "go test ./transport/protobufrpc ./internal/conformance -run 'Test(GRPC|Connect|Configuration|Request|ProtobufRPC)'",
+    "package": "go test ./transport/protobufrpc",
+    "offlineQuality": "go test -run '^$' ./... && go vet ./... && golangci-lint run && go generate ./... && git diff --exit-code"
+  },
+  "cases": [
+    {"id":"shape-presence-oneof-ranges","class":"positive","features":["presence","oneof","numeric-range"],"expected":{"status":"passed"}},
+    {"id":"field-mask-metadata-deadline","class":"boundary","features":["field-mask","metadata","deadline","credential-forwarding"],"expected":{"status":"passed"}},
+    {"id":"grpc-unary-status","class":"positive","features":["grpc","unary","status"],"expected":{"status":"passed"}},
+    {"id":"connect-unary-wire","class":"positive","features":["connect","unary","protobuf-wire"],"expected":{"status":"passed"}},
+    {"id":"grpc-server-stream","class":"positive","features":["grpc","server-streaming"],"expected":{"status":"passed"}},
+    {"id":"connect-server-stream","class":"positive","features":["connect","server-streaming"],"expected":{"status":"passed"}},
+    {"id":"caller-cancellation","class":"cancellation","features":["grpc","connect","cancellation"],"expected":{"status":"passed","code":"PROTO_RPC_CANCELLED"}},
+    {"id":"unknown-range-oneof-rejection","class":"negative","features":["unknown-field","numeric-range","oneof"],"expected":{"status":"rejected","code":"PROTO_RPC_SHAPE_INVALID"}},
+    {"id":"lossy-shape-rejection","class":"negative","features":["implicit-presence","bytes","map"],"expected":{"status":"rejected","code":"PROTO_RPC_PRESENCE_UNSUPPORTED"}},
+    {"id":"status-detail-rejection-redaction","class":"security","features":["status-details","credential-redaction","implementation-detail-redaction"],"expected":{"status":"rejected","code":"PROTO_RPC_STATUS_DETAILS_UNSUPPORTED"}},
+    {"id":"metadata-resource-limit","class":"resource-limit","features":["metadata","credentials"],"expected":{"status":"rejected","code":"PROTO_RPC_METADATA_LIMIT"}},
+    {"id":"message-stream-resource-limit","class":"resource-limit","features":["message-bytes","stream-messages","stream-bytes"],"expected":{"status":"rejected","code":"PROTO_RPC_STREAM_LIMIT"}},
+    {"id":"unsupported-stream-shape","class":"negative","features":["client-streaming","bidirectional-streaming"],"expected":{"status":"rejected","code":"PROTO_RPC_STREAMING_UNSUPPORTED"}}
+  ]
+}

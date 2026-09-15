@@ -521,6 +521,12 @@
       "profile": "tooling.lsp-1",
       "category": "integration",
       "sha256": "421c73807521b6370f421148f2e211052c323e905d9492b9d68c65ddb4ec7c8c"
+    },
+    {
+      "path": "v1/protobuf-grpc-connect.json",
+      "profile": "core.adapters.protobuf-grpc-connect-1",
+      "category": "transport",
+      "sha256": "aff756d78ddca0652bfce79e344ad175ef18f006f089e8e6cd8d274dc53392b5"
     }
   ],
   "normativeSources": [

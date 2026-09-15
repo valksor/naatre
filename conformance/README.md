@@ -150,6 +150,16 @@ the recorded package and race commands reproduce the slow-client, disconnect,
 deadline, and shutdown cancellation fixtures. Listener TLS and QUIC setup are
 host-owned and are not implied by this handler-level profile.
 
+`v1/protobuf-grpc-connect.json` pins the opt-in
+`core.adapters.protobuf-grpc-connect-1` Go client profile to exact protobuf,
+grpc-go, Connect protocol, and `core.adapters-1` revisions. It records
+descriptor shape, unary, server-streaming, cancellation, safe status,
+credential forwarding, and resource-limit evidence. The package boundary and
+every unsupported optional capability are documented in
+[`transport/protobufrpc/README.md`](../transport/protobufrpc/README.md).
+The checked-in tests use in-memory transport seams; external TLS and
+cross-language interoperability remain integration-orchestrator checks.
+
 `v1/go-sdk.json` pins `sdk.go.operations-1`, including the typed builder,
 selected-result decoder, manifest, retry, batching, pagination, POST-SSE, and
 stream lifecycle sources plus the deterministic Go generator and checked-in
