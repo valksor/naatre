@@ -1,0 +1,75 @@
+{
+  "profile": "naatre.playground-mock-1",
+  "version": "1.0.0",
+  "ownerIssue": 91,
+  "normativeOwnerIssue": 55,
+  "dependencies": {
+    "issue55Commit": "16aeb4606062207c0fccabb03a348d49e136e5c6",
+    "toolingProfile": "tooling.workflow-1@1.0.0",
+    "toolingFixture": "conformance/v1/tooling.json",
+    "toolingFixtureSHA256": "79af36f66265dc58df7fd8bbd83c3d88ab88c230b5a94d75b5696f03ff1bfb78",
+    "goModule": "github.com/valksor/naatre",
+    "goModSHA256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206",
+    "goVersion": "1.27.0",
+    "schemaVersion": "1",
+    "canonicalVersion": "c14n-1"
+  },
+  "runtime": {
+    "package": "github.com/valksor/naatre/playground",
+    "binary": "github.com/valksor/naatre/cmd/naatre-playground",
+    "listen": "127.0.0.1:0",
+    "lifecycle": "explicit-process-memory-only",
+    "executedPlatform": "darwin-arm64-offline"
+  },
+  "limits": {
+    "requestBytes": 1048576,
+    "documentBytes": 262144,
+    "inspectionPayloadBytes": 4096,
+    "responseBytes": 1048576,
+    "mockDepth": 32,
+    "mockItems": 16,
+    "mockStringBytes": 4096
+  },
+  "supported": [
+    "authorized-schema-browse",
+    "bounded-request-inspection",
+    "credential-redaction",
+    "deterministic-schema-mocks",
+    "scenario-selection",
+    "stream-frame-fixtures",
+    "sdk-example-copy"
+  ],
+  "unsupported": [
+    "alternate-native-runtime",
+    "business-handler-execution",
+    "dynamic-authorization",
+    "live-upstream-requests",
+    "network-schema-fetch",
+    "persisted-history",
+    "plugin-execution",
+    "remote-listen",
+    "tls-termination",
+    "transport-certification",
+    "unredacted-persistence",
+    "websocket-transport"
+  ],
+  "failureCodes": [
+    "PLAYGROUND_CANCELLED",
+    "PLAYGROUND_INTERNAL",
+    "PLAYGROUND_INVALID_REQUEST",
+    "PLAYGROUND_INVALID_TARGET",
+    "PLAYGROUND_METHOD_NOT_ALLOWED",
+    "PLAYGROUND_MOCK_REJECTED",
+    "PLAYGROUND_NOT_FOUND",
+    "PLAYGROUND_OUTPUT_TOO_LARGE",
+    "PLAYGROUND_REQUEST_TOO_LARGE",
+    "PLAYGROUND_UNSUPPORTED_MEDIA_TYPE"
+  ],
+  "cases": [
+    {"id": "same-input-same-bytes", "class": "positive", "status": "passed", "assertions": ["schema-digest", "document-digest", "seed", "scenario", "stream-frames", "zero-business-handlers"]},
+    {"id": "unauthorized-schema-hidden", "class": "negative", "status": "passed", "assertions": ["authorized-view-only", "stable-code", "safe-message"]},
+    {"id": "credentials-and-payload-bound", "class": "boundary", "status": "passed", "assertions": ["credentials-redacted", "valid-utf8", "maximum-bytes"]},
+    {"id": "cancelled-context", "class": "cancellation", "status": "passed", "assertions": ["no-generation", "PLAYGROUND_CANCELLED"]},
+    {"id": "request-output-and-schema-limits", "class": "resource-limit", "status": "passed", "assertions": ["request-limit", "response-limit", "schema-cardinality", "mock-item-ceiling"]}
+  ]
+}

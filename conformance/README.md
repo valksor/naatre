@@ -384,6 +384,12 @@ admission, overload, drain, and connection rotation. Concrete supervisor,
 transport, stream, worker, and durable-operation integration remains owned by
 their independently shippable profiles.
 
+`tooling/playground-mock.json` records the independently deliverable
+`naatre.playground-mock-1` implementation evidence. It pins the exact issue #55
+tooling revision and fixture digest, Go module and schema revisions, closed
+capability boundary, public failures, resource ceilings, and the positive,
+negative, boundary, cancellation, and resource-limit cases executed offline.
+
 `v1/streaming.json` fixes the `core.streaming-1` logical event vocabulary,
 required terminal state machine, cursor bindings, replay capability classes,
 safe unavailable-history outcome, required Fetch POST SSE capability, and
