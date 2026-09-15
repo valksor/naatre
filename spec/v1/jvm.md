@@ -3,9 +3,10 @@
 The `sdk.jvm.core-1` profile defines the portable generated model and client
 boundary shared by Java services and Kotlin/JVM consumers. It consumes
 `naatre.generator-model-1` and the canonical reference output from
-`sdk.generation-1`. Concrete HTTP engines, Android packaging, SSE and WebSocket
-adapters are separate capabilities owned by issue #82; the combined official
-language matrix is owned by issue #69.
+`sdk.generation-1`. Concrete HTTP engines, Android compatibility, SSE and
+WebSocket adapters are separate capabilities owned by issue #82 and advertised
+by their own profiles; the combined official language matrix is owned by issue
+#69.
 
 ## Generated bindings and wire values
 
@@ -69,11 +70,12 @@ language matrix is owned by issue #69.
   targets Gradle 9.1 and Maven 3.9 for `io.naatre:naatre-jvm-sdk`; those rows
   remain `not-executed` until #82 supplies build-tool evidence. Other JDK,
   Kotlin, Gradle, and Maven versions are not implied compatible.
-- **JVM-201:** The generated wire-model source is Android-neutral, but no
-  Android API level, Gradle plugin, desugaring configuration, device, emulator,
-  HTTP engine, SSE engine, or WebSocket engine is certified by this core
-  profile. Those combinations are explicitly unsupported until #82 provides
-  adapter evidence and #69 incorporates it into the combined matrix.
+- **JVM-201:** The generated wire-model source is Android-neutral, but this core
+  profile alone certifies no Android API level, Gradle plugin, desugaring
+  configuration, device, emulator, HTTP engine, SSE engine, or WebSocket engine.
+  An extracted adapter profile states its exact Android compile/minimum API and
+  tooling boundary separately from server-JVM evidence. DEX compatibility is
+  never presented as device or emulator execution.
 - **JVM-202:** Every combination marked passed MUST link to a checked
   conformance report recording its exact runtime, compiler, bytecode target,
   profile, commands, and vectors. A declared or extracted combination without
@@ -93,5 +95,5 @@ language matrix is owned by issue #69.
 | JVM-103 | Credentials are stripped when redirect origin changes. | A write is replayed after auth refresh without idempotency. |
 | JVM-104 | A pagination adapter is a separately advertised capability. | Generating a page type implies an installed pagination transport. |
 | JVM-200 | JDK 17, 21, and 25 reports all execute the same profile. | Untested JDK 26 is inferred supported because compilation succeeded elsewhere. |
-| JVM-201 | Android is explicitly unsupported until #82. | A JVM build is labeled an Android pass. |
+| JVM-201 | Android API-26 DEX compatibility and server HTTP have separate reports. | A server JVM build or DEX conversion is labeled a device pass. |
 | JVM-202 | Every passed matrix row links a digest-pinned report. | A CI workflow definition is treated as a completed report. |

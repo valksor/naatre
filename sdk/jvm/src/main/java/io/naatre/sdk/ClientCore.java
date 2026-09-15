@@ -57,6 +57,7 @@ public final class ClientCore {
         RESPONSE_TOO_LARGE,
         FRAME_TOO_LARGE,
         STREAM_TRUNCATED,
+        AUTHENTICATION_FAILED,
         TRANSPORT,
         UNSUPPORTED_CAPABILITY,
         SCALAR_INVALID
@@ -416,7 +417,12 @@ public final class ClientCore {
 
         public <V, R> @NonNull CompletableFuture<OperationResult<R>> executeAsync(
                 @NonNull Operation<V, R> operation, @NonNull V variables, @Nullable Duration deadline) {
-            TransportRequest request = request(operation, variables);
+            TransportRequest request;
+            try {
+                request = request(operation, variables);
+            } catch (RuntimeException failure) {
+                return CompletableFuture.failedFuture(mapFailure(failure));
+            }
             Call<TransportResponse> call;
             try {
                 call = transport.execute(request);
@@ -474,7 +480,7 @@ public final class ClientCore {
             } catch (InterruptedException interrupted) {
                 future.cancel(true);
                 Thread.currentThread().interrupt();
-                throw new ClientException(ErrorCode.CANCELLED, "blocking call interrupted", interrupted);
+                throw new ClientException(ErrorCode.CANCELLED);
             } catch (ExecutionException failure) {
                 throw mapFailure(failure.getCause());
             }
@@ -515,10 +521,17 @@ public final class ClientCore {
         }
 
         private <V, R> TransportRequest request(Operation<V, R> operation, V variables) {
+            byte[] body = operation.canonicalRequest(variables);
+            Map<String, String> headers;
+            try {
+                headers = Objects.requireNonNull(authentication.headers(), "authentication headers");
+            } catch (RuntimeException failure) {
+                throw new ClientException(ErrorCode.AUTHENTICATION_FAILED);
+            }
             return new TransportRequest(
                     UUID.randomUUID(),
-                    operation.canonicalRequest(variables),
-                    authentication.headers(),
+                    body,
+                    headers,
                     operation.kind(),
                     compressedBytes,
                     decompressedBytes,
@@ -535,8 +548,9 @@ public final class ClientCore {
 
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
-            call.cancel();
-            return super.cancel(mayInterruptIfRunning);
+            boolean changed = super.cancel(mayInterruptIfRunning);
+            if (changed) call.cancel();
+            return changed;
         }
     }
 
@@ -1033,9 +1047,9 @@ public final class ClientCore {
         while (actual instanceof CompletionException || actual instanceof ExecutionException) {
             actual = actual.getCause();
         }
-        if (actual instanceof ClientException client) return client;
+        if (actual instanceof ClientException client) return new ClientException(client.code());
         if (actual instanceof CancellationException) return new ClientException(ErrorCode.CANCELLED);
-        return new ClientException(ErrorCode.TRANSPORT, "transport failed", actual);
+        return new ClientException(ErrorCode.TRANSPORT);
     }
 
     private static boolean validUnicode(String value) {

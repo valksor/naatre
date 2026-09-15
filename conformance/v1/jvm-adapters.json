@@ -1,0 +1,115 @@
+{
+  "profile": "sdk.jvm.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 82,
+  "coreAuthority": "sdk.jvm.core-1",
+  "dependencies": [
+    {
+      "issue": 40,
+      "revision": "f2455310695238e11b81e36d121243191a7aee1c",
+      "profile": "sdk.jvm.core-1",
+      "manifest": {
+        "path": "conformance/v1/jvm-sdk.json",
+        "sha256": "7b2658c4966bc9dd871668b66e0566ffe569739a80b52866e6f96346c008393c"
+      }
+    }
+  ],
+  "toolchains": {
+    "java": {"runtime": "OpenJDK 21.0.12.1", "bytecodeTarget": "17"},
+    "kotlin": {"version": "2.2.20", "compilerArchiveSha256": "81f0264c9073b5cbbdb3ff8418cf2c5dac076879fc156fa1a6462f5a5acc4420"},
+    "coroutines": {"version": "1.10.2", "jarSha256": "5ca175b38df331fd64155b35cd8cae1251fa9ee369709b36d42e0a288ccce3fd"},
+    "android": {
+      "compileSdk": 36,
+      "compileSdkRevision": 2,
+      "platformSourcePropertiesSha256": "72291ff6611dbfc46fdfb6de2821c4a62c87befa5200713847eda426e3a501c2",
+      "minimumApi": 26,
+      "buildTools": "36.0.0",
+      "buildToolsSourcePropertiesSha256": "7dee6632e9ad6cb111da2bb99d747211e27927061b1276d040bb1d71fded5ebb"
+    }
+  },
+  "sources": {
+    "server": [
+      {"path": "sdk/jvm/check-server-adapter.sh", "sha256": "7d3f3abbebeeb7a88b857527f9a9c2539759c87fb5c14d4d357810b146144187"},
+      {"path": "sdk/jvm/generated/java/io/naatre/sdk/generated/java/GetAccount.java", "sha256": "50cd99b32e6c3824dec1708c68aff6a51a1f7f324100a40ee04e8af2b7aa68a0"},
+      {"path": "sdk/jvm/java-http/src/main/java/io/naatre/sdk/http/JavaHttpTransport.java", "sha256": "c9f475280b8b19ee190972fd27cf531f6c9bb70049f15c5d5c52a2ac34045b12"},
+      {"path": "sdk/jvm/java-http/src/test/java/io/naatre/sdk/http/JavaHttpTransportConformance.java", "sha256": "f05424ed4521170562eda04dcb0e2200c6d9db7fb2683652f3f148e7881ee913"},
+      {"path": "sdk/jvm/src/main/java/io/naatre/sdk/ClientCore.java", "sha256": "400a85887c46bd93a73cdbe443f50bb61916ad9bf150c5d8f44f4a6fb6d8b891"},
+      {"path": "sdk/jvm/src/main/java/io/naatre/sdk/annotations/NonNull.java", "sha256": "36710cd0f387dc08d7fe25c02c10e43bebc3d5154da1a27bd8bf71e95fdb96db"},
+      {"path": "sdk/jvm/src/main/java/io/naatre/sdk/annotations/Nullable.java", "sha256": "c352a0eb78cc728fd6da9db77370bf84bf793eeca7270d2187b5bea95a9f06e2"}
+    ],
+    "android": [
+      {"path": "sdk/jvm/android/src/test/java/io/naatre/sdk/android/AndroidCompatibilityConformance.java", "sha256": "c6437329bf539db4beccdcfcfd194e2a7ac0ba0a05af5f64cb33ad8466596f5a"},
+      {"path": "sdk/jvm/check-android.sh", "sha256": "cc61d456d47613f19cd2c5633df849355ae58b7e33663a30dd2832e4c6f0f07e"},
+      {"path": "sdk/jvm/generated/java/io/naatre/sdk/generated/java/GetAccount.java", "sha256": "50cd99b32e6c3824dec1708c68aff6a51a1f7f324100a40ee04e8af2b7aa68a0"},
+      {"path": "sdk/jvm/generated/kotlin/io/naatre/sdk/generated/kotlin/GetAccount.kt", "sha256": "fe463b9157889db92261f67caf02046c97325f96a0fc5d1fbc0cb04d5c98d9dd"},
+      {"path": "sdk/jvm/src/main/java/io/naatre/sdk/ClientCore.java", "sha256": "400a85887c46bd93a73cdbe443f50bb61916ad9bf150c5d8f44f4a6fb6d8b891"},
+      {"path": "sdk/jvm/src/main/java/io/naatre/sdk/annotations/NonNull.java", "sha256": "36710cd0f387dc08d7fe25c02c10e43bebc3d5154da1a27bd8bf71e95fdb96db"},
+      {"path": "sdk/jvm/src/main/java/io/naatre/sdk/annotations/Nullable.java", "sha256": "c352a0eb78cc728fd6da9db77370bf84bf793eeca7270d2187b5bea95a9f06e2"},
+      {"path": "sdk/jvm/src/main/kotlin/io/naatre/sdk/KotlinClient.kt", "sha256": "a11606c415eb740f07e535c05061e803149b0e93827e8fca1fa56552ee635b53"}
+    ]
+  },
+  "evidence": [
+    {"path": "docs/jvm-adapters.md", "sha256": "b5a74c72aa7782d250faff783bceae902b436f304295157be61042b188404ebd"},
+    {"path": "sdk/jvm/README.md", "sha256": "92182529c04de207af8f705c3d43abf39fef623af6f7b5c647462aeabcab9b59"},
+    {"path": "sdk/jvm/check-adapters.sh", "sha256": "cde637de7beaf2f03661e8771fb87faf4039eee4f3aea2bb564ffe0bc0acaec4"},
+    {"path": "sdk/jvm/java-http/build.gradle.kts", "sha256": "7659dd802f0313c7e872fc9ee425017b9ebc95bd2f217e5c2638ca7d957bf632"},
+    {"path": "sdk/jvm/java-http/pom.xml", "sha256": "5833ef92197bb1ede455eee63c679e4546041869e192f42eee86def3bf94af97"},
+    {"path": "spec/v1/jvm.md", "sha256": "617616b738aed337b243c8ab78b3666fd08f0866f86be1f320e0730afb7e2ace"},
+    {"path": "conformance/independent/verify-jvm-adapters.mjs", "sha256": "10bc79373f71870cd99daac97d9731a7635f057b7b7755eb68e276515670291d"},
+    {"path": "conformance/reports/jvm-adapters-jdk21-macos-arm64.json", "sha256": "a68d43d943c89fc44ddc51cce669c845dfb1e285ec39a8453fa787dbe748212c"},
+    {"path": "conformance/reports/jvm-android-api26-compile36.json", "sha256": "92114b7f488f3e6ab1f152fd6e6c0cd3c520912b4cf217611c7efe95f3be2e9a"}
+  ],
+  "profiles": {
+    "server": {
+      "profile": "sdk.jvm.java-http-1",
+      "package": "io.naatre:naatre-jvm-http:0.1.0",
+      "runtime": "OpenJDK 21.0.12.1",
+      "status": "passed",
+      "report": "conformance/reports/jvm-adapters-jdk21-macos-arm64.json",
+      "capabilities": ["unary-http", "manual-307-308-redirects", "active-cancellation", "transport-close"]
+    },
+    "android": {
+      "profile": "sdk.jvm.android-compat-1",
+      "package": "io.naatre:naatre-jvm-sdk:0.1.0",
+      "minimumApi": 26,
+      "compileSdk": 36,
+      "status": "passed",
+      "runtimeStatus": "not-executed",
+      "report": "conformance/reports/jvm-android-api26-compile36.json",
+      "capabilities": ["core-java-kotlin", "generated-models", "api26-d8-compatibility", "active-cancellation"]
+    }
+  },
+  "vectors": [
+    {"name": "java-kotlin-identical-canonical-vector", "polarity": "positive", "concern": "parity"},
+    {"name": "server-json-success", "polarity": "positive", "concern": "transport"},
+    {"name": "cross-origin-protected-header-stripping", "polarity": "positive", "concern": "credentials"},
+    {"name": "malformed-media-and-encoding", "polarity": "negative", "concern": "response"},
+    {"name": "denied-or-excessive-redirect", "polarity": "negative", "concern": "redirect"},
+    {"name": "exact-response-limit", "polarity": "boundary", "concern": "resource-limit"},
+    {"name": "declared-and-streamed-response-over-limit", "polarity": "negative", "concern": "resource-limit"},
+    {"name": "future-coroutine-flow-and-transport-close", "polarity": "cancellation", "concern": "lifecycle"},
+    {"name": "lossless-large-integer-and-nanosecond-timestamp", "polarity": "boundary", "concern": "precision"},
+    {"name": "missing-null-pending-and-type-use-annotations", "polarity": "boundary", "concern": "nullability"},
+    {"name": "unknown-enum-and-union", "polarity": "positive", "concern": "unknown-variants"},
+    {"name": "stable-code-with-redacted-cause", "polarity": "negative", "concern": "failure-safety"}
+  ],
+  "commands": [
+    "sdk/jvm/check-adapters.sh",
+    "node conformance/independent/verify-jvm-adapters.mjs"
+  ],
+  "unsupported": [
+    "authenticated-post-sse",
+    "websocket",
+    "compressed-responses",
+    "automatic-authentication-refresh",
+    "automatic-retry-or-non-idempotent-replay",
+    "pagination-orchestration",
+    "android-java-net-http",
+    "android-concrete-http-engine",
+    "android-framework-lifecycle-binding",
+    "android-device-or-emulator-certification",
+    "spring-ktor-okhttp-retrofit-androidx-native-image",
+    "gradle-maven-publication-and-reproducibility",
+    "complete-official-sdk-matrix-owned-by-69"
+  ]
+}

@@ -123,8 +123,13 @@ explicit Java and Kotlin nullability, lossless numeric/time/UUID/byte wrappers,
 selected presence and partial-error states, open variants, cancellable future,
 blocking, coroutine and Flow views, terminal/truncation handling, and the JDK
 17/21/25 execution reports. Android and concrete HTTP, SSE, and WebSocket
-adapters remain explicitly unsupported until #82; #69 owns the combined
-language/runtime/transport matrix.
+adapters are separately advertised rather than inferred from the core.
+`v1/jvm-adapters.json` pins issue #82's `sdk.jvm.adapters-1` composite evidence:
+the server-only bounded unary `java.net.http` adapter and the distinct Android
+API-26 D8 compatibility profile. Authenticated POST-SSE, WebSocket, compression,
+automatic retry/auth refresh, concrete Android networking/lifecycle bindings,
+and device/emulator certification remain explicitly unsupported; #69 owns the
+combined language/runtime/transport matrix.
 
 `v1/typescript-sdk.json` pins `sdk.typescript.core-1`: the dependency-free
 plain-JavaScript runtime, exact scalar codecs, selected result states,

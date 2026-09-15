@@ -4,6 +4,7 @@ ack dead-code:new-symbol 9cd416681ad811de 0 cid=0227a2f1e8c4af29 Go test entrypo
 ack dead-code:preexisting 7a16856d104c1242 0 cid=929c4cf68c910d24 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack duplication 1dbc75029553fd6f 129 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 22f1088041164831 113 issue 13 typed fixture validators share deliberate table assertion scaffolding
+ack duplication 25ada1de97b370b1 25 issue 82 HTTP adapter construction and generated operation variables are unrelated APIs; reviewed structural false positive
 ack duplication 27906dc064fe6f05 43 issue 29 requires an independently executable SDK runtime and generator separate from the conformance oracle; cross-language normalization cannot share implementation
 ack duplication 2e7ec416acf59c24 94 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 2ee018937d18ab0d 45 issue 29 requires an independently executable SDK runtime and generator separate from the conformance oracle; cross-language normalization cannot share implementation
@@ -55,6 +56,8 @@ ack new-clone-of-reused-helper 8aeda4cf683fb983 4 issue 12 required boundary tes
 ack new-clone-of-reused-helper be47f51a588f3829 3 issue 29 requires an independently executable SDK runtime and generator separate from the conformance oracle; cross-language normalization cannot share implementation
 ack new-clone-of-reused-helper dd1b308c35815b66 4 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack verbosity 1caa3996f8c9ac25 380 cid=4c0163ba7d34ded3 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack verbosity 202a60731118d501 150 cid=0ad5754e62cbb816 issue 82 requires core async authentication failures and cancellation to map to stable redacted public outcomes
 ack verbosity 6aa361097e6f3edd 450 cid=e0a046791c5113c8 conformance fixture vectors are authored contract data; adding required vectors is the deliverable, not code debt
 ack verbosity 867c6b27a47254b5 93 cid=0653002fdcdd1913 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack verbosity 9f8b0d93eb4d579a 1195 cid=f855dbdd368b6846 issue 82 requires core async authentication failures and cancellation to map to stable redacted public outcomes
 ack verbosity e27fe82c785c3bfc 127 cid=d4a29ccbceb9120a issue 19 required declarative fixtures and reviewed false-positive structural matches
