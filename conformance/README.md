@@ -401,6 +401,16 @@ does not extend `core.language-1` or claim distributed caching, user-defined
 optimizers, native compilation, framework integration, or unexecuted runtime
 certification.
 
+`v1/documentation-examples.json` pins `documentation.examples-1` to the exact
+dependency commit and component-fixture digests used by the published language
+guide. It distinguishes clients, remote workers, the Go gateway, and the Go
+native runtime; records package, runtime, platform, lifecycle, and unsupported
+boundaries; and maps positive, negative, boundary, cancellation, and
+resource-limit troubleshooting scenarios to stable public codes. The
+dependency-free `independent/documentation.mjs` verifier rejects stale evidence,
+missing executable CI anchors, unpublished codes, unsafe failure fields, and
+support claims not backed by pinned profiles.
+
 `v1/security.json` fixes the `core.security-1` denial shape, static and dynamic
 decision semantics, operation-kind distinction, lifecycle and cache-scope
 rules, and equivalent decisions for planned, cached, batched, streamed, and

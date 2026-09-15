@@ -11,3 +11,17 @@ For `LIMIT_*`, `RESOURCE_EXHAUSTED`, `OVERLOADED`, `RATE_LIMITED`, or response/f
 Missing versus null failures usually mean a host model collapsed presence. JavaScript numeric failures usually mean an extended number passed through `number`; retain its decimal string. Timestamp mismatches usually mean local-zone coercion or lost fractional precision. Unicode/hash mismatches usually mean normalization, locale sorting, Unicode-scalar sorting instead of UTF-16 key sorting, array reordering, or hashing without the Naatre purpose prefix. Cancellation mismatches usually mean code claimed work stopped when only a signal or local handle was released.
 
 If a stable code is absent from [the generated index](error-codes.md), the fixture/code addition is incomplete. Run `go generate ./internal/doccheck` and `go test ./internal/doccheck`; a new code must enter a code-bearing fixture field and resolve to this workflow before publication.
+
+## Executable troubleshooting scenarios
+
+The [documentation example evidence](../../conformance/v1/documentation-examples.json) pins one minimal fixture for each required scenario class. Run `node conformance/independent/documentation.mjs` first to verify the dependency digests, stable-code inventory, safe failure shapes, sample sources, and CI command anchors. Then run the fixture's owning test or independent verifier from [domain examples](domain-examples.md).
+
+| Class | Fixture slice | Expected public result |
+| --- | --- | --- |
+| Positive | [`generator-output.json` operations](../../conformance/v1/generator-output.json) | The language client constructs the canonical request and decodes the checked response without a public failure. |
+| Negative | [`security.json` safe denial](../../conformance/v1/security.json) | `UNAUTHORIZED`; no protected existence, principal, tenant, policy input, or cause is exposed. |
+| Boundary | [`streaming.json` safe handle failures](../../conformance/v1/streaming.json) | `REESTABLISH_REQUIRED`, `REFETCH_REQUIRED`, or `DELIVERY_CAPABILITY_UNSUPPORTED`; unknown and unauthorized handles remain indistinguishable. |
+| Cancellation | [`remote-worker-gateway.json` cases](../../conformance/v1/remote-worker-gateway.json) | `CANCELLED`; the result states effect progress and never upgrades an acknowledgement into proof of rollback or hard termination. |
+| Resource limit | [`resources.json` limit vectors](../../conformance/v1/resources.json) | `LIMIT_BYTES` before execution or `RESOURCE_EXHAUSTED` at the bounded runtime phase; the response identifies the safe phase/path without echoing request values. |
+
+Published failure examples contain only `code`, `phase`, `clause`, `path`, `requestId`, and `effectState`. They must never contain authorization or cookie values, credentials or tokens, variables, principal or tenant identifiers, private causes or stacks, topology or endpoints, service identities, or schema digests. Messages remain non-contractual and must not carry implementation-only details.

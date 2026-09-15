@@ -10,6 +10,7 @@
   "guides": [
     "docs/v1/README.md",
     "docs/v1/quick-starts.md",
+    "docs/v1/language-guides.md",
     "docs/v1/domain-examples.md",
     "docs/v1/security-and-production.md",
     "docs/v1/model-and-decisions.md",
@@ -19,6 +20,7 @@
     "docs/v1/third-party-implementation.md",
     "docs/v1/versions.md"
   ],
+  "expandedExamples": "conformance/v1/documentation-examples.json",
   "quickStarts": [
     {"language":"go","surface":"server","source":"examples/v1/server/server.go","verify":"go test ./examples/v1/server ./examples/v1/gateway"},
     {"language":"go","surface":"client","source":"sdk/go/generated/operations_test.go","verify":"go test ./sdk/go/generated"},

@@ -25,8 +25,9 @@ type evidence struct {
 		Runtime       string `json:"runtime"`
 		SDKRelease    string `json:"sdkRelease"`
 	} `json:"versions"`
-	Guides      []string `json:"guides"`
-	QuickStarts []struct {
+	Guides           []string `json:"guides"`
+	ExpandedExamples string   `json:"expandedExamples"`
+	QuickStarts      []struct {
 		Language string `json:"language"`
 		Surface  string `json:"surface"`
 		Source   string `json:"source"`
@@ -56,6 +57,7 @@ func TestPublishedDocumentationEvidence(t *testing.T) {
 	}
 	validateVersions(t, manifest)
 	validateGuides(t, root, manifest.Guides)
+	requireFile(t, root, manifest.ExpandedExamples)
 	validateQuickStarts(t, root, manifest)
 	validateSharedSchema(t, root, manifest)
 	validateDomainExamples(t, root, manifest)
