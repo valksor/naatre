@@ -1,0 +1,142 @@
+{
+  "profile": "sdk.ruby.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "naatre.ruby.adapters-1",
+  "dependencies": [
+    {
+      "issue": 44,
+      "profile": "sdk.ruby.core-1",
+      "gitCommit": "0009b4027f85f3130e842ab7dbb68e43ed9686a1",
+      "fixture": {
+        "path": "conformance/v1/ruby-sdk.json",
+        "sha256": "f9f9c9dd3d80cef1facf598cc105b29a67a8cddcc634ca2ed0e0532557053774"
+      }
+    }
+  ],
+  "package": {
+    "name": "naatre",
+    "minimumRuby": "2.6",
+    "runtimeDependencies": [],
+    "optionalLoadPaths": ["naatre/faraday", "naatre/rails"]
+  },
+  "advertisedProfiles": [
+    {"profile": "sdk.ruby.core-1", "status": "passed", "vectors": "shared-profile-boundaries"},
+    {"profile": "sdk.ruby.adapters-1", "status": "passed", "vectors": "shared-profile-boundaries-and-adapter-lifecycle"}
+  ],
+  "adapterContracts": [
+    {"name": "framework-neutral", "status": "passed", "dependency": null},
+    {"name": "faraday-run-request", "status": "passed-contract", "dependency": null, "runtimeCertification": "unclaimed"},
+    {"name": "rails-railtie-rack-lifecycle", "status": "passed-contract", "dependency": null, "runtimeCertification": "unclaimed"}
+  ],
+  "platforms": [
+    {
+      "runtime": "cruby",
+      "version": "2.6.10p210",
+      "platform": "universal.arm64e-darwin25",
+      "status": "passed",
+      "profiles": ["sdk.ruby.core-1", "sdk.ruby.adapters-1"]
+    }
+  ],
+  "evidence": [
+    {"path": "sdk/ruby/lib/naatre.rb", "sha256": "eb3accfbcd73d4ddd89b5d4fe354124f9bf59c6b5bdb95ab795da17092d8f09d"},
+    {"path": "sdk/ruby/lib/naatre/transport.rb", "sha256": "3a419f8e106d1503df7cfcf3812ecb10c43d2bf087db658128ef4c0bcfcfd451"},
+    {"path": "sdk/ruby/lib/naatre/faraday.rb", "sha256": "a2d296d5e551e7babd18e6b5b11e70abf6fa7774ec690bee45e621afda3d03e7"},
+    {"path": "sdk/ruby/lib/naatre/rails.rb", "sha256": "f6e90e76e396ffd11e777a7bc08572783ca167f37533aca61120377514d63f26"},
+    {"path": "sdk/ruby/sig/transport.rbs", "sha256": "e621c4dee1fec62fc399ef095dfa08ea09be89974d697f708d913e8de6e05074"},
+    {"path": "sdk/ruby/sig/faraday.rbs", "sha256": "53d3b20e8a268fc28e9c31a7a3d6e48d7fa4e3391812d40eeeedae3921f44c32"},
+    {"path": "sdk/ruby/sig/rails.rbs", "sha256": "77d355da13ba3cc68f2524bea76f8ec47dce7de3e6891f5e0d77ed53b4cf5e50"},
+    {"path": "sdk/ruby/test/profile_test.rb", "sha256": "1f2619c0c7bba104599bd498bebef93a7401120bcf5e69ee07d944c2df1cae37"},
+    {"path": "sdk/ruby/test/transport_test.rb", "sha256": "e5d5e5b471b7fba8ae155657ad4121d71fe62b6b3a699f25337306c38012796e"},
+    {"path": "sdk/ruby/README.md", "sha256": "d7c97524c3bf79a813b53c87755164fab0620eff0e9984d152ba0788b1f2bec8"},
+    {"path": "sdk/ruby/naatre.gemspec", "sha256": "c74e813358a95924b2e17a427f24192de1d01f3194b58e8ec90e43d99453518c"},
+    {"path": "sdk/ruby/Gemfile.lock", "sha256": "bd943ff16afc1411defe639f7fcc32fb332a8b6225627a04d83af5f7ea3f1132"},
+    {"path": "conformance/independent/verify-ruby-adapters.mjs", "sha256": "db408bd34ef8f7be28016e39b5524bd5fbd64da0e0628832621d6c8e3c63d51d"}
+  ],
+  "vectors": [
+    "every-profile-string-symbol-key-equivalence-and-collision",
+    "every-profile-lossless-bigdecimal",
+    "every-profile-nanosecond-time-precision",
+    "every-profile-enumerator-cleanup",
+    "every-profile-thread-and-fiber-isolation",
+    "every-profile-persistent-process-state",
+    "positive-unary-partial-data",
+    "negative-private-transport-error-redaction",
+    "negative-media-status-and-redirect-policy",
+    "boundary-response-frame-and-redirect-limits",
+    "cancellation-closes-owned-stream",
+    "enumerator-break-and-error-cleanup",
+    "cross-origin-protected-header-stripping",
+    "authenticated-post-sse-terminal-and-truncation",
+    "thread-and-fiber-request-isolation",
+    "persistent-process-failure-recovery",
+    "faraday-optional-load-and-request-contract",
+    "rails-request-owned-cancellation-lifecycle"
+  ],
+  "failureCodes": [
+    "CLIENT_AUTH_FAILED",
+    "CLIENT_CANCELED",
+    "CLIENT_CONFIG_INVALID",
+    "CLIENT_FRAME_LIMIT",
+    "CLIENT_KEY_COLLISION",
+    "CLIENT_OPERATION_INVALID",
+    "CLIENT_PAGINATION_INVALID",
+    "CLIENT_PAGINATION_LIMIT",
+    "CLIENT_PROTOCOL_INVALID",
+    "CLIENT_REDIRECT_DENIED",
+    "CLIENT_REDIRECT_LIMIT",
+    "CLIENT_REMOTE_ERROR",
+    "CLIENT_RESPONSE_LIMIT",
+    "CLIENT_STREAM_FAILED",
+    "CLIENT_STREAM_TERMINAL",
+    "CLIENT_STREAM_TRUNCATED",
+    "CLIENT_TRANSPORT_FAILED",
+    "CLIENT_UNSUPPORTED_ENCODING",
+    "CLIENT_UNSUPPORTED_MEDIA_TYPE"
+  ],
+  "limits": {
+    "responseBytes": 8388608,
+    "frameBytes": 1048576,
+    "redirects": 5,
+    "detachedThreads": 0,
+    "internalQueues": 0
+  },
+  "ownership": {
+    "coreContract": "issue-44",
+    "adapterSlice": "issue-83",
+    "client": "caller-owned-immutable",
+    "requestCancellation": "request-owned-explicit-token",
+    "responseBody": "stream-or-execute-owned-until-close",
+    "railsCancellation": "rack-environment-request-owned",
+    "certificationOwnerIssue": 69
+  },
+  "commands": {
+    "portable": "node conformance/independent/verify-ruby-adapters.mjs",
+    "ruby": "ruby -Isdk/ruby/lib -Isdk/ruby/test -e 'Dir[\"sdk/ruby/test/**/*_test.rb\"].sort.each { |file| require File.expand_path(file) }'",
+    "syntax": "ruby -c sdk/ruby/lib/naatre/transport.rb && ruby -c sdk/ruby/lib/naatre/faraday.rb && ruby -c sdk/ruby/lib/naatre/rails.rb"
+  },
+  "unsupported": [
+    "faraday-gem-version-certification",
+    "rails-and-rack-version-certification",
+    "active-interruption-of-blocking-faraday-call",
+    "remote-mutation-cancellation-claim",
+    "response-decompression",
+    "websocket",
+    "http2-and-http3-semantics",
+    "quic",
+    "tls-certificate-and-proxy-policy-beyond-injected-adapter",
+    "cross-origin-credential-forwarding",
+    "redirect-301-302-303-rewriting",
+    "automatic-retry",
+    "automatic-auth-refresh",
+    "automatic-reconnect-and-replay",
+    "durable-cursor-storage",
+    "client-batching-and-multipart-upload",
+    "rails-server-handlers-and-background-jobs",
+    "activesupport-instrumentation",
+    "jruby-and-truffleruby-certification",
+    "windows-linux-and-additional-macos-certification",
+    "native-and-mobile-bindings",
+    "deployment-certification",
+    "complete-official-sdk-matrix-69"
+  ]
+}

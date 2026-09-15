@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "4a4c021d9d4bb854ee48c69988dea6ce13db78983c53e0c866545ed2f3a23c21"
     },
     {
       "path": "v1/scalars.json",
@@ -337,10 +337,16 @@
       "sha256": "4154e2f7e05fa497f5e1f17ffd154e5c81a52ca635603aec65cb9f782d8756e5"
     },
     {
+      "path": "v1/ruby-adapters.json",
+      "profile": "sdk.ruby.adapters-1",
+      "category": "transport",
+      "sha256": "6543dd2a34dc927d0368cb14c6eb2dfff4199bf3debb01219a63425d62a3c63e"
+    },
+    {
       "path": "v1/ruby-sdk.json",
       "profile": "sdk.ruby.core-1",
       "category": "canonical",
-      "sha256": "0377f25c7311a08d1fc50bd2187eec35f0e77335014663491d97edb3c10ee85f"
+      "sha256": "f9f9c9dd3d80cef1facf598cc105b29a67a8cddcc634ca2ed0e0532557053774"
     },
     {
       "path": "v1/async-operations.json",
@@ -7377,6 +7383,11 @@
       "caseId": "issue.83",
       "issue": 83,
       "fixtureRefs": [
+        {
+          "path": "v1/ruby-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/83",

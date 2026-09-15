@@ -12,9 +12,9 @@ assert.equal(fixture.profile, "sdk.ruby.core-1");
 assert.equal(fixture.runtime.minimumRuby, "2.6");
 assert.deepEqual(fixture.cancellation, {
   coreStreamDecoder: "synchronous-terminal-validation",
-  http: "unsupported-until-83",
-  sse: "unsupported-until-83",
-  websocket: "unsupported-until-83",
+  http: "adapter-profile-cooperative-resource-close",
+  sse: "adapter-profile-cooperative-resource-close",
+  websocket: "unsupported",
 });
 verifyEvidence(fixture.evidence);
 verifyEvidence(fixture.reports);
@@ -29,7 +29,7 @@ run("ruby", [
   "-Isdk/ruby/lib",
   "-Isdk/ruby/test",
   "-e",
-  'Dir["sdk/ruby/test/**/*_test.rb"].sort.each { |file| require File.expand_path(file) }',
+  '%w[core_test.rb generated_test.rb].each { |file| require File.expand_path("sdk/ruby/test/#{file}") }',
 ]);
 run("ruby", ["sdk/ruby/sdkgen/cli.rb"]);
 verifyEvidence(fixture.evidence);

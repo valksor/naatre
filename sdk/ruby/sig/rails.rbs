@@ -1,0 +1,18 @@
+module Naatre
+  module Rails
+    CANCELLATION_ENV: String
+
+    class ResponseBody
+      def initialize: (untyped body, Transport::Cancellation cancellation) -> void
+      def each: () { (String) -> void } -> void
+      def close: () -> bool
+    end
+
+    class Middleware
+      def initialize: (untyped app) -> void
+      def call: (Hash[String, untyped] environment) -> [Integer, Hash[String, String], ResponseBody]
+    end
+
+    def self.install!: (untyped application) -> untyped
+  end
+end

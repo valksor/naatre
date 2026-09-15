@@ -57,7 +57,8 @@ jobs:
           ruby sdk/ruby/sdkgen/cli.rb
           ruby -Isdk/ruby/lib -Isdk/ruby/test -e 'Dir["sdk/ruby/test/**/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
           node conformance/independent/verify-ruby-sdk.mjs
-          printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ruby","command":"run","path":{"source":{"kind":"sdk","language":"ruby"},"destination":{"kind":"native-runtime","language":"ruby"}},"profiles":["sdk.ruby.core-1"]}' | node conformance/independent/runner.mjs --require-pass
+          node conformance/independent/verify-ruby-adapters.mjs
+          printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ruby","command":"run","path":{"source":{"kind":"sdk","language":"ruby"},"destination":{"kind":"native-runtime","language":"ruby"}},"profiles":["sdk.ruby.core-1","sdk.ruby.adapters-1"]}' | node conformance/independent/runner.mjs --require-pass
       - name: Go conformance runner
         run: printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"ci","command":"run","path":{"source":{"kind":"sdk","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.contract-1","runtime.go.plan-cache-1","quality.go.harness-1"]}' | go run ./cmd/naatre-conformance --require-pass
       - name: .NET SDK conformance

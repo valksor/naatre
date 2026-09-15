@@ -151,9 +151,15 @@ certification remain explicitly unsupported and owned by issue #85.
 and result shapes, RBS metadata, string/symbol key normalization, lossless
 numeric and temporal scalar adapters, partial-completion states, strict bounded
 decoding, persisted request identity, stream terminal validation, and a
-reproducible gem build. Its runtime matrix links the checked CRuby report and
-marks HTTP, Rails, SSE, WebSocket, retry/auth, and transport cancellation as
-unsupported until issue #83; issue #69 owns the combined official matrix.
+reproducible gem build. Its runtime matrix links the checked CRuby report;
+transport and integration capabilities remain a separate profile.
+`v1/ruby-adapters.json` pins `sdk.ruby.adapters-1`: immutable framework-neutral
+requests, bounded unary and authenticated POST-SSE response ownership,
+redirect credential policy, cooperative cancellation and enumerator cleanup,
+thread/fiber/process isolation, optional Faraday and Rails contract surfaces,
+the exact issue #44 dependency revision, and every unsupported runtime and
+optional capability. Its verifier is listener- and network-free. Issue #69
+owns the combined official matrix.
 
 `v1/typescript-adapters.json` pins `sdk.typescript.adapters-1`: Fetch unary and
 POST-SSE adapters, the separately advertised optional `stream.websocket-1`

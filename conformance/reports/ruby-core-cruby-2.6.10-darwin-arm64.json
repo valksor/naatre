@@ -28,13 +28,13 @@
     "typed-unsupported-capabilities"
   ],
   "unsupported": [
-    "http-transport-83",
-    "rails-integration-83",
-    "sse-transport-83",
-    "websocket-transport-83",
-    "automatic-auth-refresh-83",
-    "automatic-retry-83",
-    "transport-cancellation-83",
+    "http-transport-in-core-profile",
+    "rails-integration-in-core-profile",
+    "sse-transport-in-core-profile",
+    "websocket-transport",
+    "automatic-auth-refresh",
+    "automatic-retry",
+    "transport-cancellation-in-core-profile",
     "complete-official-sdk-matrix-69"
   ]
 }
