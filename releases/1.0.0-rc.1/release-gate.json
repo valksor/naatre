@@ -1,7 +1,7 @@
 {
   "protocol": "naatre.release-gate.report-1",
-  "status": "failed",
-  "sourceRevision": "19122adf334a30bf8c2775f1be9475cfcecadcec",
+  "status": "passed",
+  "sourceRevision": "a66518acd7ca9b0d65ea67fa39bcfc34cb98e032",
   "versions": {
     "gate": "1.0.0",
     "spec": "1",
@@ -43,7 +43,7 @@
     },
     {
       "path": "release-evidence/independent-runner.json",
-      "sha256": "752c6d2a55a11b9c019b83846cb46a8fdfc4c8104cd5f4a9bc91a67d75a1d1e3"
+      "sha256": "df9a7ad21318a115f4f992b804636ce2093df4395548627e8d4a42fba5301424"
     },
     {
       "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
@@ -195,7 +195,7 @@
     },
     {
       "path": "release-evidence/security-gate.json",
-      "sha256": "9a6a596d3e851d3692fafa7056cedd22acb353c42d4ea0d1f24ef359212880c3"
+      "sha256": "7c9d3a82bcb85ca7605331a09127a0ef088daed90ee0f0c1274555d0dc763a71"
     },
     {
       "path": "releases/release-manifest.schema.json",
@@ -1028,7 +1028,7 @@
       "profile": "suite.contract-1",
       "report": {
         "path": "release-evidence/independent-runner.json",
-        "sha256": "752c6d2a55a11b9c019b83846cb46a8fdfc4c8104cd5f4a9bc91a67d75a1d1e3"
+        "sha256": "df9a7ad21318a115f4f992b804636ce2093df4395548627e8d4a42fba5301424"
       },
       "status": "passed"
     },
@@ -1138,7 +1138,7 @@
       "profile": "suite.security-gate-1",
       "report": {
         "path": "release-evidence/security-gate.json",
-        "sha256": "9a6a596d3e851d3692fafa7056cedd22acb353c42d4ea0d1f24ef359212880c3"
+        "sha256": "7c9d3a82bcb85ca7605331a09127a0ef088daed90ee0f0c1274555d0dc763a71"
       },
       "status": "passed"
     }
@@ -1209,14 +1209,5 @@
       ]
     }
   ],
-  "failures": [
-    {
-      "code": "INDEPENDENT_RUNNER_PARTIAL",
-      "message": "independent runner did not consume the complete pinned suite"
-    },
-    {
-      "code": "SECURITY_GATE_PARTIAL",
-      "message": "security gate did not publish its exact pinned fixture evidence"
-    }
-  ]
+  "failures": null
 }
