@@ -7034,6 +7034,57 @@
           "polarity": "positive"
         }
       ]
+    },
+    {
+      "caseId": "requirements.streaming.handles.http",
+      "spec": "spec/v1/streaming.md",
+      "clauses": [
+        "STR-710",
+        "STR-711",
+        "STR-712",
+        "STR-713",
+        "STR-714"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/handleHTTP",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/browserDeliveryPaths/0",
+          "polarity": "positive"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.streaming.handles.lifecycle",
+      "spec": "spec/v1/streaming.md",
+      "clauses": [
+        "STR-715",
+        "STR-716",
+        "STR-717",
+        "STR-718",
+        "STR-719"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/safeHandleFailures/0",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/adapterFixtures/2",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/streaming.json",
+          "pointer": "/operationalCases/1",
+          "polarity": "positive"
+        }
+      ]
     }
   ],
   "issueMappings": [

@@ -427,6 +427,15 @@ shutdown, authentication expiry, authorization revocation, schema retirement,
 and consumer abandonment. The Go reference consumes every vector directly;
 #72 owns concrete SSE/WebSocket transport adapters.
 
+The same fixture now pins `core.streaming-handles-1`: authenticated and
+idempotent establishment, complete server-side authority bindings, typed HTTP
+metadata, Fetch bearer and same-origin cookie EventSource paths, exclusive
+header cursor precedence, indistinguishable unavailable-handle outcomes,
+snapshot-to-replay handoff, lifecycle cleanup, adapter fidelity, broker failure
+truth, bounded reconnect ramps, and the privacy boundary for a synthetic real-
+ingress canary. The in-process adapter is executable; production Mercure and
+rollout integration remain owned by #105 and the combined matrix by #69.
+
 `v1/federation.json` fixes the `core.federation-1` service manifests, operator
 trust pins, exact composition bytes and federation-domain hash, deterministic
 Ed25519 delegation token, composition failures, and coordinator success,

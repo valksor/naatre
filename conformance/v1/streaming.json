@@ -12,6 +12,57 @@
     {"name": "sse-post-fetch", "required": true, "advertised": false, "outcome": "adapter-required"},
     {"name": "websocket", "required": false, "advertised": false, "outcome": "unsupported"}
   ],
+  "handleBindings": ["principal", "tenant", "operationIdentity", "variableIdentity", "schemaRevision", "authorizationRevision", "limits", "createdAt", "expiresAt", "deliveryProfile"],
+  "browserHandleFixture": {"path":"conformance/browser/subscription-handles.html","sha256":"3890b85a5c38d4d59eae8c0a047c6184bf727e11e2a5231a3a84d72a605e55f3","listener":"ephemeral-port","credentials":"same-origin-memory-only"},
+  "handleHTTP": {
+    "establishmentCreatedStatus": 201,
+    "establishmentReusedStatus": 200,
+    "observationStatus": 200,
+    "renewalStatus": 200,
+    "cancellationStatus": 204,
+    "mediaType": "application/vnd.naatre.subscription-handle+json;version=1",
+    "deliveryMediaType": "text/event-stream",
+    "location": "handle-resource",
+    "linkRelations": ["https://naatre.dev/rels/subscription-delivery", "https://naatre.dev/rels/subscription-renewal"],
+    "fields": ["state", "deliveryEndpoint", "mediaType", "expiresAt", "snapshot", "reconciliationCursor", "deliveryProfile"],
+    "exposedHeaders": ["Location", "Link", "Naatre-Expires", "Naatre-Delivery-Capabilities"],
+    "cacheControl": "no-store",
+    "referrerPolicy": "no-referrer",
+    "redirects": "forbidden"
+  },
+  "browserDeliveryPaths": [
+    {"name":"fetch-bearer","method":"GET","credentialCarrier":"Authorization","cursorCarrier":"Last-Event-ID","cookies":"forbidden","query":"empty","cors":"exact-origin"},
+    {"name":"same-origin-cookie","method":"GET","credentialCarrier":"same-origin-cookie","cursorCarrier":"Last-Event-ID-or-server-held-initial","cookies":"required","query":"empty","cors":"same-origin-only"}
+  ],
+  "safeHandleFailures": [
+    {"name":"unknown-handle","status":409,"code":"REESTABLISH_REQUIRED"},
+    {"name":"unauthorized-handle","status":409,"code":"REESTABLISH_REQUIRED"},
+    {"name":"expired-handle","status":409,"code":"REESTABLISH_REQUIRED"},
+    {"name":"evicted-handle","status":409,"code":"REESTABLISH_REQUIRED"},
+    {"name":"cancelled-handle","status":409,"code":"REESTABLISH_REQUIRED"},
+    {"name":"revoked-handle","status":409,"code":"REESTABLISH_REQUIRED"},
+    {"name":"unavailable-history","status":409,"code":"REFETCH_REQUIRED"},
+    {"name":"unsupported-delivery","status":406,"code":"DELIVERY_CAPABILITY_UNSUPPORTED"}
+  ],
+  "handleHandoffCases": [
+    {"name":"mutation-after-snapshot-before-attach","snapshotPosition":1,"committedPositions":[2],"replayedPositions":[2],"livePositions":[3],"expectedPositions":[2,3],"duplicates":0,"gap":false}
+  ],
+  "adapterFixtures": [
+    {"name":"in-process","frames":["open","data","patch","error","complete","keepalive","resume","history-unavailable"],"replay":"bounded","privateScopedDelivery":true,"replayAuthorization":true,"historyLossDetection":true,"terminalFrameRetention":true,"duplicateSuppression":true,"boundedRetry":true,"expected":"compatible"},
+    {"name":"mercure-complete-mapping","frames":["open","data","patch","error","complete","keepalive","resume","history-unavailable"],"replay":"durable","privateScopedDelivery":true,"replayAuthorization":true,"historyLossDetection":true,"terminalFrameRetention":true,"duplicateSuppression":true,"boundedRetry":true,"expected":"compatible"},
+    {"name":"mercure-public-topic-missing-terminal","frames":["data","patch"],"replay":"bounded","privateScopedDelivery":false,"replayAuthorization":false,"historyLossDetection":false,"terminalFrameRetention":false,"duplicateSuppression":false,"boundedRetry":false,"expected":"fidelity-failure"}
+  ],
+  "brokerFailureCases": [
+    {"name":"broker-outage","expected":"delivery-interrupted","retry":"bounded"},
+    {"name":"delayed-replay","expected":"not-caught-up-until-live-registered","retry":"bounded"},
+    {"name":"duplicate-delivery","expected":"idempotent-or-conflict","retry":"bounded"},
+    {"name":"reconnect","expected":"resume-or-explicit-refetch","retry":"bounded"},
+    {"name":"terminal-frame-loss","expected":"truncated-not-complete","retry":"bounded"}
+  ],
+  "operationalCases": [
+    {"name":"bounded-reconnect-ramp","maximumConnectionLifetime":"finite","reconnectStagger":"finite-less-than-lifetime","maximumReconnectAttempts":5,"expected":"caught-up-or-explicit-history-loss"},
+    {"name":"synthetic-ingress-canary","data":"isolated-synthetic","steps":["establish","authorize","deliver","disconnect","resume","terminal"],"records":["bounded-stage","safe-outcome"],"forbiddenRecords":["credential","handle","cursor","payload","protected-revision"]}
+  ],
   "negotiationCases": [
     {"name": "1", "expected": "ok"},
     {"name": "2", "expected": "unsupported-version"}

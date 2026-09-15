@@ -4,7 +4,7 @@ const vectors = [];
 const persisted = Object.freeze({ algorithm: "sha-256", canonicalVersion: "c14n-1", digest: "b".repeat(64) });
 const capabilities = Object.freeze(["sse-post-fetch", "stream.websocket-1"]);
 const dependencies = Object.freeze([
-  Object.freeze({ issue: 23, profile: "core.streaming-1", gitCommit: "8d91381f3f88ecc7fe6a9f1512975bf5514f285e", fixture: Object.freeze({ path: "conformance/v1/streaming.json", sha256: "b62084353c193cb615142e363e6118b2c38ebe639ab897f693a743b861b87d8c" }) }),
+  Object.freeze({ issue: 23, profile: "core.streaming-1", gitCommit: "8d91381f3f88ecc7fe6a9f1512975bf5514f285e", fixture: Object.freeze({ path: "conformance/v1/streaming.json", sha256: "8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749" }) }),
 ]);
 
 class FakeWebSocket extends EventTarget {

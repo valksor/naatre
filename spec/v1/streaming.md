@@ -225,6 +225,85 @@ subprofile without changing this contract.
   prove availability. The server responds with `resume` followed by replay, or
   `history-unavailable`. A cursor from a parsed but rejected frame is not saved.
 
+## Secure browser subscription handles
+
+The `core.streaming-handles-1` subprofile supplies a browser-safe GET delivery
+resource without changing subscription operation identity or making an opaque
+identifier sufficient authority. The Go reference is
+`runtime.SubscriptionHandleCoordinator`; `transport/http.SubscriptionHandler`
+is the router-free HTTP binding.
+
+- **STR-710:** Establishment MUST be an authenticated POST whose body carries
+  the complete Naatre subscription request and requested delivery
+  capabilities. Structural validation, variable coercion, schema selection,
+  planning and event authorization, cost admission, and capability negotiation
+  complete before random handle creation or broker establishment. An
+  idempotency key is scoped to principal and tenant; reuse with a different
+  canonical request fingerprint is a conflict.
+- **STR-711:** A stored handle binding MUST include principal, tenant,
+  canonical operation identity, canonical coerced-variable identity, schema
+  revision, authorization revision, finite limits, delivery profile, creation,
+  and expiry. Open, resume, renew, cancel, and observe compare principal and
+  tenant and reauthorize the requested action. Schema or authorization revision
+  drift requires safe re-establishment; an identifier alone never authorizes.
+- **STR-712:** A successful establishment response MUST use status `201` when
+  created and `200` when idempotently reused, media type
+  `application/vnd.naatre.subscription-handle+json;version=1`, a handle-resource
+  `Location`, registered delivery and renewal link relations, typed state,
+  delivery endpoint, `text/event-stream` media type, absolute expiry, snapshot,
+  reconciliation cursor, and delivery profile. Renewal and observation use
+  `200`; successful cancellation uses `204`. Responses are `no-store`, use
+  `Referrer-Policy: no-referrer`, expose `Location`, `Link`, `Naatre-Expires`,
+  and `Naatre-Delivery-Capabilities` through CORS, and never redirect.
+- **STR-713:** Fetch bearer delivery MUST reject ambient cookies and send the
+  cursor only in singleton `Last-Event-ID`. Native `EventSource` MUST use a
+  same-origin cookie, `Sec-Fetch-Site: same-origin`, no authorization or cursor
+  query, and the server-held establishment cursor on its first attachment.
+  Cookie-authenticated establishment, renewal, and cancellation MUST require an
+  exact HTTPS Origin plus a constant-time double-submit CSRF value. Cross-origin
+  Fetch uses an exact CORS allowlist; credentials are never forwarded across a
+  redirect because redirects are not emitted or followed by the binding.
+- **STR-714:** Query resume cursors MUST be rejected even when a
+  `Last-Event-ID` header is also present; the header has exclusive precedence.
+  Duplicate header fields, control characters, or conflicting credential paths
+  are malformed. Browser history, referrers, generated links, diagnostics,
+  telemetry, and access logs MUST NOT contain operation documents, variables,
+  bearer values, cursors, protected schema details, or reusable authority.
+- **STR-715:** Unknown, unauthorized, expired, evicted, cancelled, and revoked
+  handles MUST return the same `409 REESTABLISH_REQUIRED` Problem Details
+  envelope. Unavailable cursor history MAY separately return
+  `409 REFETCH_REQUIRED`; unsupported negotiated delivery MAY return `406`.
+  Access-controlled internal telemetry may retain a bounded cause class, but no
+  response claims caught-up state until live registration and replay complete.
+- **STR-716:** Snapshot creation MUST capture one source high-water position
+  atomically with the reconciliation cursor. Attachment registers live
+  delivery, replays only positions after that cursor through its captured
+  bound, queues later commits, then switches to live. A mutation committed
+  after snapshot generation and before attachment is therefore delivered once,
+  without a mutation-sized race window or ambiguous loss outcome.
+- **STR-717:** Handle expiry, authentication expiry, revocation, cancellation,
+  client abandonment, and server drain MUST close every active source and
+  release bounded attachment, snapshot, history, and idempotency resources.
+  Collection is batch-bounded. Maximum connection lifetime, reconnect stagger,
+  and maximum retry attempts are finite and advertised so fleet rotation forms
+  a bounded ramp rather than a synchronized cliff.
+- **STR-718:** A broker adapter MUST publish an explicit fidelity report for
+  `open`, `data`, `patch`, `error`, `complete`, `keepalive`, `resume`, and
+  history loss; replay class and horizon; replay authorization; private scoped
+  delivery; loss detection; terminal retention; duplicate classification; and
+  bounded retry. A Mercure mapping uses private narrowly scoped topics but
+  retains Naatre error, terminal, schema, authorization, replay, and truth
+  semantics. Missing fidelity fails explicitly; it is not inferred from
+  Mercure wire compatibility or public-by-omission behavior.
+- **STR-719:** Broker outage, delayed replay, duplicate delivery, reconnect,
+  and terminal-frame loss MUST preserve truthful operation state. EOF before a
+  logical terminal is interrupted delivery, never completion; exhausted or
+  unavailable history is explicit refetch; retries stop at the advertised
+  bound. A production synthetic canary uses isolated non-production data and
+  exercises authenticated establishment, delivery, disconnect, resume, and
+  terminal observation through real ingress without recording its credential,
+  handle, cursor, payload, or protected revisions.
+
 ## Optional WebSocket subprofile
 
 - **STR-800:** WebSocket support is optional and MUST be separately advertised

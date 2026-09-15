@@ -243,6 +243,46 @@ func TestStreamReplayPressurePreservesEstablishedSubscriberDuringPreauthorizatio
 	}
 }
 
+func TestStreamReplayRetainsCandidateBytesDuringAuthorization(t *testing.T) {
+	scope := internalStreamScope(t, "s")
+	frameSize := internalFrameBytes(t, internalDataFrame("s", 1))
+	store, err := NewStreamReplayBuffer(StreamReplayConfig{
+		MaxHistoryEvents: 1, MaxHistoryBytes: 4096, SubscriberQueue: 2,
+		MaxTotalHistoryBytes: frameSize, MaxSubscribers: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Publish(scope, internalDataFrame("s", 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	options := internalReplayOptions(t, 1)
+	options.Reauthorize = func(context.Context, protocol.StreamFrame) error {
+		close(started)
+		<-release
+		return nil
+	}
+	establishment := make(chan error, 1)
+	go func() {
+		subscription, subscribeErr := store.Subscribe(context.Background(), scope, "", options)
+		if subscription != nil {
+			subscription.Close()
+		}
+		establishment <- subscribeErr
+	}()
+	<-started
+	if err := store.Publish(scope, internalDataFrame("s", 2)); !errors.Is(err, ErrStreamReplayLimit) {
+		t.Fatalf("publish while candidate authorization retains bytes = %v", err)
+	}
+	close(release)
+	if err := <-establishment; !errors.Is(err, ErrStreamHistoryUnavailable) {
+		t.Fatalf("bounded establishment under retention pressure = %v", err)
+	}
+}
+
 func TestStreamReplayAuthenticationAndSessionBudgetsAreAbsolute(t *testing.T) {
 	store, err := NewStreamReplayBuffer(StreamReplayConfig{MaxHistoryEvents: 4, MaxHistoryBytes: 4096, SubscriberQueue: 2})
 	if err != nil {

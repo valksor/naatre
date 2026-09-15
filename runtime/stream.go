@@ -673,13 +673,13 @@ func (b *StreamReplayBuffer) Subscribe(ctx context.Context, scope StreamCursorSc
 		}
 		exactReplayBytes += candidateBytes
 		initialBytes += candidateBytes
-		b.releaseStored(stored)
-		authorizationReplay[index] = nil
 		if err := checkCandidate(candidate); err != nil {
 			normalized := normalizeStreamEstablishmentError(checkCtx, err, cursor)
 			subscription.Close()
 			return nil, normalized
 		}
+		b.releaseStored(stored)
+		authorizationReplay[index] = nil
 		nextSequence++
 	}
 	subscription.mu.Lock()
@@ -696,7 +696,7 @@ func (b *StreamReplayBuffer) Subscribe(ctx context.Context, scope StreamCursorSc
 	}
 	if unavailable || closed {
 		subscription.Close()
-		return nil, streamEstablishmentFailure(cursor, ErrStreamSlowConsumer)
+		return nil, normalizeStreamEstablishmentError(lifecycleCtx, ErrStreamSlowConsumer, cursor)
 	}
 	return subscription, nil
 }
@@ -931,8 +931,9 @@ func (s *StreamReplaySubscription) cleanupLockedHeld() {
 
 func (s *StreamReplaySubscription) deliver(ctx context.Context, stored *storedStreamFrame) (protocol.StreamFrame, error) {
 	frame := cloneReplayFrame(stored.frame)
+	delivered, err := s.deliverFrame(ctx, frame)
 	s.store.releaseStored(stored)
-	return s.deliverFrame(ctx, frame)
+	return delivered, err
 }
 
 func (s *StreamReplaySubscription) deliverFrame(ctx context.Context, frame protocol.StreamFrame) (protocol.StreamFrame, error) {
