@@ -25,7 +25,7 @@ sha2 = "=0.10.9"
 
 [[bin]]
 name = "naatre-rust-sdk-generator"
-path = "src/generator_main.rs"
+path = "src/bin/generator.rs"
 required-features = ["generator"]
 
 [lints.rust]

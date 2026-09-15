@@ -29,7 +29,7 @@
     "manifest": {"path": "sdk/rust/generated/operations.json", "sha256": "cb2eaa5054148503dd7fc457ff72809f457d3500919841f61f892e7ab5771b1b"}
   },
   "evidence": [
-    {"path": "sdk/rust/Cargo.toml", "sha256": "cdc73bba8ab7d67a464c469ee97b4dd5c8b811829f925bd2f89676aa64a9aef5"},
+    {"path": "sdk/rust/Cargo.toml", "sha256": "01ea0c125594f3dc1cfde95e68b4a2d883f704609c5f30b62d27f52c904faa16"},
     {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
     {"path": "sdk/rust/ci.sh", "sha256": "ba9b166b3681a2e74b4370ee08483cf37ca2607866243868438093d0ebb9530e"},
     {"path": "sdk/rust/README.md", "sha256": "1c0a4756223b9fe33ec28fd9129aae4183384813af29260408034bf2211dcd4c"},

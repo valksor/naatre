@@ -322,7 +322,7 @@
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "429e5f6cd24d72da0342c58b42542295ab9aa3495464c91b1f433f5973715d38"
+      "sha256": "b3a42ad290046fe2961e4dd3c166d6e2d60e81aa9c3266eeeb8eab11a3b3d0d6"
     },
     {
       "path": "v1/jvm-sdk.json",
@@ -490,7 +490,7 @@
       "path": "v1/rust-async-adapters.json",
       "profile": "sdk.rust.adapters-1",
       "category": "transport",
-      "sha256": "f78066fdde02ed6f47e36a29764d8e61a3868ec3595a433d43cc50bfffe87485"
+      "sha256": "6dbb1f137acac82fb90fbd8a9fbed2b3d3511fd2c858713b0e870f4012acb377"
     },
     {
       "path": "v1/python-sdk-adapters.json",
