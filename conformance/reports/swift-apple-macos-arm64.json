@@ -1,0 +1,36 @@
+{
+  "profile": "sdk.swift.apple-1",
+  "recordedAt": "2026-09-15",
+  "platform": "macos-26.6.2-arm64",
+  "swift": "6.4",
+  "status": "passed",
+  "commands": [
+    "swift build --disable-sandbox --package-path sdk/swift --product NaatreApple",
+    "swift run --disable-sandbox --package-path sdk/swift naatre-swift-apple-conformance",
+    "node conformance/independent/verify-swift-apple-adapters.mjs"
+  ],
+  "capabilities": [
+    "https-urlsession-unary-post",
+    "authenticated-post-sse-async-sequence",
+    "active-urlsession-task-cancellation",
+    "active-urlsession-stream-cancellation",
+    "bounded-response-frame-and-stream-buffer",
+    "307-308-redirect-policy",
+    "cross-origin-credential-stripping",
+    "explicit-apple-lifecycle-bridge",
+    "stable-redacted-public-failures",
+    "exact-scalar-time-presence-and-open-variant-vectors"
+  ],
+  "unsupported": [
+    "ios-runtime-report",
+    "tvos-runtime-report",
+    "watchos-runtime-report",
+    "visionos-runtime-report",
+    "websocket",
+    "automatic-sse-reconnect-and-replay",
+    "automatic-authentication-refresh",
+    "automatic-write-replay",
+    "automatic-platform-notification-observation",
+    "native-runtime-and-deployment-certification"
+  ]
+}
