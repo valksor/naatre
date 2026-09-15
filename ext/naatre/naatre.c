@@ -67,9 +67,24 @@ static void naatre_fail(const char *code)
     zend_throw_exception(zend_ce_exception, code, 0);
 }
 
+/*
+ * Hard ceiling on nesting depth, independent of any caller-supplied value.
+ * The scanner is mutually recursive over native C stack frames, so an
+ * unbounded max_depth lets attacker- or config-controlled input exhaust the
+ * fixed worker-thread stack (SIGSEGV / DoS). This ceiling caps recursion well
+ * under any realistic thread-stack budget while staying above every default
+ * limit in the codebase (protocol DefaultLimits=64, Native\Limits=128,
+ * DuplicateKeyGuard=512).
+ */
+#define NAATRE_MAX_DEPTH_CEILING 512
+
 static bool naatre_limits_valid(naatre_limits *limits)
 {
     if (limits->max_depth < 1 || limits->max_nodes < 1 || limits->max_bytes < 1 || limits->max_output < 1) {
+        naatre_fail("CLIENT_NATIVE_LIMIT_INVALID");
+        return false;
+    }
+    if (limits->max_depth > NAATRE_MAX_DEPTH_CEILING) {
         naatre_fail("CLIENT_NATIVE_LIMIT_INVALID");
         return false;
     }
@@ -432,6 +447,18 @@ static bool naatre_encode_value(zval *value, smart_str *output, naatre_limits li
             break;
         case IS_DOUBLE: {
             smart_str temporary = {0};
+            /*
+             * Reject non-finite doubles (Inf/NaN) before encoding. PHP's
+             * php_json_encode() appends the literal "0" and returns SUCCESS for
+             * these (recording the error only in a side-channel error_code we do
+             * not read), which would silently corrupt a non-finite value into a
+             * valid-looking 0 and hash it. Fail closed, matching PureJson::encode
+             * and Go's protocol/canonical.go canonicalJSONNumber.
+             */
+            if (!zend_finite(Z_DVAL_P(value))) {
+                naatre_fail("CLIENT_JSON_INVALID");
+                return false;
+            }
             if (Z_DVAL_P(value) == 0.0) {
                 smart_str_appendc(output, '0');
                 break;

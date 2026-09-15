@@ -8,6 +8,13 @@ use InvalidArgumentException;
 
 final readonly class Limits
 {
+    /**
+     * Hard ceiling on nesting depth, matching NAATRE_MAX_DEPTH_CEILING in the
+     * native extension. Bounds recursion so a large configured depth cannot
+     * exhaust a worker thread's native stack.
+     */
+    public const int MAXIMUM_DEPTH_CEILING = 512;
+
     public function __construct(
         public int $maximumDepth = 128,
         public int $maximumNodes = 1_000_000,
@@ -18,6 +25,9 @@ final readonly class Limits
             if ($value < 1) {
                 throw new InvalidArgumentException($name . ' must be positive');
             }
+        }
+        if ($this->maximumDepth > self::MAXIMUM_DEPTH_CEILING) {
+            throw new InvalidArgumentException('maximumDepth must not exceed ' . self::MAXIMUM_DEPTH_CEILING);
         }
     }
 
