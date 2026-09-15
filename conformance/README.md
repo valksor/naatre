@@ -366,7 +366,21 @@ groups, nested calls, whole-collection denial, mixed replay history, and cursor
 binding across principal, tenant, schema, and authorization revisions. The Go
 reference runtime executes the core handler and lifecycle vectors directly. The
 `core.batch-cache-1` fixture and runtime suite own request-local cache and batch
-placement; #70 owns downstream stream, replay, and remote adapters.
+placement.
+
+`v1/security-gate.json` fixes `suite.security-gate-1`, the downstream gate for
+plan and normalized caches, request batching, persisted operations, streaming
+and replay, secure handles, large values, webhooks, remote workers, and process
+lifecycle. It pins the exact security/resource policies, feature fixtures, and
+Go implementation sources. The in-process runner executes positive, deny-by-
+default, tenant-crossing, expiry, revocation, policy-revision, cancellation,
+and aggregate-exhaustion vectors for every supported surface; protected
+handlers/providers and metadata remain behind the guard. Unsupported capability
+boundaries stay explicit. Run it without a listener using:
+
+```sh
+printf '%s\n' '{"protocol":"naatre.conformance.runner-1","id":"security-gate","command":"run","path":{"source":{"kind":"gateway","language":"go"},"destination":{"kind":"native-runtime","language":"go"}},"profiles":["suite.security-gate-1"]}' | go run ./cmd/naatre-conformance --require-pass
+```
 
 `v1/batching.json` fixes bounded map/parallel windows, authorization-before-
 grouping, indexed out-of-order and missing results, duplicate inputs,

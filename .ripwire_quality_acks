@@ -69,11 +69,15 @@ ack new-clone-of-reused-helper be47f51a588f3829 3 issue 29 requires an independe
 ack new-clone-of-reused-helper c4e12bafbdd3644a 8 issue 65 reviewed structural matches across package-specific encoders, limits, immutable value copies, and test fixture loaders; shared reuse would violate package or oracle independence
 ack new-clone-of-reused-helper dd1b308c35815b66 4 issue 19 required declarative fixtures and reviewed false-positive structural matches
 ack new-clone-of-reused-helper fe8f265a2803740a 6 issue 65 reviewed structural matches across package-specific encoders, limits, immutable value copies, and test fixture loaders; shared reuse would violate package or oracle independence
+ack verbosity 15f41efcd422cfa3 128 cid=d42902d5bc02bafa issue 70 requires machine-readable security vectors, profile bindings, and release issue mappings; declarative contract growth is the deliverable
+ack verbosity 1675a48e7efddad9 1407 cid=e10a4726b7b59517 issue 70 requires machine-readable security vectors, profile bindings, and release issue mappings; declarative contract growth is the deliverable
 ack verbosity 1caa3996f8c9ac25 380 cid=4c0163ba7d34ded3 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack verbosity 1dee4d8ceb431fc7 82 cid=b9ca982a500827df issue 70 requires machine-readable security vectors, profile bindings, and release issue mappings; declarative contract growth is the deliverable
 ack verbosity 202a60731118d501 150 cid=0ad5754e62cbb816 issue 82 requires core async authentication failures and cancellation to map to stable redacted public outcomes
 ack verbosity 6aa361097e6f3edd 450 cid=e0a046791c5113c8 conformance fixture vectors are authored contract data; adding required vectors is the deliverable, not code debt
-ack verbosity 85d93af1980a3481 3237 cid=e175237b6aa57758 issue 65 requires normative CBOR registry data; added clauses and fixture bindings are contract content
+ack verbosity 855116ead83216d6 494 cid=84439c88e61b0dce issue 70 requires machine-readable security vectors, profile bindings, and release issue mappings; declarative contract growth is the deliverable
+ack verbosity 85d93af1980a3481 3326 cid=e7943803347b23bf issue 70 requires machine-readable security vectors, profile bindings, and release issue mappings; declarative contract growth is the deliverable | prior: issue 65 requires normative CBOR registry data; added clauses and fixture bindings are contract content
 ack verbosity 867c6b27a47254b5 93 cid=0653002fdcdd1913 issue 19 required declarative fixtures and reviewed false-positive structural matches
-ack verbosity bd839452cce88d98 5988 cid=80a87d300bb97478 issue 65 requires normative CBOR registry data; added clauses and fixture bindings are contract content
 ack verbosity 9f8b0d93eb4d579a 1195 cid=f855dbdd368b6846 issue 82 requires core async authentication failures and cancellation to map to stable redacted public outcomes
+ack verbosity bd839452cce88d98 6635 cid=35f3be426a8ac861 issue 70 requires machine-readable security vectors, profile bindings, and release issue mappings; declarative contract growth is the deliverable | prior: issue 65 requires normative CBOR registry data; added clauses and fixture bindings are contract content
 ack verbosity e27fe82c785c3bfc 127 cid=d4a29ccbceb9120a issue 19 required declarative fixtures and reviewed false-positive structural matches

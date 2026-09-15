@@ -309,7 +309,8 @@ func validateOptionalCapabilities(profile profileDefinition) error {
 func validateStableRelease(profile profileDefinition) error {
 	if profile.CertificationExecutionOwnerIssue != 69 || profile.PublicationOwnerIssue != 69 ||
 		!hasRequiredEvidence(profile, "go", "runtime.execution-1") ||
-		!hasRequiredEvidence(profile, "javascript-typescript", "sdk.client-1") {
+		!hasRequiredEvidence(profile, "javascript-typescript", "sdk.client-1") ||
+		!hasRequiredEvidence(profile, "go", securityGateProfile) {
 		return errors.New("stable release evidence or ownership is incomplete")
 	}
 	return nil

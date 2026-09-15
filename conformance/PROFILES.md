@@ -98,8 +98,11 @@ reports, so repository location or a self-declared partial run cannot appear as
 certification.
 
 `release.stable-1` requires at minimum `runtime.execution-1` evidence from the
-Go runtime and `sdk.client-1` evidence from the JavaScript/TypeScript client.
-Issue #69 owns executing the full cross-language/cross-profile matrix,
-publishing the resulting reports, and changing the release matrix from
-`awaiting-complete-evidence`. This issue defines and verifies that contract; it
-does not fabricate the deferred evidence.
+Go runtime, `sdk.client-1` evidence from the JavaScript/TypeScript client, and
+the Go `suite.security-gate-1` result. The gate fixture is also a required
+release fixture, so a policy, implementation, dependency-fixture, or profile
+revision change invalidates stale gate evidence. Issue #69 owns executing the
+full cross-language/cross-profile matrix, publishing the resulting reports,
+and changing the release matrix from `awaiting-complete-evidence`. This issue
+defines and verifies that contract; it does not fabricate the deferred
+evidence.
