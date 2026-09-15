@@ -218,8 +218,14 @@ handling remains owned by #59 and the complete official SDK matrix by #69.
 feature matrix, serde bindings, exact scalar wrappers, persisted manifest,
 runtime-neutral transport ownership, bounded pagination and fallible streams,
 drop cancellation, and checked generator artifacts. The independent runner
-executes its Rust conformance verifier; async network adapters remain owned by
-issue #80 and the complete official SDK matrix by #69.
+executes its Rust conformance verifier; the complete official SDK matrix remains
+owned by #69.
+`v1/rust-async-adapters.json` pins `sdk.rust.adapters-1`: the additive `tokio`
+feature, task-local unary and byte-stream adapters, stable redacted failures,
+drop-based I/O ownership release, inherited response/frame limits, exact #39
+dependency revision, and the complete unsupported transport/runtime boundary.
+The verifier runs without listeners or network access. Concrete network and
+framework transports are not claimed.
 `v1/swift-sdk.json` pins `sdk.swift.core-1`: the Swift Package Manager core,
 lossless canonical scalar wrappers, explicit input/selected presence states,
 structured partial errors and open variants, deterministic generated Codable

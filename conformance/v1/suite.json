@@ -461,6 +461,12 @@
       "profile": "sdk.php.adapters-1",
       "category": "integration",
       "sha256": "13bfb8ffbbfbd6a496de2df038c22775aa9d44e5ad042d888db5ea1327878cb6"
+    },
+    {
+      "path": "v1/rust-async-adapters.json",
+      "profile": "sdk.rust.adapters-1",
+      "category": "transport",
+      "sha256": "fbe78eee36ec2747df22c6042d4ef314dbffba94c4474979bfd509db4874ca98"
     }
   ],
   "normativeSources": [

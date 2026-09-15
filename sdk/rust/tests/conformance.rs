@@ -1,9 +1,11 @@
+mod common;
+
+use common::{Payload, Variables, payload_operation};
 use naatre_sdk::generated::{self, GetAccountVariables, Status};
 use naatre_sdk::{
     BigInt, Bytes, Cancellation, Client, ClientError, Decimal, Duration, FallibleStream, Int64,
-    OpenUnion, Operation, OperationKind, Optional, Page, PageInfo, PageRequest, Paginator,
-    Presence, RemoteError, RequestOptions, Selected, StreamTransport, Timestamp, Transport, UInt64,
-    Uuid,
+    OpenUnion, Optional, Page, PageInfo, PageRequest, Paginator, Presence, RemoteError,
+    RequestOptions, Selected, StreamTransport, Timestamp, Transport, UInt64, Uuid,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -232,28 +234,6 @@ fn generated_request_and_persisted_hash_match_shared_reference() {
     );
     let manifest = generated::manifest().unwrap();
     assert_eq!(manifest.operations[0].persisted, *operation.persisted());
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-struct Payload {
-    name: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct Variables {
-    id: String,
-}
-
-fn payload_operation() -> Operation<Variables, Payload> {
-    Operation::new(
-        "Payload",
-        OperationKind::Query,
-        naatre_sdk::PersistedReference::new("0".repeat(64)).unwrap(),
-        |input| {
-            serde_json::from_slice(input)
-                .map_err(|_| ClientError::new("CLIENT_RESULT_INVALID", "invalid result"))
-        },
-    )
 }
 
 #[test]

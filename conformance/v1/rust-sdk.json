@@ -9,7 +9,8 @@
     "minimumRust": "1.85.0",
     "defaultFeatures": [],
     "features": {
-      "generator": "deterministic bindings and persisted manifest generation"
+      "generator": "deterministic bindings and persisted manifest generation",
+      "tokio": "separately profiled task-local adapters owned by sdk.rust.adapters-1"
     }
   },
   "featureMatrix": [
@@ -28,12 +29,12 @@
     "manifest": {"path": "sdk/rust/generated/operations.json", "sha256": "cb2eaa5054148503dd7fc457ff72809f457d3500919841f61f892e7ab5771b1b"}
   },
   "evidence": [
-    {"path": "sdk/rust/Cargo.toml", "sha256": "a8df1e0e68892a20681bb7a54b999ac3617c79dd8e7893cd7583757a9f91be00"},
+    {"path": "sdk/rust/Cargo.toml", "sha256": "01ea0c125594f3dc1cfde95e68b4a2d883f704609c5f30b62d27f52c904faa16"},
     {"path": "sdk/rust/Cargo.lock", "sha256": "a8d93984dd14d082a9f0ae7d978d06e28e7a3477ac7005ff311dcb280690dfda"},
-    {"path": "sdk/rust/ci.sh", "sha256": "df78df28f38d170c8807608b62c64c646bc9eb8ee88c6b9240105d2a923c90c3"},
-    {"path": "sdk/rust/README.md", "sha256": "0b0f569766f6bf23a19fc0d7ab424bb3a05ecaa2dd12cba73a6bf790e6d27e09"},
+    {"path": "sdk/rust/ci.sh", "sha256": "ba9b166b3681a2e74b4370ee08483cf37ca2607866243868438093d0ebb9530e"},
+    {"path": "sdk/rust/README.md", "sha256": "1c0a4756223b9fe33ec28fd9129aae4183384813af29260408034bf2211dcd4c"},
     {"path": "sdk/rust/generate.go", "sha256": "750816eba5d1856ed424b8483976c4dd100cf270f914818acc3a4d322a146b7b"},
-    {"path": "sdk/rust/src/lib.rs", "sha256": "307ffa80dd906880b7877b1afd235646952ec49caff00f2bc6e1a54e1b7c0a6a"},
+    {"path": "sdk/rust/src/lib.rs", "sha256": "5be5a8dff42ff9fa4eab1969fc1841e734329bb374d367b9ff231c75201bc1b0"},
     {"path": "sdk/rust/src/scalar.rs", "sha256": "636ce87781aa5edab0aa8b91197e9ca0b9fb6fb3c27f7d866b07346e080b012c"},
     {"path": "sdk/rust/src/transport.rs", "sha256": "d312076dc2bf8b9de213b4ce63f5bd48e48cf93da46ae97921f8b96a384968e5"},
     {"path": "sdk/rust/src/generator.rs", "sha256": "8d68bfeca88f1bac858db3319fba8559e75f28db2a243d4e377a01808c886b1c"},
@@ -75,7 +76,7 @@
     "timestampPrecision": "nanoseconds"
   },
   "unsupported": [
-    "tokio-adapter",
+    "tokio-adapter-in-core-profile",
     "http-adapter",
     "sse-adapter",
     "websocket-adapter",
