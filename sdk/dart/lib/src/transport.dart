@@ -18,11 +18,7 @@ final class TransportLimits {
 }
 
 final class CancellationToken {
-  CancellationToken._(
-    this._cancelled,
-    this._isCancelled,
-    this._register,
-  );
+  CancellationToken._(this._cancelled, this._isCancelled, this._register);
 
   final Future<void> _cancelled;
   final bool Function() _isCancelled;
@@ -94,7 +90,11 @@ final class RedirectPolicy {
       final String name = entry.key.toLowerCase();
       if (name == 'authorization' ||
           name == 'cookie' ||
+          name == 'last-event-id' ||
           name == 'proxy-authorization' ||
+          name == 'x-csrf-token' ||
+          name == 'naatre-principal' ||
+          name == 'naatre-tenant' ||
           name == 'x-naatre-tenant') {
         continue;
       }
@@ -171,6 +171,9 @@ final class TransportFailure implements Exception {
 
   final String code;
   final bool retryable;
+
+  @override
+  String toString() => 'TransportFailure: $code';
 }
 
 Never _fail(String code, [Object? cause]) => fail(code, cause);

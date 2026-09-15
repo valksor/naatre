@@ -1,0 +1,61 @@
+{
+  "profile": "sdk.dart.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "status": "passed",
+  "dependency": {
+    "issue": 43,
+    "profile": "sdk.dart.core-1",
+    "revision": "f5d1c4b530b861b0869245471347358deba5b740"
+  },
+  "runtime": {
+    "name": "dart",
+    "version": "3.13.3",
+    "platform": "macos-arm64"
+  },
+  "executedTargets": ["vm", "native-aot", "dart2js-node"],
+  "conditionalBindings": {
+    "vm": "dart-io",
+    "nativeAot": "dart-io",
+    "dart2js": "browser",
+    "flutterNative": "source-supported-not-certified",
+    "flutterWeb": "source-supported-not-certified"
+  },
+  "commands": [
+    {"command": "dart run test/adapter_test.dart", "status": "passed"},
+    {"command": "dart compile exe test/adapter_test.dart and execute", "status": "passed"},
+    {"command": "dart compile js -O2 test/adapter_test.dart and execute with Node 26.8.2", "status": "passed"},
+    {"command": "dart analyze sdk/dart --fatal-infos", "status": "passed"}
+  ],
+  "vectors": [
+    "canonical-request-and-persisted-hash-parity",
+    "web-safe-integer-rejection",
+    "conditional-io-browser-import-selection",
+    "warm-adapter-authentication-isolation",
+    "redirect-credential-and-protected-metadata-redaction",
+    "stable-public-failure-redaction",
+    "unary-cancellation-resource-release",
+    "stream-handshake-and-active-stream-cancellation-resource-release",
+    "compressed-and-decompressed-response-limits",
+    "sse-total-and-frame-limits",
+    "post-sse-terminal-and-resource-release",
+    "websocket-json-frames-and-resource-release"
+  ],
+  "deferred": [
+    "Flutter toolchain and device or simulator execution",
+    "live HTTP, SSE, and WebSocket loopback integration",
+    "browser DOM execution outside the dart2js Node probe"
+  ],
+  "unsupported": [
+    "automatic-authentication-refresh-and-token-persistence",
+    "cookie-jar-and-browser-credentialed-cookie-mode",
+    "caller-supplied-last-event-id-and-automatic-reconnect",
+    "browser-websocket-authentication-headers",
+    "websocket-subprotocol-and-compression-configuration",
+    "portable-browser-websocket-backpressure-guarantee",
+    "browser-pre-decompression-wire-byte-observation",
+    "http-get-persisted-query-optimization",
+    "proxy-custom-trust-store-and-certificate-pinning",
+    "flutter-version-and-device-matrix-certification",
+    "complete-official-sdk-matrix-owned-by-69"
+  ]
+}

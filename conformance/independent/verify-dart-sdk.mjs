@@ -11,17 +11,33 @@ const fixture = JSON.parse(readFileSync(new URL("conformance/v1/dart-sdk.json", 
 process.env.ANALYZER_STATE_LOCATION_OVERRIDE ??= join(tmpdir(), "naatre-dart-analyzer");
 
 assert.equal(fixture.profile, "sdk.dart.core-1");
-assert.deepEqual(fixture.package.supportedFlutter, []);
-assert.equal(fixture.targets.flutter.status, "unsupported-until-84");
-assert.equal(fixture.targets.websocket.status, "unsupported-until-84");
+assert.equal(fixture.adapterProfile, "sdk.dart.adapters-1");
+assert.deepEqual(fixture.dependencies, [{
+  issue: 43,
+  profile: fixture.profile,
+  revision: "f5d1c4b530b861b0869245471347358deba5b740",
+}]);
+assert.deepEqual(fixture.package.supportedFlutter, ["native-dart-io-source", "web-browser-source"]);
+assert.deepEqual(fixture.package.certifiedFlutter, []);
+assert.equal(fixture.targets.flutterNative.status, "source-supported-not-certified");
+assert.equal(fixture.targets.flutterWeb.status, "source-supported-not-certified");
+assert.equal(fixture.targets.http.status, "passed");
+assert.equal(fixture.targets.sse.status, "passed");
+assert.equal(fixture.targets.websocket.status, "passed-with-browser-boundary");
 verifyEvidence(fixture.evidence);
 verifyEvidence(fixture.reports);
 
-const report = JSON.parse(readFileSync(new URL(fixture.reports[0].path, root), "utf8"));
-assert.equal(report.profile, fixture.profile);
-assert.equal(report.status, "passed");
-assert.deepEqual(report.unsupported, fixture.unsupported);
-assert.deepEqual(report.canonicalTargets, ["vm", "native-aot", "dart2js-node"]);
+const coreReport = JSON.parse(readFileSync(new URL(fixture.reports[0].path, root), "utf8"));
+assert.equal(coreReport.profile, fixture.profile);
+assert.equal(coreReport.status, "passed");
+assert.deepEqual(coreReport.unsupported, fixture.coreUnsupportedAtDependencyRevision);
+assert.deepEqual(coreReport.canonicalTargets, ["vm", "native-aot", "dart2js-node"]);
+const adapterReport = JSON.parse(readFileSync(new URL(fixture.reports[1].path, root), "utf8"));
+assert.equal(adapterReport.profile, fixture.adapterProfile);
+assert.equal(adapterReport.status, "passed");
+assert.deepEqual(adapterReport.dependency, fixture.dependencies[0]);
+assert.deepEqual(adapterReport.unsupported, fixture.unsupported);
+assert.deepEqual(adapterReport.executedTargets, ["vm", "native-aot", "dart2js-node"]);
 
 run("dart", ["pub", "get", "-C", "sdk/dart", "--offline", "--enforce-lockfile"]);
 run("dart", ["analyze", "sdk/dart", "--fatal-infos"]);
@@ -31,6 +47,7 @@ for (const test of [
   "stream_test.dart",
   "generator_test.dart",
   "worker_test.dart",
+  "adapter_test.dart",
 ]) {
   run("dart", ["run", `test/${test}`], dartRoot);
 }
@@ -81,7 +98,7 @@ try {
   assert.equal(probe.documentHash, "cc863005080edcb85ec0345a50593dc58111896bbbe7ff86475ef2412fc5cb90");
   assert.equal(probe.unsafeExtendedIntegerRejected, true);
   assert.equal(probe.unsafeIntegerRejected, true);
-  assert.equal(createHash("sha256").update(vm).digest("hex"), report.canonicalProbeSha256);
+  assert.equal(createHash("sha256").update(vm).digest("hex"), coreReport.canonicalProbeSha256);
 
   const scalarExecutable = join(buildRoot, "scalar-vectors");
   run("dart", [
@@ -102,12 +119,32 @@ try {
     scalarJavascript,
   ]);
   run("node", [scalarJavascript]);
+
+  const adapterExecutable = join(buildRoot, "adapter-vectors");
+  run("dart", [
+    "compile",
+    "exe",
+    "sdk/dart/test/adapter_test.dart",
+    "-o",
+    adapterExecutable,
+  ]);
+  run(adapterExecutable, []);
+  const adapterJavascript = join(buildRoot, "adapter-vectors.js");
+  run("dart", [
+    "compile",
+    "js",
+    "-O2",
+    "sdk/dart/test/adapter_test.dart",
+    "-o",
+    adapterJavascript,
+  ]);
+  run("node", [adapterJavascript]);
 } finally {
   rmSync(generatedRoot, { recursive: true, force: true });
   rmSync(buildRoot, { recursive: true, force: true });
 }
 
-process.stdout.write(`${JSON.stringify({ profile: fixture.profile, status: "passed", generatorVersion: fixture.generatorVersion })}\n`);
+process.stdout.write(`${JSON.stringify({ profiles: [fixture.profile, fixture.adapterProfile], status: "passed", generatorVersion: fixture.generatorVersion, dependencyRevision: fixture.dependencies[0].revision })}\n`);
 
 function verifyEvidence(entries) {
   for (const evidence of entries) {

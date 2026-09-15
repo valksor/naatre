@@ -25,13 +25,6 @@ final class _FixtureSseTransport implements SseTransport {
   }
 }
 
-final class _UnsupportedWebSocketTransport implements WebSocketTransport {
-  @override
-  Future<StreamConnection> open(Uint8List request, TransportContext context) {
-    throw StateError('unsupported WebSocket transport was opened');
-  }
-}
-
 Future<void> main() async {
   await _terminalAndTruncation();
   await _orderingAndChunkBoundaries();
@@ -61,7 +54,10 @@ Future<void> _terminalAndTruncation() async {
     'terminal frame was not accepted',
   );
   check(sourceCancelled, 'terminal frame did not release the source');
-  check(closes == 1, 'terminal frame did not close the connection exactly once');
+  check(
+    closes == 1,
+    'terminal frame did not close the connection exactly once',
+  );
   await source.close();
   await expectAsyncClientError('CLIENT_STREAM_TRUNCATED', () async {
     await decodeSse(
@@ -78,7 +74,7 @@ Future<void> _orderingAndChunkBoundaries() async {
   await expectAsyncClientError(
     'CLIENT_CAPABILITY_UNSUPPORTED:websocket',
     () async {
-      await NaatreClient(webSocketTransport: _UnsupportedWebSocketTransport())
+      await const NaatreClient()
           .stream(
             getAccount(const GetAccountVariables(id: 'acct-1')),
             protocol: StreamProtocol.webSocket,

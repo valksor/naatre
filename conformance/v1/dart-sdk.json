@@ -3,11 +3,16 @@
   "fixtureSuite": "1.0.0",
   "generatorVersion": "naatre.generator.dart-sdk-1",
   "runtimeVersion": "0.1.0",
+  "adapterProfile": "sdk.dart.adapters-1",
+  "dependencies": [
+    {"issue": 43, "profile": "sdk.dart.core-1", "revision": "f5d1c4b530b861b0869245471347358deba5b740"}
+  ],
   "package": {
     "name": "naatre",
     "sdkConstraint": ">=3.10.0 <4.0.0",
     "certifiedDart": ["3.13.3"],
-    "supportedFlutter": [],
+    "supportedFlutter": ["native-dart-io-source", "web-browser-source"],
+    "certifiedFlutter": [],
     "runtimeDependencies": [],
     "lockfile": "sdk/dart/pubspec.lock",
     "reproducibility": "two-generation-byte-comparison"
@@ -29,33 +34,40 @@
   "cancellation": {
     "unaryContract": "invoke-and-await-exchange-cancel",
     "streamContract": "cancel-subscription-and-await-connection-close",
-    "concreteNetworkResources": "unsupported-until-84"
+    "concreteNetworkResources": "adapter-executor-abort-and-idempotent-response-or-socket-close"
   },
   "targets": {
     "vm": {"version": "3.13.3", "status": "passed", "report": "conformance/reports/dart-core-3.13.3-darwin-arm64.json"},
     "nativeAot": {"version": "3.13.3", "status": "passed", "report": "conformance/reports/dart-core-3.13.3-darwin-arm64.json"},
     "dart2js": {"version": "3.13.3", "host": "node-26.8.2", "status": "passed", "report": "conformance/reports/dart-core-3.13.3-darwin-arm64.json"},
-    "flutter": {"status": "unsupported-until-84", "report": null},
-    "http": {"status": "unsupported-until-84", "contract": "UnaryTransport"},
-    "sse": {"status": "unsupported-until-84", "contract": "SseTransport-and-core-decoder"},
-    "websocket": {"status": "unsupported-until-84", "contract": "WebSocketTransport"}
+    "flutterNative": {"status": "source-supported-not-certified", "binding": "dart-io", "report": null},
+    "flutterWeb": {"status": "source-supported-not-certified", "binding": "browser", "report": null},
+    "http": {"status": "passed", "contract": "HttpTransportAdapter", "report": "conformance/reports/dart-adapters-3.13.3-darwin-arm64.json"},
+    "sse": {"status": "passed", "contract": "PostSseTransportAdapter", "report": "conformance/reports/dart-adapters-3.13.3-darwin-arm64.json"},
+    "websocket": {"status": "passed-with-browser-boundary", "contract": "WebSocketTransportAdapter", "report": "conformance/reports/dart-adapters-3.13.3-darwin-arm64.json"}
   },
   "evidence": [
-    {"path": "sdk/dart/README.md", "sha256": "6d1fea48d78fc9a70585c4920aa1da69e3d31364df180949314bbcceb2df516b"},
-    {"path": "sdk/dart/pubspec.yaml", "sha256": "51cf5e220435171c2ff978e96de2479fbfdb403834ad94b2ce9200f4afa3a9bb"},
+    {"path": "sdk/dart/README.md", "sha256": "b6af3dc80b3482f048ed8c2621b234c96e20f938d43837ad529cfad5c5d2053f"},
+    {"path": "sdk/dart/pubspec.yaml", "sha256": "23b22593bccc502033f6c6cd4a7904e923dfa39b4169b0d26b80cd593a4e4dd9"},
     {"path": "sdk/dart/pubspec.lock", "sha256": "3b67bb35f6de269ef06afccd54dde308ec9b11c3fa4f5b520792daa0b57496f5"},
     {"path": "sdk/dart/analysis_options.yaml", "sha256": "a2964c3a75cb5ccfe3a80d86050cf045b354c19ef3a323a29bf03b60309e05e9"},
-    {"path": "sdk/dart/lib/naatre.dart", "sha256": "94325a06f7c7f61abf2c5e07613bfdb43edad3c9b15813472a068d9676f28bbf"},
+    {"path": "sdk/dart/lib/adapters.dart", "sha256": "31c41aab0ba1a023d8a02d052d3351534c834d2423e6a235a53b1194a5a804ed"},
+    {"path": "sdk/dart/lib/naatre.dart", "sha256": "8f829d5370c3a5dc446580832e7758064c45a5a957b6178215090b3db46f476c"},
     {"path": "sdk/dart/lib/generated.dart", "sha256": "81bc0ce3622c13b264cf044f10c861e3c17dfa1ea2745e7f243e553dfafe3708"},
-    {"path": "sdk/dart/lib/src/client.dart", "sha256": "b1ba6f3d379fbc1e1b5f8d413e5394227c34ad1003e1e43a042705268be806b9"},
-    {"path": "sdk/dart/lib/src/error.dart", "sha256": "169218d7c2b50eeabe5bc5d50714e97d50e31de50b329d1b9cae06d868a25ae8"},
-    {"path": "sdk/dart/lib/src/generator.dart", "sha256": "d628693695a26f776e40ce086872c922fc360d1f914bbd618baaec4350ef8fed"},
+    {"path": "sdk/dart/lib/src/client.dart", "sha256": "1660512b4dde7ee68dc36a35c99c989c40e77a1dbc662f7eda5589863e5aab71"},
+    {"path": "sdk/dart/lib/src/error.dart", "sha256": "0c316c1f8a4ba9e548693536f6734e427280936eeea6503b2982fb9ecdb91fbc"},
+    {"path": "sdk/dart/lib/src/generator.dart", "sha256": "4cddebf7f5f82e8fbc92cd4f2dd3dbc8710d3dd690f55fcd1a6db34f014ec5c6"},
     {"path": "sdk/dart/lib/src/json.dart", "sha256": "b7d08489d4eda44b47f8593337e439b2791749d8557fffacff52c21902fb25b1"},
     {"path": "sdk/dart/lib/src/model.dart", "sha256": "47098e4a4b0bb2606aac7216044d10d55ac2860d1f2b2871bd647a1a6c941968"},
     {"path": "sdk/dart/lib/src/scalars.dart", "sha256": "4d4471daacdb94d19210f37f4a2145bc543f855e84fddfc6d8885130d76d51ff"},
     {"path": "sdk/dart/lib/src/sha256.dart", "sha256": "f69ad25dfb8bb6f0e9f64e0d8facda7c04687307bb73fd46863f6194cb4b399c"},
-    {"path": "sdk/dart/lib/src/stream.dart", "sha256": "767cc289c36c29f15c20d7182731d23b83acc6152bc4976bd86618f7518db03a"},
-    {"path": "sdk/dart/lib/src/transport.dart", "sha256": "1889249351112a7a0a6ab5ff9571e41d5deb90372f10c49de06ff90a213bcc88"},
+    {"path": "sdk/dart/lib/src/stream.dart", "sha256": "2fa5eb6be3ff8088a0e327263e37e4c5060b1d89dfc213a2c88c4890a9bcfa89"},
+    {"path": "sdk/dart/lib/src/transport.dart", "sha256": "59c438d9cc167406931196970c2a374e492890cd5c91e859b55351f74e17ba3c"},
+    {"path": "sdk/dart/lib/src/adapter_engine.dart", "sha256": "ef55e7985431c642cce0ddb802bef1bccab4406815dc1d121831e81c4f91389a"},
+    {"path": "sdk/dart/lib/src/adapter_io.dart", "sha256": "dc56cc94f9bf963d41f4cf29fac5eff24feaead1639b1f1e2c56aa63f5a296c9"},
+    {"path": "sdk/dart/lib/src/adapter_stub.dart", "sha256": "fb97d0740ccd8693e30bad7120aa2b93a37dfe0c4fe90f32c836267547b89478"},
+    {"path": "sdk/dart/lib/src/adapter_web.dart", "sha256": "93ba3a6085710eb01af1c4a3d53cfac5eb9322ef8ad4af3c4875a5e974182b9a"},
+    {"path": "sdk/dart/lib/src/adapters.dart", "sha256": "ca2dd6bf447cd0992202e170d92149389b5ae900268a70abd28ce9de725e7f45"},
     {"path": "sdk/dart/lib/src/worker.dart", "sha256": "36b44fbef965725539a3aa4f025795bcb157b59b32f578002957becc8742146e"},
     {"path": "sdk/dart/lib/src/worker_vm.dart", "sha256": "2313c13f46776543bb578e711591a75ae9b995d876b536eaf74a0be4d15ea52e"},
     {"path": "sdk/dart/lib/src/worker_web.dart", "sha256": "fecce8a69f8c34d757135f966c658d1711a41710455e3079f31a686ba7074fc6"},
@@ -63,14 +75,16 @@
     {"path": "sdk/dart/test/generator_test.dart", "sha256": "7e397d91a6774695727f123b605dc18a1b37c143c69149e9959bdf5a35093d87"},
     {"path": "sdk/dart/test/json_scalars_test.dart", "sha256": "afad6d80266f75b4cc6aa453b8353e5836c1352e49af0231b1ae837991d101b5"},
     {"path": "sdk/dart/test/operation_client_test.dart", "sha256": "2a3b63550eebaba2f40f5d120d6f1192986f0ffaa5b91332f0ee31ed31b2928e"},
-    {"path": "sdk/dart/test/stream_test.dart", "sha256": "c2aa461710390c438915cdf573c507c549bff4e52b18718c2a540e26b5aca6da"},
+    {"path": "sdk/dart/test/stream_test.dart", "sha256": "c11d160ceccb4bb862b20907a649584023498795c37174cf72e26f048df65cc8"},
+    {"path": "sdk/dart/test/adapter_test.dart", "sha256": "e4308e5ff4648d32b42379f6bd5351507f8bdd7a9139a56d931d39f1404765cd"},
     {"path": "sdk/dart/test/worker_test.dart", "sha256": "5a3787ab2a1dd5558fe7521b946ec84d2c38ec98ef35511737bb6fb1a40f1c7f"},
     {"path": "sdk/dart/test/support.dart", "sha256": "2f2adc9cd0758b211dfe8220ef9b83f80f4842728584bd1d4d942412a6fba80e"},
     {"path": "sdk/dart/tool/canonical_probe.dart", "sha256": "2c77d607957093ae07fcf552da4161d3be22032ef1d1917151b01522bb99ed39"},
-    {"path": "conformance/independent/verify-dart-sdk.mjs", "sha256": "add9f4c1f5ae7fa8e0e022e604a8af1494a4ad559ed783a392aaccf7ead74139"}
+    {"path": "conformance/independent/verify-dart-sdk.mjs", "sha256": "9238a645970d301c941a0aded0f743d1f28cec4a22a63b42fadf45b42cb79fc0"}
   ],
   "reports": [
-    {"path": "conformance/reports/dart-core-3.13.3-darwin-arm64.json", "sha256": "b60153aea1fadcd3ecba8c28bd9ffa806d5d82338209436a165f345ebf0a0478"}
+    {"path": "conformance/reports/dart-core-3.13.3-darwin-arm64.json", "sha256": "b60153aea1fadcd3ecba8c28bd9ffa806d5d82338209436a165f345ebf0a0478"},
+    {"path": "conformance/reports/dart-adapters-3.13.3-darwin-arm64.json", "sha256": "53c3bbbc4d07181e914c87caf56c15876cd8f19fd460a095ea0a1eb644375f6f"}
   ],
   "vectors": [
     "vm-aot-dart2js-canonical-parity",
@@ -87,6 +101,10 @@
     "stream-terminal-truncation-and-backpressure",
     "bounded-pagination",
     "isolate-aware-background-execution",
+    "conditional-vm-flutter-browser-adapters",
+    "warm-adapter-state-isolation",
+    "stream-cancellation-and-concrete-resource-release",
+    "stable-public-failure-and-redirect-redaction",
     "byte-identical-package-generation"
   ],
   "commands": [
@@ -95,14 +113,29 @@
     "cd sdk/dart && dart run test/<entrypoint>_test.dart",
     "dart compile exe sdk/dart/tool/canonical_probe.dart",
     "dart compile js -O2 sdk/dart/tool/canonical_probe.dart",
+    "dart compile exe sdk/dart/test/adapter_test.dart and execute",
+    "dart compile js -O2 sdk/dart/test/adapter_test.dart and execute with Node",
     "node conformance/independent/verify-dart-sdk.mjs"
   ],
-  "unsupported": [
+  "coreUnsupportedAtDependencyRevision": [
     "flutter-runtime-and-tests-owned-by-84",
     "concrete-http-transport-owned-by-84",
     "concrete-sse-transport-owned-by-84",
     "concrete-websocket-transport-owned-by-84",
     "automatic-auth-refresh",
+    "complete-official-sdk-matrix-owned-by-69"
+  ],
+  "unsupported": [
+    "automatic-authentication-refresh-and-token-persistence",
+    "cookie-jar-and-browser-credentialed-cookie-mode",
+    "caller-supplied-last-event-id-and-automatic-reconnect",
+    "browser-websocket-authentication-headers",
+    "websocket-subprotocol-and-compression-configuration",
+    "portable-browser-websocket-backpressure-guarantee",
+    "browser-pre-decompression-wire-byte-observation",
+    "http-get-persisted-query-optimization",
+    "proxy-custom-trust-store-and-certificate-pinning",
+    "flutter-version-and-device-matrix-certification",
     "complete-official-sdk-matrix-owned-by-69"
   ]
 }
