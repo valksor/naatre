@@ -11,4 +11,7 @@
     <directory name="src" />
     <directory name="generated" />
   </projectFiles>
+  <stubs>
+    <file name="stubs/naatre.php" />
+  </stubs>
 </psalm>

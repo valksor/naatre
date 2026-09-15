@@ -5,7 +5,7 @@
   "runtimeVersion": "naatre.php.server-1",
   "package": {
     "distribution": "naatre/sdk",
-    "php": ["8.3", "8.4", "8.5"],
+    "php": ["8.3", "8.4", "8.5", "8.6"],
     "phpstanLevel": "max",
     "psalmErrorLevel": 1,
     "externalServerDependencies": []
@@ -47,8 +47,8 @@
     "automaticMethodExposure": false
   },
   "evidence": [
-    {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
-    {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
+    {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
+    {"path": "sdk/php/composer.json", "sha256": "59e8f915dbf50e658bd7d970082d5189dd10501ba1b3da6e97d6cc4f9e11991a"},
     {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},
     {"path": "sdk/php/generated/Operations.php", "sha256": "c9f974128a503c137022edf9c043433fc389a07b53cbfdac8d08316b1cc12246"},
     {"path": "sdk/php/src/Server/Dispatcher.php", "sha256": "2030de6337abefe74d8f262b4afc836117f6bf1cd822560e2c20c7b9c27e7b7f"},

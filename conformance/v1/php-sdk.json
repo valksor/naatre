@@ -12,25 +12,26 @@
     "manifest": {"path": "sdk/php/generated/operations.json", "sha256": "b7e2211237ed952fc0e0a8c423cb11a2ee9d087f2f2e4d5ef5e569826fef12c3"}
   },
   "evidence": [
-    {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
-    {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
-    {"path": "sdk/php/phpstan.neon", "sha256": "533b8b7b3954ed2cb957be520cdaffa3fcea8a5f30606245eb96c3b2d04fcdd3"},
-    {"path": "sdk/php/psalm.xml", "sha256": "a34b751821b8c2a506b7ec5e5374c2a76ffc6a1c167a8c881228f6ca96255723"},
+    {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
+    {"path": "sdk/php/composer.json", "sha256": "59e8f915dbf50e658bd7d970082d5189dd10501ba1b3da6e97d6cc4f9e11991a"},
+    {"path": "sdk/php/phpstan.neon", "sha256": "75e9be7b83e0e3a12baa33eedc16166f08f40b71ff10a1b8ba4bd73b4038a5e1"},
+    {"path": "sdk/php/psalm.xml", "sha256": "379e955de445105543ed2273048bbfc69b2de68135e6f39e88d0c6e15698a422"},
     {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},
     {"path": "sdk/php/tests/PsrStubs.php", "sha256": "0e45b63fd2d8d6fdc88cedd8c993a9100308918633eb3105f54b6afee7f44d34"},
     {"path": "sdk/php/tests/run.php", "sha256": "d8bc627f2708c511db4a12db7f83e4c9056b2ef4dfaa2aeb44014e24129e6045"},
     {"path": "sdk/php/src/Exception/ClientException.php", "sha256": "7399b2e9607a52e4315bd926e7d72ccfdd74b7da8d27e2bdae0fb39aac6500af"},
-    {"path": "sdk/php/src/Wire/Json.php", "sha256": "33cce6e922be65a95bb2e7be24e054da48f7cb0f61dbe554fa119aea394136f6"},
-    {"path": "sdk/php/src/Wire/DuplicateKeyGuard.php", "sha256": "b1c941973ece9d734a4e0470d4b646b6451088cb06fd8998330ae01141b99e02"},
+    {"path": "sdk/php/src/Wire/Json.php", "sha256": "f894a9b8210aae49a07089c44aa9d80f5d5c0448aa089fe22a03480bd8c49d35"},
+    {"path": "sdk/php/src/Wire/PureJson.php", "sha256": "91934c94edc4b0b1ea6fb3da38f61ebc169dc154a3dae05ab5c0a091f863b306"},
+    {"path": "sdk/php/src/Wire/DuplicateKeyGuard.php", "sha256": "64153cd22ac5fddadb08ef9718a3d65a79a4965d7403046c80d117bea58aa1af"},
     {"path": "sdk/php/src/Transport/Psr18Client.php", "sha256": "e1e6da45387037ea99cd1f94b82c1df216f564164e40d96a23f28014ed5e5297"},
     {"path": "sdk/php/src/Transport/AuthenticationHeaders.php", "sha256": "1bbaea424cd60633a0c9a667bdc8de7af1d2de436a11e117916b4cd5fd0b1cc9"},
     {"path": "sdk/php/src/Transport/BoundedResponseBody.php", "sha256": "316825ce3025ea43ed3b46bf98ce3e1ede8d6f6f0e082920f395136a24b014cc"},
     {"path": "sdk/php/src/Stream/CloseableStream.php", "sha256": "8669cb66b5be4589dc297fd2011659add8277cab235414c9b8514a50c72fe934"},
     {"path": "sdk/php/src/Scalar/Timestamp.php", "sha256": "be9a15e771faa4f5cf45d68d6c4edf652c692ed37b5c287b15cdf86007224c06"},
-    {"path": "conformance/independent/verify-php-sdk.mjs", "sha256": "b2d64c3689e879a136570872019266ae96554df91d07c3ac53d80eac5768da22"}
+    {"path": "conformance/independent/verify-php-sdk.mjs", "sha256": "405fae01650c4382a1d7de20547327bd9eb1e49cf800acceac9c71d45ce43402"}
   ],
   "support": {
-    "php": ["8.3", "8.4", "8.5"],
+    "php": ["8.3", "8.4", "8.5", "8.6"],
     "composer": "2.x",
     "phpstanLevel": "max",
     "psalmErrorLevel": 1

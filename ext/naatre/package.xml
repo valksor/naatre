@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package packagerversion="1.10.16" version="2.0" xmlns="http://pear.php.net/dtd/package-2.0">
+ <name>naatre</name>
+ <channel>pecl.php.net</channel>
+ <summary>Optional native accelerator for Naatre PHP</summary>
+ <description>Bounded JSON, canonicalization, semantic hashing, and immutable operation metadata primitives.</description>
+ <lead><name>Valksor</name><user>valksor</user><email>engineering@valksor.com</email><active>yes</active></lead>
+ <date>2026-09-15</date>
+ <version><release>0.1.0</release><api>0.1.0</api></version>
+ <stability><release>alpha</release><api>alpha</api></stability>
+ <license uri="https://www.apache.org/licenses/LICENSE-2.0">Apache-2.0</license>
+ <notes>Initial PHP 8.5 and 8.6 source release.</notes>
+ <contents><dir name="/"><file name="config.m4" role="src"/><file name="config.w32" role="src"/><file name="naatre.c" role="src"/><file name="php_naatre.h" role="src"/><file name="package-source.sh" role="script"/><file name="README.md" role="doc"/><dir name="tests"><file name="001_info.phpt" role="test"/><file name="002_codec.phpt" role="test"/></dir><dir name="fpm"><file name="isolation.php" role="test"/><file name="isolation.py" role="test"/></dir><dir name="fuzz"><file name="php-facing.php" role="test"/><dir name="corpus"><file name="empty-object.json" role="test"/><file name="escaped-duplicate.json" role="test"/><file name="invalid-surrogate.json" role="test"/><file name="malformed.json" role="test"/><file name="nested.json" role="test"/></dir></dir></dir></contents>
+ <dependencies><required><php><min>8.5.0</min><max>8.6.99</max></php><pearinstaller><min>1.10.0</min></pearinstaller><extension><name>json</name></extension><extension><name>hash</name></extension></required></dependencies>
+ <providesextension>naatre</providesextension>
+ <extsrcrelease/>
+</package>

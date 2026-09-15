@@ -43,7 +43,7 @@ final readonly class IntegrationProfile
         return new self(
             'php.fpm-host-1',
             RuntimeProfile::fpmUnary(),
-            ['php-fpm-8.3', 'php-fpm-8.4', 'php-fpm-8.5'],
+            ['php-fpm-8.3', 'php-fpm-8.4', 'php-fpm-8.5', 'php-fpm-8.6'],
         );
     }
 

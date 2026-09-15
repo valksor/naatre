@@ -1,0 +1,11 @@
+{
+  "name": "naatre/sdk-native",
+  "description": "Compatibility-checked native accelerator adapter for naatre/sdk",
+  "type": "metapackage",
+  "license": "Apache-2.0",
+  "require": {
+    "php": ">=8.5 <8.7",
+    "ext-naatre": "^0.1",
+    "naatre/sdk": "^0.1"
+  }
+}

@@ -8,6 +8,13 @@ implementation version, platform, and claimed profile.
 Generated fixture changes must be reproducible byte-for-byte. Tests read the
 checked-in files rather than duplicating their expected values in Go source.
 
+The optional PHP native accelerator has a standalone differential manifest at
+[`v1/php-native.json`](v1/php-native.json). Run its portable fallback receipt
+with `node conformance/independent/verify-php-native.mjs`; set
+`NAATRE_EXTENSION` to the exact locally built module path to run the same
+vectors through forced native selection. This evidence is additive and does
+not replace the official-language release matrix.
+
 `v1/jtd.json` pins `schema.jtd-1` to RFC 8927 and carries positive and
 negative import/export fixtures for every supported form, bounded hostile
 inputs, deterministic round-trip evidence, and the independent canonical

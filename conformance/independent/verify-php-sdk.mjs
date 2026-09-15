@@ -33,6 +33,7 @@ try {
 
 for (const command of [
   ["php", "sdk/php/tests/run.php"],
+  ["php", "sdk/php/tests/native.php"],
 ]) {
   const checked = spawnSync(command[0], command.slice(1), {
     cwd: fileURLToPath(root),

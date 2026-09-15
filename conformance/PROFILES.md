@@ -26,6 +26,9 @@ Profiles certify only their named role. In particular:
 - HTTP, streaming, persisted-operation, federation, extension-host, and schema
   tooling evidence remain distinct from codec, client, worker, and runtime
   evidence.
+- `sdk.php.native-1` is optional implementation evidence for the PHP codec and
+  SDK boundary. It does not promote a PHP client or worker into native runtime
+  execution evidence and does not alter the complete matrix owned by issue 69.
 
 Delegation never promotes a client or worker report into execution-runtime
 evidence. A report may claim a profile only when its result is `passed`, its
