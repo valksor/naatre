@@ -487,6 +487,12 @@
       "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
     },
     {
+      "path": "v1/remote-worker-gateway.json",
+      "profile": "implementation.go.remote-worker-1",
+      "category": "transport",
+      "sha256": "cc322031f129ff923b58b57a647a2627d813dc21bfa9834275828fda59a21519"
+    },
+    {
       "path": "v1/cbor.json",
       "profile": "transport.cbor.unary-1",
       "category": "transport",
@@ -8496,6 +8502,11 @@
       "caseId": "issue.88",
       "issue": 88,
       "fixtureRefs": [
+        {
+          "path": "v1/remote-worker-gateway.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/88",

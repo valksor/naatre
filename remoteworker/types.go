@@ -1,7 +1,7 @@
 // Package remoteworker contains the transport-neutral v1 remote-worker wire
-// model and a deliberately small reference gateway. It is conformance
-// scaffolding, not the production HTTP/2 connection manager owned by issue
-// #88.
+// model, the bounded Go execution gateway, the production TLS HTTP/2 transport,
+// and the stdio-only conformance transport. Workers consume the portable wire
+// contract and never need to import this Go package.
 package remoteworker
 
 import (
@@ -41,6 +41,7 @@ const (
 	CodeOverloaded           = "OVERLOADED"
 	CodeStaleReference       = "REMOTE_REFERENCE_UNAVAILABLE"
 	CodeCancellationInvalid  = "REMOTE_CANCELLATION_INVALID"
+	CodeCancelled            = "CANCELLED"
 )
 
 type Effect string
@@ -202,7 +203,6 @@ type AuthorizationRequest struct {
 type GatewayError struct {
 	Code    string
 	Message string
-	Cause   error
 }
 
 func (e *GatewayError) Error() string {
@@ -212,15 +212,8 @@ func (e *GatewayError) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-func (e *GatewayError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-func gatewayError(code, message string, cause error) error {
-	return &GatewayError{Code: code, Message: message, Cause: cause}
+func gatewayError(code, message string, _ error) error {
+	return &GatewayError{Code: code, Message: message}
 }
 
 type DeliveryPhase string
@@ -232,21 +225,13 @@ const (
 
 type DeliveryError struct {
 	Phase DeliveryPhase
-	Cause error
 }
 
 func (e *DeliveryError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("remote delivery %s: %v", e.Phase, e.Cause)
-}
-
-func (e *DeliveryError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
+	return fmt.Sprintf("remote delivery %s failed", e.Phase)
 }
 
 var ErrBackpressure = errors.New("remote stream has no available credit")

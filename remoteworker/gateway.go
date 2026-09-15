@@ -34,6 +34,10 @@ type GatewayConfig struct {
 	MaxAttempts      int
 	MaxRequestBytes  uint32
 	MaxResponseBytes uint32
+	MaxStreamFrames  uint32
+	MaxStreamBytes   uint64
+	MaxReferences    uint32
+	MaxSeen          uint32
 	Now              func() time.Time
 	VerifyDelegation func(context.Context, string, DelegationExpectation) error
 	Authorize        func(context.Context, AuthorizationRequest) error
@@ -55,12 +59,15 @@ type ReferenceGateway struct {
 	sessionID        string
 	handlers         map[string]Handler
 	seen             map[string]bool
+	seenOrder        []string
 	active           map[string]string
 	references       map[string]storedReference
 	inFlight         uint32
 	maxInFlight      uint32
 	maxRequestBytes  uint32
 	maxResponseBytes uint32
+	maxStreamFrames  uint32
+	maxStreamBytes   uint64
 	registering      bool
 }
 
@@ -68,7 +75,8 @@ func NewReferenceGateway(config GatewayConfig) (*ReferenceGateway, error) {
 	if config.Transport == nil || !validIdentifier(config.Endpoint) || !validIdentifier(config.WorkerID) ||
 		config.ServiceIdentity == "" || !validIdentifier(config.Audience) || !validIdentifier(config.SchemaRevision) ||
 		!validDigest(config.SchemaDigest) || config.MaxInFlight == 0 || config.MaxAttempts < 1 || config.MaxAttempts > 1024 || config.MaxRequestBytes == 0 ||
-		config.MaxResponseBytes == 0 || config.VerifyDelegation == nil || config.Authorize == nil ||
+		config.MaxResponseBytes == 0 || config.MaxStreamFrames == 0 || config.MaxStreamBytes == 0 || config.MaxReferences == 0 ||
+		config.MaxSeen < config.MaxInFlight || config.VerifyDelegation == nil || config.Authorize == nil ||
 		config.ValidateInput == nil || config.ValidateOutput == nil {
 		return nil, errors.New("reference remote-worker gateway requires pinned trust, schema, finite limits, and validators")
 	}
@@ -121,8 +129,11 @@ func (g *ReferenceGateway) Register(ctx context.Context, registration Registrati
 	g.maxInFlight = min(g.config.MaxInFlight, registration.Limits.MaxInFlight)
 	g.maxRequestBytes = min(g.config.MaxRequestBytes, registration.Limits.MaxRequestBytes)
 	g.maxResponseBytes = min(g.config.MaxResponseBytes, registration.Limits.MaxResponseBytes)
+	g.maxStreamFrames = min(g.config.MaxStreamFrames, registration.Limits.MaxStreamFrames)
+	g.maxStreamBytes = min(g.config.MaxStreamBytes, registration.Limits.MaxStreamBytes)
 	g.handlers = make(map[string]Handler, len(registration.Handlers))
 	g.seen = make(map[string]bool)
+	g.seenOrder = nil
 	g.references = make(map[string]storedReference)
 	for _, handler := range registration.Handlers {
 		g.handlers[handler.ID] = handler
@@ -163,17 +174,15 @@ func (g *ReferenceGateway) Invoke(ctx context.Context, request InvokeRequest) (P
 	}
 	defer g.release(request.InvocationID)
 
-	invocation := WorkerInvocation{
-		Protocol: ProtocolVersion, RequestID: request.RequestID, InvocationID: request.InvocationID,
-		HandlerID: request.HandlerID, SchemaRevision: g.config.SchemaRevision, DeadlineUnixMilli: request.Deadline.UnixMilli(),
-		IdempotencyKey: request.IdempotencyKey, DelegatedContext: request.DelegatedContext,
-		Parent: request.Parent, Input: slices.Clone(request.Input), ResumeCursor: request.ResumeCursor,
-	}
+	invocation := g.workerInvocation(request)
 	for attempt := 1; attempt <= g.config.MaxAttempts; attempt++ {
 		invocation.AttemptID = fmt.Sprintf("%s.%d", request.InvocationID, attempt)
 		result, invokeErr := g.config.Transport.Invoke(ctx, invocation)
 		if invokeErr == nil {
 			return g.complete(request, invocation, result)
+		}
+		if ctx.Err() != nil {
+			return PublicResult{}, gatewayError(CodeCancelled, "remote invocation was cancelled", nil)
 		}
 		if !g.shouldRetry(handler, request, invokeErr, attempt) {
 			var delivery *DeliveryError
@@ -186,9 +195,94 @@ func (g *ReferenceGateway) Invoke(ctx context.Context, request InvokeRequest) (P
 	return PublicResult{}, gatewayError(CodeMalformedWorkerData, "remote retry budget exhausted", nil)
 }
 
+// InvokeStream admits one server-streaming invocation. The returned source
+// owns the invocation reservation until a terminal frame, failure, or Close.
+func (g *ReferenceGateway) InvokeStream(ctx context.Context, request InvokeRequest, credit StreamCredit) (*GatewayStream, error) {
+	handler, err := g.admit(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	release := true
+	defer func() {
+		if release {
+			g.release(request.InvocationID)
+		}
+	}()
+	streaming, err := g.streamingTransport(handler, credit)
+	if err != nil {
+		return nil, err
+	}
+	source, err := g.openStreamSource(ctx, streaming, handler, request, credit)
+	if err != nil {
+		return nil, err
+	}
+	receiver, err := protocol.NewStreamReceiver(request.InvocationID, protocol.DefaultStreamLimits())
+	if err != nil {
+		_ = source.Close()
+		return nil, gatewayError(CodeInvalidInvocation, "remote stream identity is invalid", nil)
+	}
+	release = false
+	return &GatewayStream{
+		source: source, receiver: receiver, gateway: g, invocationID: request.InvocationID,
+		schemaRevision: g.config.SchemaRevision, outputSchema: handler.OutputSchema,
+	}, nil
+}
+
+func (g *ReferenceGateway) workerInvocation(request InvokeRequest) WorkerInvocation {
+	invocation := WorkerInvocation{
+		Protocol: ProtocolVersion, RequestID: request.RequestID, InvocationID: request.InvocationID,
+		HandlerID: request.HandlerID, SchemaRevision: g.config.SchemaRevision, DeadlineUnixMilli: request.Deadline.UnixMilli(),
+		IdempotencyKey: request.IdempotencyKey, DelegatedContext: request.DelegatedContext,
+		Parent: request.Parent, ResumeCursor: request.ResumeCursor,
+	}
+	invocation.Input = slices.Clone(request.Input)
+	return invocation
+}
+
+func (g *ReferenceGateway) streamingTransport(handler Handler, credit StreamCredit) (StreamingTransport, error) {
+	streaming, ok := g.config.Transport.(StreamingTransport)
+	if !ok || !slices.Contains(handler.RequiredCapabilities, CapabilityServerStreaming) ||
+		!slices.Contains(g.registration.Capabilities, CapabilityServerStreaming) {
+		return nil, gatewayError(CodeCapabilityMismatch, "remote handler does not admit server streaming", nil)
+	}
+	if credit.Frames == 0 || credit.Bytes == 0 || credit.Frames > g.maxStreamFrames || credit.Bytes > g.maxStreamBytes {
+		return nil, gatewayError(CodeOverloaded, "remote stream credit exceeds the admitted limit", nil)
+	}
+	return streaming, nil
+}
+
+func (g *ReferenceGateway) openStreamSource(ctx context.Context, streaming StreamingTransport, handler Handler, request InvokeRequest, credit StreamCredit) (StreamSource, error) {
+	invocation := g.workerInvocation(request)
+	for attempt := 1; attempt <= g.config.MaxAttempts; attempt++ {
+		invocation.AttemptID = fmt.Sprintf("%s.%d", request.InvocationID, attempt)
+		source, err := streaming.OpenStream(ctx, invocation, credit)
+		if err == nil {
+			return source, nil
+		}
+		if ctx.Err() != nil {
+			return nil, gatewayError(CodeCancelled, "remote stream was cancelled", nil)
+		}
+		if !g.shouldRetry(handler, request, err, attempt) {
+			return nil, streamInvocationError(handler, err)
+		}
+	}
+	return nil, gatewayError(CodeMalformedWorkerData, "remote stream retry budget exhausted", nil)
+}
+
+func streamInvocationError(handler Handler, err error) error {
+	var delivery *DeliveryError
+	if errors.As(err, &delivery) && delivery.Phase == DeliveryAfterWrite && handler.Effect != EffectQuery {
+		return gatewayError(CodeOutcomeIndeterminate, "remote stream outcome is indeterminate", nil)
+	}
+	return gatewayError(CodeMalformedWorkerData, "remote stream invocation failed", nil)
+}
+
 func (g *ReferenceGateway) admit(ctx context.Context, request InvokeRequest) (Handler, error) {
 	if g == nil {
 		return Handler{}, gatewayError(CodeInvalidInvocation, "gateway is unavailable", nil)
+	}
+	if ctx.Err() != nil {
+		return Handler{}, gatewayError(CodeCancelled, "remote invocation was cancelled", nil)
 	}
 	if err := g.validateInvocation(request); err != nil {
 		return Handler{}, err
@@ -200,10 +294,16 @@ func (g *ReferenceGateway) admit(ctx context.Context, request InvokeRequest) (Ha
 
 	if err := g.config.VerifyDelegation(ctx, request.DelegatedContext, DelegationExpectation{Audience: g.config.Audience, RequestID: request.RequestID, HandlerID: request.HandlerID, Deadline: request.Deadline}); err != nil {
 		g.release(request.InvocationID)
+		if ctx.Err() != nil {
+			return Handler{}, gatewayError(CodeCancelled, "remote invocation was cancelled", nil)
+		}
 		return Handler{}, gatewayError(CodeUnauthorized, "delegated context is invalid", err)
 	}
 	if err := g.config.Authorize(ctx, AuthorizationRequest{RequestID: request.RequestID, InvocationID: request.InvocationID, HandlerID: request.HandlerID, Effect: handler.Effect}); err != nil {
 		g.release(request.InvocationID)
+		if ctx.Err() != nil {
+			return Handler{}, gatewayError(CodeCancelled, "remote invocation was cancelled", nil)
+		}
 		return Handler{}, gatewayError(CodeUnauthorized, "remote handler is not authorized", err)
 	}
 	if err := g.config.ValidateInput(handler.InputSchema, request.Input); err != nil {
@@ -243,9 +343,6 @@ func (g *ReferenceGateway) reserveInvocation(request InvokeRequest) (Handler, er
 	if uint32(len(request.Input)) > g.maxRequestBytes || uint32(len(request.Parent.Value)) > g.maxRequestBytes {
 		return Handler{}, gatewayError(CodeInvalidInvocation, "remote input exceeds the worker limit", nil)
 	}
-	if g.seen[request.InvocationID] {
-		return Handler{}, gatewayError(CodeDuplicateInvocation, "remote invocation identifier was already admitted", nil)
-	}
 	if request.Parent.Reference != "" {
 		stored, found := g.references[request.Parent.Reference]
 		wrongScope := found && (stored.requestID != request.RequestID ||
@@ -255,10 +352,29 @@ func (g *ReferenceGateway) reserveInvocation(request InvokeRequest) (Handler, er
 			return Handler{}, gatewayError(CodeStaleReference, "remote parent reference is unavailable", nil)
 		}
 	}
+	if err := g.retainInvocationLocked(request.InvocationID); err != nil {
+		return Handler{}, err
+	}
 	g.inFlight++
-	g.seen[request.InvocationID] = true
 	g.active[request.InvocationID] = request.RequestID
 	return handler, nil
+}
+
+func (g *ReferenceGateway) retainInvocationLocked(invocationID string) error {
+	if g.seen[invocationID] {
+		return gatewayError(CodeDuplicateInvocation, "remote invocation identifier was already admitted", nil)
+	}
+	for uint32(len(g.seen)) >= g.config.MaxSeen {
+		oldest := g.seenOrder[0]
+		if _, active := g.active[oldest]; active {
+			return gatewayError(CodeOverloaded, "remote invocation retention is full", nil)
+		}
+		delete(g.seen, oldest)
+		g.seenOrder = g.seenOrder[1:]
+	}
+	g.seen[invocationID] = true
+	g.seenOrder = append(g.seenOrder, invocationID)
+	return nil
 }
 
 func (g *ReferenceGateway) shouldRetry(handler Handler, request InvokeRequest, err error, attempt int) bool {
@@ -309,13 +425,18 @@ func (g *ReferenceGateway) complete(request InvokeRequest, invocation WorkerInvo
 			return PublicResult{}, gatewayError(CodeOutputInvalid, "worker output does not satisfy its schema", err)
 		}
 	}
-	g.rememberReferencesForRequest(request.RequestID, request.InvocationID, result.References)
+	if !g.rememberReferencesForRequest(request.RequestID, request.InvocationID, result.References) {
+		return PublicResult{}, gatewayError(CodeOverloaded, "remote reference capacity is full", nil)
+	}
 	return PublicResult{Data: slices.Clone(result.Data), Errors: slices.Clone(result.Errors)}, nil
 }
 
 func (g *ReferenceGateway) Cancel(ctx context.Context, request CancelRequest) (CancellationAck, error) {
 	if g == nil || !validIdentifier(request.RequestID) || !validIdentifier(request.InvocationID) {
 		return CancellationAck{}, gatewayError(CodeCancellationInvalid, "cancellation request is invalid", nil)
+	}
+	if ctx.Err() != nil {
+		return CancellationAck{}, gatewayError(CodeCancelled, "remote cancellation was cancelled", nil)
 	}
 	g.mu.Lock()
 	activeRequest, active := g.active[request.InvocationID]
@@ -345,17 +466,27 @@ func (g *ReferenceGateway) release(invocationID string) {
 }
 
 func (g *ReferenceGateway) rememberReferences(invocationID string, grants []ReferenceGrant) {
-	g.rememberReferencesForRequest("", invocationID, grants)
+	_ = g.rememberReferencesForRequest("", invocationID, grants)
 }
 
-func (g *ReferenceGateway) rememberReferencesForRequest(requestID, ownerInvocation string, grants []ReferenceGrant) {
+func (g *ReferenceGateway) rememberReferencesForRequest(requestID, ownerInvocation string, grants []ReferenceGrant) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	additional := uint32(0)
+	for _, grant := range grants {
+		if _, found := g.references[grant.ID]; !found {
+			additional++
+		}
+	}
+	if uint64(len(g.references))+uint64(additional) > uint64(g.config.MaxReferences) {
+		return false
+	}
 	for _, grant := range grants {
 		if validIdentifier(grant.ID) && grant.ExpiresAt.After(g.config.Now()) && (grant.Lifetime == ReferenceInvocation || grant.Lifetime == ReferenceRequest) {
 			g.references[grant.ID] = storedReference{grant: grant, requestID: requestID, sessionID: g.sessionID, ownerInvocation: ownerInvocation}
 		}
 	}
+	return true
 }
 
 func validHandler(handler Handler) bool {
