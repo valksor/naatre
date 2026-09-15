@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "63114d259a3e696835be96117505cd16903343ba700df79497112d89d1d4dc14"
+      "sha256": "5de9a53f272515c4e79f0e3cb18db251751dd7941ead62ce661b2ba72b057c04"
     },
     {
       "path": "v1/validation.json",
@@ -352,7 +352,7 @@
       "path": "v1/php-sdk.json",
       "profile": "sdk.php.core-1",
       "category": "canonical",
-      "sha256": "fece0d4536ccbdd8f0aba0b4154e3e9117c6b82ec58ddf2a8581c953921c51b7"
+      "sha256": "99b2860b271e58be95e5d721912ca03d86d8f46b5a184e2c3a2b5dee1f6cfc4a"
     },
     {
       "path": "v1/python-sdk.json",
@@ -544,19 +544,25 @@
       "path": "v1/php-adapters.json",
       "profile": "sdk.php.adapters-1",
       "category": "integration",
-      "sha256": "1f9208e6d3d8bec625a9b5f8cc1a33293324e48d65d1ac47ff3fd84a25de4011"
+      "sha256": "d98fc83ffedb68261d1445b0a0af1e75434edb0c5b9e1f2738374714ba7637e5"
+    },
+    {
+      "path": "v1/php-native.json",
+      "profile": "sdk.php.native-1",
+      "category": "integration",
+      "sha256": "724db77f80d3c258eed32ba7546549fa84590669d618235efb31b1494c2c58c2"
     },
     {
       "path": "v1/php-server.json",
       "profile": "sdk.php.server-1",
       "category": "integration",
-      "sha256": "88249d67f9ba7456856b641f22e8048b29a9159dcbeb5770ab393b8d650be393"
+      "sha256": "d5534332e3ccfae1d773f2f58f53b7950f9657f8e01e0ba5a24e85128165a03b"
     },
     {
       "path": "v1/php-worker-adapters.json",
       "profile": "sdk.php.worker-adapters-1",
       "category": "integration",
-      "sha256": "1dd5ea8eb8da012769a97f6d84b7446cd01584af8c8f80f2d7db595f6279421d"
+      "sha256": "13708653b73cfbd77a8493af712c9b72878cab9c52618c92150c4ad343705de4"
     },
     {
       "path": "v1/rust-async-adapters.json",
@@ -8908,6 +8914,11 @@
       "caseId": "issue.110",
       "issue": 110,
       "fixtureRefs": [
+        {
+          "path": "v1/php-native.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/110",

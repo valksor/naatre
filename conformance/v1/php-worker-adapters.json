@@ -11,11 +11,11 @@
       "profile": "sdk.php.server-1",
       "manifest": {
         "path": "conformance/v1/php-server.json",
-        "sha256": "88249d67f9ba7456856b641f22e8048b29a9159dcbeb5770ab393b8d650be393"
+        "sha256": "d5534332e3ccfae1d773f2f58f53b7950f9657f8e01e0ba5a24e85128165a03b"
       },
       "lock": {
         "path": "sdk/php/composer.lock",
-        "sha256": "8a546d3cd1c0fd56c391aa5320ae3e307f40fac654f7499658fe4578a34f9cba"
+        "sha256": "9030613f94efc0f89adfc60d8266d7c4e2f1035273eb68e5eeec92a4ec149b64"
       }
     }
   ],
@@ -28,7 +28,7 @@
     "automaticHandlerOrServiceDiscovery": false
   },
   "runtimeBoundary": {
-    "php": ["8.3", "8.4", "8.5"],
+    "php": ["8.3", "8.4", "8.5", "8.6"],
     "executedFixtureRuntime": "php-cli-lifecycle-model",
     "networkRequired": false,
     "listenerRequired": false
@@ -93,7 +93,7 @@
       "streaming": "unsupported-rejected-before-dispatch",
       "requestIsolation": "new-core-context-per-request",
       "supportedPlatforms": ["linux", "macos", "windows-where-the-selected-host-is-supported"],
-      "supportedRuntimes": ["php-fpm-8.3", "php-fpm-8.4", "php-fpm-8.5"],
+      "supportedRuntimes": ["php-fpm-8.3", "php-fpm-8.4", "php-fpm-8.5", "php-fpm-8.6"],
       "evidence": {
         "lifecycle": "fpm-lifecycle-and-drain",
         "cancellation": "fpm-cancellation-disposition",
@@ -219,10 +219,10 @@
     "complete-official-implementation-certification"
   ],
   "evidence": [
-    {"path": "docs/php-worker-adapters.md", "sha256": "2ab98f06dd897281941ed17d3a7f24f7818788e5c18fee7e461d1805b92751fa"},
-    {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
-    {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
-    {"path": "sdk/php/src/Server/Integration/IntegrationProfile.php", "sha256": "d18f334ea58127b3cf6cb983eed0bdbd1379dc270ec23ede85daf380fc84ec99"},
+    {"path": "docs/php-worker-adapters.md", "sha256": "b4ca3d5318367465ac67fb343fcfcf493ce565a71d08c5e425ea2b9ed3de88ce"},
+    {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
+    {"path": "sdk/php/composer.json", "sha256": "59e8f915dbf50e658bd7d970082d5189dd10501ba1b3da6e97d6cc4f9e11991a"},
+    {"path": "sdk/php/src/Server/Integration/IntegrationProfile.php", "sha256": "12cb56f848985afb58073cea35f1b4ba9755318a12180378f3fdf77142873056"},
     {"path": "sdk/php/src/Server/Integration/LifecycleAdapter.php", "sha256": "cf526fa179dd6ad4583d27fa98efa328c14fb3201d1cdd3f79415f52508a7cd9"},
     {"path": "sdk/php/tests/worker-adapters.php", "sha256": "9ba870e88e82c39abf5e5c6e275b5226f8b36472b954696ae732b6aede9b39fc"},
     {"path": "conformance/independent/verify-php-worker-adapters.mjs", "sha256": "e2825c15d62b7c2946d69d72d2d7883600329cb17c846accf27051f5d0406a32"}

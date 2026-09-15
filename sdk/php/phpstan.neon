@@ -5,6 +5,8 @@ parameters:
     - src
     - generated
     - sdkgen
+  scanFiles:
+    - stubs/naatre.php
   parallel:
     maximumNumberOfProcesses: 1
   tmpDir: ../../.tmp/phpstan

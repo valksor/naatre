@@ -26,7 +26,7 @@ function pinnedFiles() {
   for (const item of [...evidence.components, ...evidence.contractEvidence]) {
     requireValue(!result.has(item.path), "duplicate pinned evidence path");
     const content = readFileSync(repositoryPath(item.path));
-    requireValue(digest(content) === item.sha256, "pinned evidence digest mismatch");
+    requireValue(digest(content) === item.sha256, `pinned evidence digest mismatch: ${item.path}`);
     result.set(item.path, content);
   }
   return result;
@@ -112,7 +112,8 @@ try {
   validateLanguages(files);
   validateScenarios(files);
   process.stdout.write(`${JSON.stringify({ profile: evidence.profile, status: "passed", dependencyRevision: evidence.dependencyRevision })}\n`);
-} catch {
-  process.stderr.write("documentation examples profile failed\n");
+} catch (error) {
+  const reason = error instanceof Error ? error.message : "unknown validation error";
+  process.stderr.write(`documentation examples profile failed: ${reason}\n`);
   process.exitCode = 1;
 }

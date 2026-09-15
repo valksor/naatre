@@ -1,0 +1,7 @@
+ARG_ENABLE("naatre", "Enable the optional Naatre accelerator", "no");
+
+if (PHP_NAATRE != "no") {
+    ADD_EXTENSION_DEP("naatre", "json");
+    ADD_EXTENSION_DEP("naatre", "hash");
+    EXTENSION("naatre", "naatre.c");
+}

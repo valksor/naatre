@@ -1,0 +1,180 @@
+name: PHP native extension
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-package:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build reproducible source package and checksum
+        shell: bash
+        run: |
+          ext/naatre/package-source.sh HEAD naatre-0.1.0.tgz
+          ext/naatre/package-source.sh HEAD naatre-0.1.0-second.tgz
+          cmp naatre-0.1.0.tgz naatre-0.1.0-second.tgz
+          sha256sum --check naatre-0.1.0.tgz.sha256
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: naatre-0.1.0.tgz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: naatre-0.1.0-source
+          path: |
+            naatre-0.1.0.tgz
+            naatre-0.1.0.tgz.sha256
+
+  release-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2025]
+        php: ['8.5', '8.6']
+        jit: ['0', '1255']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          ini-values: opcache.enable_cli=1, opcache.jit=${{ matrix.jit }}, opcache.jit_buffer_size=64M
+      - name: Build Unix extension
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd ext/naatre
+          phpize
+          ./configure --enable-naatre
+          make -j2
+          php -d extension=modules/naatre.so --ri naatre
+      - name: Build Windows extension
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd ext/naatre
+          phpize
+          configure --enable-naatre
+          nmake
+          $module = Get-ChildItem -Recurse -Filter php_naatre.dll | Select-Object -First 1
+          if (-not $module) { throw "php_naatre.dll was not produced" }
+          "NAATRE_EXTENSION=$($module.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Test Unix extension and fallback oracle
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          php sdk/php/tests/native.php
+          php -d extension=ext/naatre/modules/naatre.so sdk/php/tests/native.php
+          NAATRE_EXTENSION=ext/naatre/modules/naatre.so node conformance/independent/verify-php-native.mjs
+          php -d extension=ext/naatre/modules/naatre.so sdk/php/benchmarks/native.php --samples=30 --warmup=5 --output=php-native-benchmark.json
+      - name: Test Windows extension and fallback oracle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          php sdk/php/tests/native.php
+          php -d "extension=$env:NAATRE_EXTENSION" sdk/php/tests/native.php
+          node conformance/independent/verify-php-native.mjs
+          php -d "extension=$env:NAATRE_EXTENSION" sdk/php/benchmarks/native.php --samples=30 --warmup=5 --output=php-native-benchmark.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: php-native-benchmark-${{ matrix.os }}-php-${{ matrix.php }}-jit-${{ matrix.jit }}
+          path: php-native-benchmark.json
+
+  linux-runtime-profiles:
+    strategy:
+      fail-fast: false
+      matrix:
+        php-ref: ['PHP-8.5', 'php-8.6.0beta3', 'PHP-8.6']
+        zts: ['no', 'yes']
+        debug: ['no', 'yes']
+        architecture: [x64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: naatre
+      - name: Build exact PHP source profile with ext-naatre
+        shell: bash
+        env:
+          PHP_REF: ${{ matrix.php-ref }}
+          ZTS: ${{ matrix.zts }}
+          DEBUG: ${{ matrix.debug }}
+        run: |
+          git clone --depth 1 --branch "$PHP_REF" https://github.com/php/php-src.git php-src
+          cp -R naatre/ext/naatre php-src/ext/naatre
+          cd php-src
+          ./buildconf --force
+          flags=(--disable-all --enable-cli --enable-fpm --enable-opcache --enable-naatre)
+          if [ "$ZTS" = yes ]; then flags+=(--enable-zts); fi
+          if [ "$DEBUG" = yes ]; then flags+=(--enable-debug); fi
+          ./configure "${flags[@]}"
+          make -j2
+          sapi/cli/php --ri naatre
+          sapi/cli/php ../naatre/sdk/php/tests/native.php
+          sapi/cli/php ../naatre/sdk/php/tests/worker-adapters.php
+          sapi/cli/php -d opcache.enable_cli=1 -d opcache.jit=0 ../naatre/sdk/php/tests/native.php
+          sapi/cli/php -d opcache.enable_cli=1 -d opcache.jit=1255 -d opcache.jit_buffer_size=64M ../naatre/sdk/php/tests/native.php
+          python3 ../naatre/ext/naatre/fpm/isolation.py sapi/fpm/php-fpm ../naatre/ext/naatre/fpm/isolation.php
+
+  sanitizers:
+    strategy:
+      fail-fast: false
+      matrix:
+        php-ref: ['PHP-8.5', 'PHP-8.6']
+        sanitizer: [address, undefined]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ matrix.php-ref == 'PHP-8.5' && '8.5' || '8.6' }}
+          coverage: none
+      - name: Build and exercise sanitizer corpus
+        shell: bash
+        env:
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          cd ext/naatre
+          phpize
+          CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=$SANITIZER" LDFLAGS="-fsanitize=$SANITIZER" ./configure --enable-naatre
+          make -j2
+          cd ../..
+          for corpus in ext/naatre/fuzz/corpus/*.json; do php -d extension=ext/naatre/modules/naatre.so ext/naatre/fuzz/php-facing.php < "$corpus"; done
+          php -d extension=ext/naatre/modules/naatre.so sdk/php/tests/native.php
+
+  windows-address-sanitizer:
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.5', '8.6']
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - name: Build with MSVC AddressSanitizer and run corpus
+        shell: pwsh
+        run: |
+          cd ext/naatre
+          phpize
+          $env:CL = "/fsanitize=address /Zi"
+          configure --enable-naatre
+          nmake
+          $module = Get-ChildItem -Recurse -Filter php_naatre.dll | Select-Object -First 1
+          if (-not $module) { throw "php_naatre.dll was not produced" }
+          cd ../..
+          php -d "extension=$($module.FullName)" sdk/php/tests/native.php
+          Get-ChildItem ext/naatre/fuzz/corpus/*.json | ForEach-Object { Get-Content -Raw $_ | php -d "extension=$($module.FullName)" ext/naatre/fuzz/php-facing.php }
