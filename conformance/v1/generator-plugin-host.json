@@ -41,7 +41,7 @@
     {
       "name": "go-dependency-lock",
       "path": "go.sum",
-      "sha256": "57755b9e8e537cc6b24f8b8b4390fa5d415cac73806800efb833e0d62b755849",
+      "sha256": "0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a",
       "revision": "go.sum-sha256"
     },
     {

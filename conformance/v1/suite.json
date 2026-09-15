@@ -286,7 +286,7 @@
       "path": "v1/async-operation-adapters.json",
       "profile": "operations.async-adapters-go-1",
       "category": "integration",
-      "sha256": "9f81ea6baf6f3f5d2825ae6b6ffc3614c2617d201bdf4c51cdc8b72966f78423"
+      "sha256": "533413595aae7fd9d811fab202942641a1a52c7ae4f8017358ed12a6587adc00"
     },
     {
       "path": "v1/federation-coordinator.json",
@@ -304,7 +304,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "ba91515f071084bbcf00be1b7b37aa817e7fe841c867b416ff3b725feb3a9a90"
+      "sha256": "446b2dbe1581ef770f155909072588c16eefeb0b5ad5b40a4b2af4c610da64c3"
     },
     {
       "path": "v1/php-sdk.json",
@@ -424,7 +424,7 @@
       "path": "v1/plan-cache.json",
       "profile": "runtime.go.plan-cache-1",
       "category": "execution",
-      "sha256": "e98ab63e885c838b6d109bd61bfa9d85e9857c05d70127920f09741fe52442b7"
+      "sha256": "3fa978d5f1b5652ac954820e6479d2422e2054370a95a969ff8705bdf4002e50"
     },
     {
       "path": "v1/generator-plugin-host-model.json",
@@ -436,13 +436,13 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "3a56ae47a0deb02faf8c7c246fc92624516e2bf529a0162ebf43ebd762b85c24"
+      "sha256": "bb6e255f4be927e88467ba0ed4a85dec9a3956479893d8b8d360eb78838d094e"
     },
     {
       "path": "v1/go-quality.json",
       "profile": "quality.go.harness-1",
       "category": "benchmark",
-      "sha256": "f13e6d0373cee464b87f524995bcc03bb805d297749eec9b9ce364d919c6220d"
+      "sha256": "eb6a3d0b02e1fe8fdcd80e17553d5239461c34467b2d41b74e11e9da87d35be8"
     },
     {
       "path": "v1/large-values.json",
