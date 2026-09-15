@@ -146,8 +146,10 @@ troubleshooting, and the third-party implementation path.
   pool and process integration remains owned by #88.
 - `sdk/php`: the PHP 8.3-8.5 client plus explicit generated server-handler
   bindings, request-scoped dispatcher, FPM unary profile, and listener-free
-  framed worker conformance for `sdk.php.server-1`; native framework worker
-  adapters remain owned by #97.
+  framed worker conformance for `sdk.php.server-1`, plus dependency-free
+  Symfony, Laravel, FPM, RoadRunner, and Swoole host integration evidence for
+  `sdk.php.worker-adapters-1`; native framework/runtime boot remains outside
+  the certified boundary.
 - `asyncoperation`: durable SQLite operation storage, private fencing leases,
   bounded recovery dispatch, lease-renewing workers, and optional post-commit
   queue hints for `operations.async-adapters-go-1`; see the

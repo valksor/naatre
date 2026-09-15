@@ -30,6 +30,7 @@
     "test": "php tests/run.php",
     "test-adapters": "php tests/adapters.php",
     "test-server": "php tests/server.php",
+    "test-worker-adapters": "php tests/worker-adapters.php",
     "phpstan": "phpstan analyse --no-progress --memory-limit=1G",
     "psalm": "psalm --no-cache --show-info=false",
     "check": [
@@ -37,6 +38,7 @@
       "@test",
       "@test-adapters",
       "@test-server",
+      "@test-worker-adapters",
       "@phpstan",
       "@psalm"
     ]

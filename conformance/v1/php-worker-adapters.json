@@ -1,0 +1,237 @@
+{
+  "profile": "sdk.php.worker-adapters-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 97,
+  "coreAuthority": "sdk.php.server-1",
+  "protocolAuthority": "worker.remote-1",
+  "dependencies": [
+    {
+      "issue": 58,
+      "revision": "10c560933509dacbc7ad987b864f86f2ee0994de",
+      "profile": "sdk.php.server-1",
+      "manifest": {
+        "path": "conformance/v1/php-server.json",
+        "sha256": "88249d67f9ba7456856b641f22e8048b29a9159dcbeb5770ab393b8d650be393"
+      },
+      "lock": {
+        "path": "sdk/php/composer.lock",
+        "sha256": "8a546d3cd1c0fd56c391aa5320ae3e307f40fac654f7499658fe4578a34f9cba"
+      }
+    }
+  ],
+  "packageBoundary": {
+    "distribution": "naatre/sdk",
+    "namespace": "Naatre\\Sdk\\Server\\Integration",
+    "workerAdapterRuntimeDependencies": [],
+    "hostServices": ["dispatcher", "request-context-factory", "after-request-reset", "finite-request-budget"],
+    "frameworkAndRuntimeAPIs": "application-supplied",
+    "automaticHandlerOrServiceDiscovery": false
+  },
+  "runtimeBoundary": {
+    "php": ["8.3", "8.4", "8.5"],
+    "executedFixtureRuntime": "php-cli-lifecycle-model",
+    "networkRequired": false,
+    "listenerRequired": false
+  },
+  "profiles": {
+    "php.symfony-worker-bridge-1": {
+      "layer": "framework",
+      "status": "passed",
+      "executedRuntime": "php-cli-lifecycle-model",
+      "lifecycle": "container-service-with-after-request-reset",
+      "cancellation": "cooperative-control-acknowledgement-no-hard-termination",
+      "pool": "runtime-owned-bounded-pool",
+      "transaction": "application-provider-per-invocation-no-distributed-atomicity",
+      "streaming": "runtime-transport-capabilities-only",
+      "requestIsolation": "new-core-context-per-dispatch-plus-container-reset",
+      "supportedPlatforms": ["linux", "macos", "windows-where-the-selected-host-is-supported"],
+      "supportedRuntimes": ["symfony-request-or-worker-host"],
+      "evidence": {
+        "lifecycle": "symfony-lifecycle-and-drain",
+        "cancellation": "symfony-cancellation-disposition",
+        "pool": "symfony-finite-request-budget",
+        "transaction": "symfony-transaction-boundary",
+        "streaming": "symfony-streaming-rejected-before-source",
+        "requestIsolation": "symfony-principal-loader-and-reset-isolation",
+        "failureSafety": "symfony-stable-redacted-failure",
+        "resourceLimit": "symfony-request-budget-boundary"
+      },
+      "unsupported": ["automatic-service-discovery", "framework-kernel-boot", "hard-process-termination", "exactly-once-effects", "distributed-transactions", "streaming-without-a-separate-transport-adapter"]
+    },
+    "php.laravel-worker-bridge-1": {
+      "layer": "framework",
+      "status": "passed",
+      "executedRuntime": "php-cli-lifecycle-model",
+      "lifecycle": "container-binding-with-after-request-reset",
+      "cancellation": "cooperative-control-acknowledgement-no-hard-termination",
+      "pool": "runtime-owned-bounded-pool",
+      "transaction": "application-provider-per-invocation-no-distributed-atomicity",
+      "streaming": "runtime-transport-capabilities-only",
+      "requestIsolation": "new-core-context-per-dispatch-plus-container-reset",
+      "supportedPlatforms": ["linux", "macos", "windows-where-the-selected-host-is-supported"],
+      "supportedRuntimes": ["laravel-request-or-worker-host"],
+      "evidence": {
+        "lifecycle": "laravel-lifecycle-and-drain",
+        "cancellation": "laravel-cancellation-disposition",
+        "pool": "laravel-finite-request-budget",
+        "transaction": "laravel-transaction-boundary",
+        "streaming": "laravel-streaming-rejected-before-source",
+        "requestIsolation": "laravel-principal-loader-and-reset-isolation",
+        "failureSafety": "laravel-stable-redacted-failure",
+        "resourceLimit": "laravel-request-budget-boundary"
+      },
+      "unsupported": ["automatic-container-registration", "framework-kernel-boot", "octane-driver-certification", "hard-process-termination", "exactly-once-effects", "distributed-transactions", "streaming-without-a-separate-transport-adapter"]
+    },
+    "php.fpm-host-1": {
+      "layer": "runtime",
+      "status": "passed",
+      "executedRuntime": "php-cli-lifecycle-model",
+      "lifecycle": "one-invocation-per-host-owned-request",
+      "cancellation": "unsupported-disconnect-is-not-a-cancellation-acknowledgement",
+      "pool": "fpm-process-manager-owned",
+      "transaction": "unsupported-by-php.fpm-unary-1",
+      "streaming": "unsupported-rejected-before-dispatch",
+      "requestIsolation": "new-core-context-per-request",
+      "supportedPlatforms": ["linux", "macos", "windows-where-the-selected-host-is-supported"],
+      "supportedRuntimes": ["php-fpm-8.3", "php-fpm-8.4", "php-fpm-8.5"],
+      "evidence": {
+        "lifecycle": "fpm-lifecycle-and-drain",
+        "cancellation": "fpm-cancellation-disposition",
+        "pool": "fpm-finite-request-budget",
+        "transaction": "fpm-transaction-boundary",
+        "streaming": "fpm-streaming-rejected-before-source",
+        "requestIsolation": "fpm-principal-loader-and-reset-isolation",
+        "failureSafety": "fpm-stable-redacted-failure",
+        "resourceLimit": "fpm-request-budget-boundary"
+      },
+      "unsupported": ["cancellation-acknowledgement", "client-streaming", "server-streaming", "bidirectional-streaming", "sdk-owned-process-pool", "forced-rollback-after-disconnect", "hard-process-termination", "exactly-once-effects", "distributed-transactions"]
+    },
+    "php.roadrunner-worker-1": {
+      "layer": "runtime",
+      "status": "passed",
+      "executedRuntime": "php-cli-lifecycle-model",
+      "lifecycle": "persistent-worker-with-after-request-reset-and-drain",
+      "cancellation": "cooperative-control-acknowledgement-no-hard-termination",
+      "pool": "roadrunner-owned-bounded-worker-pool",
+      "transaction": "application-provider-per-invocation-no-distributed-atomicity",
+      "streaming": "not-advertised-without-a-separate-transport-adapter",
+      "requestIsolation": "new-core-context-and-reset-after-every-job",
+      "supportedPlatforms": ["linux", "macos", "windows-where-the-selected-host-is-supported"],
+      "supportedRuntimes": ["roadrunner-host-api"],
+      "evidence": {
+        "lifecycle": "roadrunner-lifecycle-and-drain",
+        "cancellation": "roadrunner-cancellation-disposition",
+        "pool": "roadrunner-finite-request-budget",
+        "transaction": "roadrunner-transaction-boundary",
+        "streaming": "roadrunner-streaming-rejected-before-source",
+        "requestIsolation": "roadrunner-principal-loader-and-reset-isolation",
+        "failureSafety": "roadrunner-stable-redacted-failure",
+        "resourceLimit": "roadrunner-request-budget-boundary"
+      },
+      "unsupported": ["native-roadrunner-binary-certification", "sdk-owned-process-supervision", "hard-process-termination", "exactly-once-effects", "distributed-transactions", "client-streaming", "server-streaming", "bidirectional-streaming"]
+    },
+    "php.swoole-worker-1": {
+      "layer": "runtime",
+      "status": "passed",
+      "executedRuntime": "php-cli-lifecycle-model",
+      "lifecycle": "persistent-worker-with-after-request-reset-and-drain",
+      "cancellation": "cooperative-control-acknowledgement-no-hard-termination",
+      "pool": "swoole-server-owned-bounded-worker-pool",
+      "transaction": "application-provider-per-invocation-no-distributed-atomicity",
+      "streaming": "not-advertised-without-a-separate-transport-adapter",
+      "requestIsolation": "new-core-context-and-reset-after-every-job",
+      "supportedPlatforms": ["linux", "macos", "windows-where-the-selected-host-is-supported"],
+      "supportedRuntimes": ["swoole-host-api", "openswoole-host-api"],
+      "evidence": {
+        "lifecycle": "swoole-lifecycle-and-drain",
+        "cancellation": "swoole-cancellation-disposition",
+        "pool": "swoole-finite-request-budget",
+        "transaction": "swoole-transaction-boundary",
+        "streaming": "swoole-streaming-rejected-before-source",
+        "requestIsolation": "swoole-principal-loader-and-reset-isolation",
+        "failureSafety": "swoole-stable-redacted-failure",
+        "resourceLimit": "swoole-request-budget-boundary"
+      },
+      "unsupported": ["native-swoole-extension-certification", "coroutine-context-propagation", "sdk-owned-process-supervision", "hard-process-termination", "exactly-once-effects", "distributed-transactions", "client-streaming", "server-streaming", "bidirectional-streaming"]
+    }
+  },
+  "vectors": [
+    {"name": "symfony-lifecycle-and-drain", "profile": "php.symfony-worker-bridge-1", "polarity": "positive", "concern": "lifecycle"},
+    {"name": "symfony-cancellation-disposition", "profile": "php.symfony-worker-bridge-1", "polarity": "cancellation", "concern": "cancellation"},
+    {"name": "symfony-finite-request-budget", "profile": "php.symfony-worker-bridge-1", "polarity": "boundary", "concern": "pool"},
+    {"name": "symfony-transaction-boundary", "profile": "php.symfony-worker-bridge-1", "polarity": "positive", "concern": "transaction"},
+    {"name": "symfony-streaming-rejected-before-source", "profile": "php.symfony-worker-bridge-1", "polarity": "negative", "concern": "streaming"},
+    {"name": "symfony-principal-loader-and-reset-isolation", "profile": "php.symfony-worker-bridge-1", "polarity": "positive", "concern": "request-isolation"},
+    {"name": "symfony-stable-redacted-failure", "profile": "php.symfony-worker-bridge-1", "polarity": "negative", "concern": "failure-safety"},
+    {"name": "symfony-request-budget-boundary", "profile": "php.symfony-worker-bridge-1", "polarity": "resource-limit", "concern": "resource-limit"},
+    {"name": "laravel-lifecycle-and-drain", "profile": "php.laravel-worker-bridge-1", "polarity": "positive", "concern": "lifecycle"},
+    {"name": "laravel-cancellation-disposition", "profile": "php.laravel-worker-bridge-1", "polarity": "cancellation", "concern": "cancellation"},
+    {"name": "laravel-finite-request-budget", "profile": "php.laravel-worker-bridge-1", "polarity": "boundary", "concern": "pool"},
+    {"name": "laravel-transaction-boundary", "profile": "php.laravel-worker-bridge-1", "polarity": "positive", "concern": "transaction"},
+    {"name": "laravel-streaming-rejected-before-source", "profile": "php.laravel-worker-bridge-1", "polarity": "negative", "concern": "streaming"},
+    {"name": "laravel-principal-loader-and-reset-isolation", "profile": "php.laravel-worker-bridge-1", "polarity": "positive", "concern": "request-isolation"},
+    {"name": "laravel-stable-redacted-failure", "profile": "php.laravel-worker-bridge-1", "polarity": "negative", "concern": "failure-safety"},
+    {"name": "laravel-request-budget-boundary", "profile": "php.laravel-worker-bridge-1", "polarity": "resource-limit", "concern": "resource-limit"},
+    {"name": "fpm-lifecycle-and-drain", "profile": "php.fpm-host-1", "polarity": "positive", "concern": "lifecycle"},
+    {"name": "fpm-cancellation-disposition", "profile": "php.fpm-host-1", "polarity": "cancellation", "concern": "cancellation"},
+    {"name": "fpm-finite-request-budget", "profile": "php.fpm-host-1", "polarity": "boundary", "concern": "pool"},
+    {"name": "fpm-transaction-boundary", "profile": "php.fpm-host-1", "polarity": "negative", "concern": "transaction"},
+    {"name": "fpm-streaming-rejected-before-source", "profile": "php.fpm-host-1", "polarity": "negative", "concern": "streaming"},
+    {"name": "fpm-principal-loader-and-reset-isolation", "profile": "php.fpm-host-1", "polarity": "positive", "concern": "request-isolation"},
+    {"name": "fpm-stable-redacted-failure", "profile": "php.fpm-host-1", "polarity": "negative", "concern": "failure-safety"},
+    {"name": "fpm-request-budget-boundary", "profile": "php.fpm-host-1", "polarity": "resource-limit", "concern": "resource-limit"},
+    {"name": "roadrunner-lifecycle-and-drain", "profile": "php.roadrunner-worker-1", "polarity": "positive", "concern": "lifecycle"},
+    {"name": "roadrunner-cancellation-disposition", "profile": "php.roadrunner-worker-1", "polarity": "cancellation", "concern": "cancellation"},
+    {"name": "roadrunner-finite-request-budget", "profile": "php.roadrunner-worker-1", "polarity": "boundary", "concern": "pool"},
+    {"name": "roadrunner-transaction-boundary", "profile": "php.roadrunner-worker-1", "polarity": "positive", "concern": "transaction"},
+    {"name": "roadrunner-streaming-rejected-before-source", "profile": "php.roadrunner-worker-1", "polarity": "negative", "concern": "streaming"},
+    {"name": "roadrunner-principal-loader-and-reset-isolation", "profile": "php.roadrunner-worker-1", "polarity": "positive", "concern": "request-isolation"},
+    {"name": "roadrunner-stable-redacted-failure", "profile": "php.roadrunner-worker-1", "polarity": "negative", "concern": "failure-safety"},
+    {"name": "roadrunner-request-budget-boundary", "profile": "php.roadrunner-worker-1", "polarity": "resource-limit", "concern": "resource-limit"},
+    {"name": "swoole-lifecycle-and-drain", "profile": "php.swoole-worker-1", "polarity": "positive", "concern": "lifecycle"},
+    {"name": "swoole-cancellation-disposition", "profile": "php.swoole-worker-1", "polarity": "cancellation", "concern": "cancellation"},
+    {"name": "swoole-finite-request-budget", "profile": "php.swoole-worker-1", "polarity": "boundary", "concern": "pool"},
+    {"name": "swoole-transaction-boundary", "profile": "php.swoole-worker-1", "polarity": "positive", "concern": "transaction"},
+    {"name": "swoole-streaming-rejected-before-source", "profile": "php.swoole-worker-1", "polarity": "negative", "concern": "streaming"},
+    {"name": "swoole-principal-loader-and-reset-isolation", "profile": "php.swoole-worker-1", "polarity": "positive", "concern": "request-isolation"},
+    {"name": "swoole-stable-redacted-failure", "profile": "php.swoole-worker-1", "polarity": "negative", "concern": "failure-safety"},
+    {"name": "swoole-request-budget-boundary", "profile": "php.swoole-worker-1", "polarity": "resource-limit", "concern": "resource-limit"}
+  ],
+  "publicFailureCodes": ["REMOTE_CAPABILITY_MISMATCH", "REMOTE_CANCELLATION_INVALID", "REMOTE_REGISTRATION_INVALID", "REMOTE_WORKER_MALFORMED"],
+  "claims": {
+    "nativeRuntimeCertification": false,
+    "frameworkReleaseCertification": false,
+    "productionTransportCertification": false,
+    "hardCancellation": false,
+    "processIsolation": false,
+    "exactlyOnceEffects": false,
+    "completeMatrixOwner": 69
+  },
+  "unsupported": [
+    "production-tls-http2-transport-certification",
+    "framework-runtime-release-matrix-certification",
+    "source-stream-credit-and-half-close",
+    "opaque-reference-provider",
+    "idempotency-replay",
+    "subscription-resume",
+    "process-isolation",
+    "native-runtime-status",
+    "complete-official-implementation-certification"
+  ],
+  "evidence": [
+    {"path": "docs/php-worker-adapters.md", "sha256": "2ab98f06dd897281941ed17d3a7f24f7818788e5c18fee7e461d1805b92751fa"},
+    {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
+    {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
+    {"path": "sdk/php/src/Server/Integration/IntegrationProfile.php", "sha256": "d18f334ea58127b3cf6cb983eed0bdbd1379dc270ec23ede85daf380fc84ec99"},
+    {"path": "sdk/php/src/Server/Integration/LifecycleAdapter.php", "sha256": "3ef564bbe15431fa4f35d026ac77f6307b2e63adceae68714a1bd4344918cb3c"},
+    {"path": "sdk/php/tests/worker-adapters.php", "sha256": "9ba870e88e82c39abf5e5c6e275b5226f8b36472b954696ae732b6aede9b39fc"},
+    {"path": "conformance/independent/verify-php-worker-adapters.mjs", "sha256": "e2825c15d62b7c2946d69d72d2d7883600329cb17c846accf27051f5d0406a32"}
+  ],
+  "commands": [
+    "php sdk/php/tests/worker-adapters.php",
+    "node conformance/independent/verify-php-worker-adapters.mjs",
+    "composer --working-dir=sdk/php test-worker-adapters",
+    "composer --working-dir=sdk/php phpstan",
+    "composer --working-dir=sdk/php psalm"
+  ]
+}

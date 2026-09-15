@@ -137,18 +137,22 @@ Two profiles are documented and pinned in
 The Symfony and Laravel `RequestContextFactory` bridges are deliberately small
 container seams. Register them explicitly and resolve them in request/job
 scope; executable examples live in `examples/symfony-server.php` and
-`examples/laravel-server.php`. Native Symfony controllers, Laravel service
-providers, RoadRunner, FrankenPHP, Swoole, Octane, and framework-specific
-persistent transports remain the independently shippable #97 surface. This
-package therefore makes no native-runtime or production-framework-adapter
-claim.
+`examples/laravel-server.php`. Issue #97 adds dependency-free Symfony, Laravel,
+FPM, RoadRunner, and Swoole host profiles plus the finite `LifecycleAdapter`.
+Their lifecycle, cancellation, pool, transaction, streaming, isolation,
+platform, and unsupported-capability boundaries are documented in
+[`docs/php-worker-adapters.md`](../../docs/php-worker-adapters.md). Native
+framework boot, runtime binaries, and production transports are not certified
+by that listener-free adapter profile.
 
 Run the server evidence without a listener or network connection:
 
 ```sh
 php sdk/php/tests/server.php
+php sdk/php/tests/worker-adapters.php
 go test ./internal/conformance -run TestPHP -count=1
 node conformance/independent/verify-php-server.mjs
+node conformance/independent/verify-php-worker-adapters.mjs
 composer --working-dir=sdk/php phpstan
 composer --working-dir=sdk/php psalm
 ```
