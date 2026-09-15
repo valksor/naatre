@@ -598,6 +598,8 @@ func canonicalJSONNumber(raw string) (string, error) {
 // scalars, which the Int64/BigInt scalar types already carry.
 func rejectUnsafeCanonicalIntegers(input []byte, current node, pointer string) error {
 	switch current.kind {
+	case nodeNull, nodeBool, nodeString:
+		return nil
 	case nodeNumber:
 		if magnitude := bareIntegerMagnitude(current.text); magnitude != "" && integerLiteralExceedsSafeRange(magnitude) {
 			return newDiagnostic(input, "MALFORMED_JSON", "PROTO-009", "validate", "integer literal exceeds the safe integer range; encode large integers as string scalars", pointer, current.start)
