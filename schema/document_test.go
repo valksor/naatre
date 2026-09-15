@@ -120,6 +120,20 @@ func TestSchemaDocumentRoundTripsEmptyAndNonIdentifierEnumSpellings(t *testing.T
 	}
 }
 
+func TestSchemaDocumentRejectsInvalidEntityIdentityMetadata(t *testing.T) {
+	t.Parallel()
+	tests := []string{
+		`{"version":"1","canonicalVersion":"c14n-1","revision":"r1","types":[{"id":"User","name":"User","kind":"object","output":true,"entity":{"keys":["secret"]},"fields":[{"id":"User.id","name":"id","type":"ID"}]}],"operations":[],"members":[]}`,
+		`{"version":"1","canonicalVersion":"c14n-1","revision":"r1","types":[{"id":"User","name":"User","kind":"object","output":true,"entity":{"keys":["id"]},"fields":[{"id":"User.id","name":"id","type":"ID","nullable":true}]}],"operations":[],"members":[]}`,
+		`{"version":"1","canonicalVersion":"c14n-1","revision":"r1","types":[{"id":"UserInput","name":"UserInput","kind":"input-object","input":true,"entity":{"keys":["id"]},"fields":[{"id":"UserInput.id","name":"id","type":"ID"}]}],"operations":[],"members":[]}`,
+	}
+	for _, input := range tests {
+		if _, err := schema.ParseDocument([]byte(input), schema.ImportOptions{}); err == nil {
+			t.Fatalf("ParseDocument accepted invalid entity metadata: %s", input)
+		}
+	}
+}
+
 func TestPortableSchemaRejectsInvalidCollectionContracts(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

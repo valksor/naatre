@@ -257,6 +257,9 @@ func validateDescriptor(descriptor TypeDescriptor) error {
 	if descriptor.ElementNullable && descriptor.Kind != ListType && descriptor.Kind != MapType {
 		return fmt.Errorf("%s type %q cannot declare element nullability", descriptor.Kind, descriptor.ID)
 	}
+	if err := validateEntityDescriptor(descriptor); err != nil {
+		return err
+	}
 	if err := validateDescriptorShape(descriptor); err != nil {
 		return err
 	}
@@ -270,6 +273,30 @@ func validateDescriptor(descriptor TypeDescriptor) error {
 		return err
 	}
 	return validateVariantIDs(descriptor)
+}
+
+func validateEntityDescriptor(descriptor TypeDescriptor) error {
+	if descriptor.Entity == nil {
+		return nil
+	}
+	if descriptor.Kind != ObjectType || !descriptor.Output || descriptor.Input {
+		return fmt.Errorf("schema entity %q must be an output object", descriptor.ID)
+	}
+	if len(descriptor.Entity.Keys) == 0 {
+		return fmt.Errorf("schema entity %q requires at least one identity field", descriptor.ID)
+	}
+	seen := make(map[string]bool, len(descriptor.Entity.Keys))
+	for _, key := range descriptor.Entity.Keys {
+		field, exists := descriptor.Fields[key]
+		if !exists || seen[key] {
+			return fmt.Errorf("schema entity %q has invalid or duplicate identity field %q", descriptor.ID, key)
+		}
+		if field.Nullable {
+			return fmt.Errorf("schema entity %q identity field %q cannot be nullable", descriptor.ID, key)
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 func validateDescriptorShape(descriptor TypeDescriptor) error {
@@ -371,6 +398,22 @@ func validateCatalogReferences(types map[TypeID]TypeDescriptor) error {
 		}
 		if err := validateVariantReferences(types, descriptor); err != nil {
 			return err
+		}
+		if err := validateEntityReferences(types, descriptor); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateEntityReferences(types map[TypeID]TypeDescriptor, descriptor TypeDescriptor) error {
+	if descriptor.Entity == nil {
+		return nil
+	}
+	for _, key := range descriptor.Entity.Keys {
+		fieldType := types[descriptor.Fields[key].Type]
+		if fieldType.Kind != ScalarType || !fieldType.Input {
+			return fmt.Errorf("schema entity %q identity field %q must use an input-capable scalar type", descriptor.ID, key)
 		}
 	}
 	return nil

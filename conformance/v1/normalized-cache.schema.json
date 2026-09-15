@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naatre.dev/conformance/v1/normalized-cache.schema.json",
+  "profile": "sdk.normalized-cache.schema-1",
+  "title": "Naatre normalized cache fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "profile",
+    "fixtureVersion",
+    "schemaMetadata",
+    "scopeBindings",
+    "fieldIdentity",
+    "fieldStates",
+    "cacheability",
+    "freshness",
+    "mergeCases",
+    "optimisticOutcomes",
+    "scopeInvalidations",
+    "evidenceOwnership"
+  ],
+  "properties": {
+    "$schema": {"const": "normalized-cache.schema.json"},
+    "profile": {"const": "sdk.normalized-cache-1"},
+    "fixtureVersion": {"const": "1.0.0"},
+    "schemaMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityTypes", "identityFields", "aliasesAffectIdentity", "federationRequired"],
+      "properties": {
+        "entityTypes": {"const": "declared-output-objects-only"},
+        "identityFields": {"const": "present-non-null-public-scalars"},
+        "aliasesAffectIdentity": {"const": false},
+        "federationRequired": {"const": false}
+      }
+    },
+    "scopeBindings": {"$ref": "#/$defs/stringSet"},
+    "fieldIdentity": {"$ref": "#/$defs/stringSet"},
+    "fieldStates": {"$ref": "#/$defs/stringSet"},
+    "cacheability": {"$ref": "#/$defs/stringSet"},
+    "freshness": {"$ref": "#/$defs/stringSet"},
+    "mergeCases": {
+      "type": "array",
+      "minItems": 8,
+      "items": {"$ref": "#/$defs/namedCase"}
+    },
+    "optimisticOutcomes": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outcome", "expected"],
+        "properties": {
+          "outcome": {"enum": ["committed", "rejected", "timed-out", "unknown"]},
+          "expected": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "scopeInvalidations": {"$ref": "#/$defs/stringSet"},
+    "evidenceOwnership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["referenceLanguage", "referencePackage", "sdkEvidence", "completeMatrixOwnerIssue"],
+      "properties": {
+        "referenceLanguage": {"const": "go"},
+        "referencePackage": {"const": "github.com/valksor/naatre/normalizedcache"},
+        "sdkEvidence": {"const": "owned-by-each-sdk"},
+        "completeMatrixOwnerIssue": {"const": 69}
+      }
+    }
+  },
+  "$defs": {
+    "stringSet": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "namedCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "input", "expected"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "input": {"type": "string", "minLength": 1},
+        "expected": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

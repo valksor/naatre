@@ -1,0 +1,112 @@
+{
+  "$schema": "normalized-cache.schema.json",
+  "profile": "sdk.normalized-cache-1",
+  "fixtureVersion": "1.0.0",
+  "schemaMetadata": {
+    "entityTypes": "declared-output-objects-only",
+    "identityFields": "present-non-null-public-scalars",
+    "aliasesAffectIdentity": false,
+    "federationRequired": false
+  },
+  "scopeBindings": [
+    "subject",
+    "tenant",
+    "authorizationRevision",
+    "schemaRevision"
+  ],
+  "fieldIdentity": [
+    "schemaName",
+    "arguments",
+    "locale",
+    "representation",
+    "schemaRevision"
+  ],
+  "fieldStates": [
+    "absent",
+    "skipped",
+    "pending",
+    "failed",
+    "null",
+    "value"
+  ],
+  "cacheability": [
+    "no-store",
+    "private"
+  ],
+  "freshness": [
+    "fresh",
+    "stale",
+    "miss"
+  ],
+  "mergeCases": [
+    {
+      "name": "alias-and-location-share-identity",
+      "input": "same-type-and-canonical-key-fields",
+      "expected": "same-entity"
+    },
+    {
+      "name": "partial-marker-preserves-value",
+      "input": "absent-skipped-pending-failed-after-value",
+      "expected": "known-value-preserved"
+    },
+    {
+      "name": "explicit-null-replaces-value",
+      "input": "explicit-null-after-value",
+      "expected": "null"
+    },
+    {
+      "name": "pagination-arguments-separate-windows",
+      "input": "different-canonical-arguments",
+      "expected": "separate-fields"
+    },
+    {
+      "name": "unknown-field",
+      "input": "field-absent-from-active-schema",
+      "expected": "raw-only"
+    },
+    {
+      "name": "out-of-order-known-revision",
+      "input": "older-revision-after-newer-revision",
+      "expected": "stale-rejected"
+    },
+    {
+      "name": "divergent-revision-default",
+      "input": "unknown-lineage-without-policy",
+      "expected": "conflict"
+    },
+    {
+      "name": "divergent-revision-explicit-policy",
+      "input": "unknown-lineage-with-replace-policy",
+      "expected": "incoming-replaces"
+    }
+  ],
+  "optimisticOutcomes": [
+    {
+      "outcome": "committed",
+      "expected": "merge-authoritative-then-remove-layer"
+    },
+    {
+      "outcome": "rejected",
+      "expected": "remove-layer"
+    },
+    {
+      "outcome": "timed-out",
+      "expected": "pending-reconciliation"
+    },
+    {
+      "outcome": "unknown",
+      "expected": "pending-reconciliation"
+    }
+  ],
+  "scopeInvalidations": [
+    "logout",
+    "revoked",
+    "tenant-switch"
+  ],
+  "evidenceOwnership": {
+    "referenceLanguage": "go",
+    "referencePackage": "github.com/valksor/naatre/normalizedcache",
+    "sdkEvidence": "owned-by-each-sdk",
+    "completeMatrixOwnerIssue": 69
+  }
+}

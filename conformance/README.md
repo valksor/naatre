@@ -85,6 +85,13 @@ idempotency replay ordering, read consistency, and committed-revision
 boundaries. Each SDK records its own implementation evidence; issue #69 owns
 the complete cross-language matrix.
 
+`v1/normalized-cache.json` and `v1/normalized-cache.schema.json` publish the
+language-neutral `sdk.normalized-cache-1` identity, scope, field-state,
+freshness, merge, invalidation, and optimistic-reconciliation contract. The Go
+reference package consumes these semantics without changing the executor or
+the raw-response client path. Each SDK owns its implementation evidence; issue
+#69 owns the complete advertised-language matrix.
+
 The `core.value-1` vectors cover schema-directed maps, lists, input objects,
 one-of activation, enum compatibility, and recursive value limits.
 

@@ -65,6 +65,11 @@ func TestCatalogRejectsDuplicateAndImpossibleDescriptors(t *testing.T) {
 		{name: "oneof as output", descriptor: schema.TypeDescriptor{ID: "Choice", Kind: schema.OneOfType, Input: true, Output: true, Fields: map[string]schema.FieldDescriptor{"a": {Type: schema.TypeID(schema.String)}}}},
 		{name: "open object", descriptor: schema.TypeDescriptor{ID: "User", Kind: schema.ObjectType, Output: true, Open: true, Fields: map[string]schema.FieldDescriptor{"name": {Type: schema.TypeID(schema.String)}}}},
 		{name: "scalar element nullability", descriptor: schema.TypeDescriptor{ID: "Text", Kind: schema.ScalarType, Output: true, ElementNullable: true}},
+		{name: "entity without keys", descriptor: schema.TypeDescriptor{ID: "User", Kind: schema.ObjectType, Output: true, Entity: &schema.EntityDescriptor{}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID)}}}},
+		{name: "entity on input", descriptor: schema.TypeDescriptor{ID: "UserInput", Kind: schema.InputObjectType, Input: true, Entity: &schema.EntityDescriptor{Keys: []string{"id"}}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID)}}}},
+		{name: "entity with unknown key", descriptor: schema.TypeDescriptor{ID: "User", Kind: schema.ObjectType, Output: true, Entity: &schema.EntityDescriptor{Keys: []string{"secret"}}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID)}}}},
+		{name: "entity with duplicate key", descriptor: schema.TypeDescriptor{ID: "User", Kind: schema.ObjectType, Output: true, Entity: &schema.EntityDescriptor{Keys: []string{"id", "id"}}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID)}}}},
+		{name: "entity with nullable key", descriptor: schema.TypeDescriptor{ID: "User", Kind: schema.ObjectType, Output: true, Entity: &schema.EntityDescriptor{Keys: []string{"id"}}, Fields: map[string]schema.FieldDescriptor{"id": {Type: schema.TypeID(schema.ID), Nullable: true}}}},
 	}
 
 	for _, tt := range tests {
@@ -100,6 +105,10 @@ func TestCatalogFreezeRejectsInvalidSchemas(t *testing.T) {
 			"email": {Type: schema.TypeID(schema.String), Default: json.RawMessage(`"a@example.com"`)},
 			"phone": {Type: schema.TypeID(schema.String), Default: json.RawMessage(`"1"`)},
 		}}}},
+		{"composite entity key", []schema.TypeDescriptor{
+			{ID: "Key", Kind: schema.ObjectType, Output: true, Fields: map[string]schema.FieldDescriptor{"value": {Type: schema.TypeID(schema.String)}}},
+			{ID: "User", Kind: schema.ObjectType, Output: true, Entity: &schema.EntityDescriptor{Keys: []string{"key"}}, Fields: map[string]schema.FieldDescriptor{"key": {Type: "Key"}}},
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

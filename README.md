@@ -27,6 +27,10 @@ evidence must be described as planned.
   builders, generated-result primitives, persisted manifests, query-only
   retries, bounded batching/pagination, unary HTTP, and authenticated POST SSE
   for the `sdk.go.client-1` and `sdk.go.operations-1` profiles.
+- `normalizedcache`: opt-in reference normalized entity/request caching,
+  deterministic partial and streamed merge, scoped invalidation, and safe
+  optimistic reconciliation for `sdk.normalized-cache-1`; raw client responses
+  remain the default.
 - `sdk/typescript`: dependency-free ESM JavaScript runtime and deterministic
   strict TypeScript operation bindings for `sdk.typescript.core-1`.
 - `sdk/php`: framework-neutral PSR-18 unary client, lossless PHP value model,

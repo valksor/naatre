@@ -260,19 +260,21 @@
     },
     "45": {
       "issue": 45,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 45,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.normalized-cache-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.normalized-cache-1"
+        ]
       }
     },
     "46": {
