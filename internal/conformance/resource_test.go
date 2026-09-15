@@ -180,13 +180,27 @@ func TestPortableResourceLimitVectorsAgainstRuntime(t *testing.T) {
 	// then assert the fixture's declared code appears among the validation
 	// diagnostics the real runtime produced during Prepare.
 	validationDrivers := map[string]func(*testing.T) []string{
-		"plan-depth":        func(t *testing.T) []string { return resourcePrepareCodes(t, resourceParallelQuery(), 1, runtime.ResourceLimits{MaxPlanDepth: 1}) },
-		"plan-nodes":        func(t *testing.T) []string { return resourcePrepareCodes(t, resourceTwoCallQuery(), 1, runtime.ResourceLimits{MaxPlanNodes: 1}) },
-		"planned-calls":     func(t *testing.T) []string { return resourcePrepareCodes(t, resourceTwoCallQuery(), 1, runtime.ResourceLimits{MaxPlannedCalls: 1}) },
-		"parallel-width":    func(t *testing.T) []string { return resourcePrepareCodes(t, resourceParallelQuery(), 1, runtime.ResourceLimits{MaxParallelWidth: 1}) },
-		"queued-work":       func(t *testing.T) []string { return resourcePrepareCodes(t, resourceParallelQuery(), 1, runtime.ResourceLimits{MaxQueuedWork: 1}) },
-		"static-cost":       func(t *testing.T) []string { return resourcePrepareCodes(t, resourceSingleCallQuery(), 6, runtime.ResourceLimits{MaxStaticCost: 5}) },
-		"validation-errors": func(t *testing.T) []string { return resourcePrepareCodes(t, resourceUnknownCallsQuery(), 1, runtime.ResourceLimits{MaxValidationErrors: 2}) },
+		"plan-depth": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceParallelQuery(), 1, runtime.ResourceLimits{MaxPlanDepth: 1})
+		},
+		"plan-nodes": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceTwoCallQuery(), 1, runtime.ResourceLimits{MaxPlanNodes: 1})
+		},
+		"planned-calls": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceTwoCallQuery(), 1, runtime.ResourceLimits{MaxPlannedCalls: 1})
+		},
+		"parallel-width": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceParallelQuery(), 1, runtime.ResourceLimits{MaxParallelWidth: 1})
+		},
+		"queued-work": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceParallelQuery(), 1, runtime.ResourceLimits{MaxQueuedWork: 1})
+		},
+		"static-cost": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceSingleCallQuery(), 6, runtime.ResourceLimits{MaxStaticCost: 5})
+		},
+		"validation-errors": func(t *testing.T) []string {
+			return resourcePrepareCodes(t, resourceUnknownCallsQuery(), 1, runtime.ResourceLimits{MaxValidationErrors: 2})
+		},
 	}
 	// Execute/serialize-phase budgets: run the plan and assert the fixture's
 	// declared code (RESOURCE_EXHAUSTED) appears among the execution errors.

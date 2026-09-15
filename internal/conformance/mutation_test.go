@@ -189,7 +189,9 @@ func mutationDriveLaterGroupRollback(t *testing.T, vector mutationVector) {
 func mutationDriveCommitUnknown(t *testing.T, vector mutationVector) {
 	provider := fakeConformanceTransactionProvider{begin: func(ctx context.Context, _ runtime.TransactionRequest) (context.Context, runtime.Transaction, error) {
 		return ctx, fakeConformanceTransaction{
-			commit:   func(context.Context) (runtime.CommitOutcome, error) { return runtime.CommitUnknown, errors.New("connection lost") },
+			commit: func(context.Context) (runtime.CommitOutcome, error) {
+				return runtime.CommitUnknown, errors.New("connection lost")
+			},
 			rollback: func(context.Context) error { return nil },
 		}, nil
 	}}
@@ -204,7 +206,9 @@ func mutationDriveCommitUnknown(t *testing.T, vector mutationVector) {
 func mutationDriveRollbackFailed(t *testing.T, vector mutationVector) {
 	provider := fakeConformanceTransactionProvider{begin: func(ctx context.Context, _ runtime.TransactionRequest) (context.Context, runtime.Transaction, error) {
 		return ctx, fakeConformanceTransaction{
-			commit:   func(context.Context) (runtime.CommitOutcome, error) { return runtime.CommitNotApplied, errors.New("commit rejected") },
+			commit: func(context.Context) (runtime.CommitOutcome, error) {
+				return runtime.CommitNotApplied, errors.New("commit rejected")
+			},
 			rollback: func(context.Context) error { return errors.New("rollback failed") },
 		}, nil
 	}}
