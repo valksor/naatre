@@ -66,6 +66,10 @@ evidence must be described as planned.
   deterministic bounded backend projections, explicit imported-operation
   registration, and a constrained HTTP-JSON reference consumer for
   `core.adapters-1`; full external-protocol integrations remain optional.
+- `openrpcadapter`: optional strict OpenRPC 1.4.1 description import/export and
+  bounded JSON-RPC 2.0 consume/expose integration for
+  `adapter.openrpc-jsonrpc-1`; see the
+  [profile boundary and lifecycle](openrpcadapter/README.md).
 - `generatorplugin`: explicit generator-plugin discovery, bounded process
   hosting, safe diagnostics, and reproducible third-party fixture execution for
   `sdk.generator-plugin-host-1`; see the

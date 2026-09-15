@@ -214,7 +214,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "16be44943bf5beab1fa456434c0f8b0db05f11c07a22925b3fc4a8205cad7497"
+      "sha256": "2814946b4b549f5746dfca733a73e7b97eefdab474eb909c1faf6ec396fe550f"
     },
     {
       "path": "v1/scalars.json",
@@ -371,6 +371,12 @@
       "profile": "core.adapters-1",
       "category": "transport",
       "sha256": "4ada331660f6c692fbdfa518e0c70479daf28341d0ee3764d9d6f7a18e1ae28a"
+    },
+    {
+      "path": "v1/openrpc-jsonrpc.json",
+      "profile": "adapter.openrpc-jsonrpc-1",
+      "category": "transport",
+      "sha256": "9094c084089858fbc70e44eb2381dcf33635effd6ede63a7e2fdd868a7176327"
     },
     {
       "path": "v1/http-digest.json",
@@ -7547,6 +7553,11 @@
       "caseId": "issue.98",
       "issue": 98,
       "fixtureRefs": [
+        {
+          "path": "v1/openrpc-jsonrpc.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/98",

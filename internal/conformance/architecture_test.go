@@ -35,6 +35,7 @@ var layers = []struct {
 	{"observability", 3},
 	{"reflectadapter", 3},
 	{"interopadapter", 3},
+	{"openrpcadapter", 4},
 	{"transport", 4},
 	{"examples", 5},
 	{"internal/qualityharness", 5},
