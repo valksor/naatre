@@ -66,7 +66,7 @@ final class LifecycleAdapter
         if ($failure !== null) {
             throw new ServerException('REMOTE_WORKER_MALFORMED');
         }
-        if ($cleanupFailed || !$result instanceof WorkerResult) {
+        if ($cleanupFailed) {
             throw new ServerException('REMOTE_WORKER_MALFORMED');
         }
 
