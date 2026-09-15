@@ -34,6 +34,13 @@ transport and egress cases without contacting a network endpoint.
 receiver and dependency-free JavaScript receiver both verify whitespace, gzip,
 method and target binding, freshness, exact key selection, duplicate replay,
 retry, batch, version-skew, recovery, revocation, and redaction vectors.
+`v1/webhook-adapters.json` fixes the concrete Go/SQLite delivery and receiver
+boundary owned by #90. It pins the exact #48 contract revision, dependency and
+implementation digests, transactional outbox and durable receiver outcomes,
+finite retry, lease, payload, response and rate limits, stable redacted
+failures, reproducible offline commands, and explicit supported and unsupported
+capabilities. It composes `core.events-1` without redefining its protocol or
+event schema.
 `v1/http-digest-integration.json` is the separate
 `implementation.go.http-digest-1` middleware and Go SDK evidence manifest. It
 references rather than redefines the #63 contract, pins its exact dependency
