@@ -696,7 +696,7 @@ func (b *StreamReplayBuffer) Subscribe(ctx context.Context, scope StreamCursorSc
 	}
 	if unavailable || closed {
 		subscription.Close()
-		return nil, streamEstablishmentFailure(cursor, ErrStreamSlowConsumer)
+		return nil, normalizeStreamEstablishmentError(lifecycleCtx, ErrStreamSlowConsumer, cursor)
 	}
 	return subscription, nil
 }

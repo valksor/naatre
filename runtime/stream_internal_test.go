@@ -278,7 +278,7 @@ func TestStreamReplayRetainsCandidateBytesDuringAuthorization(t *testing.T) {
 		t.Fatalf("publish while candidate authorization retains bytes = %v", err)
 	}
 	close(release)
-	if err := <-establishment; !errors.Is(err, ErrStreamSlowConsumer) {
+	if err := <-establishment; !errors.Is(err, ErrStreamHistoryUnavailable) {
 		t.Fatalf("bounded establishment under retention pressure = %v", err)
 	}
 }
