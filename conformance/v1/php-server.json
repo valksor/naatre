@@ -47,8 +47,8 @@
     "automaticMethodExposure": false
   },
   "evidence": [
-    {"path": "sdk/php/README.md", "sha256": "9c6abd4b9e6d6786c6d60fde6df290800c551b448bab59122cec0491cff59a19"},
-    {"path": "sdk/php/composer.json", "sha256": "d7186176c8110ad8c013a6039dc87c0d1e99019476477823c1d51757d136cf90"},
+    {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
+    {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
     {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},
     {"path": "sdk/php/generated/Operations.php", "sha256": "c9f974128a503c137022edf9c043433fc389a07b53cbfdac8d08316b1cc12246"},
     {"path": "sdk/php/src/Server/Dispatcher.php", "sha256": "2030de6337abefe74d8f262b4afc836117f6bf1cd822560e2c20c7b9c27e7b7f"},

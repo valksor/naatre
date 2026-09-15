@@ -1,7 +1,10 @@
 # ripwire quality acks v1 — written by --quality-ack; a finding stays suppressed until it worsens past its acked magnitude
 # format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)
 ack dead-code:new-symbol 9cd416681ad811de 0 cid=0227a2f1e8c4af29 Go test entrypoint is invoked by go test and has no lexical caller
+ack dead-code:preexisting 36c2c9ad631e588e 0 cid=770dde247354e8ad issue 97 transaction lifecycle fixtures implement required TransactionProvider and Transaction methods; tests execute every method and the duplicate signatures are interface-mandated
+ack dead-code:preexisting 51a6efb4d658cc13 0 cid=a3f095f9ae20de75 issue 97 transaction lifecycle fixtures implement required TransactionProvider and Transaction methods; tests execute every method and the duplicate signatures are interface-mandated
 ack dead-code:preexisting 7a16856d104c1242 0 cid=929c4cf68c910d24 issue 19 required declarative fixtures and reviewed false-positive structural matches
+ack dead-code:preexisting f48c4936c29cfc3b 0 cid=f87d723ac0645bb6 issue 97 transaction lifecycle fixtures implement required TransactionProvider and Transaction methods; tests execute every method and the duplicate signatures are interface-mandated
 ack duplication 1ca60a0322e7fa73 21 issue 58 requires independent language fixture helpers, generated server serializers, and declarative suite mappings; reviewed cross-boundary structural matches cannot share implementation
 ack duplication 1dbc75029553fd6f 129 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 1fb5e8a3a7e0e814 97 issue 58 centralizes the remote-worker fixture inside internal conformance; cross-package event fixture loading remains independent test scaffolding
@@ -9,6 +12,7 @@ ack duplication 22f1088041164831 113 issue 13 typed fixture validators share del
 ack duplication 23ca4414889c1332 31 issue 65 reviewed structural matches across package-specific encoders, limits, immutable value copies, and test fixture loaders; shared reuse would violate package or oracle independence
 ack duplication 25ada1de97b370b1 25 issue 82 HTTP adapter construction and generated operation variables are unrelated APIs; reviewed structural false positive
 ack duplication 27906dc064fe6f05 43 issue 29 requires an independently executable SDK runtime and generator separate from the conformance oracle; cross-language normalization cannot share implementation
+ack duplication 2b32b5306efda2b1 99 issue 97 transaction lifecycle fixtures implement required TransactionProvider and Transaction methods; tests execute every method and the duplicate signatures are interface-mandated
 ack duplication 2e7ec416acf59c24 94 issue 13 typed fixture validators share deliberate table assertion scaffolding
 ack duplication 2ee018937d18ab0d 45 issue 29 requires an independently executable SDK runtime and generator separate from the conformance oracle; cross-language normalization cannot share implementation
 ack duplication 32777e3f3ae72c9d 181 issue 19 required declarative fixtures and reviewed false-positive structural matches

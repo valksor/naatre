@@ -12,8 +12,8 @@
     "manifest": {"path": "sdk/php/generated/operations.json", "sha256": "b7e2211237ed952fc0e0a8c423cb11a2ee9d087f2f2e4d5ef5e569826fef12c3"}
   },
   "evidence": [
-    {"path": "sdk/php/README.md", "sha256": "9c6abd4b9e6d6786c6d60fde6df290800c551b448bab59122cec0491cff59a19"},
-    {"path": "sdk/php/composer.json", "sha256": "d7186176c8110ad8c013a6039dc87c0d1e99019476477823c1d51757d136cf90"},
+    {"path": "sdk/php/README.md", "sha256": "95bc5b420dee9c3aeb3799ceb8735bab3f399a2bcc348bcb9dd12e7f13543278"},
+    {"path": "sdk/php/composer.json", "sha256": "ef3b1b305ad331d12ff95a2bfb71341e4f3ebb9adfdffec3a82ab5b7d2c6acaa"},
     {"path": "sdk/php/phpstan.neon", "sha256": "533b8b7b3954ed2cb957be520cdaffa3fcea8a5f30606245eb96c3b2d04fcdd3"},
     {"path": "sdk/php/psalm.xml", "sha256": "a34b751821b8c2a506b7ec5e5374c2a76ffc6a1c167a8c881228f6ca96255723"},
     {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},

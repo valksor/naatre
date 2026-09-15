@@ -239,6 +239,12 @@ validation, FPM unary capability rejection, and a framed long-lived reference
 worker. The same Go gateway fixture executes neutral, Symfony, and Laravel
 context bindings over stdio. Native framework worker adapters and the complete
 runtime matrix remain owned by #97 and #69 respectively.
+`v1/php-worker-adapters.json` pins `sdk.php.worker-adapters-1` to the exact #58
+server revision and fixture digest. Its listener-free CLI model independently
+exercises Symfony, Laravel, FPM, RoadRunner, and Swoole lifecycle, cancellation,
+pool, transaction, streaming, request-isolation, stable-failure, and resource-
+limit vectors. Native framework/runtime boot and the complete certification
+matrix remain explicitly unsupported and owned outside this profile.
 `v1/dotnet-sdk.json` pins `sdk.dotnet.core-1`: deterministic C# selected-result
 bindings, nullable `net8.0` and `net10.0` builds, an F# consumer build, explicit
 presence and open-variant shapes, lossless extended scalars, persisted request
