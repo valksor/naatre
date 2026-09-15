@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/valksor/naatre/protocol"
+	naatrecbor "github.com/valksor/naatre/protocol/cbor"
 	"github.com/valksor/naatre/runtime"
 )
 
@@ -80,6 +81,61 @@ func TestHandlerStatusMediaEncodingAndProtocolParity(t *testing.T) {
 	if response.Header().Get("Allow") != "POST, OPTIONS" || response.Header().Get("Location") != "" {
 		t.Fatalf("method headers = %v", response.Header())
 	}
+}
+
+func TestHandlerCBORNegotiationAndMalformedIsolation(t *testing.T) {
+	t.Parallel()
+	var invocations atomic.Int64
+	handler := testHandler(t, Config{EnableCBOR: true, Executor: func(context.Context, *protocol.Request) runtime.Outcome {
+		invocations.Add(1)
+		return runtime.Outcome{Data: map[string]any{"value": "ok"}, Capabilities: []string{CBORCapability}}
+	}})
+	cborRequest := []byte(`{"version":"1","id":"client-1","capabilities":["` + CBORCapability + `"],"document":{"operations":[{"name":"Ping","kind":"query","select":[{"$call":{"name":"ping"}}]}]}}`)
+	body, err := encodeCBORPayload(cborRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := newRequestBytes(body)
+	request.Header.Set("Content-Type", CBORRequestMediaType)
+	request.Header.Set("Accept", CBORResponseMediaType)
+	request.Header.Set("Naatre-Capabilities", CBORCapability)
+	response := serve(handler, request)
+	if response.Code != stdhttp.StatusOK || response.Header().Get("Content-Type") != CBORResponseMediaType {
+		t.Fatalf("CBOR response = %d headers=%v body=%x", response.Code, response.Header(), response.Body.Bytes())
+	}
+	decoded, err := naatrecbor.DecodeJSON(response.Body.Bytes(), naatrecbor.Limits{})
+	if err != nil || !strings.Contains(string(decoded), `"value":"ok"`) {
+		t.Fatalf("decoded CBOR response = %s, %v", decoded, err)
+	}
+	if !varyContains(response.Header(), "Accept") || !varyContains(response.Header(), "Naatre-Capabilities") {
+		t.Fatalf("CBOR response Vary = %v", response.Header().Values("Vary"))
+	}
+
+	request = newRequest(validRequest)
+	request.Header.Set("Accept", CBORResponseMediaType)
+	assertProblem(t, serve(handler, request), stdhttp.StatusNotAcceptable, "NOT_ACCEPTABLE")
+
+	request = newRequest(validRequest)
+	request.Header.Set("Accept", "application/*")
+	response = serve(handler, request)
+	if response.Header().Get("Content-Type") != ResponseMediaType {
+		t.Fatalf("wildcard response media = %q", response.Header().Get("Content-Type"))
+	}
+
+	before := invocations.Load()
+	request = newRequestBytes(body[:len(body)-1])
+	request.Header.Set("Content-Type", CBORRequestMediaType)
+	request.Header.Set("Naatre-Capabilities", CBORCapability)
+	assertProblem(t, serve(handler, request), stdhttp.StatusBadRequest, "MALFORMED_CBOR")
+	if invocations.Load() != before {
+		t.Fatal("malformed CBOR invoked the executor")
+	}
+
+	disabled := testHandler(t, Config{})
+	request = newRequestBytes(body)
+	request.Header.Set("Content-Type", CBORRequestMediaType)
+	request.Header.Set("Naatre-Capabilities", CBORCapability)
+	assertProblem(t, serve(disabled, request), stdhttp.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE")
 }
 
 func TestHandlerCompressedAndDecompressedLimits(t *testing.T) {

@@ -39,6 +39,7 @@ jobs:
           npm --prefix sdk/typescript run typecheck
           node conformance/independent/scalars.mjs
           node conformance/independent/canonical.mjs
+          node conformance/independent/cbor.mjs
           node conformance/independent/http-digest.mjs
           node conformance/independent/reliability.mjs
           node conformance/independent/profiles.mjs

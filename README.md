@@ -22,6 +22,8 @@ evidence must be described as planned.
 - `conformance`: portable fixtures and profile manifests.
 - `docs/tooling.md`: offline CLI, editor adapter, mocks, and compatibility workflow.
 - `protocol`: strict envelopes, decoding, and typed operation documents.
+- `protocol/cbor`: dependency-free deterministic unary CBOR codec, strict
+  budgets, and JSON semantic projection for `transport.cbor.unary-1`.
 - `internal/slicesx`: dependency-free slice transformations shared by portable layers.
 - `client`: runtime-independent Go SDK request values, immutable typed
   builders, generated-result primitives, persisted manifests, query-only
