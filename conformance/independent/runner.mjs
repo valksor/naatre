@@ -31,6 +31,7 @@ const implementations = new Map([
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.rust.adapters-1", "verify-rust-async-adapters.mjs"],
   ["sdk.jvm.core-1", "verify-jvm-sdk.mjs"],
+  ["sdk.jvm.adapters-1", "verify-jvm-adapters.mjs"],
   ["sdk.dotnet.core-1", "verify-dotnet-sdk.mjs"],
   ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
   ["sdk.dart.core-1", "verify-dart-sdk.mjs"],
@@ -40,6 +41,7 @@ const implementations = new Map([
 ]);
 const profileTimeouts = new Map([
   ["sdk.jvm.core-1", 240_000],
+  ["sdk.jvm.adapters-1", 240_000],
   ["sdk.dotnet.core-1", 120_000],
   ["sdk.rust.adapters-1", 120_000],
 ]);

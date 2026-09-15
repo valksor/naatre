@@ -1,0 +1,34 @@
+{
+  "profile": "sdk.jvm.android-compat-1",
+  "status": "passed",
+  "runtimeStatus": "not-executed",
+  "platform": "Android D8 compatibility on macOS 26.6.2 arm64",
+  "minimumApi": 26,
+  "compileSdk": 36,
+  "compileSdkRevision": 2,
+  "buildTools": "36.0.0",
+  "d8": "8.10.9-dev a7ad18a70460b799d0482e497c109a75bf7f91de",
+  "jdk": "OpenJDK 21.0.12.1",
+  "kotlin": "2.2.20",
+  "coroutines": "1.10.2",
+  "bytecodeTarget": "17",
+  "sourceSetSha256": "442c69c8e7cceb29534bedcaf7cd5ce9d32dd68fb1f355f18df32f5eaae34897",
+  "command": "sdk/jvm/check-android.sh",
+  "vectors": [
+    "api26-d8-conversion",
+    "server-http-package-exclusion",
+    "java-kotlin-core-linkage",
+    "java-type-use-nullability",
+    "missing-null-pending-distinction",
+    "unknown-enum-union-preservation",
+    "big-integer-nanosecond-precision",
+    "future-active-cancellation",
+    "response-resource-limit"
+  ],
+  "unsupported": [
+    "device-or-emulator-runtime-certification",
+    "android-java-net-http",
+    "android-concrete-http-engine",
+    "android-framework-lifecycle-binding"
+  ]
+}

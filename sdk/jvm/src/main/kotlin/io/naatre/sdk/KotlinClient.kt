@@ -65,7 +65,7 @@ class KotlinClient(private val delegate: Client) {
             override fun onNext(item: OperationResult<R>) {
                 trySend(item).onFailure { failure ->
                     cancelSubscription()
-                    close(failure ?: ClientException(ErrorCode.TRANSPORT, "Kotlin Flow buffer rejected a frame"))
+                    close(failure ?: ClientException(ErrorCode.TRANSPORT))
                 }
             }
 

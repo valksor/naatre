@@ -473,6 +473,12 @@
       "profile": "sdk.python.adapters-1",
       "category": "transport",
       "sha256": "ad608dc81e2f48680acc2b50e766e867628b7d857ad8e8e5cfb12c14331a8872"
+    },
+    {
+      "path": "v1/jvm-adapters.json",
+      "profile": "sdk.jvm.adapters-1",
+      "category": "transport",
+      "sha256": "857686fa4c5fc3bcdafaf471b0294aa01527c7fadd7d61f8e962e5b90475f8f2"
     }
   ],
   "normativeSources": [

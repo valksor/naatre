@@ -46,7 +46,8 @@ evidence must be described as planned.
   wrappers, deterministic serde operation bindings for `sdk.rust.core-1`, and
   optional task-local Tokio adapters for `sdk.rust.adapters-1`.
 - `sdk/jvm`: Java 17 wire/client core, deterministic Java and Kotlin bindings,
-  and cancellation-safe coroutine and Flow views for `sdk.jvm.core-1`.
+  cancellation-safe coroutine and Flow views, a separate server-only
+  `java.net.http` unary adapter, and an Android API-26 D8 compatibility profile.
 - `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,
   F# consumption proof, and cancellable HTTP/SSE reference client for
   `sdk.dotnet.core-1`.

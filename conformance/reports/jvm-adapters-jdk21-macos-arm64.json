@@ -1,0 +1,24 @@
+{
+  "profile": "sdk.jvm.java-http-1",
+  "status": "passed",
+  "platform": "macOS 26.6.2 arm64",
+  "jdk": "OpenJDK 21.0.12.1",
+  "bytecodeTarget": "17",
+  "sourceSetSha256": "f6b4e460c45a8b871a98ec1000e131735a05f730f8e8bb0814551c70bab9dbb9",
+  "command": "sdk/jvm/check-server-adapter.sh",
+  "vectors": [
+    "canonical-post-body",
+    "json-media-type",
+    "identity-content-encoding",
+    "redirect-credential-stripping",
+    "redirect-body-closure",
+    "redirect-denial",
+    "exact-response-boundary",
+    "declared-response-limit-before-read",
+    "streamed-response-limit",
+    "active-call-cancellation",
+    "transport-close-cancellation",
+    "stable-redacted-failures",
+    "unsupported-sse-websocket"
+  ]
+}

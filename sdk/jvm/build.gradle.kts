@@ -50,6 +50,7 @@ tasks.register<JavaExec>("jvmConformance") {
 
 tasks.named("check") {
     dependsOn("jvmConformance")
+    dependsOn(":java-http:check")
 }
 
 publishing {
