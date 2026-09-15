@@ -8,7 +8,8 @@ const String dartGeneratorVersion = 'naatre.generator.dart-sdk-1';
 const int _maximumInputBytes = 4 << 20;
 
 final class DartGeneratorException extends NaatreClientException {
-  const DartGeneratorException(super.code, [super.cause]);
+  const DartGeneratorException(String code, [Object? cause])
+    : super(code, cause);
 }
 
 final class DartArtifacts {

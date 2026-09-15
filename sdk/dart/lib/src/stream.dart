@@ -137,6 +137,55 @@ Stream<StreamFrame> decodeSse(
   }
 }
 
+Stream<StreamFrame> decodeJsonFrames(
+  Stream<List<int>> source, {
+  int maximumFrameBytes = 1 << 20,
+  Future<void> Function()? close,
+}) async* {
+  String? acceptedStream;
+  int acceptedSequence = 0;
+  bool terminal = false;
+  bool sourceEnded = false;
+  try {
+    await for (final List<int> chunk in source) {
+      if (terminal) _fail('CLIENT_STREAM_INVALID');
+      if (chunk.length > maximumFrameBytes) _fail('CLIENT_STREAM_LIMIT');
+      late final String payload;
+      try {
+        payload = utf8.decode(chunk, allowMalformed: false);
+      } on FormatException catch (error) {
+        _fail('CLIENT_STREAM_INVALID', error);
+      }
+      final StreamFrame frame = _decodeFrame(
+        expectObject(parseStrictJson(payload, maximumBytes: maximumFrameBytes)),
+      );
+      if (acceptedStream != null && frame.stream != acceptedStream) {
+        _fail('CLIENT_STREAM_INVALID');
+      }
+      if (frame.type == 'keepalive') {
+        if (acceptedSequence == 0) _fail('CLIENT_STREAM_INVALID');
+      } else {
+        if (frame.sequence != acceptedSequence + 1 ||
+            acceptedSequence == 0 && frame.type != 'open' ||
+            (frame.type == 'resume' || frame.type == 'history-unavailable') &&
+                acceptedSequence != 1) {
+          _fail('CLIENT_STREAM_INVALID');
+        }
+        acceptedStream ??= frame.stream;
+        acceptedSequence = frame.sequence!;
+      }
+      terminal = frame.terminal || frame.type == 'history-unavailable';
+      yield frame;
+      if (terminal) return;
+    }
+    sourceEnded = true;
+    if (!terminal) _fail('CLIENT_STREAM_TRUNCATED');
+  } finally {
+    await close?.call();
+    if (!sourceEnded) acceptedStream = null;
+  }
+}
+
 StreamFrame _decodeEvent(
   String? event,
   String? eventId,
@@ -146,6 +195,19 @@ StreamFrame _decodeEvent(
   final Map<String, Object?> frame = expectObject(
     parseStrictJson(lines.join('\n'), maximumBytes: maximumFrameBytes),
   );
+  final StreamFrame decoded = _decodeFrame(frame);
+  if (event != 'naatre.${decoded.type}') {
+    _fail('CLIENT_STREAM_INVALID');
+  }
+  final Object? cursor = frame['cursor'];
+  if ((eventId == null) != (cursor == null) ||
+      eventId != null && (cursor is! String || cursor != eventId)) {
+    _fail('CLIENT_STREAM_INVALID');
+  }
+  return decoded;
+}
+
+StreamFrame _decodeFrame(Map<String, Object?> frame) {
   final Object? type = frame['type'];
   final Object? stream = frame['stream'];
   final Object? sequence = frame['sequence'];
@@ -160,18 +222,12 @@ StreamFrame _decodeEvent(
         'keepalive',
         'resume',
         'history-unavailable',
-      }.contains(type) ||
-      event != 'naatre.$type') {
+      }.contains(type)) {
     _fail('CLIENT_STREAM_INVALID');
   }
   if (type == 'keepalive') {
     if (sequence != null) _fail('CLIENT_STREAM_INVALID');
   } else if (sequence is! int || sequence < 1) {
-    _fail('CLIENT_STREAM_INVALID');
-  }
-  final Object? cursor = frame['cursor'];
-  if ((eventId == null) != (cursor == null) ||
-      eventId != null && (cursor is! String || cursor != eventId)) {
     _fail('CLIENT_STREAM_INVALID');
   }
   return StreamFrame(

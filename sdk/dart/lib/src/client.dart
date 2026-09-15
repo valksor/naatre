@@ -94,10 +94,9 @@ final class NaatreClient {
     CancellationToken? cancellation,
     DateTime? deadline,
   }) async* {
-    if (protocol == StreamProtocol.webSocket) {
-      _fail('CLIENT_CAPABILITY_UNSUPPORTED:websocket');
-    }
-    final StreamTransport? selected = sseTransport;
+    final StreamTransport? selected = protocol == StreamProtocol.sse
+        ? sseTransport
+        : webSocketTransport;
     if (selected == null) {
       final String capability = protocol == StreamProtocol.sse
           ? 'sse'
@@ -120,11 +119,19 @@ final class NaatreClient {
       cancellation: cancellation,
       deadline: deadline,
     );
-    yield* decodeSse(
-      chunks,
-      maximumFrameBytes: limits.frameBytes,
-      close: connection.close,
-    );
+    if (protocol == StreamProtocol.sse) {
+      yield* decodeSse(
+        chunks,
+        maximumFrameBytes: limits.frameBytes,
+        close: connection.close,
+      );
+    } else {
+      yield* decodeJsonFrames(
+        chunks,
+        maximumFrameBytes: limits.frameBytes,
+        close: connection.close,
+      );
+    }
   }
 
   Stream<T> paginate<T>(
@@ -150,7 +157,11 @@ final class NaatreClient {
   Future<Map<String, String>> _headers() async {
     final AuthenticationProvider? provider = authentication;
     if (provider == null) return const <String, String>{};
-    return Map<String, String>.unmodifiable(await provider.headers());
+    try {
+      return Map<String, String>.unmodifiable(await provider.headers());
+    } on Object {
+      _fail('CLIENT_AUTHENTICATION_FAILED');
+    }
   }
 }
 

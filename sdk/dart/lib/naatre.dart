@@ -1,5 +1,6 @@
 library;
 
+export 'src/adapters.dart';
 export 'src/client.dart';
 export 'src/error.dart';
 export 'src/generator.dart';

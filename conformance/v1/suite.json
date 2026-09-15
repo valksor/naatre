@@ -334,7 +334,7 @@
       "path": "v1/dart-sdk.json",
       "profile": "sdk.dart.core-1",
       "category": "canonical",
-      "sha256": "4154e2f7e05fa497f5e1f17ffd154e5c81a52ca635603aec65cb9f782d8756e5"
+      "sha256": "b6f1ead1b3d42550724d7f2e89e2313beecb9abd8b702c6dfb14987365722113"
     },
     {
       "path": "v1/ruby-sdk.json",

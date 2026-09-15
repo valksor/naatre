@@ -1,8 +1,7 @@
 class NaatreClientException implements Exception {
-  const NaatreClientException(this.code, [this.cause]);
+  const NaatreClientException(this.code, [Object? cause]);
 
   final String code;
-  final Object? cause;
 
   @override
   String toString() => 'NaatreClientException: $code';
