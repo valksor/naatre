@@ -24,6 +24,8 @@ sdk/jvm/build/
 sdk/jvm/target/
 !sdk/dart/bin/
 !sdk/dart/bin/naatre_sdkgen.dart
+!sdk/rust/src/bin/
+!sdk/rust/src/bin/generator.rs
 coverage.out
 dist/
 node_modules/
