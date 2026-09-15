@@ -91,6 +91,10 @@ troubleshooting, and the third-party implementation path.
   webhook verification, replay status, endpoint policy, and durable delivery
   state contracts for `core.events-1`; applications remain responsible for
   producing business events and #90 owns durable HTTP delivery.
+- `webhook`: durable SQLite outbox/replay/order state, fenced retry dispatch,
+  pinned-address no-redirect HTTPS delivery, rotation-aware signing, and a
+  listener-neutral receiver for `events.webhook-adapters-go-1`; see the
+  [webhook adapter guide](docs/webhook-adapters.md).
 - `generator`: versioned language-neutral generator-model validation,
   deterministic reference output, semantic manifest hashing, and output-root
   containment for `sdk.generation-1`.

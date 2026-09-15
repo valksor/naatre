@@ -38,6 +38,7 @@ var layers = []struct {
 	{"sdk", 3},
 	{"observability", 3},
 	{"asyncoperation", 3},
+	{"webhook", 3},
 	{"reflectadapter", 3},
 	{"interopadapter", 3},
 	{"asyncapi", 4},

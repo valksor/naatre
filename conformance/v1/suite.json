@@ -475,6 +475,12 @@
       "sha256": "5aa10c1553346e3b66295ff0acaf724277f6ee88b0362a9af08dfcbd7df12fe9"
     },
     {
+      "path": "v1/webhook-adapters.json",
+      "profile": "events.webhook-adapters-go-1",
+      "category": "integration",
+      "sha256": "a62741c0d5ebbb6f1ab94ba8b147494235a6c27d35ad12879b8825fa68eca1e4"
+    },
+    {
       "path": "v1/governance.json",
       "profile": "governance.release-1",
       "category": "evolution",
@@ -8534,6 +8540,11 @@
       "caseId": "issue.90",
       "issue": 90,
       "fixtureRefs": [
+        {
+          "path": "v1/webhook-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/90",
