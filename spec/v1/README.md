@@ -67,6 +67,7 @@ Documents:
 24. [Deterministic CBOR transport profile](cbor.md)
 25. [Developer tooling](tooling.md)
 26. [Interoperability adapters](adapters.md)
+21. [JSON Type Definition projection and fidelity](jtd.md)
 
 The specification is language-neutral. Go is a reference implementation and
 does not override these documents or their portable fixtures.

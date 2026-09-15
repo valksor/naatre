@@ -449,6 +449,12 @@
       "profile": "transport.cbor.unary-1",
       "category": "transport",
       "sha256": "f8eaa941c69a03dff8001ba154765ee0d9b2c5d1b29b37a2d021f26e528730f4"
+    },
+    {
+      "path": "v1/jtd.json",
+      "profile": "schema.jtd-1",
+      "category": "schema",
+      "sha256": "56e236f82dc1d4b55d81d0fe81a99b046ce3563b9b12b0bec1e2e2b96ebd7cae"
     }
   ],
   "normativeSources": [
@@ -6977,6 +6983,55 @@
           "path": "v1/cbor.json",
           "pointer": "/streaming",
           "polarity": "negative"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.jtd.authority-mapping",
+      "spec": "spec/v1/jtd.md",
+      "clauses": [
+        "JTD-001",
+        "JTD-002",
+        "JTD-003",
+        "JTD-004"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/jtd.json",
+          "pointer": "/losslessSchema",
+          "polarity": "positive"
+        },
+        {
+          "path": "v1/jtd.json",
+          "pointer": "/forms/0",
+          "polarity": "mixed"
+        },
+        {
+          "path": "v1/jtd.json",
+          "pointer": "/negativeExports/0",
+          "polarity": "negative"
+        }
+      ]
+    },
+    {
+      "caseId": "requirements.jtd.validation-determinism",
+      "spec": "spec/v1/jtd.md",
+      "clauses": [
+        "JTD-100",
+        "JTD-101",
+        "JTD-102",
+        "JTD-103"
+      ],
+      "fixtureRefs": [
+        {
+          "path": "v1/jtd.json",
+          "pointer": "/boundedFailures/0",
+          "polarity": "negative"
+        },
+        {
+          "path": "v1/jtd.json",
+          "pointer": "/losslessSchema",
+          "polarity": "positive"
         }
       ]
     }

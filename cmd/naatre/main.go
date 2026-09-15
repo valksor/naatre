@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -149,9 +151,192 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 		return runSchemaExport(args[1:], stdout, stderr)
 	case "diff":
 		return runSchemaDiff(args[1:], stdout, stderr)
+	case "jtd":
+		return runSchemaJTD(args[1:], stdout, stderr)
 	default:
 		return usage(stderr)
 	}
+}
+
+func runSchemaJTD(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr)
+	}
+	switch args[0] {
+	case "export":
+		return runJTDExport(args[1:], stdout, stderr)
+	case "import":
+		return runJTDImport(args[1:], stdout, stderr)
+	case "validate":
+		return runJTDValidate(args[1:], stdout, stderr)
+	case "diff":
+		return runJTDDiff(args[1:], stdout, stderr)
+	default:
+		return usage(stderr)
+	}
+}
+
+func runJTDExport(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("schema jtd export", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	schemaPath := flags.String("schema", "", "canonical Naatre schema")
+	root := flags.String("root", "", "root type identity")
+	reportPath := flags.String("report", "", "optional fidelity report output")
+	if flags.Parse(args) != nil || *schemaPath == "" || *root == "" || flags.NArg() != 0 {
+		return usage(stderr)
+	}
+	document, status := readSchema(*schemaPath, stderr)
+	if status != exitOK {
+		return status
+	}
+	output, report, err := generator.GenerateJTD(document, schema.TypeID(*root))
+	if err != nil {
+		return writeFailure(stderr, err)
+	}
+	if *reportPath != "" {
+		encoded, encodeErr := json.Marshal(report)
+		if encodeErr != nil {
+			return exitInternal
+		}
+		if status := writeArtifact(*reportPath, append(encoded, '\n'), stderr); status != exitOK {
+			return status
+		}
+	}
+	if _, err := stdout.Write(append(output, '\n')); err != nil {
+		return exitIO
+	}
+	return exitOK
+}
+
+func runJTDImport(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("schema jtd import", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jtdPath := flags.String("jtd", "", "JTD document")
+	optionsFlags := addJTDImportFlags(flags)
+	if flags.Parse(args) != nil || *jtdPath == "" || flags.NArg() != 0 {
+		return usage(stderr)
+	}
+	input, status := readInput(*jtdPath, stderr)
+	if status != exitOK {
+		return status
+	}
+	options, status := readJTDImportOptions(optionsFlags, stderr)
+	if status != exitOK {
+		return status
+	}
+	output, _, err := tooling.ImportJTD(input, options)
+	if err != nil {
+		return writeFailure(stderr, err)
+	}
+	if _, err := stdout.Write(append(output, '\n')); err != nil {
+		return exitIO
+	}
+	return exitOK
+}
+
+func runJTDValidate(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("schema jtd validate", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jtdPath := flags.String("jtd", "", "JTD document")
+	optionsFlags := addJTDImportFlags(flags)
+	if flags.Parse(args) != nil || *jtdPath == "" || flags.NArg() != 0 {
+		return usage(stderr)
+	}
+	input, status := readInput(*jtdPath, stderr)
+	if status != exitOK {
+		return status
+	}
+	options, status := readJTDImportOptions(optionsFlags, stderr)
+	if status != exitOK {
+		return status
+	}
+	report, err := tooling.ValidateJTD(input, options)
+	if writeJSON(stdout, report) != nil {
+		return exitIO
+	}
+	if err != nil {
+		return exitDiagnostic
+	}
+	return exitOK
+}
+
+func runJTDDiff(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("schema jtd diff", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	beforePath := flags.String("before", "", "previous JTD projection")
+	afterPath := flags.String("after", "", "proposed JTD projection")
+	optionsFlags := addJTDImportFlags(flags)
+	if flags.Parse(args) != nil || *beforePath == "" || *afterPath == "" || flags.NArg() != 0 {
+		return usage(stderr)
+	}
+	before, status := readInput(*beforePath, stderr)
+	if status != exitOK {
+		return status
+	}
+	after, status := readInput(*afterPath, stderr)
+	if status != exitOK {
+		return status
+	}
+	options, status := readJTDImportOptions(optionsFlags, stderr)
+	if status != exitOK {
+		return status
+	}
+	diff, err := tooling.DiffJTD(before, after, options)
+	if err != nil {
+		return writeFailure(stderr, err)
+	}
+	return writeJSONStatus(stdout, diff)
+}
+
+type jtdImportFlags struct {
+	identities              string
+	revision                string
+	embedded, input, output bool
+}
+
+type jtdIdentityFile struct {
+	Types   map[string]schema.TypeID `json:"types"`
+	Fields  map[string]string        `json:"fields"`
+	Members map[string]string        `json:"members"`
+}
+
+func addJTDImportFlags(flags *flag.FlagSet) *jtdImportFlags {
+	result := &jtdImportFlags{}
+	flags.StringVar(&result.identities, "identities", "", "stable identity assignment JSON")
+	flags.StringVar(&result.revision, "revision", "", "assigned canonical schema revision")
+	flags.BoolVar(&result.embedded, "approve-embedded-identities", false, "approve pinned Naatre identity metadata")
+	flags.BoolVar(&result.input, "input", false, "assign imported definitions to input position")
+	flags.BoolVar(&result.output, "output", false, "assign imported definitions to output position")
+	return result
+}
+
+func readJTDImportOptions(input *jtdImportFlags, stderr io.Writer) (schema.JTDImportOptions, int) {
+	options := schema.JTDImportOptions{
+		Approved: true, UseEmbeddedIdentities: input.embedded, Revision: input.revision,
+		DefaultInput: input.input, DefaultOutput: input.output,
+	}
+	if input.identities != "" {
+		encoded, status := readInput(input.identities, stderr)
+		if status != exitOK {
+			return options, status
+		}
+		var identities jtdIdentityFile
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&identities); err != nil {
+			return options, writeFailure(stderr, errors.New("invalid JTD identity assignment file"))
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return options, writeFailure(stderr, errors.New("invalid JTD identity assignment file"))
+		}
+		options.Identities = identities.Types
+		options.FieldIdentities = identities.Fields
+		options.MemberIdentities = identities.Members
+	}
+	if !input.embedded && (input.identities == "" || input.revision == "" || (!input.input && !input.output)) {
+		return options, usage(stderr)
+	}
+	return options, exitOK
 }
 
 func runSchemaExport(args []string, stdout, stderr io.Writer) int {

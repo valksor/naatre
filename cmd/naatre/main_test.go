@@ -23,6 +23,12 @@ const cliSchema = `{
   "members":[{"id":"User.name.resolver","name":"name","owner":"User","kind":"field","output":"String","effect":"read","deterministic":true,"cacheable":true,"retrySafe":true,"threadSafety":"thread-safe","batching":"ineligible","transaction":"none","authorizationPolicy":"public","cost":1}]
 }`
 
+const cliJTDSchema = `{
+  "version":"1","canonicalVersion":"c14n-1","revision":"cli-jtd-r1",
+  "types":[{"id":"Node","name":"Node","kind":"object","output":true,"maxDepth":3,"fields":[{"id":"Node.name","name":"name","type":"String","required":true},{"id":"Node.next","name":"next","type":"Node","nullable":true}]}],
+  "operations":[],"members":[]
+}`
+
 type rejectingWriter struct{}
 
 func (rejectingWriter) Write([]byte) (int, error) {
@@ -128,6 +134,48 @@ func TestGenerateGoClientAndConformanceCommands(t *testing.T) {
 	invalid := writeTestFile(t, outputDirectory, "invalid-tooling.json", []byte(`{"profile":"tooling.workflow-1"}`))
 	if status := run([]string{"conformance", "--fixture", invalid}, &stdout, &stderr); status != exitDiagnostic {
 		t.Fatalf("invalid conformance = %d", status)
+	}
+}
+
+func TestJTDCLIUsesSharedGenerationValidationImportAndDiff(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	schemaPath := writeTestFile(t, directory, "schema.json", []byte(cliJTDSchema))
+	reportPath := filepath.Join(directory, "fidelity.json")
+	var output, diagnostic bytes.Buffer
+	if status := run([]string{"schema", "jtd", "export", "--schema", schemaPath, "--root", "Node", "--report", reportPath}, &output, &diagnostic); status != exitOK {
+		t.Fatalf("JTD export = %d, %s", status, diagnostic.String())
+	}
+	projection := append([]byte(nil), output.Bytes()...)
+	if len(projection) == 0 {
+		t.Fatal("JTD export is empty")
+	}
+	var report struct {
+		Exact   bool `json:"exact"`
+		Binding struct {
+			Mapper string `json:"mapperRevision"`
+		} `json:"binding"`
+	}
+	reportBytes, err := os.ReadFile(reportPath)
+	if err != nil || json.Unmarshal(reportBytes, &report) != nil || !report.Exact || report.Binding.Mapper == "" {
+		t.Fatalf("JTD report = %s, %v", reportBytes, err)
+	}
+	jtdPath := writeTestFile(t, directory, "schema.jtd.json", projection)
+	output.Reset()
+	if status := run([]string{"schema", "jtd", "validate", "--jtd", jtdPath, "--approve-embedded-identities"}, &output, &diagnostic); status != exitOK {
+		t.Fatalf("JTD validate = %d, %s, %s", status, output.String(), diagnostic.String())
+	}
+	output.Reset()
+	if status := run([]string{"schema", "jtd", "import", "--jtd", jtdPath, "--approve-embedded-identities"}, &output, &diagnostic); status != exitOK {
+		t.Fatalf("JTD import = %d, %s", status, diagnostic.String())
+	}
+	want, err := tooling.ExportSchema([]byte(cliJTDSchema))
+	if err != nil || !bytes.Equal(bytes.TrimSpace(output.Bytes()), want) {
+		t.Fatalf("JTD imported schema differs:\n%s\n%s\n%v", output.Bytes(), want, err)
+	}
+	output.Reset()
+	if status := run([]string{"schema", "jtd", "diff", "--before", jtdPath, "--after", jtdPath, "--approve-embedded-identities"}, &output, &diagnostic); status != exitOK || !bytes.Contains(output.Bytes(), []byte(`"changes":null`)) {
+		t.Fatalf("JTD diff = %d, %s, %s", status, output.String(), diagnostic.String())
 	}
 }
 

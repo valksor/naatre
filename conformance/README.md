@@ -8,6 +8,11 @@ implementation version, platform, and claimed profile.
 Generated fixture changes must be reproducible byte-for-byte. Tests read the
 checked-in files rather than duplicating their expected values in Go source.
 
+`v1/jtd.json` pins `schema.jtd-1` to RFC 8927 and carries positive and
+negative import/export fixtures for every supported form, bounded hostile
+inputs, deterministic round-trip evidence, and the independent canonical
+source binding used to compare JTD with JSON Schema fidelity reports.
+
 `v1/http-digest.json` pins the `core.http.digest-1` RFC 9530 profile with exact
 identity, gzip, range, and transfer-framed bytes; strict negotiation and failure
 vectors; phase outcomes; webhook signature inputs; and explicit trailer

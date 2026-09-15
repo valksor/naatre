@@ -57,8 +57,9 @@ evidence must be described as planned.
   operation bindings for `sdk.dart.core-1`.
 - `sdk/ruby/` contains the dependency-free Ruby core, deterministic generated
   operation bindings, and RBS metadata for `sdk.ruby.core-1`.
-- `schema`: portable types, values, scalar codecs, portable validation and
-  strict JSON Schema 2020-12 constraint mappings, and deterministic federation
+- `schema`: portable types, values, scalar codecs, portable validation,
+  strict JSON Schema 2020-12 constraint mappings, an RFC 8927 JTD projection
+  with independent fidelity reports, and deterministic federation
   composition from operator-pinned service manifests.
 - `collectionquery`: optional provider-neutral typed filter evaluation, stable
   sorting, and parameterized SQLite translation for `collection.query-1`.
