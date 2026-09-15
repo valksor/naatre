@@ -867,18 +867,20 @@
     "79": {
       "issue": 79,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 79,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.php.adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.php.adapters-1"
+        ]
       }
     },
     "80": {

@@ -67,7 +67,11 @@ namespace Naatre\Sdk\Tests {
         private int $offset = 0;
         private bool $closed = false;
 
-        public function __construct(private readonly string $contents)
+        public function __construct(
+            private readonly string $contents = '',
+            private readonly bool $stall = false,
+            private readonly bool $failClose = false,
+        )
         {
         }
 
@@ -78,12 +82,15 @@ namespace Naatre\Sdk\Tests {
 
         public function close(): void
         {
+            if ($this->failClose) {
+                throw new \RuntimeException('Bearer protected-close-detail');
+            }
             $this->closed = true;
         }
 
         public function eof(): bool
         {
-            return $this->closed || $this->offset >= strlen($this->contents);
+            return $this->closed || (!$this->stall && $this->offset >= strlen($this->contents));
         }
 
         public function isReadable(): bool
@@ -96,7 +103,7 @@ namespace Naatre\Sdk\Tests {
             if ($this->closed) {
                 throw new \RuntimeException('stream closed');
             }
-            $chunk = substr($this->contents, $this->offset, $length);
+            $chunk = $this->stall ? '' : substr($this->contents, $this->offset, $length);
             $this->offset += strlen($chunk);
             return $chunk;
         }
@@ -136,12 +143,12 @@ namespace Naatre\Sdk\Tests {
 
     final readonly class TestResponse implements ResponseInterface
     {
-        public TestStream $body;
+        public StreamInterface $body;
 
         /** @param array<string, string> $headers */
-        public function __construct(private array $headers, string $body, private int $statusCode = 200)
+        public function __construct(private array $headers, string|StreamInterface $body, private int $statusCode = 200)
         {
-            $this->body = new TestStream($body);
+            $this->body = is_string($body) ? new TestStream($body) : $body;
         }
 
         public function getStatusCode(): int
@@ -160,8 +167,23 @@ namespace Naatre\Sdk\Tests {
         }
     }
 
-    final class TestFactory implements RequestFactoryInterface, StreamFactoryInterface
+    final class TestFactory implements ClientInterface, RequestFactoryInterface, StreamFactoryInterface
     {
+        public ?RequestInterface $request = null;
+        public int $attempts = 0;
+
+        /** @var list<RequestInterface> */
+        public array $requests = [];
+
+        /** @param ResponseInterface|list<ResponseInterface>|null $responses */
+        public function __construct(
+            private array|ResponseInterface|null $responses = null,
+            private readonly int $failuresBeforeSuccess = 0,
+            private readonly string $failureMessage = 'temporary transport failure',
+        )
+        {
+        }
+
         public function createRequest(string $method, mixed $uri): RequestInterface
         {
             return new TestRequest();
@@ -171,25 +193,26 @@ namespace Naatre\Sdk\Tests {
         {
             return new TestStream($content);
         }
-    }
-
-    final class TestHttpClient implements ClientInterface
-    {
-        public ?RequestInterface $request = null;
-        public int $attempts = 0;
-
-        public function __construct(private readonly ResponseInterface $response, private readonly int $failuresBeforeSuccess = 0)
-        {
-        }
 
         public function sendRequest(RequestInterface $request): ResponseInterface
         {
             $this->request = $request;
+            $this->requests[] = $request;
             ++$this->attempts;
             if ($this->attempts <= $this->failuresBeforeSuccess) {
-                throw new TestTransportException('temporary transport failure');
+                throw new TestTransportException($this->failureMessage);
             }
-            return $this->response;
+            if ($this->responses === null) {
+                throw new \RuntimeException('test HTTP client is not configured');
+            }
+            if ($this->responses instanceof ResponseInterface) {
+                return $this->responses;
+            }
+            $response = array_shift($this->responses);
+            if (!$response instanceof ResponseInterface) {
+                throw new \RuntimeException('fixture response exhausted');
+            }
+            return $response;
         }
     }
 

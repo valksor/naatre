@@ -455,6 +455,12 @@
       "profile": "schema.jtd-1",
       "category": "schema",
       "sha256": "56e236f82dc1d4b55d81d0fe81a99b046ce3563b9b12b0bec1e2e2b96ebd7cae"
+    },
+    {
+      "path": "v1/php-adapters.json",
+      "profile": "sdk.php.adapters-1",
+      "category": "integration",
+      "sha256": "13bfb8ffbbfbd6a496de2df038c22775aa9d44e5ad042d888db5ea1327878cb6"
     }
   ],
   "normativeSources": [

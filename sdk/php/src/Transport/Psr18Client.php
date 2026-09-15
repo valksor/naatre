@@ -7,7 +7,6 @@ namespace Naatre\Sdk\Transport;
 use Naatre\Sdk\Exception\ClientException;
 use Naatre\Sdk\Protocol\Operation;
 use Naatre\Sdk\Protocol\OperationResult;
-use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
@@ -30,7 +29,17 @@ final readonly class Psr18Client
         mixed $authenticate = null,
         private int $maximumResponseBytes = 16_777_216,
     ) {
-        if (!str_starts_with($endpoint, 'https://') || $maximumResponseBytes < 1) {
+        $parts = parse_url($endpoint);
+        if (
+            !is_array($parts)
+            || ($parts['scheme'] ?? null) !== 'https'
+            || !isset($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['fragment'])
+            || $maximumResponseBytes < 1
+            || ($authenticate !== null && !is_callable($authenticate))
+        ) {
             throw new ClientException('CLIENT_CONFIGURATION_INVALID');
         }
         $this->authenticate = $authenticate;
@@ -51,9 +60,9 @@ final readonly class Psr18Client
             try {
                 $body = $this->send($operation, $timeoutMilliseconds);
                 return OperationResult::decode($body, $operation);
-            } catch (ClientExceptionInterface $error) {
-                if ($attempt >= $maximumAttempts) {
-                    throw new ClientException('CLIENT_TRANSPORT_ERROR', $error);
+            } catch (ClientException $error) {
+                if ($error->errorCode !== 'CLIENT_TRANSPORT_ERROR' || $attempt >= $maximumAttempts) {
+                    throw $error;
                 }
             }
         }
@@ -61,48 +70,24 @@ final readonly class Psr18Client
 
     private function send(Operation $operation, ?int $timeoutMilliseconds): string
     {
-        $request = $this->requests->createRequest('POST', $this->endpoint)
-            ->withHeader('Content-Type', self::REQUEST_MEDIA_TYPE)
-            ->withHeader('Accept', self::RESPONSE_MEDIA_TYPE)
-            ->withBody($this->streams->createStream($operation->canonicalRequest()));
-        if ($timeoutMilliseconds !== null) {
-            $request = $request->withHeader('Naatre-Timeout-Ms', (string) $timeoutMilliseconds);
-        }
-        if ($this->authenticate !== null) {
-            $headers = ($this->authenticate)(new AuthContext($this->endpoint, $operation));
-            foreach ($headers as $name => $value) {
-                if (strcasecmp($name, 'Content-Type') === 0 || strcasecmp($name, 'Accept') === 0 || strcasecmp($name, 'Naatre-Timeout-Ms') === 0) {
-                    throw new ClientException('CLIENT_AUTH_HEADER_INVALID');
-                }
+        try {
+            $request = $this->requests->createRequest('POST', $this->endpoint)
+                ->withHeader('Content-Type', self::REQUEST_MEDIA_TYPE)
+                ->withHeader('Accept', self::RESPONSE_MEDIA_TYPE)
+                ->withBody($this->streams->createStream($operation->canonicalRequest()));
+            if ($timeoutMilliseconds !== null) {
+                $request = $request->withHeader('Naatre-Timeout-Ms', (string) $timeoutMilliseconds);
+            }
+            foreach (AuthenticationHeaders::resolve($this->authenticate, $this->endpoint, $operation) as $name => $value) {
                 $request = $request->withHeader($name, $value);
             }
-        }
-        $response = $this->http->sendRequest($request);
-        $body = $response->getBody();
-        try {
-            $contentType = strtolower(trim(explode(';', $response->getHeaderLine('Content-Type'), 2)[0]));
-            if ($contentType !== 'application/vnd.naatre.response+json') {
-                throw new ClientException('CLIENT_MEDIA_TYPE_INVALID');
-            }
-            $contents = '';
-            while (!$body->eof()) {
-                $chunk = $body->read(min(8192, $this->maximumResponseBytes - strlen($contents) + 1));
-                $contents .= $chunk;
-                if (strlen($contents) > $this->maximumResponseBytes) {
-                    throw new ClientException('CLIENT_RESPONSE_TOO_LARGE');
-                }
-                if ($chunk === '' && !$body->eof()) {
-                    throw new ClientException('CLIENT_RESPONSE_STALLED');
-                }
-            }
-            return $contents;
+            $response = $this->http->sendRequest($request);
+            return BoundedResponseBody::read($response, $this->maximumResponseBytes);
         } catch (Throwable $error) {
             if ($error instanceof ClientException) {
                 throw $error;
             }
-            throw new ClientException('CLIENT_TRANSPORT_ERROR', $error);
-        } finally {
-            $body->close();
+            throw new ClientException('CLIENT_TRANSPORT_ERROR');
         }
     }
 }
