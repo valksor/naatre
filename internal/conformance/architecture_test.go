@@ -41,6 +41,7 @@ var layers = []struct {
 	{"interopadapter", 3},
 	{"playground", 4},
 	{"graphqladapter", 4},
+	{"openapiadapter", 4},
 	{"transport", 4},
 	{"largevalue", 5},
 	{"examples", 5},

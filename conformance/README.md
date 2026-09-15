@@ -518,3 +518,9 @@ bounded fan-out and retry multiplication, cancellation/timeout and rolling
 upgrade evidence, operator-owned endpoint bindings, trace propagation, the
 runtime/platform boundary, and every unsupported optional capability. The Go
 harness consumes its planning vectors directly.
+
+`v1/openapi-adapter.json` pins `adapter.openapi-1` to OpenAPI 3.2.0, the Draft
+2020-12 JSON Schema dialect, the exact issue #56 dependency revisions and file
+digests, and the Go import, export, runtime-consume, cancellation, security,
+and resource-limit evidence. `openapiadapter/README.md` publishes the complete
+closed supported subset and its unsupported optional capabilities.

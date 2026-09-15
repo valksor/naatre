@@ -403,6 +403,12 @@
       "sha256": "4ada331660f6c692fbdfa518e0c70479daf28341d0ee3764d9d6f7a18e1ae28a"
     },
     {
+      "path": "v1/openapi-adapter.json",
+      "profile": "adapter.openapi-1",
+      "category": "integration",
+      "sha256": "48e5e8bc37478569b2657160487ff3f9c9665f8ae9eb6b3c639cfd4b2a8d7fa2"
+    },
+    {
       "path": "v1/http-digest.json",
       "profile": "core.http.digest-1",
       "category": "transport",
@@ -8313,6 +8319,11 @@
       "caseId": "issue.93",
       "issue": 93,
       "fixtureRefs": [
+        {
+          "path": "v1/openapi-adapter.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/93",

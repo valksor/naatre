@@ -92,6 +92,9 @@ evidence must be described as planned.
   mapping, and in-process query, mutation, and subscription integration for
   `core.adapters.graphql-1`; wire transports and frameworks require separate
   evidence. See the [GraphQL adapter guide](graphqladapter/README.md).
+- `openapiadapter`: strict OpenAPI 3.2.0 JSON import/export and explicitly
+  approved, bounded `net/http` runtime consumption for `adapter.openapi-1`;
+  see the [OpenAPI adapter guide](openapiadapter/README.md).
 - `generatorplugin`: explicit generator-plugin discovery, bounded process
   hosting, safe diagnostics, and reproducible third-party fixture execution for
   `sdk.generator-plugin-host-1`; see the
