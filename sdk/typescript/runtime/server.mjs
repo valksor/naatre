@@ -133,25 +133,53 @@ export function createWorker(configuration) {
   return worker;
 }
 
-export function createFetchWorkerAdapter(worker) {
+export function createFetchWorkerAdapter(worker, options = {}) {
   const record = workerRecords.get(worker);
   if (!record) invalidRegistration("Fetch adapter requires a Naatre worker");
+  const adapterOptions = closedDataObject(options, ["signal"], "Fetch adapter options");
+  if (adapterOptions.signal !== undefined && !(adapterOptions.signal instanceof AbortSignal)) invalidRegistration("Fetch adapter signal is invalid");
   return async function fetchWorker(request) {
+    let linked;
     try {
       if (!(request instanceof Request) || request.method !== "POST") return response({ code: "REMOTE_INVOCATION_INVALID", message: "worker endpoint requires POST" }, 405);
       if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== mediaType) return response({ code: "REMOTE_INVOCATION_INVALID", message: "worker media type is invalid" }, 415);
       const member = new URL(request.url).pathname.split("/").at(-1);
       const maximum = member === "Register" ? record.registration.limits.maxRequestBytes : record.registration.limits.maxRequestBytes;
-      const body = parseJSON(await readRequestBody(request, maximum), maximum);
+      linked = linkedAbortSignal(request.signal, adapterOptions.signal);
+      const body = parseJSON(await readRequestBody(request, maximum, linked.signal), maximum);
       if (member === "Register") return response(await worker.register(body));
-      if (member === "Invoke") return response(await worker.invoke(body, { signal: request.signal }));
+      if (member === "Invoke") return response(await worker.invoke(body, { signal: linked.signal }));
       if (member === "Cancel") return response(await worker.cancel(body));
       return response({ code: "REMOTE_HANDLER_UNKNOWN", message: "worker endpoint is unknown" }, 404);
     } catch (error) {
       const failure = asWorkerError(error);
       return response({ code: failure.code, message: failure.message }, failure.status);
+    } finally {
+      linked?.dispose();
     }
   };
+}
+
+function linkedAbortSignal(requestSignal, lifecycleSignal) {
+  if (lifecycleSignal === undefined) return Object.freeze({ signal: requestSignal, dispose() {} });
+  const controller = new AbortController();
+  const sources = [requestSignal, lifecycleSignal];
+  const listeners = [];
+  for (const source of sources) {
+    if (source.aborted) {
+      controller.abort(source.reason);
+      break;
+    }
+    const abort = () => controller.abort(source.reason);
+    source.addEventListener("abort", abort, { once: true });
+    listeners.push([source, abort]);
+  }
+  return Object.freeze({
+    signal: controller.signal,
+    dispose() {
+      for (const [source, abort] of listeners) source.removeEventListener("abort", abort);
+    },
+  });
 }
 
 async function register(record, candidate) {
@@ -648,13 +676,14 @@ function freezeJSON(value) {
   return value;
 }
 
-async function readRequestBody(request, maximum) {
+async function readRequestBody(request, maximum, signal) {
   const declared = request.headers.get("content-length");
   if (declared !== null && (!/^[0-9]+$/u.test(declared) || Number(declared) > maximum)) throw new NaatreWorkerError("REMOTE_INVOCATION_INVALID", "worker request exceeds its limit", 413);
   if (!request.body) throw new NaatreWorkerError("REMOTE_INVOCATION_INVALID", "worker request body is required", 400);
   const reader = request.body.getReader();
   const chunks = [];
   let size = 0;
+  const cancellation = cancelReaderOnAbort(reader, signal);
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -663,10 +692,12 @@ async function readRequestBody(request, maximum) {
       if (size > maximum) throw new NaatreWorkerError("REMOTE_INVOCATION_INVALID", "worker request exceeds its limit", 413);
       chunks.push(value);
     }
+    await cancellation.throwIfAborted();
   } catch (error) {
     await Promise.allSettled([reader.cancel(error)]);
     throw error;
   } finally {
+    cancellation.dispose();
     reader.releaseLock();
   }
   const output = new Uint8Array(size);
@@ -676,6 +707,29 @@ async function readRequestBody(request, maximum) {
     offset += chunk.byteLength;
   }
   return output;
+}
+
+function cancelReaderOnAbort(reader, signal) {
+  let result;
+  const abort = () => {
+    result = reader.cancel(signal.reason).then(
+      () => undefined,
+      (error) => error,
+    );
+  };
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  return Object.freeze({
+    async throwIfAborted() {
+      if (!signal.aborted) return;
+      const failure = await result;
+      if (failure !== undefined) throw new NaatreWorkerError("CANCELLED", "worker request was canceled", 499, { cause: failure });
+      throw canceled();
+    },
+    dispose() {
+      signal.removeEventListener("abort", abort);
+    },
+  });
 }
 
 function response(value, status = 200) {

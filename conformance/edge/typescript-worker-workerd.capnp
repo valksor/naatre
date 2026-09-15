@@ -13,7 +13,13 @@ const config :Workerd.Config = (
         (name = "sdk/typescript/runtime/json.mjs", esModule = embed "../../sdk/typescript/runtime/json.mjs"),
         (name = "sdk/typescript/runtime/scalars.mjs", esModule = embed "../../sdk/typescript/runtime/scalars.mjs"),
         (name = "sdk/typescript/runtime/server.mjs", esModule = embed "../../sdk/typescript/runtime/server.mjs"),
-        (name = "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", esModule = embed "../../sdk/typescript/runtime/fixtures/plain-worker-handler.mjs")
+        (name = "sdk/typescript/runtime/worker-runtime.mjs", esModule = embed "../../sdk/typescript/runtime/worker-runtime.mjs"),
+        (name = "sdk/typescript/runtime/worker-node.mjs", esModule = embed "../../sdk/typescript/runtime/worker-node.mjs"),
+        (name = "sdk/typescript/runtime/worker-bun.mjs", esModule = embed "../../sdk/typescript/runtime/worker-bun.mjs"),
+        (name = "sdk/typescript/runtime/worker-deno.mjs", esModule = embed "../../sdk/typescript/runtime/worker-deno.mjs"),
+        (name = "sdk/typescript/runtime/worker-edge.mjs", esModule = embed "../../sdk/typescript/runtime/worker-edge.mjs"),
+        (name = "sdk/typescript/runtime/fixtures/plain-worker-handler.mjs", esModule = embed "../../sdk/typescript/runtime/fixtures/plain-worker-handler.mjs"),
+        (name = "sdk/typescript/runtime/fixtures/worker-test-contract.mjs", esModule = embed "../../sdk/typescript/runtime/fixtures/worker-test-contract.mjs")
       ]
     ))
   ],

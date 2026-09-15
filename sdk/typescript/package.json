@@ -21,6 +21,22 @@
       "types": "./runtime/server.d.mts",
       "import": "./runtime/server.mjs"
     },
+    "./worker/node": {
+      "types": "./runtime/worker-node.d.mts",
+      "import": "./runtime/worker-node.mjs"
+    },
+    "./worker/bun": {
+      "types": "./runtime/worker-bun.d.mts",
+      "import": "./runtime/worker-bun.mjs"
+    },
+    "./worker/deno": {
+      "types": "./runtime/worker-deno.d.mts",
+      "import": "./runtime/worker-deno.mjs"
+    },
+    "./worker/edge": {
+      "types": "./runtime/worker-edge.d.mts",
+      "import": "./runtime/worker-edge.mjs"
+    },
     "./generated": "./generated/operations.ts"
   },
   "scripts": {

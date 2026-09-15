@@ -115,6 +115,6 @@ export class NaatreWorkerError extends Error {
 
 export function defineHandler<TInput, TOutput>(definition: HandlerDefinition<TInput, TOutput>, handler: Handler<TInput, TOutput> | StreamHandler<TInput, TOutput>): DefinedHandler<TInput, TOutput>;
 export function createWorker(configuration: WorkerConfiguration): NaatreWorker;
-export function createFetchWorkerAdapter(worker: NaatreWorker): (request: Request) => Promise<Response>;
+export function createFetchWorkerAdapter(worker: NaatreWorker, options?: Readonly<{ signal?: AbortSignal }>): (request: Request) => Promise<Response>;
 export const workerProtocol: "naatre.remote-worker.v1";
 export const workerRuntimeVersion: "naatre.typescript.worker-1";

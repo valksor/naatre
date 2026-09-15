@@ -8,17 +8,11 @@ import {
   createWorker,
   defineHandler,
 } from "./index.mjs";
+import { greetInput, greetOutput, handlerDefinition, stringSchema } from "./fixtures/worker-test-contract.mjs";
 
 const protocol = "naatre.remote-worker.v1";
 const schemaDigest = "a".repeat(64);
-const stringSchema = Object.freeze({ kind: "scalar", type: "String" });
 const numberSchema = Object.freeze({ kind: "scalar", type: "Float64" });
-const greetInput = objectSchema([
-  { name: "name", schema: stringSchema, required: true, nullable: false },
-]);
-const greetOutput = objectSchema([
-  { name: "greeting", schema: stringSchema, required: true, nullable: false },
-]);
 
 test("plain JavaScript handlers execute the remote-worker success and error vectors", async () => {
   const worker = fixtureWorker(defineHandler(handlerDefinition("fixture.greet", greetInput, greetOutput), async (input) => {
@@ -244,6 +238,38 @@ test("Fetch adapter handles registration and invocation without owning a listene
   assert.equal((await invalid.json()).code, "REMOTE_INVOCATION_INVALID");
 });
 
+test("Fetch adapter lifecycle cancellation closes an in-progress request body", async () => {
+  const worker = fixtureWorker(defineHandler(handlerDefinition("fixture.greet", greetInput, greetOutput), async (input) => ({ greeting: `Hello, ${input.name}` })));
+  const lifecycle = new AbortController();
+  const fetchWorker = createFetchWorkerAdapter(worker, { signal: lifecycle.signal });
+  let bodyCanceled = 0;
+  let bodyStarted;
+  const started = new Promise((resolve) => { bodyStarted = resolve; });
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new TextEncoder().encode('{"protocol":"naatre.remote-worker.v1",'));
+      bodyStarted();
+      return new Promise(() => {});
+    },
+    cancel() {
+      bodyCanceled += 1;
+    },
+  });
+  const request = new Request("https://worker.example/naatre.remote-worker.v1.Worker/Invoke", {
+    method: "POST",
+    headers: { "content-type": "application/naatre-worker+json" },
+    body,
+    duplex: "half",
+  });
+  const pending = fetchWorker(request);
+  await started;
+  lifecycle.abort(new DOMException("runtime shutdown", "AbortError"));
+  const response = await pending;
+  assert.equal(response.status, 499);
+  assert.equal((await response.json()).code, "CANCELLED");
+  assert.equal(bodyCanceled, 1);
+});
+
 function fixtureWorker(handler, extraCapabilities = []) {
   return createWorker({
     workerId: "fixture-worker",
@@ -261,24 +287,6 @@ function fixtureWorker(handler, extraCapabilities = []) {
     },
     createRequestState: () => ({ cache: new Map(), loaders: new Map(), state: Object.create(null) }),
   });
-}
-
-function handlerDefinition(id, input, output) {
-  return {
-    id,
-    inputSchema: `${id}.input`,
-    outputSchema: `${id}.output`,
-    codec: "naatre.json-1",
-    effect: "query",
-    requiredCapabilities: [],
-    executionProfile: "inline",
-    input,
-    output,
-  };
-}
-
-function objectSchema(fields) {
-  return Object.freeze({ kind: "object", fields: Object.freeze(fields.map(Object.freeze)), additionalProperties: false });
 }
 
 function invocation(overrides = {}) {
