@@ -352,6 +352,16 @@
       "name": "infinity-token",
       "input": "{\"a\":Infinity}",
       "code": "MALFORMED_JSON"
+    },
+    {
+      "name": "bare-integer-above-safe-range",
+      "input": "{\"value\":9007199254740993}",
+      "code": "MALFORMED_JSON"
+    },
+    {
+      "name": "bare-integer-below-safe-range",
+      "input": "{\"value\":-9007199254740992}",
+      "code": "MALFORMED_JSON"
     }
   ]
 }

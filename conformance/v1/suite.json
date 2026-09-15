@@ -76,7 +76,7 @@
       "path": "v1/canonical.json",
       "profile": "core.interop.c14n-1",
       "category": "canonical",
-      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+      "sha256": "8f608592bf5a5fff669dfad19ce9d0ee9f71ecb2102d1e0ecd750a2f3ca41479"
     },
     {
       "path": "v1/core.json",
@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "8eb24e94c505a0b93f407ad44af030d07619ae4438d633091999e07d25948c08"
+      "sha256": "9095ad4f0513b4768546aa870b7b30c477202ec6cb75b3872a2cd96f7daff191"
     },
     {
       "path": "v1/validation.json",
@@ -340,7 +340,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "37ea4caea5d9bbdcc9aac442ae24786cd80bf025599cbb2a5bcd1dd9b2af0a17"
+      "sha256": "f7cb58d4fc384819d9869594342f6d3fd15b7d843cad2ca94464fe519bbbd61c"
     },
     {
       "path": "v1/release-gate.json",

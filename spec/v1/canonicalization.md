@@ -28,7 +28,9 @@ implementation and the dependency-free JavaScript verifier execute that file.
   ECMAScript number serialization. NaN and infinities are never JSON values;
   negative zero serializes as `0`. A producer that needs exact integers outside
   `[-9007199254740991, 9007199254740991]` MUST use a declared extended scalar,
-  not a JSON number token.
+  not a JSON number token. A canonicalizer MUST reject a bare JSON integer
+  literal whose magnitude exceeds `9007199254740991` rather than round-trip it
+  lossily through binary64, so every language agrees on this boundary.
 - **CANON-006:** Empty object and list remain `{}` and `[]`. A missing member is
   absent and an explicit null is `null`; neither is inserted or rewritten.
   Whitespace and input object-member order are discarded.

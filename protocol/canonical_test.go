@@ -1,11 +1,43 @@
 package protocol_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/valksor/naatre/protocol"
 )
+
+func TestCanonicalizeJSONRejectsBareUnsafeIntegers(t *testing.T) {
+	t.Parallel()
+	// Bare integer literals outside the JS-safe range must be rejected so large
+	// integers travel as string scalars, matching the PHP/TS/Python/Dart/CBOR
+	// paths. Safe-range integers and the string form remain accepted.
+	rejected := []string{
+		`{"value":9007199254740992}`,    // 2^53 (first unsafe positive)
+		`{"value":9007199254740993}`,    // 2^53 + 1
+		`{"value":-9007199254740992}`,   // first unsafe negative
+		`[1,2,99999999999999999999999]`, // nested, far beyond int64
+	}
+	for _, input := range rejected {
+		var diagnostic *protocol.Diagnostic
+		if _, err := protocol.CanonicalizeJSON([]byte(input), protocol.Limits{}); err == nil || !errors.As(err, &diagnostic) || diagnostic.Code != "MALFORMED_JSON" {
+			t.Fatalf("CanonicalizeJSON(%s) = %v, want MALFORMED_JSON diagnostic", input, err)
+		}
+	}
+	accepted := map[string]string{
+		`{"value":9007199254740991}`:   `{"value":9007199254740991}`,   // 2^53 - 1 (max safe)
+		`{"value":-9007199254740991}`:  `{"value":-9007199254740991}`,  // min safe
+		`{"value":"9007199254740993"}`: `{"value":"9007199254740993"}`, // string scalar stays exact
+		`{"value":1e21}`:               `{"value":1e+21}`,              // float literal, not a bare integer
+	}
+	for input, want := range accepted {
+		canonical, err := protocol.CanonicalizeJSON([]byte(input), protocol.Limits{})
+		if err != nil || string(canonical) != want {
+			t.Fatalf("CanonicalizeJSON(%s) = %s, %v; want %s", input, canonical, err, want)
+		}
+	}
+}
 
 func TestCanonicalizeJSONUsesUTF16KeyOrderWithoutUnicodeNormalization(t *testing.T) {
 	t.Parallel()

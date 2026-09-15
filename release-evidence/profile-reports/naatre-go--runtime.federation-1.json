@@ -35,7 +35,7 @@
     },
     "canonicalization": {
       "version": "c14n-1",
-      "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+      "sha256": "8f608592bf5a5fff669dfad19ce9d0ee9f71ecb2102d1e0ecd750a2f3ca41479"
     },
     "fixtures": {
       "version": "1.0.0",
@@ -189,7 +189,7 @@
         },
         {
           "fixture": "v1/canonical.json",
-          "sha256": "a7e9e04f139705fe414081345e6d6b11666c8753e33f17aac184c56d6f0e771f"
+          "sha256": "8f608592bf5a5fff669dfad19ce9d0ee9f71ecb2102d1e0ecd750a2f3ca41479"
         },
         {
           "fixture": "v1/federation.json",

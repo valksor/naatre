@@ -71,6 +71,9 @@ func CanonicalizeHashPayload(purpose HashPurpose, input []byte, limits Limits) (
 		if root.kind != nodeObject {
 			return nil, purposePayloadDiagnostic(input, purpose, "hash payload must be an object", "", root.start)
 		}
+		if err := rejectUnsafeCanonicalIntegers(input, root, ""); err != nil {
+			return nil, err
+		}
 		if err := normalizePurposeCapabilities(input, purpose, &root); err != nil {
 			return nil, err
 		}
@@ -124,6 +127,9 @@ const (
 func canonicalizeJSON(input []byte, limits Limits, profile canonicalProfile) ([]byte, error) {
 	root, err := parseJSON(input, limits)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectUnsafeCanonicalIntegers(input, root, ""); err != nil {
 		return nil, err
 	}
 	switch profile {
@@ -582,4 +588,61 @@ func canonicalJSONNumber(raw string) (string, error) {
 		return "", fmt.Errorf("encode canonical JSON number: %w", err)
 	}
 	return string(encoded), nil
+}
+
+// rejectUnsafeCanonicalIntegers walks a parsed tree and rejects any bare integer
+// literal outside the JS-safe range [-(2^53-1), 2^53-1]. Such a literal cannot
+// round-trip losslessly through binary64, and the PHP native/pure, TypeScript,
+// Python, Dart, and CBOR paths all reject it, so canonicalization rejects it
+// here too for cross-language agreement. Large integers must travel as string
+// scalars, which the Int64/BigInt scalar types already carry.
+func rejectUnsafeCanonicalIntegers(input []byte, current node, pointer string) error {
+	switch current.kind {
+	case nodeNumber:
+		if magnitude := bareIntegerMagnitude(current.text); magnitude != "" && integerLiteralExceedsSafeRange(magnitude) {
+			return newDiagnostic(input, "MALFORMED_JSON", "PROTO-009", "validate", "integer literal exceeds the safe integer range; encode large integers as string scalars", pointer, current.start)
+		}
+	case nodeArray:
+		for index := range current.array {
+			if err := rejectUnsafeCanonicalIntegers(input, current.array[index], fmt.Sprintf("%s/%d", pointer, index)); err != nil {
+				return err
+			}
+		}
+	case nodeObject:
+		for index := range current.object {
+			if err := rejectUnsafeCanonicalIntegers(input, current.object[index].value, pointer+"/"+current.object[index].name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// bareIntegerMagnitude returns the digits of an integer literal with any leading
+// minus sign stripped, or "" when the token carries a fractional or exponent
+// part and is therefore a binary64 value rather than an exact integer.
+func bareIntegerMagnitude(raw string) string {
+	for index := 0; index < len(raw); index++ {
+		switch raw[index] {
+		case '.', 'e', 'E':
+			return ""
+		}
+	}
+	if len(raw) > 0 && raw[0] == '-' {
+		return raw[1:]
+	}
+	return raw
+}
+
+// integerLiteralExceedsSafeRange reports whether a bare integer magnitude (its
+// digits, sign already stripped) is greater than the JS maximum safe integer
+// 2^53-1. The comparison is done on the digit string so arbitrarily large
+// literals are handled without overflow. JSON forbids leading zeros, so equal
+// lengths compare lexicographically.
+func integerLiteralExceedsSafeRange(magnitude string) bool {
+	const maxSafeInteger = "9007199254740991" // 2^53 - 1
+	if len(magnitude) != len(maxSafeInteger) {
+		return len(magnitude) > len(maxSafeInteger)
+	}
+	return magnitude > maxSafeInteger
 }

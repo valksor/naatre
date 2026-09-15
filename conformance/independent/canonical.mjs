@@ -489,6 +489,15 @@ class StrictParser {
     );
     if (!match) fail("MALFORMED_JSON", "invalid token");
     this.index += match[0].length;
+    // A bare integer literal outside the JS-safe range [-(2^53-1), 2^53-1] cannot
+    // round-trip losslessly through binary64; reject it so every language agrees
+    // that large integers must travel as string scalars.
+    if (!/[.eE]/.test(match[0])) {
+      const magnitude = BigInt(match[0]);
+      if (magnitude > 9007199254740991n || magnitude < -9007199254740991n) {
+        fail("MALFORMED_JSON", "integer literal exceeds the safe integer range");
+      }
+    }
     const value = Number(match[0]);
     if (!Number.isFinite(value)) fail("MALFORMED_JSON", "non-finite number");
     return value;
