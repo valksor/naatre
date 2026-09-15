@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/valksor/naatre/asyncapi"
 	"github.com/valksor/naatre/generator"
 	"github.com/valksor/naatre/schema"
 	"github.com/valksor/naatre/sdk/go/sdkgen"
@@ -57,6 +58,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runMock(args[1:], stdout, stderr)
 	case "conformance":
 		return runConformance(args[1:], stdout, stderr)
+	case "asyncapi":
+		return runAsyncAPI(args[1:], stdout, stderr)
 	case "help", "--help", "-h":
 		return usage(stdout)
 	default:
@@ -65,7 +68,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(output io.Writer) int {
-	_, _ = fmt.Fprintln(output, "usage: naatre <validate|format|canonicalize|hash|schema|generate|manifest|compatibility|explain|mock|conformance>")
+	_, _ = fmt.Fprintln(output, "usage: naatre <validate|format|canonicalize|hash|schema|generate|manifest|compatibility|explain|mock|conformance|asyncapi>")
 	return exitUsage
 }
 
@@ -559,6 +562,101 @@ func runConformance(args []string, stdout, stderr io.Writer) int {
 		return writeFailure(stderr, err)
 	}
 	return writeJSONStatus(stdout, map[string]any{"profile": tooling.ToolingProfile, "status": "pass"})
+}
+
+func runAsyncAPI(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return usage(stderr)
+	}
+	switch args[0] {
+	case "validate", "export", "inspect", "mock":
+		return runAsyncAPIDocument(args[0], args[1:], stdout, stderr)
+	case "diff":
+		return runAsyncAPIDiff(args[1:], stdout, stderr)
+	default:
+		return usage(stderr)
+	}
+}
+
+func runAsyncAPIDocument(command string, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("asyncapi "+command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	documentPath := flags.String("document", "", "local AsyncAPI document")
+	allowServers := flags.String("allow-server", "", "comma-separated exact server URL allowlist")
+	seed := flags.Uint64("seed", 1, "deterministic mock seed")
+	if flags.Parse(args) != nil || *documentPath == "" || flags.NArg() != 0 || command != "mock" && *seed != 1 {
+		return usage(stderr)
+	}
+	model, report, status := readAsyncAPI(*documentPath, *allowServers, stderr)
+	if status != exitOK {
+		return status
+	}
+	switch command {
+	case "validate":
+		return writeJSONStatus(stdout, report)
+	case "export":
+		content, err := asyncapi.CanonicalJSON(model)
+		if err != nil {
+			return writeFailure(stderr, err)
+		}
+		if _, err := stdout.Write(append(content, '\n')); err != nil {
+			return exitIO
+		}
+		return exitOK
+	case "inspect":
+		return writeJSONStatus(stdout, asyncapi.Inspect(model))
+	case "mock":
+		return writeJSONStatus(stdout, asyncapi.Mock(model, *seed))
+	default:
+		return usage(stderr)
+	}
+}
+
+func runAsyncAPIDiff(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("asyncapi diff", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	beforePath := flags.String("before", "", "local baseline AsyncAPI document")
+	afterPath := flags.String("after", "", "local candidate AsyncAPI document")
+	allowServers := flags.String("allow-server", "", "comma-separated exact server URL allowlist")
+	if flags.Parse(args) != nil || *beforePath == "" || *afterPath == "" || flags.NArg() != 0 {
+		return usage(stderr)
+	}
+	before, _, status := readAsyncAPI(*beforePath, *allowServers, stderr)
+	if status != exitOK {
+		return status
+	}
+	after, _, status := readAsyncAPI(*afterPath, *allowServers, stderr)
+	if status != exitOK {
+		return status
+	}
+	return writeJSONStatus(stdout, asyncapi.Diff(before, after))
+}
+
+func readAsyncAPI(path, allowServers string, stderr io.Writer) (asyncapi.Model, asyncapi.FidelityReport, int) {
+	input, status := readInput(path, stderr)
+	if status != exitOK {
+		return asyncapi.Model{}, asyncapi.FidelityReport{}, status
+	}
+	model, report, err := asyncapi.Import(input, asyncapi.ImportOptions{
+		Limits: asyncapi.DefaultLimits(), AllowedServerURLs: splitNonEmpty(allowServers),
+	})
+	if err != nil {
+		if writeJSON(stderr, report) != nil {
+			return asyncapi.Model{}, report, exitIO
+		}
+		return asyncapi.Model{}, report, exitDiagnostic
+	}
+	return model, report, exitOK
+}
+
+func splitNonEmpty(input string) []string {
+	var result []string
+	for _, value := range strings.Split(input, ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func readSchema(path string, stderr io.Writer) (schema.Document, int) {

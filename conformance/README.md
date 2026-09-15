@@ -574,3 +574,9 @@ harness consumes its planning vectors directly.
 digests, and the Go import, export, runtime-consume, cancellation, security,
 and resource-limit evidence. `openapiadapter/README.md` publishes the complete
 closed supported subset and its unsupported optional capabilities.
+
+`v1/asyncapi.json` pins `adapter.asyncapi-1` to AsyncAPI 3.0.0 and exporter
+`asyncapi-exporter-1`. It records the complete fidelity matrix, separate import
+and export directions, revision bindings, evidence-backed transport metadata,
+correlation lifetimes, compatibility classes, default-deny local import, shared
+CLI/documentation/mock/playground consumers, and zero business-handler calls.

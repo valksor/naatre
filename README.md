@@ -102,6 +102,9 @@ troubleshooting, and the third-party implementation path.
 - `openapiadapter`: strict OpenAPI 3.2.0 JSON import/export and explicitly
   approved, bounded `net/http` runtime consumption for `adapter.openapi-1`;
   see the [OpenAPI adapter guide](openapiadapter/README.md).
+- `asyncapi`: deterministic AsyncAPI 3.0.0 event descriptions, fail-closed
+  local import, compatibility classification, and handler-free tooling views;
+  see the [AsyncAPI guide](docs/asyncapi.md).
 - `openrpcadapter`: optional strict OpenRPC 1.4.1 description import/export and
   bounded JSON-RPC 2.0 consume/expose integration for
   `adapter.openrpc-jsonrpc-1`; see the
