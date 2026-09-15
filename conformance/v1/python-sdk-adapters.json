@@ -1,0 +1,116 @@
+{
+  "profile": "sdk.python.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "0.1.0",
+  "dependencies": [
+    {
+      "issue": 38,
+      "profile": "sdk.python.core-1",
+      "gitCommit": "db8148c9cbf3f45f9a0fb7452aee2f909b6068ab",
+      "fixture": {"path": "conformance/v1/python-sdk.json", "sha256": "4ad1c7931350de9f889fcfd5a05fdb7e9fb79f1e0ce447dbfc8ef8c0acbceb99"}
+    }
+  ],
+  "package": {
+    "name": "naatre-sdk",
+    "requiresPython": ">=3.11,<3.15",
+    "coreDependencies": [],
+    "pydanticImport": "naatre.pydantic",
+    "pydanticInstallation": "caller-managed"
+  },
+  "pydantic": {
+    "version": "2.13.4",
+    "coreVersion": "2.46.4",
+    "required": false,
+    "strict": true,
+    "extraFields": "forbid",
+    "failureCode": "CLIENT_RESULT_INVALID"
+  },
+  "evidence": [
+    {"path": "sdk/python/README.md", "sha256": "d7f94eeca4719bb26d3c03ba80ee3dd18dc5dafcde2e0061d96aa7ce2da9fa75"},
+    {"path": "sdk/python/pyproject.toml", "sha256": "086ef18b7d069f46750592a0eb6a6ca9ba66b1ee68d41b2f4ec1e6df07c8fc92"},
+    {"path": "sdk/python/uv.lock", "sha256": "8766d46fa76c215273bee63c5115240fdd0912d516fe2bc61e36e2493253085d"},
+    {"path": "sdk/python/src/naatre/__init__.py", "sha256": "64c7cb41f1f74b5d0fe3bc648f0bd94317f86930ede99f01eaf3f789bfb4543a"},
+    {"path": "sdk/python/src/naatre/transport.py", "sha256": "8813c747c747776698df07eba1cd29bc119cdf9cd8be008b8457b39fd39c7a3b"},
+    {"path": "sdk/python/src/naatre/pydantic.py", "sha256": "7a06f1436ddc5dfef51934bee46578f4d118712ca0f77d87fb2b15c96cc28e2e"},
+    {"path": "sdk/python/tests/test_adapters.py", "sha256": "55599df8c9656278a7b5e3f8a70b40711f8e18b0daa62d65c33b90272ff69489"},
+    {"path": "sdk/python/tests/test_pydantic.py", "sha256": "48d7d66d8283c328ee0a0a6572ed128cef471adb52f80b4f8617f9ebd860af3f"},
+    {"path": "conformance/independent/verify-python-sdk-adapters.py", "sha256": "16ca6179cd9d74901b3940ba066e09c5552a8e7c5ad9a58e21ac8a9211217323"}
+  ],
+  "vectors": [
+    "sync-threaded-async-canonical-request-parity",
+    "async-cancellation-running-thread-distinction",
+    "per-request-context-isolation",
+    "bounded-executor-saturation",
+    "bounded-unary-response",
+    "versioned-response-media-type",
+    "redirect-rejection-without-credential-forwarding",
+    "stable-public-errors-no-protected-details",
+    "pydantic-strict-no-coercion",
+    "pydantic-extra-field-rejection",
+    "pydantic-unset-field-omission",
+    "pydantic-redacted-validation-failure"
+  ],
+  "transports": [
+    {
+      "name": "stdlib-unary-http",
+      "status": "passed",
+      "execution": "in-process-exchange-fixture",
+      "networkStackCertification": false
+    },
+    {
+      "name": "threaded-asyncio",
+      "status": "passed",
+      "maximumWorkers": {"minimum": 1, "maximum": 32},
+      "maximumPending": {"minimum": 0, "maximum": 256},
+      "runningThreadCancellation": "backend-owned-until-return"
+    }
+  ],
+  "platforms": [
+    {
+      "runtime": "cpython",
+      "version": "3.14.7",
+      "platform": "darwin-arm64",
+      "status": "passed",
+      "scope": "in-process-adapter-profile"
+    }
+  ],
+  "unverifiedRuntimes": [
+    {"runtime": "cpython", "versions": ["3.11", "3.12", "3.13"], "status": "not-claimed", "reason": "official-runtime-matrix-owned-by-69"},
+    {"runtime": "cpython", "version": "3.14", "platform": "non-darwin-arm64", "status": "not-claimed", "reason": "official-platform-matrix-owned-by-69"}
+  ],
+  "commands": [
+    "python3 -m pip install pydantic==2.13.4",
+    "python3 conformance/independent/verify-python-sdk-adapters.py",
+    "python3 conformance/independent/verify-python-sdk.py",
+    "cd sdk/python && uv sync --frozen",
+    "cd sdk/python && pytest",
+    "cd sdk/python && ruff check src tests",
+    "cd sdk/python && mypy --python-version 3.11 src tests",
+    "cd sdk/python && mypy --python-version 3.12 src tests",
+    "cd sdk/python && mypy --python-version 3.13 src tests",
+    "cd sdk/python && mypy --python-version 3.14 src tests"
+  ],
+  "unsupported": [
+    "native-non-threaded-async-sockets",
+    "trio-event-loop",
+    "anyio-event-loop-abstraction",
+    "http2",
+    "http3",
+    "proxy-configuration",
+    "automatic-redirects",
+    "cross-origin-credential-forwarding",
+    "gzip-response-decoding",
+    "cookie-management",
+    "automatic-authentication-refresh",
+    "adapter-owned-mutation-retry",
+    "concrete-post-sse-transport",
+    "websocket-transport",
+    "pydantic-v1",
+    "pydantic-settings-plugin",
+    "pydantic-dataclass-plugin",
+    "asgi-server-handlers-owned-by-59",
+    "pypy",
+    "native-mobile-runtimes",
+    "official-cross-platform-certification-owned-by-69"
+  ]
+}

@@ -4,6 +4,7 @@ from .errors import Error, NaatreClientError, TransportError
 from .json import JSONValue, canonical_json, strict_json_loads
 from .operation import Operation, OperationResult, PersistedReference, decode_selected, omit_missing
 from .stream import AsyncStreamTransport, StreamFrame, decode_sse
+from .transport import AsyncHTTPTransport, ExecutorLimits, HTTPTransport, ThreadedAsyncTransport
 from .values import (
     MISSING,
     MissingType,
@@ -26,9 +27,12 @@ from .values import (
 __all__ = [
     "MISSING",
     "AsyncClient",
+    "AsyncHTTPTransport",
     "AsyncStreamTransport",
     "AsyncTransport",
     "Error",
+    "ExecutorLimits",
+    "HTTPTransport",
     "JSONValue",
     "MissingType",
     "NaatreClientError",
@@ -44,6 +48,7 @@ __all__ = [
     "SyncClient",
     "SyncTransport",
     "Timestamp",
+    "ThreadedAsyncTransport",
     "TransportError",
     "canonical_json",
     "client_lifespan",

@@ -26,6 +26,7 @@ const implementations = new Map([
   ["sdk.generation-1", "verify-generator.mjs"],
   ["sdk.php.core-1", "verify-php-sdk.mjs"],
   ["sdk.php.adapters-1", "verify-php-adapters.mjs"],
+  ["sdk.python.adapters-1", "verify-python-sdk-adapters.py"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.rust.adapters-1", "verify-rust-async-adapters.mjs"],

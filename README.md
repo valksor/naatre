@@ -39,9 +39,9 @@ evidence must be described as planned.
   serializer-neutral attributes, and deterministic bindings for
   `sdk.php.core-1`, plus request-scoped Symfony and Laravel PSR bridge
   factories for `sdk.php.adapters-1`.
-- `sdk/python`: dependency-free typed Python 3.11-3.14 client core, sync and
-  async transport protocols, lossless scalar wrappers, SSE lifecycle, and
-  deterministic dataclass bindings for `sdk.python.core-1`.
+- `sdk/python`: dependency-free typed Python 3.11-3.14 client core plus bounded
+  stdlib HTTP/threaded-async and optional strict Pydantic adapters for
+  `sdk.python.core-1` and `sdk.python.adapters-1`.
 - `sdk/rust`: runtime-neutral Rust client ownership traits, lossless scalar
   wrappers, deterministic serde operation bindings for `sdk.rust.core-1`, and
   optional task-local Tokio adapters for `sdk.rust.adapters-1`.

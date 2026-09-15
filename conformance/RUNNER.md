@@ -51,12 +51,12 @@ node conformance/independent/runner.mjs --http=127.0.0.1:8080
 
 It executes the suite-integrity profile, the independent scalar and
 canonicalization profiles, the JavaScript/TypeScript core and adapter SDK
-profiles, and the runtime-neutral Rust SDK core profile through its checked
-Cargo conformance target. The standalone reliability script checks the portable
-reliability fixture contract but does not advertise execution of runtime
-reliability semantics. All other profiles are discovered
-and reported explicitly as unsupported. The final advertised-language and
-cross-profile execution matrix belongs to issues #69 and #70.
+profiles, the Python core and adapter profiles, and the runtime-neutral Rust
+SDK core profile through its checked Cargo conformance target. The standalone
+reliability script checks the portable reliability fixture contract but does
+not advertise execution of runtime reliability semantics. All other profiles
+are discovered and reported explicitly as unsupported. The final advertised-
+language and cross-profile execution matrix belongs to issues #69 and #70.
 
 The Go reference binding is available as `go run ./cmd/naatre-conformance` and
 supports the same NDJSON and `--http=address` forms. Go implementations register
