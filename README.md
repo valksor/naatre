@@ -67,6 +67,10 @@ evidence must be described as planned.
 - `mutation`: provider-neutral typed updates, exact-path JSON Patch validation,
   opaque revisions, conditional writes, and declared read-consistency modes for
   `mutation.update-1`.
+- `event`: application-neutral CloudEvents envelopes, exact-byte RFC 9421
+  webhook verification, replay status, endpoint policy, and durable delivery
+  state contracts for `core.events-1`; applications remain responsible for
+  producing business events and #90 owns durable HTTP delivery.
 - `generator`: versioned language-neutral generator-model validation,
   deterministic reference output, semantic manifest hashing, and output-root
   containment for `sdk.generation-1`.

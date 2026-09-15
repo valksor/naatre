@@ -182,7 +182,7 @@ func TestIndependentRunnerProtocol(t *testing.T) {
 	}
 	request := strings.Join([]string{
 		`{"protocol":"naatre.conformance.runner-1","id":"discover","command":"discover"}`,
-		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.profiles-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http.digest-1","core.http-1"]}`,
+		`{"protocol":"naatre.conformance.runner-1","id":"run","command":"run","path":{"source":{"kind":"sdk","language":"javascript-typescript"},"destination":{"kind":"native-runtime","language":"javascript-typescript"}},"profiles":["suite.contract-1","suite.profiles-1","suite.supervision-1","core.scalar.c14n-1","core.interop.c14n-1","core.http.digest-1","core.events-1","core.http-1"]}`,
 		`{"protocol":`,
 		`{"protocol":"naatre.conformance.runner-1","id":"unknown","command":"discover","extra":true}`,
 	}, "\n") + "\n"
@@ -247,7 +247,7 @@ func TestIndependentRunnerProtocol(t *testing.T) {
 			supervisionEvidence = result.Evidence
 		}
 	}
-	if statuses["suite.contract-1"] != "passed" || statuses["suite.profiles-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http.digest-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
+	if statuses["suite.contract-1"] != "passed" || statuses["suite.profiles-1"] != "passed" || statuses["suite.supervision-1"] != "passed" || statuses["core.scalar.c14n-1"] != "passed" || statuses["core.interop.c14n-1"] != "passed" || statuses["core.http.digest-1"] != "passed" || statuses["core.events-1"] != "passed" || statuses["core.http-1"] != "unsupported" {
 		t.Fatalf("runner statuses = %#v", statuses)
 	}
 	var manifest suiteManifest

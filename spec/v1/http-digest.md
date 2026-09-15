@@ -113,7 +113,8 @@ middleware and SDK wiring are owned by issue 104.
   webhook timestamp. Receivers verify content bytes against that field before
   accepting the signature result. The fixture proves changes to method,
   target, metadata, digest field, or body are detected; issue 48 owns executable
-  webhook delivery and key management.
+  webhook identity and key management. The `core.events-1` profile additionally
+  binds content encoding, endpoint audience, expiry, and exact key generation.
 - **DIGEST-302:** Upload references and download metadata identify which
   field, algorithm, variant, byte range, and assembled representation were
   verified. Retries reverify received bytes and never reuse a prior success for

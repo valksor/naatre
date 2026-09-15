@@ -17,6 +17,11 @@ consume it directly.
 identity, cleanup, range/resume, conditional download, redirect, DNS-rebinding,
 and malicious metadata vectors. The Go reference package consumes all
 transport and egress cases without contacting a network endpoint.
+`v1/events.json` pins the CloudEvents 1.0.2 envelope and
+`naatre.webhook.rfc9421-1` exact-byte signature profile. The Go reference
+receiver and dependency-free JavaScript receiver both verify whitespace, gzip,
+method and target binding, freshness, exact key selection, duplicate replay,
+retry, batch, version-skew, recovery, revocation, and redaction vectors.
 `v1/generator-plugin-host.json` binds the public Go host, the exact generator
 model and toolchain revisions, and a dependency-free third-party JavaScript
 fixture. The `sdk.generator-plugin-host-1` profile executes discovery,
@@ -27,10 +32,7 @@ support and unsupported-capability boundaries are documented in
 `v1/suite.json` is the authoritative inventory for fixture suite `1.0.0`.
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
-maps all 535 stable normative clauses and all 110 repository issues to exact
-maps all 525 stable normative clauses and all 110 repository issues to exact
-maps all 520 stable normative clauses and all 110 repository issues to exact
-maps all 524 stable normative clauses and all 110 repository issues to exact
+maps all 642 stable normative clauses and all 110 repository issues to exact
 JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
 those deferred records are never counted as conformance passes. The manifest
 also declares downstream ownership for Go harnesses (#78) and complete profile
@@ -79,6 +81,7 @@ checks with the CI-pinned Node 24.21.0 toolchain:
 node conformance/independent/scalars.mjs
 node conformance/independent/canonical.mjs
 node conformance/independent/reliability.mjs
+node conformance/independent/events.mjs
 node conformance/independent/profiles.mjs
 node conformance/independent/verify-generator.mjs
 ```

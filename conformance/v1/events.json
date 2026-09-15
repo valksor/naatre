@@ -1,0 +1,133 @@
+{
+  "profile": "core.events-1",
+  "specifications": {
+    "cloudEvents": "1.0.2",
+    "httpMessageSignatures": "RFC 9421",
+    "digestFields": "RFC 9530"
+  },
+  "envelope": {
+    "specversion": "1.0",
+    "requiredAttributes": ["specversion", "id", "source", "type", "time", "dataschema", "datacontenttype", "data", "naatreschemarevision", "naatreschemadigest"],
+    "eventTypeVersioning": "terminal-major-version",
+    "unknownTypeDefault": "authenticate-acknowledge-ignore",
+    "orderingDefault": "absent",
+    "orderingExtensions": ["naatreorderingkey", "naatresequence"]
+  },
+  "signaturePolicy": {
+    "profile": "naatre.webhook.rfc9421-1",
+    "label": "naatre",
+    "algorithm": "hmac-sha256",
+    "coveredComponents": ["@method", "@target-uri", "content-type", "content-encoding", "content-digest", "naatre-webhook-id", "naatre-webhook-timestamp", "naatre-webhook-audience"],
+    "maximumValiditySeconds": 300,
+    "digestBeforeSignature": true,
+    "exactTransmittedContent": true,
+    "redirects": "never",
+    "keySelection": "exact-keyid-only"
+  },
+  "keys": [
+    {
+      "id": "whsec_2026_09_a",
+      "sender": "urn:naatre:sender:orders",
+      "audience": "endpoint_orders_1",
+      "secretBase64": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      "notBefore": "2026-09-15T11:00:00Z",
+      "notAfter": "2026-09-15T13:00:00Z",
+      "state": "retiring"
+    },
+    {
+      "id": "whsec_2026_09_b",
+      "sender": "urn:naatre:sender:orders",
+      "audience": "endpoint_orders_1",
+      "secretBase64": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=",
+      "notBefore": "2026-09-15T11:30:00Z",
+      "notAfter": "2026-09-15T14:00:00Z",
+      "state": "active"
+    }
+  ],
+  "signatureVectors": [
+    {
+      "name": "whitespace-identity",
+      "keyId": "whsec_2026_09_a",
+      "now": "2026-09-15T12:01:00Z",
+      "method": "POST",
+      "targetUri": "https://hooks.example.test/v1/events",
+      "contentType": "application/cloudevents+json",
+      "contentEncoding": "identity",
+      "deliveryId": "wh_01",
+      "timestamp": "1789473600",
+      "audience": "endpoint_orders_1",
+      "bodyBase64": "ewogICJzcGVjdmVyc2lvbiI6ICIxLjAiLAogICJpZCI6ICJldnRfb3JkZXJfMTIzIiwKICAic291cmNlIjogInVybjpuYWF0cmU6b3JkZXJzIiwKICAidHlwZSI6ICJjb20udmFsa3Nvci5vcmRlci5jcmVhdGVkLnYxIiwKICAidGltZSI6ICIyMDI2LTA5LTE1VDExOjU5OjU5WiIsCiAgImRhdGFzY2hlbWEiOiAiaHR0cHM6Ly9zY2hlbWFzLmV4YW1wbGUudGVzdC9vcmRlcnMvdjEiLAogICJkYXRhY29udGVudHR5cGUiOiAiYXBwbGljYXRpb24vanNvbiIsCiAgIm5hYXRyZXNjaGVtYXJldmlzaW9uIjogIm9yZGVycy1yMSIsCiAgIm5hYXRyZXNjaGVtYWRpZ2VzdCI6ICJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsCiAgImRhdGEiOiB7ICJvcmRlcklkIjogIjEyMyIgfQp9Cg==",
+      "contentDigest": "sha-256=:K4NHUPmNFUHWnJw9j658iPJC3ljqtwlIpLaR6s5Hxb8=:",
+      "signatureInput": "naatre=(\"@method\" \"@target-uri\" \"content-type\" \"content-encoding\" \"content-digest\" \"naatre-webhook-id\" \"naatre-webhook-timestamp\" \"naatre-webhook-audience\");created=1789473600;expires=1789473900;keyid=\"whsec_2026_09_a\";alg=\"hmac-sha256\"",
+      "signature": "naatre=:CqjFFlMRLxkmcsoB+A41YEjrk+xVRS/CaScF71/t/Ts=:",
+      "signatureBaseBase64": "IkBtZXRob2QiOiBQT1NUCiJAdGFyZ2V0LXVyaSI6IGh0dHBzOi8vaG9va3MuZXhhbXBsZS50ZXN0L3YxL2V2ZW50cwoiY29udGVudC10eXBlIjogYXBwbGljYXRpb24vY2xvdWRldmVudHMranNvbgoiY29udGVudC1lbmNvZGluZyI6IGlkZW50aXR5CiJjb250ZW50LWRpZ2VzdCI6IHNoYS0yNTY9Oks0TkhVUG1ORlVIV25KdzlqNjU4aVBKQzNsanF0d2xJcExhUjZzNUh4Yjg9OgoibmFhdHJlLXdlYmhvb2staWQiOiB3aF8wMQoibmFhdHJlLXdlYmhvb2stdGltZXN0YW1wIjogMTc4OTQ3MzYwMAoibmFhdHJlLXdlYmhvb2stYXVkaWVuY2UiOiBlbmRwb2ludF9vcmRlcnNfMQoiQHNpZ25hdHVyZS1wYXJhbXMiOiAoIkBtZXRob2QiICJAdGFyZ2V0LXVyaSIgImNvbnRlbnQtdHlwZSIgImNvbnRlbnQtZW5jb2RpbmciICJjb250ZW50LWRpZ2VzdCIgIm5hYXRyZS13ZWJob29rLWlkIiAibmFhdHJlLXdlYmhvb2stdGltZXN0YW1wIiAibmFhdHJlLXdlYmhvb2stYXVkaWVuY2UiKTtjcmVhdGVkPTE3ODk0NzM2MDA7ZXhwaXJlcz0xNzg5NDczOTAwO2tleWlkPSJ3aHNlY18yMDI2XzA5X2EiO2FsZz0iaG1hYy1zaGEyNTYi"
+    },
+    {
+      "name": "gzip-batch",
+      "keyId": "whsec_2026_09_b",
+      "now": "2026-09-15T12:01:00Z",
+      "method": "POST",
+      "targetUri": "https://hooks.example.test/v1/events",
+      "contentType": "application/cloudevents-batch+json",
+      "contentEncoding": "gzip",
+      "deliveryId": "wh_02",
+      "timestamp": "1789473600",
+      "audience": "endpoint_orders_1",
+      "bodyBase64": "H4sIAAAAAAACE6WQwU7DMAyG38XnNm0KHVregDsnEJqi1FrD2iTEbsU07d1xGwkkrkQ5WL9/f3/itxsMli2YG8Q8YH4ewIDuHuBe7Q0XA2NgviaUhk1p8s6yj6H5oBigmMiNOAsDRuZEpmmKQAq/7JwmVIzEzc6nZtUy5bcYXPm0i6ctsIJgLWfcFR/OF7yKxy3EccZcP/0YCnzwZ4GKg0bb9Qdj/3n+4DOunuSbElDeXWf9a8HPBYOTjTx2FVBc8lbDkoMpBlNmZIASulXKgtKqFY39vNm7tjvU7bHW/YvWpj/Kfd26ZdUuzmq104ViVjtNuYyWcVCywPv7N7HWad64AQAA",
+      "decodedBodyBase64": "W3siZGF0YSI6eyJvcmRlcklkIjoiMTIzIn0sImRhdGFjb250ZW50dHlwZSI6ImFwcGxpY2F0aW9uL2pzb24iLCJkYXRhc2NoZW1hIjoiaHR0cHM6Ly9zY2hlbWFzLmV4YW1wbGUudGVzdC9vcmRlcnMvdjEiLCJpZCI6ImV2dF9vcmRlcl8xMjMiLCJuYWF0cmVvcmRlcmluZ2tleSI6ImN1c3RvbWVyLTciLCJuYWF0cmVzY2hlbWFkaWdlc3QiOiJzaGEyNTY6YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm5hYXRyZXNjaGVtYXJldmlzaW9uIjoib3JkZXJzLXIxIiwibmFhdHJlc2VxdWVuY2UiOjQyLCJzb3VyY2UiOiJ1cm46bmFhdHJlOm9yZGVycyIsInNwZWN2ZXJzaW9uIjoiMS4wIiwidGltZSI6IjIwMjYtMDktMTVUMTE6NTk6NTlaIiwidHlwZSI6ImNvbS52YWxrc29yLm9yZGVyLmNyZWF0ZWQudjEifV0=",
+      "contentDigest": "sha-256=:X5ZELaUSmZxZFwevLdKnbKXDCHBN7fktLIFlXd81VSo=:",
+      "signatureInput": "naatre=(\"@method\" \"@target-uri\" \"content-type\" \"content-encoding\" \"content-digest\" \"naatre-webhook-id\" \"naatre-webhook-timestamp\" \"naatre-webhook-audience\");created=1789473600;expires=1789473900;keyid=\"whsec_2026_09_b\";alg=\"hmac-sha256\"",
+      "signature": "naatre=:1BreO3+5uVGovDtYD5oNde6e41iVRPMODUcu1QXaICc=:",
+      "signatureBaseBase64": "IkBtZXRob2QiOiBQT1NUCiJAdGFyZ2V0LXVyaSI6IGh0dHBzOi8vaG9va3MuZXhhbXBsZS50ZXN0L3YxL2V2ZW50cwoiY29udGVudC10eXBlIjogYXBwbGljYXRpb24vY2xvdWRldmVudHMtYmF0Y2granNvbgoiY29udGVudC1lbmNvZGluZyI6IGd6aXAKImNvbnRlbnQtZGlnZXN0Ijogc2hhLTI1Nj06WDVaRUxhVVNtWnhaRndldkxkS25iS1hEQ0hCTjdma3RMSUZsWGQ4MVZTbz06CiJuYWF0cmUtd2ViaG9vay1pZCI6IHdoXzAyCiJuYWF0cmUtd2ViaG9vay10aW1lc3RhbXAiOiAxNzg5NDczNjAwCiJuYWF0cmUtd2ViaG9vay1hdWRpZW5jZSI6IGVuZHBvaW50X29yZGVyc18xCiJAc2lnbmF0dXJlLXBhcmFtcyI6ICgiQG1ldGhvZCIgIkB0YXJnZXQtdXJpIiAiY29udGVudC10eXBlIiAiY29udGVudC1lbmNvZGluZyIgImNvbnRlbnQtZGlnZXN0IiAibmFhdHJlLXdlYmhvb2staWQiICJuYWF0cmUtd2ViaG9vay10aW1lc3RhbXAiICJuYWF0cmUtd2ViaG9vay1hdWRpZW5jZSIpO2NyZWF0ZWQ9MTc4OTQ3MzYwMDtleHBpcmVzPTE3ODk0NzM5MDA7a2V5aWQ9Indoc2VjXzIwMjZfMDlfYiI7YWxnPSJobWFjLXNoYTI1NiI="
+    }
+  ],
+  "negativeSignatures": [
+    {"name": "modified-whitespace", "vector": 0, "member": "body", "find": "  \"id\"", "replace": " \"id\"", "outcome": "reject-digest"},
+    {"name": "modified-path", "vector": 0, "member": "targetUri", "replace": "https://hooks.example.test/v1/other", "outcome": "reject-signature"},
+    {"name": "modified-method", "vector": 0, "member": "method", "replace": "PUT", "outcome": "reject-message"},
+    {"name": "stale-timestamp", "vector": 0, "member": "now", "replace": "2026-09-15T12:05:00Z", "outcome": "reject-freshness"},
+    {"name": "wrong-key", "vector": 0, "member": "secret", "replaceBase64": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=", "outcome": "reject-signature"}
+  ],
+  "replay": {"vector": 0, "results": ["fresh", "duplicate"], "stableEventId": "evt_order_123", "stableDeliveryId": "wh_01", "windowSeconds": 300},
+  "retry": {
+    "delivery": "at-least-once",
+    "maximumAttempts": 6,
+    "initialDelayMilliseconds": 1000,
+    "maximumDelayMilliseconds": 8000,
+    "multiplier": 2,
+    "delaysBeforeAttemptsMilliseconds": [1000, 2000, 4000, 8000, 8000],
+    "terminal": "dead-lettered"
+  },
+  "batch": {
+    "maximumEvents": 100,
+    "maximumBytes": 1048576,
+    "accepted": [{"events": 1, "bytes": 438, "decodedBytes": 438, "contentEncoding": "identity"}, {"events": 100, "bytes": 1048576, "decodedBytes": 1048576, "contentEncoding": "gzip"}],
+    "rejected": [{"events": 101, "bytes": 1024, "decodedBytes": 1024}, {"events": 1, "bytes": 1048577, "decodedBytes": 1048577}, {"events": 1, "bytes": 1024, "decodedBytes": 1048577}]
+  },
+  "versionSkew": [
+    {"name": "unknown-optional-type", "known": false, "subscribed": false, "schemaChange": "additive", "outcome": "authenticate-acknowledge-ignore"},
+    {"name": "unknown-subscribed-type", "known": false, "subscribed": true, "schemaChange": "additive", "outcome": "dead-letter-unsupported-type"},
+    {"name": "known-additive-schema", "known": true, "subscribed": true, "schemaChange": "additive", "outcome": "deliver"},
+    {"name": "known-breaking-schema", "known": true, "subscribed": true, "schemaChange": "breaking", "outcome": "dead-letter-schema-incompatible"}
+  ],
+  "registration": {
+    "authorization": "tenant-owner-hook",
+    "verification": "challenge-before-active",
+    "schemes": ["https"],
+    "redirects": "never",
+    "dns": "resolve-validate-pin-revalidate-every-connection",
+    "forbiddenTargets": ["loopback", "private", "link-local", "multicast", "unspecified", "documentation", "benchmark"],
+    "rateLimitScope": "tenant-endpoint",
+    "rotation": {"overlap": true, "selection": "exact-keyid-only", "ambiguousFallback": false},
+    "revocation": "before-every-attempt"
+  },
+  "recovery": [
+    {"name": "crash-after-lease", "before": "in-flight", "endpoint": "active", "after": "pending", "preserve": ["tenant", "endpointId", "endpointRevision", "deliveryId", "eventIds", "payloadReference"]},
+    {"name": "endpoint-revoked-before-retry", "before": "in-flight", "endpoint": "revoked", "after": "dead-lettered", "failureCode": "ENDPOINT_REVOKED", "preserve": ["tenant", "endpointId", "endpointRevision", "deliveryId", "eventIds", "payloadReference"]}
+  ],
+  "redaction": {
+    "safeFields": ["tenantReference", "endpointReference", "deliveryId", "eventIds", "eventTypes", "attempt", "outcome", "failureCode", "httpStatus", "nextAttempt"],
+    "forbiddenFields": ["body", "payload", "payloadReference", "endpointUrl", "contentDigest", "signature", "secret", "challengeToken"],
+    "deadLetterPayloadDefault": "opaque-reference-only"
+  }
+}

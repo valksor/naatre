@@ -6,6 +6,8 @@
 .idea/
 .vscode/
 bin/
+!sdk/rust/src/bin/
+!sdk/rust/src/bin/generator.rs
 obj/
 coverage.out
 dist/
