@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <AssemblyName>Valksor.Naatre.AspNetCore</AssemblyName>
+    <RootNamespace>Valksor.Naatre.AspNetCore</RootNamespace>
+    <PackageId>Valksor.Naatre.AspNetCore</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Valksor</Authors>
+    <Description>Optional ASP.NET Core dependency-injection helpers for the Naatre client.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/valksor/naatre</RepositoryUrl>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../Naatre.Client/Naatre.Client.csproj" />
+  </ItemGroup>
+</Project>

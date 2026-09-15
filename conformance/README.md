@@ -147,6 +147,14 @@ handling, redirect credential stripping, and non-replay of mutations. The
 independent runner executes the .NET verifier when both SDK lines are present.
 WebSocket, ASP.NET dependency injection, trimming/AOT, and broader runtime
 certification remain explicitly unsupported and owned by issue #85.
+`v1/dotnet-adapters.json` pins `sdk.dotnet.adapters-1`: a separately versioned
+issue #85 C# facade and F# discriminated-union/`Async` surface over the exact
+issue #41 core revision, bounded `HttpClient` execution, sanitized stable
+public failures, active cancellation, explicit handler ownership, and the
+optional Microsoft.Extensions.Http dependency-injection helper. Its verifier
+uses only in-memory message handlers, builds and runs both `net8.0` and
+`net10.0`, and confirms that trimming, NativeAOT, WebSocket, mobile, browser,
+server-binding, and broader framework support remain unclaimed.
 `v1/ruby-sdk.json` pins `sdk.ruby.core-1`: immutable generated Ruby operation
 and result shapes, RBS metadata, string/symbol key normalization, lossless
 numeric and temporal scalar adapters, partial-completion states, strict bounded

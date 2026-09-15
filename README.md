@@ -40,8 +40,9 @@ evidence must be described as planned.
 - `sdk/jvm`: Java 17 wire/client core, deterministic Java and Kotlin bindings,
   and cancellation-safe coroutine and Flow views for `sdk.jvm.core-1`.
 - `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,
-  F# consumption proof, and cancellable HTTP/SSE reference client for
-  `sdk.dotnet.core-1`.
+  idiomatic F# presence/`Async` helpers, cancellable HTTP/SSE, and optional
+  ASP.NET dependency injection for `sdk.dotnet.core-1` and
+  `sdk.dotnet.adapters-1`.
 - `sdk/swift`: reflection-free Swift Package Manager client core, lossless
   canonical scalar wrappers, async transport/cancellation contract, and
   deterministic Codable operation bindings for `sdk.swift.core-1`; concrete

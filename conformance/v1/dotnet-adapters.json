@@ -1,0 +1,138 @@
+{
+  "profile": "sdk.dotnet.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "naatre.dotnet.adapters-1",
+  "dependencies": [
+    {
+      "issue": 41,
+      "profile": "sdk.dotnet.core-1",
+      "gitCommit": "753c687aac6d8e870870691a5ba67d64a3c14434",
+      "fixture": {
+        "path": "conformance/v1/dotnet-sdk.json",
+        "sha256": "783a6b9df42ef1d25adcd380f33b3258f8b5c07f3565bca91a330d9a14f06513"
+      }
+    }
+  ],
+  "packages": [
+    {
+      "assembly": "Valksor.Naatre.Client",
+      "packageId": "Valksor.Naatre.Client",
+      "version": "0.1.0",
+      "surface": "csharp-http-client",
+      "targetFrameworks": ["net8.0", "net10.0"]
+    },
+    {
+      "assembly": "Valksor.Naatre.FSharp",
+      "packageId": "Valksor.Naatre.FSharp",
+      "version": "0.1.0",
+      "surface": "fsharp-presence-and-async",
+      "targetFrameworks": ["net8.0", "net10.0"]
+    },
+    {
+      "assembly": "Valksor.Naatre.AspNetCore",
+      "packageId": "Valksor.Naatre.AspNetCore",
+      "version": "0.1.0",
+      "surface": "optional-dependency-injection",
+      "targetFrameworks": ["net8.0", "net10.0"],
+      "frameworkReference": "Microsoft.AspNetCore.App"
+    }
+  ],
+  "toolchain": {
+    "sdkVersions": ["8.0.425", "10.0.401"],
+    "referencePacks": ["8.0.31", "10.0.12"],
+    "csharp": "12.0",
+    "nullable": "enabled",
+    "packageDependencies": [
+      {"packageId": "FSharp.Core", "kind": "sdk-implicit", "revisionAuthority": "sdkVersions"},
+      {"frameworkReference": "Microsoft.AspNetCore.App", "kind": "shared-framework", "revisionAuthority": "referencePacks"}
+    ]
+  },
+  "evidence": [
+    {"path": "sdk/dotnet/Naatre.Client/Naatre.Client.csproj", "sha256": "0f3c229532ef704ff675c4169c9bd0b19866867528ae1fa73a63d4a3d3e88278"},
+    {"path": "sdk/dotnet/Naatre.Client/NaatreClient.cs", "sha256": "99543ba00727055d85d6186580cbd0def0bdbd9976f656e85e88fd5eccba3ebf"},
+    {"path": "sdk/dotnet/Naatre.FSharp/Naatre.FSharp.fsproj", "sha256": "9547e280b634cbf4952ec4538e06a740756791ce1d34579e56817af80f2b5a67"},
+    {"path": "sdk/dotnet/Naatre.FSharp/Library.fs", "sha256": "0f4ddc3bb0873dde196e11620d34968c3375e37e349ab3df5c3903ebf0fa4640"},
+    {"path": "sdk/dotnet/Naatre.AspNetCore/Naatre.AspNetCore.csproj", "sha256": "be5e79b79f42b3e42a315ff38e0ea91680cb61a338038d8736bab1545cfc364a"},
+    {"path": "sdk/dotnet/Naatre.AspNetCore/NaatreServiceCollectionExtensions.cs", "sha256": "eab1c218248a5ef14027a9728d94b16c875c64a2b9ccc260218d59ed5451a9b5"},
+    {"path": "sdk/dotnet/Naatre.AdapterConformance/Naatre.AdapterConformance.csproj", "sha256": "1b974934cd1ad0a0fb8a73849012c3c3b5b54afa20da882193d09cdaf5574ed6"},
+    {"path": "sdk/dotnet/Naatre.AdapterConformance/Program.cs", "sha256": "69aa26e13d99e82c7e43cb4f558d3eddad66501bd97dcefe41aed0d6ba3f5f91"},
+    {"path": "sdk/dotnet/Naatre.FSharpConformance/Naatre.FSharpConformance.fsproj", "sha256": "5929921512b8832b093aef96d954ae2e3578f7dd078fb1556ec24a4b2b2efa82"},
+    {"path": "sdk/dotnet/Naatre.FSharpConformance/Program.fs", "sha256": "8b184f62e507f2b37608e1a9fe09513e4326733261285f3cbb31c9fb944934be"},
+    {"path": "conformance/independent/verify-dotnet-adapters.mjs", "sha256": "60132a6f84cab688e74f4d382f493939baa57f2af71f4339db79f986b1f3e18d"}
+  ],
+  "vectors": [
+    "shared-canonical-codec-and-positive-unary",
+    "culture-independent-wire-output",
+    "fsharp-missing-null-value-roundtrip",
+    "stable-public-errors-without-protected-details",
+    "response-and-configuration-boundaries",
+    "active-cancellation",
+    "owned-and-borrowed-handler-lifecycle",
+    "aspnet-httpclientfactory-dependency-injection"
+  ],
+  "runtimeMatrix": [
+    {"language": "csharp", "target": "net8.0", "status": "passed"},
+    {"language": "csharp", "target": "net10.0", "status": "passed"},
+    {"language": "fsharp", "target": "net8.0", "status": "passed"},
+    {"language": "fsharp", "target": "net10.0", "status": "passed"},
+    {"language": "csharp", "target": "trimmed", "status": "not-claimed", "reason": "core-profile-uses-reflection-json-metadata"},
+    {"language": "fsharp", "target": "trimmed", "status": "not-claimed", "reason": "core-profile-uses-reflection-json-metadata"},
+    {"language": "csharp", "target": "nativeaot", "status": "not-claimed", "reason": "core-profile-uses-reflection-json-metadata"},
+    {"language": "fsharp", "target": "nativeaot", "status": "not-claimed", "reason": "core-profile-uses-reflection-json-metadata"}
+  ],
+  "transportMatrix": [
+    {"transport": "unary-http", "status": "passed", "cancellation": "active-abort"},
+    {"transport": "post-sse", "status": "passed", "cancellation": "active-abort", "terminal": "explicit-terminal-frame"},
+    {"transport": "websocket", "status": "unsupported"}
+  ],
+  "frameworkMatrix": [
+    {"framework": "Microsoft.Extensions.DependencyInjection", "status": "passed"},
+    {"framework": "Microsoft.Extensions.Http", "status": "passed", "handlerOwnership": "factory-owned"},
+    {"framework": "ASP.NET Core MVC or minimal API binding", "status": "unsupported"}
+  ],
+  "failureCodes": [
+    "CLIENT_CANCELLED",
+    "CLIENT_CONFIG_INVALID",
+    "CLIENT_RESPONSE_TOO_LARGE",
+    "CLIENT_FRAME_TOO_LARGE",
+    "CLIENT_PROTOCOL_INVALID",
+    "CLIENT_RESULT_INVALID",
+    "CLIENT_SCALAR_INVALID",
+    "CLIENT_VALUE_PRECISION",
+    "CLIENT_STREAM_TRUNCATED",
+    "CLIENT_TRANSPORT_ERROR",
+    "CLIENT_UNSUPPORTED"
+  ],
+  "commands": [
+    "dotnet build sdk/dotnet/Naatre.Client/Naatre.Client.csproj --configuration Release --no-restore --disable-build-servers -m:1",
+    "dotnet build sdk/dotnet/Naatre.FSharp/Naatre.FSharp.fsproj --configuration Release --no-restore --disable-build-servers -m:1",
+    "dotnet build sdk/dotnet/Naatre.AspNetCore/Naatre.AspNetCore.csproj --configuration Release --no-restore --disable-build-servers -m:1",
+    "dotnet build sdk/dotnet/Naatre.AdapterConformance/Naatre.AdapterConformance.csproj --configuration Release --no-restore --disable-build-servers -m:1",
+    "dotnet build sdk/dotnet/Naatre.FSharpConformance/Naatre.FSharpConformance.fsproj --configuration Release --no-restore --disable-build-servers -m:1",
+    "dotnet pack sdk/dotnet/Naatre.Client/Naatre.Client.csproj --configuration Release --no-build --no-restore",
+    "dotnet pack sdk/dotnet/Naatre.FSharp/Naatre.FSharp.fsproj --configuration Release --no-build --no-restore",
+    "dotnet pack sdk/dotnet/Naatre.AspNetCore/Naatre.AspNetCore.csproj --configuration Release --no-build --no-restore",
+    "node conformance/independent/verify-dotnet-adapters.mjs --metadata-only",
+    "node conformance/independent/verify-dotnet-adapters.mjs"
+  ],
+  "unsupported": [
+    "websocket-transport",
+    "automatic-authentication-refresh",
+    "automatic-stream-reconnect-and-replay",
+    "transparent-decompression",
+    "trimming-certification",
+    "nativeaot-certification",
+    "browser-and-webassembly-runtimes",
+    "mobile-runtimes-and-dotnet-maui",
+    "xamarin-and-unity-runtimes",
+    "dotnet-framework",
+    "aspnet-mvc-model-binding",
+    "aspnet-minimal-api-binding",
+    "aspnet-server-transport",
+    "frameworks-beyond-microsoft-extensions-http-and-dependencyinjection",
+    "opentelemetry-instrumentation",
+    "durable-client-cursor-storage",
+    "deployment-certification",
+    "runtime-revisions-beyond-recorded-toolchain"
+  ]
+}

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <AssemblyName>Valksor.Naatre.Client</AssemblyName>
+    <RootNamespace>Valksor.Naatre.Client</RootNamespace>
+    <PackageId>Valksor.Naatre.Client</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Valksor</Authors>
+    <Description>Sanitized C# HTTP and streaming client facade for Naatre.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/valksor/naatre</RepositoryUrl>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Naatre.Core/Naatre.Core.csproj" />
+  </ItemGroup>
+</Project>
