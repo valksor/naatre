@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "5de9a53f272515c4e79f0e3cb18db251751dd7941ead62ce661b2ba72b057c04"
+      "sha256": "7bd91f7954bc2aeaa335357b4d8d158764a13b85601c05aa1e96197a1e65300d"
     },
     {
       "path": "v1/validation.json",
@@ -340,7 +340,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "c8daaa5b265a357d377ab30b7fdeb11e6619a5a736509249f06731494228c38d"
+      "sha256": "948141845b415ed85f8a3a1ba497fed0085271bbe18904b6bbd947d4ece526bd"
     },
     {
       "path": "v1/release-gate.json",
@@ -478,7 +478,7 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "95212808826756e8c8b785709e8499ac3ff7d6026eaa2b4746505b4a726aba87"
+      "sha256": "cfd618db2995026c498b85a59866a34de2011718b0f707a86f8cdc34a60a156a"
     },
     {
       "path": "v1/go-quality.json",

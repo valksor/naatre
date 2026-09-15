@@ -1,7 +1,7 @@
 {
   "protocol": "naatre.release-gate.report-1",
-  "status": "passed",
-  "sourceRevision": "435a3f0939d047d148397d4224bc0e47efa01712",
+  "status": "failed",
+  "sourceRevision": "19122adf334a30bf8c2775f1be9475cfcecadcec",
   "versions": {
     "gate": "1.0.0",
     "spec": "1",
@@ -31,7 +31,7 @@
     },
     {
       "path": "conformance/v1/profiles.json",
-      "sha256": "c8daaa5b265a357d377ab30b7fdeb11e6619a5a736509249f06731494228c38d"
+      "sha256": "948141845b415ed85f8a3a1ba497fed0085271bbe18904b6bbd947d4ece526bd"
     },
     {
       "path": "conformance/v1/release-gate.json",
@@ -39,11 +39,11 @@
     },
     {
       "path": "conformance/v1/suite.json",
-      "sha256": "48e152447a76d647fbbadb1a6e23e6dfe873a8670bdd777714a120fb1fa313ea"
+      "sha256": "39023c27f53653cdf9491cda62468ea7699fc0dd5a70aee6c2b9c2743776f751"
     },
     {
       "path": "release-evidence/independent-runner.json",
-      "sha256": "48a94c54f8b44d58bff967ce99c33d7dc799693610140506cfcdad0cc103b9bc"
+      "sha256": "752c6d2a55a11b9c019b83846cb46a8fdfc4c8104cd5f4a9bc91a67d75a1d1e3"
     },
     {
       "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
@@ -79,7 +79,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--schema.tooling-1.json",
-      "sha256": "83142751274f36d697c5c803a4d0e035ed7022568bf0a818f2dd1b82ab087158"
+      "sha256": "59dcd9da8b1174c7e0645c00801a6fe9e46f255011d0214acca453c9eea27a30"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--sdk.client-1.json",
@@ -163,7 +163,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-sdk--schema.tooling-1.json",
-      "sha256": "7996c716c9618db37348272f9f2d9981ebc16eeaff4f0b72e20ff4b39e566b29"
+      "sha256": "c584121a4ccc7cc1563a7c4f09612a3d95e72d443b8c7095e4df05c11cc16573"
     },
     {
       "path": "release-evidence/profile-reports/naatre-sdk--sdk.client-1.json",
@@ -195,7 +195,7 @@
     },
     {
       "path": "release-evidence/security-gate.json",
-      "sha256": "20debd305eaef83e6c5a1b27af615b1d74ee6ddd0a4ea5e4f3db8cb50af279c7"
+      "sha256": "9a6a596d3e851d3692fafa7056cedd22acb353c42d4ea0d1f24ef359212880c3"
     },
     {
       "path": "releases/release-manifest.schema.json",
@@ -405,7 +405,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--schema.tooling-1.json",
-        "sha256": "83142751274f36d697c5c803a4d0e035ed7022568bf0a818f2dd1b82ab087158"
+        "sha256": "59dcd9da8b1174c7e0645c00801a6fe9e46f255011d0214acca453c9eea27a30"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -529,7 +529,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-sdk--schema.tooling-1.json",
-        "sha256": "7996c716c9618db37348272f9f2d9981ebc16eeaff4f0b72e20ff4b39e566b29"
+        "sha256": "c584121a4ccc7cc1563a7c4f09612a3d95e72d443b8c7095e4df05c11cc16573"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -1028,7 +1028,7 @@
       "profile": "suite.contract-1",
       "report": {
         "path": "release-evidence/independent-runner.json",
-        "sha256": "48a94c54f8b44d58bff967ce99c33d7dc799693610140506cfcdad0cc103b9bc"
+        "sha256": "752c6d2a55a11b9c019b83846cb46a8fdfc4c8104cd5f4a9bc91a67d75a1d1e3"
       },
       "status": "passed"
     },
@@ -1138,7 +1138,7 @@
       "profile": "suite.security-gate-1",
       "report": {
         "path": "release-evidence/security-gate.json",
-        "sha256": "20debd305eaef83e6c5a1b27af615b1d74ee6ddd0a4ea5e4f3db8cb50af279c7"
+        "sha256": "9a6a596d3e851d3692fafa7056cedd22acb353c42d4ea0d1f24ef359212880c3"
       },
       "status": "passed"
     }
@@ -1209,5 +1209,14 @@
       ]
     }
   ],
-  "failures": null
+  "failures": [
+    {
+      "code": "INDEPENDENT_RUNNER_PARTIAL",
+      "message": "independent runner did not consume the complete pinned suite"
+    },
+    {
+      "code": "SECURITY_GATE_PARTIAL",
+      "message": "security gate did not publish its exact pinned fixture evidence"
+    }
+  ]
 }

@@ -235,7 +235,7 @@
         },
         {
           "fixture": "v1/generator-plugin-host.json",
-          "sha256": "95212808826756e8c8b785709e8499ac3ff7d6026eaa2b4746505b4a726aba87"
+          "sha256": "cfd618db2995026c498b85a59866a34de2011718b0f707a86f8cdc34a60a156a"
         },
         {
           "fixture": "v1/language.json",
