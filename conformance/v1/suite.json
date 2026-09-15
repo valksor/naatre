@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "c7754d3e4a1dafe5888c1448e7c2de727ab83c1759be6115fc9c0f519e62e067"
+      "sha256": "182724a6910ed1fcf97d3aefb7bbb61eafa76682dbb9789b4b18892285c347f5"
     },
     {
       "path": "v1/scalars.json",
@@ -545,6 +545,12 @@
       "profile": "sdk.python.adapters-1",
       "category": "transport",
       "sha256": "ad608dc81e2f48680acc2b50e766e867628b7d857ad8e8e5cfb12c14331a8872"
+    },
+    {
+      "path": "v1/python-worker-adapters.json",
+      "profile": "sdk.python.worker-adapters-1",
+      "category": "integration",
+      "sha256": "aca5bd55d8aeb1a5c1aba6c3ce6f4d47269a492303fcb85af6628185d4514626"
     },
     {
       "path": "v1/jvm-adapters.json",

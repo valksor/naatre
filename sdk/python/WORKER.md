@@ -29,8 +29,7 @@ handlers, typed input and output dataclasses, strict codecs, and explicit
 late registration. The base implementation uses only dataclasses and typing;
 it never imports Pydantic. `PydanticCodec` is an optional protocol adapter that
 forces strict, extra-forbidden validation for both decoded inputs and encoded
-outputs without adding Pydantic as a package dependency. FastAPI and Starlette
-convenience adapters are owned by issue #99.
+outputs without adding Pydantic as a package dependency.
 
 Strict codecs preserve missing separately from null, require exact Boolean,
 Int32, and Float64 host types, carry extended integers and Decimal as strings,
@@ -60,7 +59,13 @@ the source and release its transaction and invocation state.
 
 ## ASGI and application resources
 
-`WorkerASGI` is the dependency-free ASGI callable for unary worker envelopes.
+Issue #59 owns `naatre.worker`, generated handler interfaces, and the
+`worker.remote-1` schema. Issue #99 owns only `naatre.worker_asgi`: the
+dependency-free `WorkerASGI` callable plus the optional
+`starlette_worker_app` and `fastapi_worker_app` constructors. The constructors
+compose the same callable and never decode, validate, or redefine an envelope.
+
+`WorkerASGI` is the dependency-free ASGI 3.0 callable for unary worker envelopes.
 Its lifespan starts resources, drains active invocations, then closes resources
 in reverse ownership order. HTTP disconnect cancels async work and initiates
 the same cleanup. The application supplies finite connection pools as
@@ -70,9 +75,41 @@ the worker does not create hidden global pools or transactions.
 `Worker.reload(new_registry)` first stops admission and drains the old registry,
 then atomically admits the frozen replacement. Shutdown rejects new work,
 cancels owned async work, waits for still-running executor work, drains pools,
-and closes them. FastAPI and Starlette convenience constructors are deliberately
-left to issue #99; they compose this ASGI callable rather than defining another
-runtime.
+and closes them. Framework development-server reload is unrelated and remains
+owned by the process supervisor.
+
+FastAPI and Starlette are caller-managed optional dependencies; importing the
+core package never imports either framework. The checked adapter revisions are
+FastAPI 0.136.1 and Starlette 1.0.0. Both constructors return
+`FrameworkWorkerASGI`, whose `application` attribute is the concrete framework
+application and whose outer lifespan is the stable, redacted worker lifespan.
+The worker route still passes through framework middleware. Configure middleware
+on `application` before its first call.
+
+```python
+from naatre.worker_asgi import fastapi_worker_app, starlette_worker_app
+
+fastapi_app = fastapi_worker_app(worker)
+starlette_app = starlette_worker_app(worker, path="/internal/naatre/worker")
+```
+
+The source and typing floor remains CPython 3.11. CPython 3.11 through 3.14,
+`asyncio`, and ASGI 3.0 are the supported source/runtime boundary. The checked
+framework evidence executes CPython 3.14.7 on Darwin arm64 without a listener.
+Other CPython versions and platforms remain source-supported but unverified by
+this slice; the official matrix remains owned by issue #69.
+
+Unsupported optional capabilities are ASGI WebSocket scopes, worker streaming
+over an ASGI response, WSGI, Trio, Curio, alternate AnyIO backends, framework
+dependency injection into generated handlers, framework-generated OpenAPI or
+interactive docs for the worker protocol, additional framework lifespan hooks,
+framework-owned pools or transactions, process-pool sharing, hard termination
+of running sync threads, development-server file watching/reload, Uvicorn,
+Hypercorn, and Daphne certification, HTTP/2 and HTTP/3 transport certification,
+TLS and workload-identity policy, proxy policy, automatic retries, and native
+Python-runtime or production-deployment certification. Server-streaming remains
+available through the #59 `Worker.open_stream` contract; this adapter profile
+does not invent an ASGI streaming framing.
 
 Run the framework-neutral and ASGI example without binding a listener:
 
@@ -81,6 +118,12 @@ PYTHONPATH=sdk/python/src python3 examples/python-worker/app.py
 PYTHONPATH=sdk/python/src python3 examples/python-worker/asgi_probe.py
 GOCACHE=/tmp/naatre-go-cache go run ./examples/python-worker
 PYTHONPATH=sdk/python/src python3 conformance/independent/verify-python-worker.py
+python3 -m pip install fastapi==0.136.1 starlette==1.0.0
+PYTHONPATH=sdk/python/src python3 conformance/independent/verify-python-worker-adapters.py
+PYTHONPATH=sdk/python/src python3 -m pytest -q \
+  sdk/python/tests/test_worker.py \
+  sdk/python/tests/test_worker_asgi.py \
+  sdk/python/tests/test_worker_frameworks.py
 ```
 
 The Go program is the complete cross-language example: the reference Go gateway

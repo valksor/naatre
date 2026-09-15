@@ -1,0 +1,206 @@
+{
+  "profile": "sdk.python.worker-adapters-1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "0.1.0",
+  "owner": {
+    "issue": 99,
+    "coreContractIssue": 59,
+    "normativeProfile": "worker.remote-1",
+    "protocol": "naatre.remote-worker.v1"
+  },
+  "coreDependency": {
+    "issue": 59,
+    "profile": "worker.remote-1",
+    "gitCommit": "332d3419cdf438c5ddbc3c3f9e249359e81d64ed",
+    "fixture": {
+      "path": "sdk/python/src/naatre/worker.py",
+      "sha256": "2a9d2ea43e684b92933eadcdffcee03905692f153b676175fd59102db5d0f42e"
+    }
+  },
+  "package": {
+    "name": "naatre-sdk",
+    "requiresPython": ">=3.11,<3.15",
+    "coreDependencies": [],
+    "adapterImport": "naatre.worker_asgi",
+    "frameworkInstallation": "caller-managed"
+  },
+  "frameworks": [
+    {
+      "name": "FastAPI",
+      "package": "fastapi",
+      "version": "0.136.1",
+      "required": false,
+      "constructor": "fastapi_worker_app"
+    },
+    {
+      "name": "Starlette",
+      "package": "starlette",
+      "version": "1.0.0",
+      "required": false,
+      "constructor": "starlette_worker_app"
+    }
+  ],
+  "runtime": {
+    "asgiVersion": "3.0",
+    "eventLoop": "asyncio",
+    "minimumCPython": "3.11",
+    "maximumCPythonExclusive": "3.15",
+    "transport": "in-process-asgi-fixture",
+    "listenerRequired": false,
+    "nativeRuntime": false,
+    "productionTransportCertified": false
+  },
+  "limits": {
+    "minimumRequestBytes": 1,
+    "defaultRequestBytes": 1048576,
+    "maximumRequestBytes": 67108864,
+    "executor": "bounded-by-worker.remote-1",
+    "streamCredit": "bounded-by-worker.remote-1",
+    "poolOwnership": "application-supplied-lifecycle-resource",
+    "transactionOwnership": "application-supplied-transaction-provider"
+  },
+  "failureCodes": [
+    "WORKER_ASGI_SCOPE_UNSUPPORTED",
+    "WORKER_CONFIG_INVALID",
+    "WORKER_FRAMEWORK_UNAVAILABLE",
+    "WORKER_ROUTE_NOT_FOUND",
+    "WORKER_SHUTDOWN_FAILED",
+    "WORKER_STARTUP_FAILED",
+    "REMOTE_INVOCATION_INVALID"
+  ],
+  "fixtures": [
+    {
+      "class": "positive",
+      "tests": [
+        "test_framework_adapters_route_exact_worker_protocol_without_listener",
+        "verify_framework"
+      ]
+    },
+    {
+      "class": "negative",
+      "tests": [
+        "test_framework_dependency_failure_has_one_stable_public_code",
+        "test_asgi_startup_failure_closes_previously_started_pools_without_leaking_detail"
+      ]
+    },
+    {
+      "class": "boundary",
+      "tests": [
+        "test_reload_drains_old_invocations_before_admitting_new_registry",
+        "test_asgi_lifespan_starts_drains_and_closes_resources"
+      ]
+    },
+    {
+      "class": "cancellation",
+      "tests": [
+        "test_cancellation_distinguishes_async_from_running_executor_work",
+        "test_parent_cancellation_closes_handler_transaction_and_disconnect_task",
+        "test_asgi_unary_and_disconnect_cleanup_without_listener"
+      ]
+    },
+    {
+      "class": "resource-limit",
+      "tests": [
+        "test_framework_request_limit_never_echoes_protected_body",
+        "test_stream_flow_control_source_transaction_and_shutdown_cleanup"
+      ]
+    },
+    {
+      "class": "concurrency-isolation",
+      "tests": [
+        "test_request_context_and_loader_state_never_leak",
+        "test_concurrent_lifespan_startup_starts_each_pool_once",
+        "test_framework_adapters_route_exact_worker_protocol_without_listener",
+        "verify_framework"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "path": "sdk/python/WORKER.md",
+      "sha256": "37908331e5c041f00bc7f5721927a2e199c454b2213e289c8f2d1e0f728d6eba"
+    },
+    {
+      "path": "sdk/python/src/naatre/worker_asgi.py",
+      "sha256": "52f4a0289a04b14590c32a16f185a1b2b70c2c99342494c11789270ef668dc36"
+    },
+    {
+      "path": "sdk/python/tests/test_worker.py",
+      "sha256": "02cb98eff55c9c5231e0fa50f5e00cd5c1692d7ff88f359fe0c6f859d98860cd"
+    },
+    {
+      "path": "sdk/python/tests/test_worker_asgi.py",
+      "sha256": "1535341be2ae57a916ebe1373f77d896a8e76e266ee342905b854cfc1a24af85"
+    },
+    {
+      "path": "sdk/python/tests/test_worker_frameworks.py",
+      "sha256": "613e8954b0c16d6e2d4d6ee7387e987eed8642c903b50ac632d1fbd1074f8934"
+    },
+    {
+      "path": "conformance/independent/verify-python-worker-adapters.py",
+      "sha256": "4cec616f6bcf1ffed932fe9461a24f7da64152804e749205455909ec67269002"
+    }
+  ],
+  "commands": [
+    "python3 -m pip install fastapi==0.136.1 starlette==1.0.0",
+    "PYTHONPATH=sdk/python/src python3 conformance/independent/verify-python-worker-adapters.py",
+    "PYTHONPATH=sdk/python/src python3 -m pytest -q sdk/python/tests/test_worker.py sdk/python/tests/test_worker_asgi.py sdk/python/tests/test_worker_frameworks.py",
+    "cd sdk/python && ruff check src tests",
+    "cd sdk/python && mypy --python-version 3.11 src tests",
+    "cd sdk/python && mypy --python-version 3.12 src tests",
+    "cd sdk/python && mypy --python-version 3.13 src tests",
+    "cd sdk/python && mypy --python-version 3.14 src tests"
+  ],
+  "platforms": [
+    {
+      "runtime": "cpython",
+      "version": "3.14.7",
+      "platform": "darwin-arm64",
+      "status": "passed",
+      "scope": "in-process-asgi-framework-adapter-profile"
+    }
+  ],
+  "unverifiedRuntimes": [
+    {
+      "runtime": "cpython",
+      "versions": ["3.11", "3.12", "3.13"],
+      "status": "not-claimed",
+      "reason": "official-runtime-matrix-owned-by-69"
+    },
+    {
+      "runtime": "cpython",
+      "version": "3.14",
+      "platform": "non-darwin-arm64",
+      "status": "not-claimed",
+      "reason": "official-platform-matrix-owned-by-69"
+    }
+  ],
+  "unsupported": [
+    "asgi-websocket-scope",
+    "asgi-worker-stream-framing",
+    "wsgi",
+    "trio",
+    "curio",
+    "alternate-anyio-backends",
+    "framework-dependency-injection-into-generated-handlers",
+    "framework-generated-worker-openapi",
+    "interactive-worker-api-docs",
+    "additional-framework-lifespan-hooks",
+    "framework-owned-pools",
+    "framework-owned-transactions",
+    "process-pool-sharing",
+    "hard-sync-thread-termination",
+    "development-server-file-watching-reload",
+    "uvicorn-certification",
+    "hypercorn-certification",
+    "daphne-certification",
+    "http2-transport-certification",
+    "http3-transport-certification",
+    "tls-workload-identity-policy",
+    "proxy-policy",
+    "automatic-retries",
+    "native-python-runtime-certification",
+    "production-deployment-certification",
+    "official-cross-platform-certification-owned-by-69"
+  ]
+}

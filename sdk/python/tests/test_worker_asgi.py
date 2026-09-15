@@ -19,7 +19,7 @@ from naatre.worker import (
     VerifiedIdentity,
     Worker,
 )
-from naatre.worker_asgi import WorkerASGI
+from naatre.worker_asgi import ASGIApplication, WorkerASGI
 
 
 class Resource:
@@ -44,7 +44,7 @@ async def verify(_delegation: str) -> VerifiedIdentity:
 
 
 async def call_asgi(
-    app: WorkerASGI,
+    app: ASGIApplication,
     scope: dict[str, object],
     messages: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -61,6 +61,32 @@ async def call_asgi(
 
     await app(scope, receive, send)
     return sent
+
+
+async def assert_startup_failure(
+    factory: Callable[[Worker], ASGIApplication],
+) -> None:
+    async def handler(request: HandlerRequest[Input]) -> Output:
+        return Output(request.input.name)
+
+    first = Resource()
+    failing = Resource(fail_start=True)
+    registry = Registry(schema_revision="schema-1")
+    registry.bind_async(
+        "fixture.greet",
+        DataclassCodec(Input, (Field("name", ScalarCodec("String")),)),
+        DataclassCodec(Output, (Field("greeting", ScalarCodec("String")),)),
+        handler,
+    )
+    application = factory(Worker(registry, verify_identity=verify, resources=(first, failing)))
+    messages = await call_asgi(
+        application,
+        {"type": "lifespan"},
+        [{"type": "lifespan.startup"}],
+    )
+    assert messages == [{"type": "lifespan.startup.failed", "message": "WORKER_STARTUP_FAILED"}]
+    assert first.events == ["start", "close"]
+    assert "private pool startup detail" not in repr(messages)
 
 
 def app_with_handler(
@@ -110,6 +136,64 @@ def test_asgi_lifespan_starts_drains_and_closes_resources() -> None:
         return resource.events
 
     assert asyncio.run(scenario()) == ["start", "drain", "close"]
+
+
+def test_concurrent_lifespan_startup_starts_each_pool_once() -> None:
+    class ConcurrentResource(Resource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_starts = 0
+            self.maximum_active_starts = 0
+
+        async def start(self) -> None:
+            self.active_starts += 1
+            self.maximum_active_starts = max(self.maximum_active_starts, self.active_starts)
+            await asyncio.sleep(0)
+            self.events.append("start")
+            self.active_starts -= 1
+
+    async def handler(request: HandlerRequest[Input]) -> Output:
+        return Output(request.input.name)
+
+    async def scenario() -> tuple[list[dict[str, object]], list[str], int]:
+        resource = ConcurrentResource()
+        app = app_with_handler(handler, resource)
+        sent: list[dict[str, object]] = []
+        both_started = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            first = True
+
+            async def receive() -> dict[str, object]:
+                nonlocal first
+                if first:
+                    first = False
+                    return {"type": "lifespan.startup"}
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+            async def send(message: dict[str, object]) -> None:
+                sent.append(message)
+                if len(sent) == 2:
+                    both_started.set()
+
+            await app({"type": "lifespan"}, receive, send)
+
+        lifespans = [asyncio.create_task(run_lifespan()) for _index in range(2)]
+        await both_started.wait()
+        for lifespan_task in lifespans:
+            lifespan_task.cancel()
+        await asyncio.gather(*lifespans, return_exceptions=True)
+        await app.worker.aclose()
+        return sent, resource.events, resource.maximum_active_starts
+
+    messages, events, maximum_active = asyncio.run(scenario())
+    assert messages == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.startup.complete"},
+    ]
+    assert events == ["start", "drain", "close"]
+    assert maximum_active == 1
 
 
 def test_asgi_unary_and_disconnect_cleanup_without_listener() -> None:
@@ -233,31 +317,4 @@ def test_parent_cancellation_closes_handler_transaction_and_disconnect_task() ->
 
 
 def test_asgi_startup_failure_closes_previously_started_pools_without_leaking_detail() -> None:
-    async def handler(request: HandlerRequest[Input]) -> Output:
-        return Output(request.input.name)
-
-    async def scenario() -> tuple[list[dict[str, object]], list[str]]:
-        first = Resource()
-        failing = Resource(fail_start=True)
-        registry = Registry(schema_revision="schema-1")
-        registry.bind_async(
-            "fixture.greet",
-            DataclassCodec(Input, (Field("name", ScalarCodec("String")),)),
-            DataclassCodec(Output, (Field("greeting", ScalarCodec("String")),)),
-            handler,
-        )
-        application = WorkerASGI(
-            Worker(registry, verify_identity=verify, resources=(first, failing))
-        )
-        messages = await call_asgi(
-            application,
-            {"type": "lifespan"},
-            [{"type": "lifespan.startup"}],
-        )
-        return messages, first.events
-
-    messages, events = asyncio.run(scenario())
-    assert messages == [
-        {"type": "lifespan.startup.failed", "message": "WORKER_STARTUP_FAILED"}
-    ]
-    assert events == ["start", "close"]
+    asyncio.run(assert_startup_failure(WorkerASGI))

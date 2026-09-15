@@ -30,6 +30,7 @@ const implementations = new Map([
   ["sdk.php.adapters-1", "verify-php-adapters.mjs"],
   ["sdk.php.server-1", "verify-php-server.mjs"],
   ["sdk.python.adapters-1", "verify-python-sdk-adapters.py"],
+  ["sdk.python.worker-adapters-1", "verify-python-worker-adapters.py"],
   ["sdk.python.core-1", "verify-python-sdk.py"],
   ["sdk.rust.core-1", "verify-rust-sdk.mjs"],
   ["sdk.rust.adapters-1", "verify-rust-async-adapters.mjs"],
