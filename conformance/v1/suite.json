@@ -451,6 +451,12 @@
       "sha256": "2a3783fdee2236ea27e4617669ef5668425ce4aeb1cd9451e3ab68d4deb14ae3"
     },
     {
+      "path": "v1/large-value-adapters.json",
+      "profile": "implementation.go.large-value-adapters-1",
+      "category": "integration",
+      "sha256": "1b193f9734f9a93f21adcd947e94432b8e666c7556a2469e4fc7cd9858c1d2c5"
+    },
+    {
       "path": "v1/events.json",
       "profile": "core.events-1",
       "category": "transport",

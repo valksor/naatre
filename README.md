@@ -75,7 +75,11 @@ evidence must be described as planned.
 - `largevalue`: transport-neutral signed upload/download capabilities,
   streaming integrity and scanning gates, deterministic cleanup ownership,
   payload identity, range/resume decisions, and pinned-dial egress policy for
-  `core.large-value-1`; concrete storage and HTTP adapters remain owned by #87.
+  `core.large-value-1`.
+- `largevalueadapter`: Go 1.27 direct HTTP, pinned presigned,
+  filesystem-backed multipart/resumable, and application-provided streaming
+  adapters for `implementation.go.large-value-adapters-1`; see the
+  [large-value adapter guide](docs/large-value-adapters.md).
 - `mutation`: provider-neutral typed updates, exact-path JSON Patch validation,
   opaque revisions, conditional writes, and declared read-consistency modes for
   `mutation.update-1`.

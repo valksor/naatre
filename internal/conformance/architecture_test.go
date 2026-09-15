@@ -46,6 +46,7 @@ var layers = []struct {
 	{"openrpcadapter", 4},
 	{"transport", 4},
 	{"largevalue", 5},
+	{"largevalueadapter", 6},
 	{"examples", 5},
 	{"internal/qualityharness", 5},
 	{"internal", 6},
