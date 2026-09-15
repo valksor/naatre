@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <AssemblyName>Valksor.Naatre.FSharp</AssemblyName>
+    <RootNamespace>Valksor.Naatre.FSharp</RootNamespace>
+    <PackageId>Valksor.Naatre.FSharp</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Valksor</Authors>
+    <Description>Idiomatic F# presence and asynchronous client helpers for Naatre.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/valksor/naatre</RepositoryUrl>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Library.fs" />
+    <ProjectReference Include="../Naatre.Client/Naatre.Client.csproj" />
+  </ItemGroup>
+</Project>

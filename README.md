@@ -49,8 +49,9 @@ evidence must be described as planned.
   cancellation-safe coroutine and Flow views, a separate server-only
   `java.net.http` unary adapter, and an Android API-26 D8 compatibility profile.
 - `sdk/dotnet`: nullable multi-target C# wire types, lossless scalar adapters,
-  F# consumption proof, and cancellable HTTP/SSE reference client for
-  `sdk.dotnet.core-1`.
+  idiomatic F# presence/`Async` helpers, cancellable HTTP/SSE, and optional
+  ASP.NET dependency injection for `sdk.dotnet.core-1` and
+  `sdk.dotnet.adapters-1`.
 - `sdk/swift`: reflection-free Swift Package Manager client core, lossless
   canonical scalar wrappers, async transport/cancellation contract, and
   deterministic Codable operation bindings for `sdk.swift.core-1`; concrete

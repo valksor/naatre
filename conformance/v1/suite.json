@@ -325,6 +325,12 @@
       "sha256": "783a6b9df42ef1d25adcd380f33b3258f8b5c07f3565bca91a330d9a14f06513"
     },
     {
+      "path": "v1/dotnet-adapters.json",
+      "profile": "sdk.dotnet.adapters-1",
+      "category": "transport",
+      "sha256": "a317c372220132d7757596238a76db8df40a086a3b6e185392dea5bb357a41d1"
+    },
+    {
       "path": "v1/swift-sdk.json",
       "profile": "sdk.swift.core-1",
       "category": "transport",
@@ -8191,6 +8197,11 @@
       "caseId": "issue.85",
       "issue": 85,
       "fixtureRefs": [
+        {
+          "path": "v1/dotnet-adapters.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/85",
