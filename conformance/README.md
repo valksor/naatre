@@ -365,6 +365,13 @@ crash recovery, worker crash, duplicate delivery, cancellation/completion,
 expiry, unknown commit outcome, and cross-principal result isolation. The Go
 runtime provides the queue-neutral coordinator; issue #89 owns concrete durable
 stores, leases, dispatch scanners, and worker adapters.
+`v1/async-operation-adapters.json` fixes the concrete Go/SQLite integration
+boundary owned by #89. It pins the exact #47 contract revision, dependency and
+implementation digests, finite store and recovery limits, stable redacted
+failures, supported and unsupported capabilities, reproducible offline
+commands, and positive, negative, boundary, cancellation, and resource-limit
+fixtures. It composes `operations.async-1` without redefining its protocol or
+state schema.
 `v1/operations.json` fixes the `operations.lifecycle-1` state machine owned by
 #57 and the #96 Go integration evidence. It pins the exact dependency revision,
 runtime/host/runner source digests, supported runtime boundary, complete

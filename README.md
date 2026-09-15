@@ -108,6 +108,10 @@ evidence must be described as planned.
   reference scoping, and stream-credit state for `worker.remote-1`; see the
   [remote-worker deployment guide](docs/remote-workers.md). Production HTTP/2
   pool and process integration remains owned by #88.
+- `asyncoperation`: durable SQLite operation storage, private fencing leases,
+  bounded recovery dispatch, lease-renewing workers, and optional post-commit
+  queue hints for `operations.async-adapters-go-1`; see the
+  [durable adapter guide](docs/async-operation-adapters.md).
 - `observability`: optional OpenTelemetry trace, metric, and log export plus
   application-owned transactional audit/outbox admission for
   `operations.observability-integrations-go-1`; see the

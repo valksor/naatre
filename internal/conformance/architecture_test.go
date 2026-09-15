@@ -36,6 +36,7 @@ var layers = []struct {
 	{"generatorplugin", 3},
 	{"sdk", 3},
 	{"observability", 3},
+	{"asyncoperation", 3},
 	{"reflectadapter", 3},
 	{"interopadapter", 3},
 	{"transport", 4},

@@ -1,0 +1,115 @@
+{
+  "profile": "operations.async-adapters-go-1",
+  "fixtureSuite": "1.0.0",
+  "owner": {
+    "issue": 89,
+    "coreContractIssue": 47,
+    "normativeProfile": "operations.async-1",
+    "dependencyRevision": "ce1791c772cbca0c48438e9021a094ccf775188b"
+  },
+  "dependencies": [
+    {"profile": "operations.async-1-spec", "path": "spec/v1/async-operations.md", "sha256": "50ebcf2acb174b31fc76cd2b2928f1e9e1703c4e56c7c3757b63b21d1d04d4df"},
+    {"profile": "operations.async-1-fixture", "path": "conformance/v1/async-operations.json", "sha256": "9efe62107f1583f2531fe794272a36f6e899dbbd2273e8cdfbd06dff973f48e0"},
+    {"profile": "operations.async-1-runtime", "path": "runtime/async_operation.go", "sha256": "a796781fa941fcc25718f2eeaceda534e20d11b2c097b08fd3cf9458e51ccff5"},
+    {"profile": "go.module", "path": "go.mod", "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
+    {"profile": "go.module-lock", "path": "go.sum", "sha256": "4ab1142371fb95281ac0e674e481d95e234eb937bcdcadb686ff4bb11da8c94f"}
+  ],
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "package": "github.com/valksor/naatre/asyncoperation",
+    "goVersion": "1.27.0",
+    "dependencies": [
+      {"module": "modernc.org/sqlite", "version": "v1.58.0"}
+    ],
+    "files": [
+      {"path": "asyncoperation/store.go", "sha256": "c06ae8af409342d22346f3eb41a8f9ea8bb91994de4879705e8726186f49cb16"},
+      {"path": "asyncoperation/worker.go", "sha256": "8b4cb0fe3d67d83443ca39ce88506ab5e6fcf941b3f61bb104505a0e4a98df95"},
+      {"path": "asyncoperation/store_test.go", "sha256": "b6bfac78329ac2e22f49b48e34951ccd1396cee7848ac0ed82ba8f6214e499e4"},
+      {"path": "docs/async-operation-adapters.md", "sha256": "2b35dc94bf477d9a033c5eaba49c9e62fa236229be7a5e5004b2a6a2ae9ed27b"}
+    ]
+  },
+  "runtime": {
+    "language": "go",
+    "minimum": "1.27.0",
+    "database": "sqlite",
+    "driver": "modernc.org/sqlite",
+    "platformProfile": "portable-go-library",
+    "certifiedOperatingSystems": []
+  },
+  "limits": {
+    "defaultIdentifierBytes": 128,
+    "defaultBindingBytes": 4096,
+    "defaultPayloadBytes": 262144,
+    "defaultRecordBytes": 1048576,
+    "defaultPendingBatch": 128,
+    "defaultCollectionBatch": 128
+  },
+  "fixtures": [
+    {"name": "sqlite-restart-idempotent-acceptance", "class": "positive", "tests": ["TestSQLiteStoreSurvivesRestartAndDeduplicatesAcceptance"]},
+    {"name": "lease-expiry-stale-worker-fence", "class": "boundary", "tests": ["TestLeaseExpiryFencesStaleWorkerPublication"]},
+    {"name": "terminal-idempotent-duplicate-delivery", "class": "positive", "tests": ["TestLeaseExpiryFencesStaleWorkerPublication"]},
+    {"name": "authorized-poll-and-retention", "class": "negative", "tests": ["TestAuthorizedPollingDoesNotLeakAndRetentionIsBounded"]},
+    {"name": "worker-cancellation", "class": "cancellation", "tests": ["TestWorkerAdapterPropagatesCancellationAndRenewsLease"]},
+    {"name": "lost-hint-pending-recovery", "class": "positive", "tests": ["TestDispatcherRecoversPendingAndHintFailurePreservesAcceptance"]},
+    {"name": "store-and-query-limits", "class": "resource-limit", "tests": ["TestStoreRejectsResourceExcessAndRedactsBackendFailures"]},
+    {"name": "stable-redacted-failures", "class": "negative", "tests": ["TestStoreRejectsResourceExcessAndRedactsBackendFailures"]}
+  ],
+  "stableFailureCodes": [
+    "ASYNC_ADAPTER_INVALID_CONFIG",
+    "ASYNC_ADAPTER_INVALID_RECORD",
+    "ASYNC_ADAPTER_UNAVAILABLE",
+    "ASYNC_ADAPTER_STORE_UNAVAILABLE",
+    "ASYNC_ADAPTER_LEASE_EXPIRED",
+    "ASYNC_ADAPTER_FENCE_REJECTED",
+    "ASYNC_ADAPTER_RESOURCE_EXHAUSTED",
+    "ASYNC_ADAPTER_CANCELLED",
+    "IDEMPOTENCY_CONFLICT"
+  ],
+  "capabilities": {
+    "supported": [
+      "sqlite-durable-operation-store",
+      "atomic-idempotent-acceptance",
+      "revision-compare-and-swap",
+      "private-monotonic-worker-fences",
+      "lease-renewal",
+      "bounded-expired-lease-recovery",
+      "bounded-pending-discovery",
+      "bounded-terminal-retention-collection",
+      "worker-cancellation-observation",
+      "post-commit-dispatch-hints"
+    ],
+    "unsupported": [
+      "postgresql-store",
+      "mysql-store",
+      "external-key-value-store",
+      "object-store-backend",
+      "broker-backed-store",
+      "bundled-queue-product",
+      "process-wide-scheduler",
+      "supervisor-ownership",
+      "leader-election",
+      "exactly-once-external-effects",
+      "automatic-indeterminate-reconciliation",
+      "expired-lease-mutation-retry",
+      "online-versioned-schema-migrations",
+      "replication",
+      "backup-or-compaction",
+      "encryption-at-rest-or-key-management",
+      "cross-database-effect-transactions",
+      "remote-worker-transport",
+      "webhook-dispatch",
+      "sse-or-websocket-subscription",
+      "framework-adapters",
+      "non-go-native-runtimes",
+      "operating-system-certification",
+      "architecture-certification",
+      "filesystem-container-cluster-or-managed-service-certification"
+    ]
+  },
+  "commands": [
+    "GOWORK=off go test ./asyncoperation -count=1",
+    "GOWORK=off go test -race ./asyncoperation -count=1",
+    "GOWORK=off go test ./internal/conformance -run 'TestAsyncOperationAdapterProfile|TestAsyncOperationFixtureDefinesDurableRaceSafeContract' -count=1",
+    "GOWORK=off go vet ./asyncoperation ./internal/conformance"
+  ]
+}
