@@ -38,7 +38,7 @@ public sealed class NaatreAdapterCanceledException : OperationCanceledException
     {
     }
 
-    public string Code => ClientErrorCodes.Cancelled;
+    public string Code { get; } = ClientErrorCodes.Cancelled;
 }
 
 [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The adapter boundary must not expose handler, credential-provider, parser, or dependency exceptions.")]

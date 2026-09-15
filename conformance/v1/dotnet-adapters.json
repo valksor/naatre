@@ -49,16 +49,16 @@
   },
   "evidence": [
     {"path": "sdk/dotnet/Naatre.Client/Naatre.Client.csproj", "sha256": "0f3c229532ef704ff675c4169c9bd0b19866867528ae1fa73a63d4a3d3e88278"},
-    {"path": "sdk/dotnet/Naatre.Client/NaatreClient.cs", "sha256": "99543ba00727055d85d6186580cbd0def0bdbd9976f656e85e88fd5eccba3ebf"},
+    {"path": "sdk/dotnet/Naatre.Client/NaatreClient.cs", "sha256": "841374d18a22bf71c0c5f2c47a740ab3108d067322139f9d3cef1b7bed4a5c84"},
     {"path": "sdk/dotnet/Naatre.FSharp/Naatre.FSharp.fsproj", "sha256": "9547e280b634cbf4952ec4538e06a740756791ce1d34579e56817af80f2b5a67"},
-    {"path": "sdk/dotnet/Naatre.FSharp/Library.fs", "sha256": "0f4ddc3bb0873dde196e11620d34968c3375e37e349ab3df5c3903ebf0fa4640"},
+    {"path": "sdk/dotnet/Naatre.FSharp/Library.fs", "sha256": "9aee99f918f38a6e42371b3bd4fe5d3c6dd6dc3be0520067d91f4404ba5e9cf6"},
     {"path": "sdk/dotnet/Naatre.AspNetCore/Naatre.AspNetCore.csproj", "sha256": "be5e79b79f42b3e42a315ff38e0ea91680cb61a338038d8736bab1545cfc364a"},
     {"path": "sdk/dotnet/Naatre.AspNetCore/NaatreServiceCollectionExtensions.cs", "sha256": "eab1c218248a5ef14027a9728d94b16c875c64a2b9ccc260218d59ed5451a9b5"},
     {"path": "sdk/dotnet/Naatre.AdapterConformance/Naatre.AdapterConformance.csproj", "sha256": "1b974934cd1ad0a0fb8a73849012c3c3b5b54afa20da882193d09cdaf5574ed6"},
-    {"path": "sdk/dotnet/Naatre.AdapterConformance/Program.cs", "sha256": "69aa26e13d99e82c7e43cb4f558d3eddad66501bd97dcefe41aed0d6ba3f5f91"},
+    {"path": "sdk/dotnet/Naatre.AdapterConformance/Program.cs", "sha256": "09a2f224e7f8037af9a421a98fc5e7ee513239c68c0401c9506e95a6f26001fd"},
     {"path": "sdk/dotnet/Naatre.FSharpConformance/Naatre.FSharpConformance.fsproj", "sha256": "5929921512b8832b093aef96d954ae2e3578f7dd078fb1556ec24a4b2b2efa82"},
     {"path": "sdk/dotnet/Naatre.FSharpConformance/Program.fs", "sha256": "8b184f62e507f2b37608e1a9fe09513e4326733261285f3cbb31c9fb944934be"},
-    {"path": "conformance/independent/verify-dotnet-adapters.mjs", "sha256": "60132a6f84cab688e74f4d382f493939baa57f2af71f4339db79f986b1f3e18d"}
+    {"path": "conformance/independent/verify-dotnet-adapters.mjs", "sha256": "f4b4d47ad274500c648cb342bb3eb1dc6b8be8396ba4a68568f7bc769df7055f"}
   ],
   "vectors": [
     "shared-canonical-codec-and-positive-unary",

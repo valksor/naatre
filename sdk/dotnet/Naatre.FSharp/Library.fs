@@ -22,7 +22,7 @@ module Presence =
         | PresenceState.Missing -> Presence.Missing
         | PresenceState.Null -> Presence.Null
         | PresenceState.Failed -> Presence.Failed value.Errors
-        | PresenceState.Skipped -> Presence.Skipped value.Reason
+        | PresenceState.Skipped -> Presence.Skipped(nonNull value.Reason)
         | PresenceState.Pending -> Presence.Pending
         | PresenceState.Present -> Presence.Present value.Value
         | state -> invalidArg (nameof value) $"Unknown presence state {state}."

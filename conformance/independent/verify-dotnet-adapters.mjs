@@ -81,9 +81,11 @@ try {
   const packageOutput = join(runtimeState, "packages-output");
   mkdirSync(packageOutput, { recursive: true });
   for (const package_ of fixture.packages) {
-    const project = `sdk/dotnet/${package_.assembly.replace("Valksor.", "")}/${package_.assembly.replace("Valksor.", "")}.csproj`;
+    const projectName = package_.assembly.replace("Valksor.", "");
+    const csproj = join(root, `sdk/dotnet/${projectName}/${projectName}.csproj`);
+    const project = existsSync(csproj) ? csproj : join(root, `sdk/dotnet/${projectName}/${projectName}.fsproj`);
     execFileSync(dotnet, [
-      "pack", join(root, project), "--configuration", "Release", "--no-build", "--no-restore", "--output", packageOutput,
+      "pack", project, "--configuration", "Release", "--no-build", "--no-restore", "--output", packageOutput,
     ], dotnetOptions);
     assert.ok(existsSync(join(packageOutput, `${package_.packageId}.${package_.version}.nupkg`)), `package: ${package_.packageId}`);
   }

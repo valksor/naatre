@@ -343,6 +343,7 @@ internal sealed class TrackingDelegatingHandler : DelegatingHandler
 
 internal sealed class ThrowingDisposeDelegatingHandler(string message) : DelegatingHandler
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2215:Dispose methods should call base class dispose", Justification = "Intentionally throwing dispose test double for adapter dispose-failure coverage.")]
     protected override void Dispose(bool disposing) => throw new InvalidOperationException(message);
 }
 

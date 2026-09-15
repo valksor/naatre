@@ -340,7 +340,7 @@
       "path": "v1/dotnet-adapters.json",
       "profile": "sdk.dotnet.adapters-1",
       "category": "transport",
-      "sha256": "a317c372220132d7757596238a76db8df40a086a3b6e185392dea5bb357a41d1"
+      "sha256": "30bf466836062085b3f7a7dbfab429c1f8a583c7a4b46ac0e2848f797d8d7f65"
     },
     {
       "path": "v1/swift-sdk.json",
