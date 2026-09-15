@@ -6,14 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/valksor/naatre/protocol"
 )
 
 func TestReferenceGatewayExecutesFixtureOperation(t *testing.T) {
@@ -106,6 +110,62 @@ func TestFramedIndependentFixtureWorkerProducesEquivalentPublicDataAndErrors(t *
 	}
 }
 
+func TestFramedIndependentReferenceWorkerStreamsOverStdio(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for the independent remote-worker fixture")
+	}
+	command := exec.Command(node, filepath.Join("..", "conformance", "independent", "remote-worker-gateway.mjs"), "--serve")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		if waitErr := command.Wait(); waitErr != nil {
+			t.Errorf("independent streaming worker: %v: %s", waitErr, stderr.String())
+		}
+	})
+	transport, err := NewFramedTransport(stdout, stdin, 64<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := newTestGateway(t, transport, 1)
+	registration := fixtureRegistration()
+	registration.Capabilities = append(registration.Capabilities, CapabilityServerStreaming)
+	registration.Handlers = append(registration.Handlers, Handler{
+		ID: "fixture.stream", InputSchema: "GreetInput", OutputSchema: "GreetOutput", Codec: CodecJSON,
+		Effect: EffectSubscription, RequiredCapabilities: []string{CapabilityServerStreaming},
+	})
+	if err := gateway.Register(context.Background(), registration); err != nil {
+		t.Fatal(err)
+	}
+	request := fixtureRequest("fixture.stream")
+	request.InvocationID = "invocation-stream"
+	stream, err := gateway.InvokeStream(context.Background(), request, StreamCredit{Frames: 3, Bytes: 8 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []protocol.StreamEventType{protocol.StreamOpen, protocol.StreamData, protocol.StreamComplete} {
+		frame, nextErr := stream.Next(context.Background())
+		if nextErr != nil {
+			t.Fatalf("Next %s: %v", want, nextErr)
+		}
+		if frame.Type != want {
+			t.Fatalf("frame type = %s, want %s", frame.Type, want)
+		}
+	}
+}
+
 func equalWorkerErrors(left, right []WorkerError) bool {
 	return len(left) == len(right) && (len(left) == 0 || reflect.DeepEqual(left, right))
 }
@@ -122,10 +182,12 @@ func TestReferenceGatewayRejectsBeforeDispatch(t *testing.T) {
 		registration Registration
 		request      InvokeRequest
 		wantCode     string
+		cancelled    bool
 	}{
 		{name: "wrong schema", registration: fixtureRegistration(), wantCode: CodeSchemaMismatch},
 		{name: "forged worker identity", registration: fixtureRegistration(), wantCode: CodeUnauthenticated},
 		{name: "forged delegated identity", request: fixtureRequest("fixture.greet"), wantCode: CodeUnauthorized},
+		{name: "cancelled context", request: fixtureRequest("fixture.greet"), wantCode: CodeCancelled, cancelled: true},
 		{name: "unknown handler", request: fixtureRequest("fixture.unknown"), wantCode: CodeUnknownHandler},
 		{name: "unsupported transaction", registration: fixtureRegistration(), wantCode: CodeCapabilityMismatch},
 	}
@@ -152,7 +214,13 @@ func TestReferenceGatewayRejectsBeforeDispatch(t *testing.T) {
 				if test.name == "forged delegated identity" {
 					request.DelegatedContext = "forged"
 				}
-				_, err := gateway.Invoke(context.Background(), request)
+				ctx := context.Background()
+				if test.cancelled {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithCancel(ctx)
+					cancel()
+				}
+				_, err := gateway.Invoke(ctx, request)
 				assertGatewayCode(t, err, test.wantCode)
 			}
 			if transport.invocations.Load() != 0 {
@@ -213,7 +281,7 @@ func TestReferenceGatewayReconnectDecisions(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			transport := &fixtureTransport{failures: []error{&DeliveryError{Phase: test.failure, Cause: errors.New("worker process died")}}}
+			transport := &fixtureTransport{failures: []error{&DeliveryError{Phase: test.failure}}}
 			gateway := newTestGateway(t, transport, 2)
 			registration := fixtureRegistration()
 			if test.name == "mutation after write with evidence" {
@@ -258,6 +326,41 @@ func TestReferenceGatewayRejectsDuplicateInvocation(t *testing.T) {
 	assertGatewayCode(t, err, CodeDuplicateInvocation)
 	if transport.invocations.Load() != 1 {
 		t.Fatalf("worker calls = %d, want 1", transport.invocations.Load())
+	}
+}
+
+func TestReferenceGatewayBoundsDeduplicationAndReferences(t *testing.T) {
+	t.Parallel()
+	transport := &fixtureTransport{}
+	gateway := newTestGateway(t, transport, 1)
+	gateway.config.MaxSeen = 2
+	gateway.config.MaxReferences = 1
+	registerFixtureWorker(t, gateway)
+	for index := 1; index <= 3; index++ {
+		request := fixtureRequest("fixture.greet")
+		request.RequestID = fmt.Sprintf("request-%d", index)
+		request.InvocationID = fmt.Sprintf("invocation-%d", index)
+		if _, err := gateway.Invoke(context.Background(), request); err != nil {
+			t.Fatalf("Invoke %d: %v", index, err)
+		}
+	}
+	oldest := fixtureRequest("fixture.greet")
+	if _, err := gateway.Invoke(context.Background(), oldest); err != nil {
+		t.Fatalf("evicted invocation identifier remained blocked: %v", err)
+	}
+	transport.result = WorkerResult{
+		Protocol: ProtocolVersion, SchemaRevision: "schema-1", Data: json.RawMessage(`{"greeting":"Hello"}`),
+		References: []ReferenceGrant{
+			{ID: "ref-first", ExpiresAt: time.Date(2026, 9, 15, 12, 1, 0, 0, time.UTC), Lifetime: ReferenceRequest},
+			{ID: "ref-second", ExpiresAt: time.Date(2026, 9, 15, 12, 1, 0, 0, time.UTC), Lifetime: ReferenceRequest},
+		},
+	}
+	request := fixtureRequest("fixture.greet")
+	request.RequestID, request.InvocationID = "request-reference", "invocation-reference"
+	_, err := gateway.Invoke(context.Background(), request)
+	assertGatewayCode(t, err, CodeOverloaded)
+	if len(gateway.references) != 0 {
+		t.Fatalf("references retained after aggregate limit failure: %d", len(gateway.references))
 	}
 }
 
@@ -324,8 +427,10 @@ func TestReferenceGatewayRejectsStaleReference(t *testing.T) {
 	gateway.rememberReferences("invocation-owner", []ReferenceGrant{{ID: "ref-1", ExpiresAt: now.Add(-time.Second), Lifetime: ReferenceInvocation}})
 	request := fixtureRequest("fixture.greet")
 	request.Parent = Parent{Reference: "ref-1", OwnerInvocationID: "invocation-owner"}
-	_, err := gateway.Invoke(context.Background(), request)
-	assertGatewayCode(t, err, CodeStaleReference)
+	for range 2 {
+		_, err := gateway.Invoke(context.Background(), request)
+		assertGatewayCode(t, err, CodeStaleReference)
+	}
 	if transport.invocations.Load() != 0 {
 		t.Fatalf("worker calls = %d, want 0", transport.invocations.Load())
 	}
@@ -349,6 +454,108 @@ func TestCreditWindowEnforcesBackpressure(t *testing.T) {
 	if err := window.Consume(3); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestReferenceGatewayStreamsValidatedFramesAndReleasesLifecycle(t *testing.T) {
+	t.Parallel()
+	transport := &fixtureStreamingTransport{frames: []protocol.StreamFrame{
+		{Type: protocol.StreamOpen, Stream: "invocation-stream", Sequence: 1, SchemaRevision: "schema-1"},
+		{Type: protocol.StreamData, Stream: "invocation-stream", Sequence: 2, Data: json.RawMessage(`{"greeting":"Hello, stream"}`)},
+		{Type: protocol.StreamComplete, Stream: "invocation-stream", Sequence: 3},
+	}}
+	gateway := newTestGateway(t, transport, 1)
+	registration := fixtureRegistration()
+	registration.Capabilities = append(registration.Capabilities, CapabilityServerStreaming)
+	registration.Handlers = append(registration.Handlers, Handler{
+		ID: "fixture.stream", InputSchema: "GreetInput", OutputSchema: "GreetOutput", Codec: CodecJSON,
+		Effect: EffectSubscription, RequiredCapabilities: []string{CapabilityServerStreaming},
+	})
+	if err := gateway.Register(context.Background(), registration); err != nil {
+		t.Fatal(err)
+	}
+	request := fixtureRequest("fixture.stream")
+	request.InvocationID = "invocation-stream"
+	stream, err := gateway.InvokeStream(context.Background(), request, StreamCredit{Frames: 3, Bytes: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []protocol.StreamEventType{protocol.StreamOpen, protocol.StreamData, protocol.StreamComplete} {
+		frame, nextErr := stream.Next(context.Background())
+		if nextErr != nil {
+			t.Fatalf("Next %s: %v", want, nextErr)
+		}
+		if frame.Type != want {
+			t.Fatalf("frame type = %s, want %s", frame.Type, want)
+		}
+	}
+	if _, err := stream.Next(context.Background()); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after terminal = %v", err)
+	}
+	if !transport.closed.Load() || gateway.inFlight != 0 {
+		t.Fatalf("stream cleanup: closed=%v inFlight=%d", transport.closed.Load(), gateway.inFlight)
+	}
+}
+
+func TestReferenceGatewayMapsBackpressureToStableCode(t *testing.T) {
+	t.Parallel()
+	transport := &fixtureStreamingTransport{nextErr: ErrBackpressure}
+	gateway := newTestGateway(t, transport, 1)
+	registration := fixtureRegistration()
+	registration.Capabilities = append(registration.Capabilities, CapabilityServerStreaming)
+	registration.Handlers = append(registration.Handlers, Handler{
+		ID: "fixture.stream", InputSchema: "GreetInput", OutputSchema: "GreetOutput", Codec: CodecJSON,
+		Effect: EffectSubscription, RequiredCapabilities: []string{CapabilityServerStreaming},
+	})
+	if err := gateway.Register(context.Background(), registration); err != nil {
+		t.Fatal(err)
+	}
+	request := fixtureRequest("fixture.stream")
+	request.InvocationID = "invocation-stream"
+	stream, err := gateway.InvokeStream(context.Background(), request, StreamCredit{Frames: 1, Bytes: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = stream.Next(context.Background())
+	assertGatewayCode(t, err, CodeOverloaded)
+}
+
+type fixtureStreamingTransport struct {
+	fixtureTransport
+	frames  []protocol.StreamFrame
+	nextErr error
+	closed  atomic.Bool
+}
+
+func (f *fixtureStreamingTransport) OpenStream(_ context.Context, _ WorkerInvocation, _ StreamCredit) (StreamSource, error) {
+	stream := sliceRemoteStream{frames: slices.Clone(f.frames)}
+	stream.nextErr = f.nextErr
+	stream.closed = &f.closed
+	return &stream, nil
+}
+
+type sliceRemoteStream struct {
+	frames  []protocol.StreamFrame
+	nextErr error
+	closed  *atomic.Bool
+}
+
+func (s *sliceRemoteStream) Next(context.Context) (protocol.StreamFrame, error) {
+	if len(s.frames) == 0 {
+		if s.nextErr != nil {
+			err := s.nextErr
+			s.nextErr = nil
+			return protocol.StreamFrame{}, err
+		}
+		return protocol.StreamFrame{}, io.EOF
+	}
+	frame := s.frames[0]
+	s.frames = s.frames[1:]
+	return frame, nil
+}
+
+func (s *sliceRemoteStream) Close() error {
+	s.closed.Store(true)
+	return nil
 }
 
 type fixtureTransport struct {
@@ -435,7 +642,8 @@ func newTestGatewayWithClock(t *testing.T, transport Transport, attempts int, no
 		Transport: transport, Endpoint: "fixture-stdio", WorkerID: "fixture-worker",
 		ServiceIdentity: "spiffe://example/fixture-worker", Audience: "naatre-gateway",
 		SchemaRevision: "schema-1", SchemaDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		MaxInFlight: 1, MaxAttempts: attempts, MaxRequestBytes: 4096, MaxResponseBytes: 4096, Now: now,
+		MaxInFlight: 1, MaxAttempts: attempts, MaxRequestBytes: 4096, MaxResponseBytes: 4096,
+		MaxStreamFrames: 4, MaxStreamBytes: 16384, MaxReferences: 16, MaxSeen: 32, Now: now,
 		VerifyDelegation: func(_ context.Context, token string, _ DelegationExpectation) error {
 			if token != "valid-delegation" {
 				return errors.New("invalid delegation")
@@ -480,5 +688,8 @@ func assertGatewayCode(t *testing.T, err error, code string) {
 	var gatewayErr *GatewayError
 	if !errors.As(err, &gatewayErr) || gatewayErr.Code != code {
 		t.Fatalf("error = %v, want gateway code %s", err, code)
+	}
+	if errors.Unwrap(err) != nil {
+		t.Fatalf("public gateway error exposes its private cause: %v", errors.Unwrap(err))
 	}
 }

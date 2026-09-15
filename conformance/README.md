@@ -76,6 +76,11 @@ and support-matrix boundaries. The dependency-free JavaScript stdio fixture
 and Go reference gateway execute the same schema-defined success and typed
 error cases. This is remote-worker evidence only; production HTTP/2 integration
 belongs to #88 and the complete matrix belongs to #69.
+`v1/remote-worker-gateway.json` is the separate issue #88
+`implementation.go.remote-worker-1` evidence manifest. It references rather
+than redefines `worker.remote-1` and `core.streaming-1`, pins their exact
+dependency commits and files, and records listener-free HTTP/2, stdio,
+identity, lifecycle, fault, cancellation, and resource-boundary execution.
 
 `v1/interactions.json` fixes the authorization/cache, conditional/fragment,
 sequential-write/loader, partial-data/generated-type, remote-cancellation, and

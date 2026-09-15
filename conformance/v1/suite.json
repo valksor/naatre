@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "77d54079e3429f7135a1d6b045fd7be4cbb5cb6a23e0a0c6b4cbe416a410ffe0"
+      "sha256": "77abfe0cf744ceb6197352a89d71e8563a1fd25a601875b0f61f34f7060b1df7"
     },
     {
       "path": "v1/scalars.json",
@@ -467,6 +467,12 @@
       "profile": "worker.remote-1",
       "category": "integration",
       "sha256": "f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"
+    },
+    {
+      "path": "v1/remote-worker-gateway.json",
+      "profile": "implementation.go.remote-worker-1",
+      "category": "transport",
+      "sha256": "cc322031f129ff923b58b57a647a2627d813dc21bfa9834275828fda59a21519"
     },
     {
       "path": "v1/cbor.json",
@@ -8283,6 +8289,11 @@
       "caseId": "issue.88",
       "issue": 88,
       "fixtureRefs": [
+        {
+          "path": "v1/remote-worker-gateway.json",
+          "pointer": "",
+          "polarity": "mixed"
+        },
         {
           "path": "v1/roadmap.json",
           "pointer": "/issues/88",

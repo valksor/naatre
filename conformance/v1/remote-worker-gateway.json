@@ -1,0 +1,82 @@
+{
+  "profile": "implementation.go.remote-worker-1",
+  "fixtureSuite": "1.0.0",
+  "ownerIssue": 88,
+  "dependencies": [
+    {
+      "profile": "worker.remote-1",
+      "ownerIssue": 51,
+      "gitCommit": "ca675523d2e34fc00770d65508dfbb773e22ff8e",
+      "files": [
+        {"path":"spec/v1/remote-workers.md","sha256":"41088211fe0fa7ae95b4fab7239a4e79f3900b63382b192d9d38ebc35038bdad"},
+        {"path":"spec/v1/remote-worker.schema.json","sha256":"4b5d3aa788e8f84167643201b51f07bfdd20c9bd913f561393a71e32d4ed884a"},
+        {"path":"conformance/v1/remote-workers.json","sha256":"f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
+        {"path":"conformance/independent/remote-worker.mjs","sha256":"f6d91b5a5b8225299ef704613624998458ea19a04919a4f01b7907b031d42a80"}
+      ]
+    },
+    {
+      "profile": "core.streaming-1",
+      "ownerIssue": 23,
+      "gitCommit": "60bdc7fa81e726ead8069c2bf9a56ddb04bcbab2",
+      "files": [
+        {"path":"spec/v1/streaming.md","sha256":"26f024874a33a697fe59066ed8571b8ecec477a49707aec842787635a14f5441"},
+        {"path":"conformance/v1/streaming.json","sha256":"8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"},
+        {"path":"protocol/stream.go","sha256":"03a496a8cf018d80353d65526a55e2209127834515fec4082ad149fb268d23f2"}
+      ]
+    }
+  ],
+  "implementation": {
+    "module": "github.com/valksor/naatre",
+    "minimumGo": "1.27",
+    "referenceWorker": "implementation.language-neutral.reference-worker-1",
+    "files": [
+      {"path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+      {"path":"remoteworker/gateway.go","sha256":"a60a18be7a722c36ea6cb0609dbfbab6f91ef4b9ac34881c359b7b10f18098cb"},
+      {"path":"remoteworker/http_transport.go","sha256":"bbec4f8f53653c36a3c7a69780ebaf96e49ab4523104a1b2359015f9b2c84498"},
+      {"path":"remoteworker/stream.go","sha256":"ac50b3f09978bbe061b007b4334ddff3f5e0218cd57cfd0ab904424a2727aa87"},
+      {"path":"remoteworker/transport.go","sha256":"6dad69399d4f0059c3dc0aa46a317e58f6c5cb795f027614dbc4145a78a6f169"},
+      {"path":"remoteworker/types.go","sha256":"f040bcfdc712d806e7e78a089aceafe1b34aaa256d4661b39326a4a53e48b2e2"},
+      {"path":"remoteworker/framing.go","sha256":"1ae5cb067df7d85848cbd98aa7b9da9b6f5d1c7112adcee14b296a4db10e6bd9"},
+      {"path":"remoteworker/backpressure.go","sha256":"4972d5e63690db5703faf02e0e2d50204d691cb2572d7ba3f45a60bc3b3894d1"},
+      {"path":"remoteworker/gateway_test.go","sha256":"c2f45ba72c2c9562183b979cc8b1fb919276965549b646088d7a964a9a0de9e3"},
+      {"path":"remoteworker/http_transport_test.go","sha256":"2da1348c23d9820a690389f892bd071553ba5f419bcca2b152d28cd8e4201067"},
+      {"path":"remoteworker/framing_test.go","sha256":"07fa41ad21d912c77b63a2041a000c34f4174d66e2df5ea42fed2a6c3b378f17"},
+      {"path":"conformance/independent/remote-worker-gateway.mjs","sha256":"eccbbcc1060c7dc6d8e0ceeb9dcc8fca3ee39dc3554f822fd92940f98caadf09"},
+      {"path":"conformance/independent/verify-remote-worker-gateway.mjs","sha256":"f88ff58912744748245ba6dfb644350b25767342934c75e13e2a35d322992d47"},
+      {"path":"internal/conformance/remote_worker_gateway_test.go","sha256":"5772808c805de07b6a8f32deed2b4ee0fd9407225512b8852005bf87b0e41ad1"},
+      {"path":"docs/remote-workers.md","sha256":"a5cc88b8f1ac34006001e209f26dfefbf6643876b2287e7570f4a826b737d4e2"}
+    ]
+  },
+  "runtimeBoundary": {
+    "supported": ["Go 1.27 net/http TLS HTTP/2 client", "bounded unary registration, invocation, and cancellation", "bounded server-stream receive", "Node.js stdio reference worker"],
+    "executed": {"go":"1.27.1","node":"26.8.2","os":"darwin","arch":"arm64","networkListeners":0},
+    "unsupported": ["HTTP/1.1 fallback", "HTTP/3", "QUIC", "WebSocket", "gRPC and Connect compatibility", "compression", "endpoint discovery", "redirects", "automatic load balancing", "automatic credential creation or refresh", "proxy certification", "framework integration", "inbound worker serving", "client streaming", "bidirectional streaming", "dynamic stream-credit replenishment", "automatic subscription replay after an opened stream fails", "forced handler termination", "process isolation", "exactly-once effects", "distributed atomicity", "native runtime certification", "non-Go gateway implementations", "production deployment certification"]
+  },
+  "stablePublicCodes": ["REMOTE_REGISTRATION_INVALID", "REMOTE_SCHEMA_MISMATCH", "REMOTE_UNAUTHENTICATED", "UNAUTHORIZED", "REMOTE_HANDLER_UNKNOWN", "REMOTE_CAPABILITY_MISMATCH", "REMOTE_INVOCATION_INVALID", "REMOTE_INVOCATION_DUPLICATE", "REMOTE_WORKER_MALFORMED", "OUTPUT_COMPLETION", "REMOTE_OUTCOME_INDETERMINATE", "OVERLOADED", "REMOTE_REFERENCE_UNAVAILABLE", "REMOTE_CANCELLATION_INVALID", "CANCELLED"],
+  "cases": [
+    {"name":"unary","class":"positive","code":"","test":"TestHTTPTransportExecutesHTTP2UnaryHandshake","result":"passed"},
+    {"name":"streaming","class":"positive","code":"","test":"TestFramedIndependentReferenceWorkerStreamsOverStdio","result":"passed"},
+    {"name":"schema-mismatch","class":"negative","code":"REMOTE_SCHEMA_MISMATCH","test":"TestReferenceGatewayRejectsBeforeDispatch","result":"passed"},
+    {"name":"forged-identity","class":"security","code":"UNAUTHORIZED","test":"TestReferenceGatewayRejectsBeforeDispatch","result":"passed"},
+    {"name":"public-error-redaction","class":"security","code":"REMOTE_WORKER_MALFORMED","test":"TestHTTPTransportRejectsProtocolDowngradeAndRedactsPrivateFailure","result":"passed"},
+    {"name":"protocol-downgrade","class":"security","code":"REMOTE_WORKER_MALFORMED","test":"TestHTTPTransportRejectsProtocolDowngradeAndRedactsPrivateFailure","result":"passed"},
+    {"name":"overload","class":"limit","code":"OVERLOADED","test":"TestReferenceGatewayWorkerOverload","result":"passed"},
+    {"name":"cancellation","class":"cancellation","code":"","test":"TestReferenceGatewayCancellationAcknowledgement","result":"passed"},
+    {"name":"context-cancellation","class":"cancellation","code":"CANCELLED","test":"TestReferenceGatewayRejectsBeforeDispatch","result":"passed"},
+    {"name":"process-death","class":"boundary","code":"REMOTE_OUTCOME_INDETERMINATE","test":"TestReferenceGatewayReconnectDecisions","result":"passed"},
+    {"name":"write-boundary","class":"boundary","code":"","test":"TestHTTPTransportClassifiesProcessDeathByWriteBoundary","result":"passed"},
+    {"name":"duplicate-invocation","class":"negative","code":"REMOTE_INVOCATION_DUPLICATE","test":"TestReferenceGatewayRejectsDuplicateInvocation","result":"passed"},
+    {"name":"stale-reference","class":"boundary","code":"REMOTE_REFERENCE_UNAVAILABLE","test":"TestReferenceGatewayRejectsStaleReference","result":"passed"},
+    {"name":"bounded-backpressure","class":"limit","code":"OVERLOADED","test":"TestReferenceGatewayMapsBackpressureToStableCode","result":"passed"},
+    {"name":"frame-limit","class":"limit","code":"REMOTE_INVOCATION_INVALID","test":"TestHTTPTransportRejectsUnsafeEndpointsAndFrameLimits","result":"passed"},
+    {"name":"retention-limit","class":"limit","code":"OVERLOADED","test":"TestReferenceGatewayBoundsDeduplicationAndReferences","result":"passed"},
+    {"name":"malformed-worker-frame","class":"malformed","code":"REMOTE_WORKER_MALFORMED","test":"TestReferenceGatewayRejectsMalformedWorkerOutput","result":"passed"}
+  ],
+  "verificationCommands": [
+    ["go","test","./remoteworker","-count=1"],
+    ["go","test","-race","./remoteworker","-count=1"],
+    ["go","test","./internal/conformance","-run","TestRemoteWorkerGatewayEvidence","-count=1"],
+    ["node","conformance/independent/remote-worker-gateway.mjs"],
+    ["node","conformance/independent/verify-remote-worker-gateway.mjs"]
+  ]
+}
