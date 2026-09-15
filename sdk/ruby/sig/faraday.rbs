@@ -1,0 +1,6 @@
+module Naatre
+  class FaradayAdapter
+    def initialize: (?untyped connection) -> void
+    def call: (Transport::Request request, Transport::Cancellation cancellation) -> Transport::Response
+  end
+end

@@ -59,7 +59,8 @@ evidence must be described as planned.
   partial-result models, pluggable transport contracts, and deterministic
   operation bindings for `sdk.dart.core-1`.
 - `sdk/ruby/` contains the dependency-free Ruby core, deterministic generated
-  operation bindings, and RBS metadata for `sdk.ruby.core-1`.
+  operation bindings, RBS metadata, a bounded transport client, and optional
+  Faraday/Rails contracts for `sdk.ruby.core-1` and `sdk.ruby.adapters-1`.
 - `schema`: portable types, values, scalar codecs, portable validation,
   strict JSON Schema 2020-12 constraint mappings, an RFC 8927 JTD projection
   with independent fidelity reports, and deterministic federation

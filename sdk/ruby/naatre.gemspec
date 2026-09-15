@@ -5,8 +5,8 @@ require_relative "lib/naatre"
 Gem::Specification.new do |spec|
   spec.name = "naatre"
   spec.version = Naatre::VERSION
-  spec.summary = "Strict generated Ruby bindings for Naatre"
-  spec.description = "Framework-neutral Naatre operation values, scalar codecs, and selected-result bindings."
+  spec.summary = "Strict Ruby bindings and transport adapters for Naatre"
+  spec.description = "Framework-neutral Naatre values, generated bindings, bounded transport client, and optional integrations."
   spec.authors = ["Valksor"]
   spec.license = "Apache-2.0"
   spec.homepage = "https://github.com/valksor/naatre"

@@ -945,18 +945,20 @@
     "83": {
       "issue": 83,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 83,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.ruby.adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.ruby.adapters-1"
+        ]
       }
     },
     "84": {

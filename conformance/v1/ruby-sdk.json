@@ -23,12 +23,12 @@
     "frameBytes": 1048576,
     "redirects": 5
   },
-  "redirectCredentials": "unsupported-until-83",
+  "redirectCredentials": "adapter-profile-sdk.ruby.adapters-1",
   "cancellation": {
     "coreStreamDecoder": "synchronous-terminal-validation",
-    "http": "unsupported-until-83",
-    "sse": "unsupported-until-83",
-    "websocket": "unsupported-until-83"
+    "http": "adapter-profile-cooperative-resource-close",
+    "sse": "adapter-profile-cooperative-resource-close",
+    "websocket": "unsupported"
   },
   "package": {
     "name": "naatre",
@@ -38,7 +38,7 @@
     "reproducibility": "two-clean-build-sha256-match"
   },
   "evidence": [
-    {"path": "sdk/ruby/lib/naatre.rb", "sha256": "4c56bd84735e4bef95befe4fbdb5fdb1c649a256c559a9c4a7f0f4f83ebabbb0"},
+    {"path": "sdk/ruby/lib/naatre.rb", "sha256": "eb3accfbcd73d4ddd89b5d4fe354124f9bf59c6b5bdb95ab795da17092d8f09d"},
     {"path": "sdk/ruby/lib/naatre/core.rb", "sha256": "50c94c2ffa2d361bf7d430e07f870fbb641664cef2deb7ba94ad4674e64db8bf"},
     {"path": "sdk/ruby/lib/naatre/generated/operations.rb", "sha256": "2218ebf54ac7b0fc5b897d7d7c772cbd38054ac71a683a547664d5325c666c30"},
     {"path": "sdk/ruby/generated/operations.json", "sha256": "3a346f61a5b7a5f2ade3c0f527f9ff5d50bd87b12a827c5a172bdcc3a508d8dd"},
@@ -48,13 +48,13 @@
     {"path": "sdk/ruby/sig/generated.rbs", "sha256": "3b09e3a57eb2cebb8bca12ba66538869c29c41faaed930317f4f2c4471d3516b"},
     {"path": "sdk/ruby/test/core_test.rb", "sha256": "8b5d81b582a3e1258eff4f8adbb4d8b90833b193c266f6ee71ed7b748b9a6721"},
     {"path": "sdk/ruby/test/generated_test.rb", "sha256": "47e00a690ac91afc407d741456b79eaaf38b063f7be87b66e8a476364a2ca0d4"},
-    {"path": "sdk/ruby/naatre.gemspec", "sha256": "564ff68c6228265527c57fcb5b9d92510ff1ad6ba07960d2214aa6d74504195e"},
+    {"path": "sdk/ruby/naatre.gemspec", "sha256": "c74e813358a95924b2e17a427f24192de1d01f3194b58e8ec90e43d99453518c"},
     {"path": "sdk/ruby/Gemfile", "sha256": "53bf60ef2edbd3a0b3896f8e531a6ed7306c45245c69a379a971010b1b09ee80"},
     {"path": "sdk/ruby/Gemfile.lock", "sha256": "bd943ff16afc1411defe639f7fcc32fb332a8b6225627a04d83af5f7ea3f1132"},
-    {"path": "conformance/independent/verify-ruby-sdk.mjs", "sha256": "cf1565695f9df63369d6e3b10395e431afb0b1baff04eb689ba03fe0e5ed1cef"}
+    {"path": "conformance/independent/verify-ruby-sdk.mjs", "sha256": "d698ce19efdcd54d582b02e7568c59ef5fb7f5af03c99774f872123e4deed234"}
   ],
   "reports": [
-    {"path": "conformance/reports/ruby-core-cruby-2.6.10-darwin-arm64.json", "sha256": "ad5b9ebe5d698aed4f5d87c7fc3da7a2e43df92ae4494a0a15dc1629f5c5477e"}
+    {"path": "conformance/reports/ruby-core-cruby-2.6.10-darwin-arm64.json", "sha256": "dcb4dcb51705e101ecba6d9b500bf7b1fbaf849d048ea5c109f06c1dc8586d62"}
   ],
   "vectors": [
     "string-symbol-key-equivalence-and-collision",
@@ -72,13 +72,13 @@
     "byte-identical-generation-and-gem-build"
   ],
   "unsupported": [
-    "http-transport-83",
-    "rails-integration-83",
-    "sse-transport-83",
-    "websocket-transport-83",
-    "automatic-auth-refresh-83",
-    "automatic-retry-83",
-    "transport-cancellation-83",
+    "http-transport-in-core-profile",
+    "rails-integration-in-core-profile",
+    "sse-transport-in-core-profile",
+    "websocket-transport",
+    "automatic-auth-refresh",
+    "automatic-retry",
+    "transport-cancellation-in-core-profile",
     "complete-official-sdk-matrix-69"
   ]
 }

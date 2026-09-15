@@ -36,6 +36,7 @@ const implementations = new Map([
   ["sdk.swift.core-1", "verify-swift-sdk.mjs"],
   ["sdk.dart.core-1", "verify-dart-sdk.mjs"],
   ["sdk.ruby.core-1", "verify-ruby-sdk.mjs"],
+  ["sdk.ruby.adapters-1", "verify-ruby-adapters.mjs"],
   ["sdk.typescript.adapters-1", "verify-typescript-adapters.mjs"],
   ["sdk.typescript.core-1", "verify-typescript-sdk.mjs"],
 ]);

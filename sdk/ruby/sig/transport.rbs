@@ -1,0 +1,60 @@
+module Naatre
+  module Transport
+    REQUEST_MEDIA_TYPE: String
+    RESPONSE_MEDIA_TYPE: String
+    SSE_MEDIA_TYPE: String
+
+    class Cancellation
+      def initialize: () -> void
+      def cancel: () -> bool
+      def cancelled?: () -> bool
+      def raise_if_cancelled!: () -> nil
+      def on_cancel: () { () -> void } -> ^() -> untyped
+    end
+
+    class Request
+      attr_reader method: String
+      attr_reader url: String
+      attr_reader headers: Hash[String, String]
+      attr_reader body: String
+      attr_reader timeout: Numeric?
+    end
+
+    class Response
+      attr_reader status: Integer
+      attr_reader headers: Hash[String, String]
+      attr_reader body: untyped
+      def initialize: (status: Integer, headers: Hash[(String | Symbol), String], body: untyped) -> void
+      def close: () -> bool
+      def cancel: () -> bool
+      def closed?: () -> bool
+    end
+
+    interface _Adapter
+      def call: (Request request, Cancellation cancellation) -> Response
+    end
+
+    class Client
+      attr_reader endpoint: String
+      attr_reader adapter: _Adapter
+      attr_reader limits: Hash[String, Integer]
+      def initialize: (
+        endpoint: String,
+        adapter: _Adapter,
+        ?authenticate: ^(Hash[String, String]) -> Hash[(String | Symbol), String],
+        ?redirect_origins: Array[String],
+        ?limits: Hash[(String | Symbol), Integer]
+      ) -> void
+      def execute: (Operation operation, ?Hash[(String | Symbol), untyped] options) -> OperationResult
+      def stream: (Operation operation, ?Hash[(String | Symbol), untyped] options) -> Stream
+      def paginate: (Integer maximum_pages, ?String? initial_cursor, ?Hash[(String | Symbol), untyped] options) { (String? cursor) -> Operation } -> Array[untyped]
+    end
+
+    class Stream
+      include Enumerable[Hash[String, untyped]]
+      def each: () { (Hash[String, untyped]) -> void } -> Stream
+      def close: () -> bool
+      def closed?: () -> bool
+    end
+  end
+end
