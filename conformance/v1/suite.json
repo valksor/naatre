@@ -127,6 +127,12 @@
       "sha256": "f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"
     },
     {
+      "path": "v1/graphql-adapter.json",
+      "profile": "core.adapters.graphql-1",
+      "category": "integration",
+      "sha256": "0d54a0375d6315c934f49bd1fc03c89807314197163e4bd710fc6428f5f4a702"
+    },
+    {
       "path": "v1/go-client.json",
       "profile": "sdk.go.client-1",
       "category": "transport",

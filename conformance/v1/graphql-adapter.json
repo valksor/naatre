@@ -1,0 +1,78 @@
+{
+  "profile": "core.adapters.graphql-1",
+  "fixtureSuite": "1.0.0",
+  "upstreamSpecification": "https://spec.graphql.org/September2025/",
+  "implementation": {
+    "package": "github.com/valksor/naatre/graphqladapter",
+    "language": "go",
+    "runtime": "go1.27",
+    "platforms": ["linux-amd64", "linux-arm64", "macos-amd64", "macos-arm64", "windows-amd64", "windows-arm64"]
+  },
+  "dependencies": [
+    {
+      "profile": "core.adapters-1",
+      "path": "spec/v1/adapters.md",
+      "sha256": "c82bc36993539f17ac99b45ec8658a7a1f3542375a5c33642b4dd9c31a50494c"
+    },
+    {
+      "profile": "core.adapters-1-fixtures",
+      "path": "conformance/v1/adapters.json",
+      "sha256": "4ada331660f6c692fbdfa518e0c70479daf28341d0ee3764d9d6f7a18e1ae28a"
+    },
+    {
+      "profile": "go-module-dependencies",
+      "path": "go.mod",
+      "sha256": "2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"
+    }
+  ],
+  "directions": ["schema-import", "schema-export", "runtime-consume", "runtime-expose"],
+  "capabilities": [
+    "explicit-resolver-registration",
+    "graphql-non-null-propagation",
+    "named-and-inline-fragments",
+    "operation-import-export",
+    "partial-data-safe-errors",
+    "policy-not-inferred",
+    "schema-import-export",
+    "selection-alias-preservation",
+    "subscription-cancellation"
+  ],
+  "unsupported": [
+    "automatic-persisted-queries",
+    "browser-runtime",
+    "custom-directives",
+    "defer-stream",
+    "federation",
+    "framework-bindings",
+    "graphql-http-transport",
+    "graphql-websocket-transport",
+    "input-oneof",
+    "interface-implements",
+    "introspection-execution",
+    "inline-enum-literals",
+    "live-queries",
+    "multipart-sse",
+    "native-mobile-runtime",
+    "remote-schema-discovery",
+    "schema-extensions",
+    "schema-stitching",
+    "uploads"
+  ],
+  "cases": [
+    {"name": "schema-import-export", "class": "positive", "result": "passed"},
+    {"name": "operation-selection-alias-null", "class": "positive", "result": "passed"},
+    {"name": "missing-policy-rejected", "class": "negative", "code": "GRAPHQL_POLICY_REQUIRED", "result": "passed"},
+    {"name": "missing-resolver-adaptation-rejected", "class": "negative", "code": "GRAPHQL_RESOLVER_REQUIRED", "result": "passed"},
+    {"name": "non-null-bubbles-with-original-path", "class": "boundary", "result": "passed"},
+    {"name": "partial-data-safe-error", "class": "boundary", "result": "passed"},
+    {"name": "subscription-context-cancellation", "class": "cancellation", "code": "GRAPHQL_CANCELLED", "result": "passed"},
+    {"name": "document-byte-depth-token-bounds", "class": "resource-limit", "code": "GRAPHQL_RESOURCE_EXHAUSTED", "result": "passed"},
+    {"name": "protected-upstream-details-redacted", "class": "security", "code": "GRAPHQL_UPSTREAM_FAILED", "result": "passed"},
+    {"name": "protected-runtime-details-redacted", "class": "security", "code": "GRAPHQL_EXECUTION_FAILED", "result": "passed"}
+  ],
+  "commands": [
+    "GOCACHE=/tmp/naatre-graphql-gocache go test ./graphqladapter -count=1",
+    "GOCACHE=/tmp/naatre-graphql-gocache go test ./internal/conformance -run TestGraphQLAdapterEvidence -count=1",
+    "node conformance/independent/verify-graphql-adapter.mjs"
+  ]
+}

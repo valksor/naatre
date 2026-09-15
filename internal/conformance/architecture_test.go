@@ -40,6 +40,7 @@ var layers = []struct {
 	{"reflectadapter", 3},
 	{"interopadapter", 3},
 	{"playground", 4},
+	{"graphqladapter", 4},
 	{"transport", 4},
 	{"largevalue", 5},
 	{"examples", 5},
