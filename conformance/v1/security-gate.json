@@ -137,7 +137,7 @@
       "profile": "runtime.go.plan-cache-1",
       "surface": "plan-cache",
       "status": "supported",
-      "fixture": {"path": "conformance/v1/plan-cache.json", "sha256": "8582eaf58ee027927270ec8939536fad2d98c4f5f245e1db05244ef0ee3582a0"},
+      "fixture": {"path": "conformance/v1/plan-cache.json", "sha256": "dbfdf376ebc5af5d51b374431f7adf4e80861471a8be97ecc4651109ecdfb6b5"},
       "implementation": [{"path": "runtime/plan_cache.go", "sha256": "b6792a9b0ff375fac2eb22377880dab4dc9f76d83d19a6d4e4671704ecba6c0f"}],
       "classes": ["positive", "negative", "adversarial", "cancellation", "exhaustion"],
       "budgetDimensions": ["entries", "compile-work", "authorization-evaluations"],
@@ -248,7 +248,7 @@
       "profile": "operations.lifecycle-1",
       "surface": "lifecycle",
       "status": "supported",
-      "fixture": {"path": "conformance/v1/operations.json", "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"},
+      "fixture": {"path": "conformance/v1/operations.json", "sha256": "5efba914ad89d9e284b5c643e2796f7498ef0824cc91531673d46fdcfd3c1cd2"},
       "implementation": [
         {"path": "runtime/process_admission.go", "sha256": "c9b86b06e9cee4fa60759ca49a35e159d68779df516285f25aea09cda14150eb"},
         {"path": "runtime/process_lifecycle.go", "sha256": "2e44343941d4401268b518e5b66e23ab451ea24fb378f98278122fbfc9307e8a"}

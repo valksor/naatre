@@ -12,8 +12,8 @@
     {"profile":"core.streaming-1-fixture","path":"conformance/v1/streaming.json","sha256":"8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"},
     {"profile":"core.streaming-handles-1-runtime","path":"runtime/subscription_handle.go","sha256":"b0c05c17e78aec2619dc1d14f4ebef11698215435b5c9a8e1394224715da3b1a"},
     {"profile":"core.streaming-handles-1-reference-broker","path":"runtime/subscription_broker.go","sha256":"cba59646e00f821443c61399f142a57b792c193e9f86bc7621e0715617012310"},
-    {"profile":"go.module","path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
-    {"profile":"go.module-lock","path":"go.sum","sha256":"0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+    {"profile":"go.module","path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
+    {"profile":"go.module-lock","path":"go.sum","sha256":"807111b34b04ef367eb9a805175416a67720ca1923d72f5d3ec0f784b3551b01"}
   ],
   "implementation": {
     "module": "github.com/valksor/naatre",

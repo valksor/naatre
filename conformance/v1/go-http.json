@@ -10,7 +10,7 @@
       "arch": "arm64"
     },
     "dependencies": [
-      {"path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+      {"path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
       {"path":"spec/v1/http.md","sha256":"68fe0b94423b7d95addb9350276c2587aca344bfebc0fcaafcca1bceb5075e29"},
       {"path":"conformance/v1/http.json","sha256":"f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"}
     ],

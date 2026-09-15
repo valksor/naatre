@@ -235,7 +235,7 @@
         },
         {
           "fixture": "v1/generator-plugin-host.json",
-          "sha256": "cfd618db2995026c498b85a59866a34de2011718b0f707a86f8cdc34a60a156a"
+          "sha256": "f53fe35f4617ad00c4c27c271957b5c90a89e1074528a9fbdb846a89222491ca"
         },
         {
           "fixture": "v1/language.json",
@@ -255,7 +255,7 @@
         },
         {
           "fixture": "v1/schema-discovery.json",
-          "sha256": "be1b60919c7822e9b85d224aecb47071023b7df63e05bb1e8cf14553915bff36"
+          "sha256": "b8520c2ae00441f41705ad18566af2065b9c81446b6f400e9f67ce139e79046d"
         },
         {
           "fixture": "v1/schema.json",

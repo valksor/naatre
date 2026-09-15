@@ -14,8 +14,8 @@
     {"profile":"core.large-value-1-egress","path":"largevalue/egress.go","sha256":"d0edf3d59731d5d46a505e7b8b2c9434c25fd1a37bb0228b143800fab37a53f1"},
     {"profile":"core.large-value-1-range","path":"largevalue/range.go","sha256":"7d69bc37a6b639f7ae9357db38022e454baede9e04478161cccbcf6d835fce5a"},
     {"profile":"core.large-value-1-identity","path":"largevalue/identity.go","sha256":"5459dd5d9df6ab54c4f0ebc913b7d84197a7e15704e0417b173afd4e1a59edab"},
-    {"profile":"go.module","path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
-    {"profile":"go.module-lock","path":"go.sum","sha256":"0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+    {"profile":"go.module","path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
+    {"profile":"go.module-lock","path":"go.sum","sha256":"807111b34b04ef367eb9a805175416a67720ca1923d72f5d3ec0f784b3551b01"}
   ],
   "implementation": {
     "module": "github.com/valksor/naatre",

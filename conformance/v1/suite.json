@@ -130,19 +130,19 @@
       "path": "v1/graphql-adapter.json",
       "profile": "core.adapters.graphql-1",
       "category": "integration",
-      "sha256": "b3210fb158abe5a9f6e81536bcfc16a4bc6b77f28dd3c1624c7c12f8a8142918"
+      "sha256": "a4dc3b0cd2b5048122277e677747b1c2878cf25519b34eb63eeb974de427e590"
     },
     {
       "path": "v1/go-client.json",
       "profile": "sdk.go.client-1",
       "category": "transport",
-      "sha256": "6643adb885ece92efaef56eec234dfab2c9d5c53ccfba209bf1ada70205d20c9"
+      "sha256": "b217d5bf49ad9a301442088a3cf439d87ea98c01cb13bb78c0f176d07f2d7886"
     },
     {
       "path": "v1/go-sdk.json",
       "profile": "sdk.go.operations-1",
       "category": "transport",
-      "sha256": "7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"
+      "sha256": "816f3023318a58f17061b537f1e9a82762e4276bb6e6389f7d35e4d26578eb21"
     },
     {
       "path": "v1/http.json",
@@ -178,7 +178,7 @@
       "path": "v1/operations.json",
       "profile": "operations.lifecycle-1",
       "category": "execution",
-      "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
+      "sha256": "5efba914ad89d9e284b5c643e2796f7498ef0824cc91531673d46fdcfd3c1cd2"
     },
     {
       "path": "v1/partial-results.json",
@@ -244,7 +244,7 @@
       "path": "v1/security-gate.json",
       "profile": "suite.security-gate-1",
       "category": "security",
-      "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
+      "sha256": "94bc9b4e44d7f31e7e4385dda93a66468f9c867367c8883fa61913f9d5c17401"
     },
     {
       "path": "v1/streaming.json",
@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "9095ad4f0513b4768546aa870b7b30c477202ec6cb75b3872a2cd96f7daff191"
+      "sha256": "c74ac69e50d19c32fabfcdb620d9d43fee74e2367ee99e1590582411dc28e6e8"
     },
     {
       "path": "v1/validation.json",
@@ -304,7 +304,7 @@
       "path": "v1/schema-discovery.json",
       "profile": "schema.discovery.http-1",
       "category": "transport",
-      "sha256": "be1b60919c7822e9b85d224aecb47071023b7df63e05bb1e8cf14553915bff36"
+      "sha256": "b8520c2ae00441f41705ad18566af2065b9c81446b6f400e9f67ce139e79046d"
     },
     {
       "path": "v1/observability-integrations.json",
@@ -316,19 +316,19 @@
       "path": "v1/async-operation-adapters.json",
       "profile": "operations.async-adapters-go-1",
       "category": "integration",
-      "sha256": "533413595aae7fd9d811fab202942641a1a52c7ae4f8017358ed12a6587adc00"
+      "sha256": "39d9ae7625f5c3a9cd1edfc5f6f133d6bc1693c76c01ab7a02577178b002bff5"
     },
     {
       "path": "v1/subscription-broker-adapters.json",
       "profile": "streaming.broker-adapters-go-1",
       "category": "integration",
-      "sha256": "85e0efce08e8ea97f0caef2776ad14275213bea995dd8b01ffadd14551e62334"
+      "sha256": "226abccae69bf9cd90d0885697298a2665a353fb54aa86d73af8bfb9f2bac93e"
     },
     {
       "path": "v1/federation-coordinator.json",
       "profile": "runtime.go.federation-coordinator-1",
       "category": "execution",
-      "sha256": "b6b607e626a49236c7a9c54d9683323c41a20cd5cc0ff09e832b0ab9808ebcbe"
+      "sha256": "8eee9f48fe9f2237bc64bd569436d7f7bddf079a2ba465191557d95419dd7c9b"
     },
     {
       "path": "v1/compatibility.json",
@@ -340,7 +340,7 @@
       "path": "v1/profiles.json",
       "profile": "suite.profiles-1",
       "category": "evolution",
-      "sha256": "f7cb58d4fc384819d9869594342f6d3fd15b7d843cad2ca94464fe519bbbd61c"
+      "sha256": "f02bd1dbd56c6defc7576a1ee9469a91c57bdc50a8d0b27103def4f5ef6f1520"
     },
     {
       "path": "v1/release-gate.json",
@@ -460,13 +460,13 @@
       "path": "v1/go-http.json",
       "profile": "core.http-1",
       "category": "transport",
-      "sha256": "a4003954a448f69f3313d6d3d7a0942995540cf7062e8aeae1d921518d962bf3"
+      "sha256": "64ad7e579857c5f16c73dcd30bb3d0baa92a966e9356f582932413973b4fac5c"
     },
     {
       "path": "v1/plan-cache.json",
       "profile": "runtime.go.plan-cache-1",
       "category": "execution",
-      "sha256": "8582eaf58ee027927270ec8939536fad2d98c4f5f245e1db05244ef0ee3582a0"
+      "sha256": "dbfdf376ebc5af5d51b374431f7adf4e80861471a8be97ecc4651109ecdfb6b5"
     },
     {
       "path": "v1/generator-plugin-host-model.json",
@@ -478,13 +478,13 @@
       "path": "v1/generator-plugin-host.json",
       "profile": "sdk.generator-plugin-host-1",
       "category": "canonical",
-      "sha256": "cfd618db2995026c498b85a59866a34de2011718b0f707a86f8cdc34a60a156a"
+      "sha256": "f53fe35f4617ad00c4c27c271957b5c90a89e1074528a9fbdb846a89222491ca"
     },
     {
       "path": "v1/go-quality.json",
       "profile": "quality.go.harness-1",
       "category": "benchmark",
-      "sha256": "eb6a3d0b02e1fe8fdcd80e17553d5239461c34467b2d41b74e11e9da87d35be8"
+      "sha256": "126c7b6bbad877019d2c744f1bdcca54d40ab9b179d394fcee876202be179568"
     },
     {
       "path": "v1/large-values.json",
@@ -496,7 +496,7 @@
       "path": "v1/large-value-adapters.json",
       "profile": "implementation.go.large-value-adapters-1",
       "category": "integration",
-      "sha256": "1b193f9734f9a93f21adcd947e94432b8e666c7556a2469e4fc7cd9858c1d2c5"
+      "sha256": "a4cc8aa0bd4b2ee161381e985ca3e831f856690bac7d28bab7fe1dc83be3c2c2"
     },
     {
       "path": "v1/events.json",
@@ -508,7 +508,7 @@
       "path": "v1/webhook-adapters.json",
       "profile": "events.webhook-adapters-go-1",
       "category": "integration",
-      "sha256": "a62741c0d5ebbb6f1ab94ba8b147494235a6c27d35ad12879b8825fa68eca1e4"
+      "sha256": "b49e88883b817b3357e4a30836da2c0d070ec52ce30c0d779812292062a69c90"
     },
     {
       "path": "v1/governance.json",
@@ -526,7 +526,7 @@
       "path": "v1/remote-worker-gateway.json",
       "profile": "implementation.go.remote-worker-1",
       "category": "transport",
-      "sha256": "308d32ac2904394f6c30ef28b97973b111730ba5a9bc5b63a91a52c7978a20b9"
+      "sha256": "c6afa3ad58bb2191fed370d5fee1454892ad8dce0c2a0d616f451ee94d54db68"
     },
     {
       "path": "v1/cbor.json",
@@ -616,13 +616,13 @@
       "path": "v1/openrpc-jsonrpc.json",
       "profile": "adapter.openrpc-jsonrpc-1",
       "category": "transport",
-      "sha256": "30947dcf815aab2427a8bf6ccf777cd0fae3ad55b057753ca9ac59fca7c048f3"
+      "sha256": "4d295bf4e88bda795824d3f14289aac8696b3c220fb00c5a1a6f808a78d0eb32"
     },
     {
       "path": "v1/http-digest-integration.json",
       "profile": "implementation.go.http-digest-1",
       "category": "transport",
-      "sha256": "19eea2dd381655820298e875edd711130355a911a8aedda66edec8fe322f721e"
+      "sha256": "72230dd2ca513af9e088f5bbf12db11d1eae06cb47c69a9af784f852fd66eac5"
     },
     {
       "path": "v1/asyncapi.json",
@@ -634,7 +634,7 @@
       "path": "v1/asyncapi-projection.json",
       "profile": "adapter.asyncapi.projection-1",
       "category": "integration",
-      "sha256": "3645698a11da8a874e2e4b36728b13f51e7c105df7459ac8242daf3d2d7c72cb"
+      "sha256": "2397010f4ca65fca13e6fa92fafa77d62ebbe17cde729abdfaf37215c26ff0aa"
     },
     {
       "path": "v1/mcp-adapter.json",
@@ -646,7 +646,7 @@
       "path": "v1/mcp-runtime.json",
       "profile": "adapter.mcp-go-runtime-1",
       "category": "integration",
-      "sha256": "a11d584620ece7dad63f484ebb2bcabe084644c60c18de0e15d8baae74ac3dcc"
+      "sha256": "ead30deb97733d614ed3c0a60514c880a305548630d4a3cc50f82031ff26a570"
     }
   ],
   "normativeSources": [

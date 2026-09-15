@@ -464,7 +464,7 @@
         },
         {
           "fixture": "v1/security-gate.json",
-          "sha256": "1ed9f674ad09fa80b9ad776917583b4289d7397521ec8dbb0613b41bd624cb48"
+          "sha256": "94bc9b4e44d7f31e7e4385dda93a66468f9c867367c8883fa61913f9d5c17401"
         },
         {
           "fixture": "v1/security.json",

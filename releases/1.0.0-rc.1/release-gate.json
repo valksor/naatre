@@ -31,7 +31,7 @@
     },
     {
       "path": "conformance/v1/profiles.json",
-      "sha256": "f7cb58d4fc384819d9869594342f6d3fd15b7d843cad2ca94464fe519bbbd61c"
+      "sha256": "f02bd1dbd56c6defc7576a1ee9469a91c57bdc50a8d0b27103def4f5ef6f1520"
     },
     {
       "path": "conformance/v1/release-gate.json",
@@ -39,11 +39,11 @@
     },
     {
       "path": "conformance/v1/suite.json",
-      "sha256": "a76ad0542acc44852c375da0315b8fc7c43983d8a906e9c7c2915a4bbbf8e512"
+      "sha256": "6650f8ae6bbed10aa039fd4985b7c429b7b8ca2dc64b9bbfa8a6a3e348f17e42"
     },
     {
       "path": "release-evidence/independent-runner.json",
-      "sha256": "fd4b62667c0adfb122ecae76d7980d996da36da6c87747584bab6afc1c9dfb2f"
+      "sha256": "6c447bfbab2c06474a9e6420976e46fa3fa5e224e4d0bdb510c96bdf34022345"
     },
     {
       "path": "release-evidence/profile-reports/naatre-dart--sdk.client-1.json",
@@ -63,15 +63,15 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.execution-1.json",
-      "sha256": "05608e8224fe664cd59ef199ba4d994e770173a4cd5cb5aa1c82202a140bd477"
+      "sha256": "a8c36dd346bc77b91345356d411de0d51f44186df1c97b5bbdd6413d88705c84"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.extensions-1.json",
-      "sha256": "ed21b7b8fc02a111da05b65e085ee0451e8f5940042e0e4293b743d640bf069d"
+      "sha256": "c81d8228dd9063910cf161de4fc78c55462cd5636599320d23750117545b5053"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.federation-1.json",
-      "sha256": "a3011c8ada4a66420f8cb1343ea4f48a8f373c9b0e95b66c59b5a1e46faa38bc"
+      "sha256": "36c5bc564129c329cbaf0a753290ada21aaedd8b21d3b7d76fcf157844fe8fcd"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--runtime.persisted-1.json",
@@ -79,7 +79,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--schema.tooling-1.json",
-      "sha256": "add6e18d0e5ecd2d4c47822dceaa23897da941105a7668e1f8a16241127d97d3"
+      "sha256": "1216e91f97824cd5b90b87243b605ee60a76ed1ff1b2653eaf310cdb3f8fedb0"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--sdk.client-1.json",
@@ -95,11 +95,11 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--transport.http.server-1.json",
-      "sha256": "be2957b73a294ad0ab41da79c2adbb58270ebb0fad15573d5f56dadd9c490dad"
+      "sha256": "e7d42ef942bcb3b6c49e35991993298d13e3f77cdcfaed79d3fb79edc6f1d520"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--transport.streaming-1.json",
-      "sha256": "a66ffc646918efa04ece73565c485e1c146290d8ee74023b62aa141fa6c86995"
+      "sha256": "0099a4f8527967d9b5ce7f6db0949d02e3b9d4fa7fe732b91224867685e5758f"
     },
     {
       "path": "release-evidence/profile-reports/naatre-go--wire.codec-1.json",
@@ -107,7 +107,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-javascript-typescript-worker--worker.remote-1.json",
-      "sha256": "3ef5a9b9c568e963134ac7ac0e2a94e8df9b5bee96b002f47227749efd0feaff"
+      "sha256": "bb5c602d2495b82243df4cb2cff7a4f1b0bdb9a8deb67ee62ffb89321755d961"
     },
     {
       "path": "release-evidence/profile-reports/naatre-jvm--sdk.client-1.json",
@@ -127,7 +127,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-php-worker--worker.remote-1.json",
-      "sha256": "44d390fe1e3e236eab1c68b96a687804558ee0e6e7a78082b68be57194084eef"
+      "sha256": "34834ada250a827a6c4fd80be500fadccf95985244b81798bdf73270711ef4f1"
     },
     {
       "path": "release-evidence/profile-reports/naatre-python--sdk.client-1.json",
@@ -139,7 +139,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-python-worker--worker.remote-1.json",
-      "sha256": "13f72db935c4ff2e0773c6e4771751a5ce9d5995a9982af64904eb17b075ce00"
+      "sha256": "02eb84b7335a266ad1f72c256f8e39d0496d9f1dbfeec8bf6c6237354292d4ab"
     },
     {
       "path": "release-evidence/profile-reports/naatre-ruby--sdk.client-1.json",
@@ -159,11 +159,11 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-rust-worker--worker.remote-1.json",
-      "sha256": "476c508cc47b6c5b1e1003a6612a73272f84d6fc6cccf9d533fd6755794b2207"
+      "sha256": "84b8ea1cd9a85b0fdd1a0e446cb745d9cb847ebfc32498472c9298143c7ae007"
     },
     {
       "path": "release-evidence/profile-reports/naatre-sdk--schema.tooling-1.json",
-      "sha256": "29d64679bcd0c3d6aa6cf6b34da92be0b3890634cb7b366943b465c3791967e6"
+      "sha256": "60f88b63b64246a8d7c909a3ce018dbc2e0c81f53530cb2b662f0097fc23738c"
     },
     {
       "path": "release-evidence/profile-reports/naatre-sdk--sdk.client-1.json",
@@ -179,7 +179,7 @@
     },
     {
       "path": "release-evidence/profile-reports/naatre-sdk--transport.streaming-1.json",
-      "sha256": "158914129baf3150291b72b5dfea6ae543183df3780db0f59636c529d80f2a6b"
+      "sha256": "fbdf3411740a8f72a0e33cc39257a8eb7d88d124647fd74da956ee11efeadb81"
     },
     {
       "path": "release-evidence/profile-reports/naatre-sdk--wire.codec-1.json",
@@ -195,7 +195,7 @@
     },
     {
       "path": "release-evidence/security-gate.json",
-      "sha256": "c3d9f7ec81a280fc5c7529ac6b7c21422af6894c81d91a2228c6d0ee087f5aab"
+      "sha256": "52885da1d11a14f4888fa70ec4c616fe2688237376731ee3070ad1a4334329e2"
     },
     {
       "path": "releases/release-manifest.schema.json",
@@ -313,7 +313,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--runtime.execution-1.json",
-        "sha256": "05608e8224fe664cd59ef199ba4d994e770173a4cd5cb5aa1c82202a140bd477"
+        "sha256": "a8c36dd346bc77b91345356d411de0d51f44186df1c97b5bbdd6413d88705c84"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -336,7 +336,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--runtime.extensions-1.json",
-        "sha256": "ed21b7b8fc02a111da05b65e085ee0451e8f5940042e0e4293b743d640bf069d"
+        "sha256": "c81d8228dd9063910cf161de4fc78c55462cd5636599320d23750117545b5053"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -359,7 +359,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--runtime.federation-1.json",
-        "sha256": "a3011c8ada4a66420f8cb1343ea4f48a8f373c9b0e95b66c59b5a1e46faa38bc"
+        "sha256": "36c5bc564129c329cbaf0a753290ada21aaedd8b21d3b7d76fcf157844fe8fcd"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -405,7 +405,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--schema.tooling-1.json",
-        "sha256": "add6e18d0e5ecd2d4c47822dceaa23897da941105a7668e1f8a16241127d97d3"
+        "sha256": "1216e91f97824cd5b90b87243b605ee60a76ed1ff1b2653eaf310cdb3f8fedb0"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -451,7 +451,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--transport.http.server-1.json",
-        "sha256": "be2957b73a294ad0ab41da79c2adbb58270ebb0fad15573d5f56dadd9c490dad"
+        "sha256": "e7d42ef942bcb3b6c49e35991993298d13e3f77cdcfaed79d3fb79edc6f1d520"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -474,7 +474,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-go--transport.streaming-1.json",
-        "sha256": "a66ffc646918efa04ece73565c485e1c146290d8ee74023b62aa141fa6c86995"
+        "sha256": "0099a4f8527967d9b5ce7f6db0949d02e3b9d4fa7fe732b91224867685e5758f"
       },
       "status": "passed",
       "optionalCapabilities": [
@@ -529,7 +529,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-sdk--schema.tooling-1.json",
-        "sha256": "29d64679bcd0c3d6aa6cf6b34da92be0b3890634cb7b366943b465c3791967e6"
+        "sha256": "60f88b63b64246a8d7c909a3ce018dbc2e0c81f53530cb2b662f0097fc23738c"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -575,7 +575,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-sdk--transport.streaming-1.json",
-        "sha256": "158914129baf3150291b72b5dfea6ae543183df3780db0f59636c529d80f2a6b"
+        "sha256": "fbdf3411740a8f72a0e33cc39257a8eb7d88d124647fd74da956ee11efeadb81"
       },
       "status": "passed",
       "optionalCapabilities": [
@@ -906,7 +906,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-javascript-typescript-worker--worker.remote-1.json",
-        "sha256": "3ef5a9b9c568e963134ac7ac0e2a94e8df9b5bee96b002f47227749efd0feaff"
+        "sha256": "bb5c602d2495b82243df4cb2cff7a4f1b0bdb9a8deb67ee62ffb89321755d961"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -929,7 +929,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-php-worker--worker.remote-1.json",
-        "sha256": "44d390fe1e3e236eab1c68b96a687804558ee0e6e7a78082b68be57194084eef"
+        "sha256": "34834ada250a827a6c4fd80be500fadccf95985244b81798bdf73270711ef4f1"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -952,7 +952,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-python-worker--worker.remote-1.json",
-        "sha256": "13f72db935c4ff2e0773c6e4771751a5ce9d5995a9982af64904eb17b075ce00"
+        "sha256": "02eb84b7335a266ad1f72c256f8e39d0496d9f1dbfeec8bf6c6237354292d4ab"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -975,7 +975,7 @@
       },
       "report": {
         "path": "release-evidence/profile-reports/naatre-rust-worker--worker.remote-1.json",
-        "sha256": "476c508cc47b6c5b1e1003a6612a73272f84d6fc6cccf9d533fd6755794b2207"
+        "sha256": "84b8ea1cd9a85b0fdd1a0e446cb745d9cb847ebfc32498472c9298143c7ae007"
       },
       "status": "passed",
       "optionalCapabilities": []
@@ -988,7 +988,7 @@
       "profile": "worker.remote-1",
       "report": {
         "path": "release-evidence/profile-reports/naatre-javascript-typescript-worker--worker.remote-1.json",
-        "sha256": "3ef5a9b9c568e963134ac7ac0e2a94e8df9b5bee96b002f47227749efd0feaff"
+        "sha256": "bb5c602d2495b82243df4cb2cff7a4f1b0bdb9a8deb67ee62ffb89321755d961"
       },
       "status": "passed"
     },
@@ -998,7 +998,7 @@
       "profile": "worker.remote-1",
       "report": {
         "path": "release-evidence/profile-reports/naatre-php-worker--worker.remote-1.json",
-        "sha256": "44d390fe1e3e236eab1c68b96a687804558ee0e6e7a78082b68be57194084eef"
+        "sha256": "34834ada250a827a6c4fd80be500fadccf95985244b81798bdf73270711ef4f1"
       },
       "status": "passed"
     },
@@ -1008,7 +1008,7 @@
       "profile": "worker.remote-1",
       "report": {
         "path": "release-evidence/profile-reports/naatre-python-worker--worker.remote-1.json",
-        "sha256": "13f72db935c4ff2e0773c6e4771751a5ce9d5995a9982af64904eb17b075ce00"
+        "sha256": "02eb84b7335a266ad1f72c256f8e39d0496d9f1dbfeec8bf6c6237354292d4ab"
       },
       "status": "passed"
     },
@@ -1018,7 +1018,7 @@
       "profile": "worker.remote-1",
       "report": {
         "path": "release-evidence/profile-reports/naatre-rust-worker--worker.remote-1.json",
-        "sha256": "476c508cc47b6c5b1e1003a6612a73272f84d6fc6cccf9d533fd6755794b2207"
+        "sha256": "84b8ea1cd9a85b0fdd1a0e446cb745d9cb847ebfc32498472c9298143c7ae007"
       },
       "status": "passed"
     },
@@ -1028,7 +1028,7 @@
       "profile": "suite.contract-1",
       "report": {
         "path": "release-evidence/independent-runner.json",
-        "sha256": "fd4b62667c0adfb122ecae76d7980d996da36da6c87747584bab6afc1c9dfb2f"
+        "sha256": "6c447bfbab2c06474a9e6420976e46fa3fa5e224e4d0bdb510c96bdf34022345"
       },
       "status": "passed"
     },
@@ -1138,7 +1138,7 @@
       "profile": "suite.security-gate-1",
       "report": {
         "path": "release-evidence/security-gate.json",
-        "sha256": "c3d9f7ec81a280fc5c7529ac6b7c21422af6894c81d91a2228c6d0ee087f5aab"
+        "sha256": "52885da1d11a14f4888fa70ec4c616fe2688237376731ee3070ad1a4334329e2"
       },
       "status": "passed"
     }

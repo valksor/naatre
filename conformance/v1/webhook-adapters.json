@@ -13,8 +13,8 @@
     {"profile": "core.events-1-envelope", "path": "event/envelope.go", "sha256": "46c033df3d05439a60b4a795f342b5ed2a6d8db35029b7c7a0cc2c939bc7f492"},
     {"profile": "core.events-1-delivery", "path": "event/delivery.go", "sha256": "107bd3dac5805e8c7d304565f83ef1f863a26ada8b7868357f22a1842d4992ae"},
     {"profile": "core.events-1-signature", "path": "event/signature.go", "sha256": "7668a8df08ef0986e5b2905d818fd787a468039038d90536834210069526aa38"},
-    {"profile": "go.module", "path": "go.mod", "sha256": "e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
-    {"profile": "go.module-lock", "path": "go.sum", "sha256": "0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+    {"profile": "go.module", "path": "go.mod", "sha256": "c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
+    {"profile": "go.module-lock", "path": "go.sum", "sha256": "807111b34b04ef367eb9a805175416a67720ca1923d72f5d3ec0f784b3551b01"}
   ],
   "implementation": {
     "module": "github.com/valksor/naatre",

@@ -11,7 +11,7 @@
     "updateRule": "Update this evidence, the language guide, and executable CI anchors in the same change as any package profile boundary."
   },
   "components": [
-    {"language":"go","path":"conformance/v1/go-sdk.json","sha256":"7ca2c5e4a5ea53ee4b28710a6e5d5dfc07bcff16b47edd047032309a112303f6"},
+    {"language":"go","path":"conformance/v1/go-sdk.json","sha256":"816f3023318a58f17061b537f1e9a82762e4276bb6e6389f7d35e4d26578eb21"},
     {"language":"javascript-typescript","path":"conformance/v1/typescript-sdk.json","sha256":"85fba24cf4db5f2a7a1c1601995ff5419fc255c885d7f61f691054c4992f926e"},
     {"language":"php","path":"conformance/v1/php-sdk.json","sha256":"99b2860b271e58be95e5d721912ca03d86d8f46b5a184e2c3a2b5dee1f6cfc4a"},
     {"language":"python","path":"conformance/v1/python-sdk.json","sha256":"4ad1c7931350de9f889fcfd5a05fdb7e9fb79f1e0ce447dbfc8ef8c0acbceb99"},
@@ -25,9 +25,9 @@
   "contractEvidence": [
     {"path":"conformance/v1/generator-model.json","sha256":"22e9883715b5704e68304c13ac63d5d667ffd29b81553e1af308cf596e1682db"},
     {"path":"conformance/v1/generator-output.json","sha256":"f6b21b6a42e3c62e0a219db8955a9cd58d1c24878316785572135f2ad478eea7"},
-    {"path":"conformance/v1/profiles.json","sha256":"f7cb58d4fc384819d9869594342f6d3fd15b7d843cad2ca94464fe519bbbd61c"},
+    {"path":"conformance/v1/profiles.json","sha256":"f02bd1dbd56c6defc7576a1ee9469a91c57bdc50a8d0b27103def4f5ef6f1520"},
     {"path":"conformance/v1/remote-workers.json","sha256":"f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
-    {"path":"conformance/v1/remote-worker-gateway.json","sha256":"308d32ac2904394f6c30ef28b97973b111730ba5a9bc5b63a91a52c7978a20b9"},
+    {"path":"conformance/v1/remote-worker-gateway.json","sha256":"c6afa3ad58bb2191fed370d5fee1454892ad8dce0c2a0d616f451ee94d54db68"},
     {"path":"conformance/v1/typescript-worker.json","sha256":"697a3496a125ba7c761230ee0faa725dfa8404f7135b2188ec1ea25c1abc403e"},
     {"path":"conformance/v1/php-server.json","sha256":"d5534332e3ccfae1d773f2f58f53b7950f9657f8e01e0ba5a24e85128165a03b"},
     {"path":"conformance/v1/rust-worker.json","sha256":"f108c6215b32a2804800f4c440b40b252251c9d5b185a79dfd1576fe0b6b0d77"},

@@ -20,7 +20,7 @@
       "github.com/valksor/naatre/client"
     ],
     "files": [
-      {"path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+      {"path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
       {"path":"protocol/httpdigest/digest.go","sha256":"2fe7528d928d9172fe442763c9eb66c7d5df7fcfbf3c830a6bb66f8a89eeb76b"},
       {"path":"protocol/httpdigest/http.go","sha256":"513aa12e609702ed65746c2d00bc4f39844e373cb9318450f41ab116b81f0b75"},
       {"path":"transport/http/digest.go","sha256":"b44004c5f63384ae5f2dccc6e3b310b6dad9ea07a94ad671f9078ff824b03f55"},

@@ -13,8 +13,8 @@
     {"profile":"adapter.asyncapi-1-exporter","path":"asyncapi/export.go","sha256":"76a1562f6935b782938da949241e9dce4a19cabe4b93bf5d4af782c1904cf0c2"},
     {"profile":"adapter.asyncapi-1-importer","path":"asyncapi/import.go","sha256":"2a6411061ee9ba1acea26e087774452d53dff4b96e8f410e62fd4c7247325453"},
     {"profile":"adapter.asyncapi-1-model","path":"asyncapi/model.go","sha256":"9754b68bc1ca01570f691edc251ceaf5e8054884af5ea0cf06b2c4df21f1d372"},
-    {"profile":"go.module","path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
-    {"profile":"go.module-lock","path":"go.sum","sha256":"0bc4380803125ffb0e0bd9afa76b5d328021274d7b79362ef436208effe43a6a"}
+    {"profile":"go.module","path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
+    {"profile":"go.module-lock","path":"go.sum","sha256":"807111b34b04ef367eb9a805175416a67720ca1923d72f5d3ec0f784b3551b01"}
   ],
   "implementation": {
     "module": "github.com/valksor/naatre",

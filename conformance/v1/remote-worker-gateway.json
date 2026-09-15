@@ -30,7 +30,7 @@
     "minimumGo": "1.27",
     "referenceWorker": "implementation.language-neutral.reference-worker-1",
     "files": [
-      {"path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+      {"path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
       {"path":"remoteworker/gateway.go","sha256":"a60a18be7a722c36ea6cb0609dbfbab6f91ef4b9ac34881c359b7b10f18098cb"},
       {"path":"remoteworker/http_transport.go","sha256":"bbec4f8f53653c36a3c7a69780ebaf96e49ab4523104a1b2359015f9b2c84498"},
       {"path":"remoteworker/stream.go","sha256":"ac50b3f09978bbe061b007b4334ddff3f5e0218cd57cfd0ab904424a2727aa87"},

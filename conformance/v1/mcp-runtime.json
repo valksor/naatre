@@ -10,7 +10,7 @@
     "mcpRevision": "2025-11-25",
     "coreFixture": {"path":"conformance/v1/mcp-adapter.json","sha256":"7856cffa3ea17c64e6d856a30c7b7df97d46874d38ac1218fe628be19262a839"},
     "specification": {"path":"spec/v1/mcp-adapter.md","sha256":"3f705f44a6b4ee0c445a2fd3adcf346d773f42299bec1d11be3e6b6bd8f56bd6"},
-    "goMod": {"path":"go.mod","sha256":"e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+    "goMod": {"path":"go.mod","sha256":"c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
     "goModule": "github.com/valksor/naatre",
     "goVersion": "1.27.0"
   },

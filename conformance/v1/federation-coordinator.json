@@ -23,7 +23,7 @@
       "kind": "module",
       "revision": "go1.27.0",
       "fixture": "go.mod",
-      "sha256": "e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"
+      "sha256": "c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"
     }
   ],
   "commands": [

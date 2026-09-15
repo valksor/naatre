@@ -6,7 +6,7 @@
       "profile": "release.stable-1",
       "report": {
         "path": "releases/1.0.0-rc.1/release-gate.json",
-        "sha256": "53e33eea48ff9459242182b81d498cf8c51e59711bb0daf9cc1e8a2f8f43e801"
+        "sha256": "7eff9450d5297b2ccb25d284c137448dad802731be78c73c7f0556c763bfd750"
       }
     }
   ],

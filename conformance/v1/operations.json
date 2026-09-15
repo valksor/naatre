@@ -40,7 +40,7 @@
       "node conformance/independent/supervise.mjs"
     ],
     "evidence": [
-      {"path": "go.mod", "sha256": "e17f6c2039e1d3f9ff4b5dcb6bc6d1b07dc6dbf78fb12fc2ca37607ad7cc5a39"},
+      {"path": "go.mod", "sha256": "c090402bb257003c0a03859600a843d9c710b27289b492ef745c47f07f96ea46"},
       {"path": "runtime/process.go", "sha256": "de0f0f77d6a487a8d133d459682f5c2adec2fb053abfaca5e9ebe7592cbfa3b2"},
       {"path": "runtime/process_admission.go", "sha256": "c9b86b06e9cee4fa60759ca49a35e159d68779df516285f25aea09cda14150eb"},
       {"path": "runtime/process_lifecycle.go", "sha256": "2e44343941d4401268b518e5b66e23ab451ea24fb378f98278122fbfc9307e8a"},

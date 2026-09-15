@@ -186,7 +186,7 @@
         },
         {
           "fixture": "v1/operations.json",
-          "sha256": "c6cbee7a06864eb89d60e5548b6566a658a727afd865b30876df6738567fad7e"
+          "sha256": "5efba914ad89d9e284b5c643e2796f7498ef0824cc91531673d46fdcfd3c1cd2"
         },
         {
           "fixture": "v1/protocol.json",
