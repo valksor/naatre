@@ -9,7 +9,7 @@
       "gitCommit": "b66c36c1e86a0a938c7d1ab0c80fac09e79a4d87",
       "fixture": {
         "path": "conformance/v1/rust-sdk.json",
-        "sha256": "b4bd0c82f16c69234d096b781802a5a3cfef2a9f8d3cd7d168a2663a6e149b04"
+        "sha256": "d8b1ba3dc7886af7e834c46eb50b7c03a1e0ce465b49daf66bd650ba4c57b0c3"
       }
     }
   ],
@@ -42,11 +42,11 @@
   "evidence": [
     {
       "path": "sdk/rust/Cargo.toml",
-      "sha256": "257473439740006e6e4eec0a61d3c30c1990a5ed8afef95079d4b648ec98da11"
+      "sha256": "3e55eb0a9574b5a0dd98d9dc9a021e9f426ad0d22f6391174b1869db7413840a"
     },
     {
       "path": "sdk/rust/Cargo.lock",
-      "sha256": "01826263b9417db54d9f88830ba2f4aced44a8b55756db67c3edda516398f174"
+      "sha256": "a920fc3ae31906f2b729b0a84d1fc8234287afcc3723b51a2bf18ba6bcb75d4d"
     },
     {
       "path": "sdk/rust/README.md",

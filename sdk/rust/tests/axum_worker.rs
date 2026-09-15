@@ -306,8 +306,8 @@ fn positive_register_and_invoke_use_the_normative_framed_transport() {
 #[test]
 fn negative_failures_are_stable_and_redact_credentials_and_panics() {
     runtime().block_on(async {
-        let (worker, _) = worker((), greet);
-        let unauthorized = adapter(worker, 4096)
+        let (worker_core, _) = worker((), greet);
+        let unauthorized = adapter(worker_core, 4096)
             .router()
             .oneshot(request(
                 Method::POST,
@@ -321,8 +321,8 @@ fn negative_failures_are_stable_and_redact_credentials_and_panics() {
         assert_eq!(body, br#"{"code":"UNAUTHORIZED"}"#);
         assert!(!String::from_utf8_lossy(&body).contains("credential-secret"));
 
-        let (worker, _) = worker((), panics);
-        let panicked = adapter(worker, 4096)
+        let (worker_core, _) = worker((), panics);
+        let panicked = adapter(worker_core, 4096)
             .router()
             .oneshot(request(
                 Method::POST,
@@ -402,12 +402,12 @@ fn cancellation_drops_the_core_future_and_releases_request_resources() {
         let (worker, scopes) = worker(handler, waits_forever);
         let adapter = adapter(worker, 4096);
         let app = adapter.router();
-        let request = request(
+        let invoke_request = request(
             Method::POST,
             AXUM_INVOKE_PATH,
             envelope("invoke", &invocation("cancel", "valid-delegation"), 4096),
         );
-        let route = tokio::spawn(app.oneshot(request));
+        let route = tokio::spawn(app.oneshot(invoke_request));
         started.notified().await;
 
         let cancellation = CancelRequest {
@@ -456,9 +456,8 @@ fn resource_limits_bound_async_and_blocking_tokio_work() {
         let mut pending_task = spawner
             .spawn(async { pending::<Result<(), WorkerError>>().await })
             .expect("first task admitted");
-        let error = match spawner.spawn(async { Ok(()) }) {
-            Err(error) => error,
-            Ok(_) => panic!("second task must exceed the finite budget"),
+        let Err(error) = spawner.spawn(async { Ok(()) }) else {
+            panic!("second task must exceed the finite budget")
         };
         assert_eq!(error.code(), "OVERLOADED");
         assert_eq!(error.to_string(), "Tokio worker capacity is full");
@@ -483,9 +482,8 @@ fn resource_limits_bound_async_and_blocking_tokio_work() {
             })
             .expect("blocking task admitted");
         started.notified().await;
-        let error = match spawner.spawn_blocking(|_| Ok(())) {
-            Err(error) => error,
-            Ok(_) => panic!("second blocking task must exceed the finite budget"),
+        let Err(error) = spawner.spawn_blocking(|_| Ok(())) else {
+            panic!("second blocking task must exceed the finite budget")
         };
         assert_eq!(error.code(), "OVERLOADED");
         blocking.cancel();
@@ -520,10 +518,21 @@ fn dropping_tokio_work_requests_abort_or_cooperative_cancellation() {
         async_started.notified().await;
         drop(task);
         async_dropped.notified().await;
-        let task = spawner
-            .spawn(async { Ok(()) })
-            .expect("async permit released");
-        task.shutdown()
+        // The dropped task's permit is released when the runtime finishes tearing
+        // the aborted task down, which is ordered after the future body drop that
+        // fired `async_dropped`. Yield until the released permit admits a replacement.
+        let mut task = None;
+        for _ in 0..10_000 {
+            match spawner.spawn(async { Ok(()) }) {
+                Ok(admitted) => {
+                    task = Some(admitted);
+                    break;
+                }
+                Err(_) => tokio::task::yield_now().await,
+            }
+        }
+        task.expect("async permit released")
+            .shutdown()
             .await
             .expect("replacement async task joined");
 
@@ -544,10 +553,20 @@ fn dropping_tokio_work_requests_abort_or_cooperative_cancellation() {
         blocking_started.notified().await;
         drop(blocking);
         blocking_finished.notified().await;
-        let task = spawner
-            .spawn_blocking(|_| Ok(()))
-            .expect("blocking permit released");
-        task.shutdown()
+        // As with the async permit above, the blocking permit is released after the
+        // cancelled closure returns; yield until it admits a replacement.
+        let mut task = None;
+        for _ in 0..10_000 {
+            match spawner.spawn_blocking(|_| Ok(())) {
+                Ok(admitted) => {
+                    task = Some(admitted);
+                    break;
+                }
+                Err(_) => tokio::task::yield_now().await,
+            }
+        }
+        task.expect("blocking permit released")
+            .shutdown()
             .await
             .expect("replacement blocking task joined");
     });
@@ -561,36 +580,33 @@ fn send_sync_static_and_configuration_boundaries_are_compile_checked() {
     assert_send_sync_static::<axum::Router>();
 
     let (worker, _) = worker((), greet);
-    let error = match AxumWorker::new(
+    let Err(error) = AxumWorker::new(
         worker,
         AxumWorkerConfig {
             session_id: "credential secret".to_owned(),
             maximum_frame_bytes: 0,
         },
-    ) {
-        Err(error) => error,
-        Ok(_) => panic!("invalid public configuration must fail"),
+    ) else {
+        panic!("invalid public configuration must fail")
     };
     assert_eq!(error.code(), "WORKER_CONFIG_INVALID");
     assert_eq!(error.to_string(), "Axum worker configuration is invalid");
     assert!(!error.to_string().contains("credential"));
 
     let runtime = runtime();
-    let error = match TokioWorkerSpawner::new(
+    let Err(error) = TokioWorkerSpawner::new(
         runtime.handle().clone(),
         TokioWorkerLimits {
             max_tasks: 0,
             max_blocking_tasks: 1,
         },
-    ) {
-        Err(error) => error,
-        Ok(_) => panic!("zero task budget must fail"),
+    ) else {
+        panic!("zero task budget must fail")
     };
     assert_eq!(error.code(), "WORKER_CONFIG_INVALID");
 
-    let error = match TokioWorkerSpawner::current(TokioWorkerLimits::default()) {
-        Err(error) => error,
-        Ok(_) => panic!("a Tokio handle must not be invented outside a runtime"),
+    let Err(error) = TokioWorkerSpawner::current(TokioWorkerLimits::default()) else {
+        panic!("a Tokio handle must not be invented outside a runtime")
     };
     assert_eq!(error.code(), "WORKER_RUNTIME_UNAVAILABLE");
     assert_eq!(error.to_string(), "Tokio worker runtime is unavailable");

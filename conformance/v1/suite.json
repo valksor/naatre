@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "bec3caf34fb817ca71d351e1cada9d4dfc938fe84e9c07c4d2a2fef4636f8cf7"
+      "sha256": "8cd2e8daf313bd2b51083948fde13fe6ccc4c6a98e28e57f5f98ae7005e371c5"
     },
     {
       "path": "v1/scalars.json",
@@ -256,37 +256,37 @@
       "path": "v1/typescript-adapters.json",
       "profile": "sdk.typescript.adapters-1",
       "category": "transport",
-      "sha256": "7e9e1d41c68359f51fee7df1477e3ee9780986957755158221bec243d4e254d1"
+      "sha256": "e626ceb4a9532f344f54c15f2f9f80e97d9682fe58fa851dc32683741cde7c46"
     },
     {
       "path": "v1/typescript-sdk.json",
       "profile": "sdk.typescript.core-1",
       "category": "canonical",
-      "sha256": "cf4e6f00cf2a208592cf94a4ea4561e283fa384a7ea31f016ccc232a8a6420f4"
+      "sha256": "85fba24cf4db5f2a7a1c1601995ff5419fc255c885d7f61f691054c4992f926e"
     },
     {
       "path": "v1/typescript-worker.json",
       "profile": "worker.javascript-typescript-1",
       "category": "worker",
-      "sha256": "5efa64e3aa2c473e90fbf198716578842a923c92da829db359662d224c2fe651"
+      "sha256": "697a3496a125ba7c761230ee0faa725dfa8404f7135b2188ec1ea25c1abc403e"
     },
     {
       "path": "v1/rust-worker.json",
       "profile": "worker.remote-1.rust",
       "category": "worker",
-      "sha256": "79668f28b46f679aec9f2a936f23186984528485fabff5db57f3f79ef39cfbd9"
+      "sha256": "f108c6215b32a2804800f4c440b40b252251c9d5b185a79dfd1576fe0b6b0d77"
     },
     {
       "path": "v1/rust-tokio-axum.json",
       "profile": "worker.remote-1.rust-tokio-axum-1",
       "category": "worker",
-      "sha256": "2c928db43829dfda5b9a7ad88ded52ded500d59223257645bdf6e47c216a834d"
+      "sha256": "cdae1b18dd2a25f5763cf5c9e5128efc23b1d861cb1f09b90f52c4a55b859df7"
     },
     {
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "d46bb2e96358db9873c1e564a2b39c19f477a7a7157c211201a37cf4673c5f99"
+      "sha256": "f4e6a0d8001c4edf9fe07fdecc6b0bff574ce2a42358fe50b1df6de7a6c9cf9a"
     },
     {
       "path": "v1/validation.json",
@@ -358,7 +358,7 @@
       "path": "v1/rust-sdk.json",
       "profile": "sdk.rust.core-1",
       "category": "transport",
-      "sha256": "f6c48df6110c97c695acf044727aced1ec54a1f1116efa313b0b46e439e9e51e"
+      "sha256": "d8b1ba3dc7886af7e834c46eb50b7c03a1e0ce465b49daf66bd650ba4c57b0c3"
     },
     {
       "path": "v1/jvm-sdk.json",
@@ -556,7 +556,7 @@
       "path": "v1/rust-async-adapters.json",
       "profile": "sdk.rust.adapters-1",
       "category": "transport",
-      "sha256": "33c28d51b2bbe3b207b544d085e24146486fe8529d65f0eae15d0c43e743e2a0"
+      "sha256": "c396b6c7936325799463e5a54e20d5ef750768d7b7b8594fa3724e1b0c2db611"
     },
     {
       "path": "v1/python-sdk-adapters.json",
@@ -610,7 +610,7 @@
       "path": "v1/http-digest-integration.json",
       "profile": "implementation.go.http-digest-1",
       "category": "transport",
-      "sha256": "7a57d92278f6ca461952ca6c827fb742a371efe3241d5fc7af8b400c613f2c72"
+      "sha256": "19eea2dd381655820298e875edd711130355a911a8aedda66edec8fe322f721e"
     },
     {
       "path": "v1/asyncapi.json",

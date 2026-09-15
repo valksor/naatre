@@ -102,7 +102,6 @@ impl AxumWorker {
 
     /// Returns an in-memory-testable router for the three normative unary
     /// remote-worker RPC paths.
-    #[must_use]
     pub fn router(&self) -> Router {
         Router::new()
             .route(AXUM_REGISTER_PATH, any(register))
@@ -154,7 +153,7 @@ async fn register(
 ) -> Response {
     let registration = match request::<Registration>(&state, &method, &headers, body, "register") {
         Ok(registration) => registration,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if &registration != state.worker.registration() {
         return failure("REMOTE_REGISTRATION_INVALID");
@@ -174,7 +173,7 @@ async fn invoke(
 ) -> Response {
     let invocation = match request::<WorkerInvocation>(&state, &method, &headers, body, "invoke") {
         Ok(invocation) => invocation,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match state.worker.invoke(invocation) {
         Ok(future) => match future.await {
@@ -193,7 +192,7 @@ async fn cancel(
 ) -> Response {
     let cancellation = match request::<CancelRequest>(&state, &method, &headers, body, "cancel") {
         Ok(cancellation) => cancellation,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match state.worker.cancel(&cancellation) {
         Ok(ack) => success(&state, "cancelled", ack),
@@ -211,15 +210,15 @@ fn request<T: DeserializeOwned>(
     headers: &HeaderMap,
     body: Result<Bytes, BytesRejection>,
     kind: &str,
-) -> Result<T, Response> {
+) -> Result<T, Box<Response>> {
     if method != Method::POST || !negotiated(headers) {
-        return Err(failure("REMOTE_WORKER_MALFORMED"));
+        return Err(Box::new(failure("REMOTE_WORKER_MALFORMED")));
     }
-    let body = body.map_err(|_| failure("REMOTE_WORKER_MALFORMED"))?;
+    let body = body.map_err(|_| Box::new(failure("REMOTE_WORKER_MALFORMED")))?;
     let envelope = decode_worker_frame::<Envelope<T>>(&body, state.maximum_frame_bytes)
-        .map_err(|_| failure("REMOTE_WORKER_MALFORMED"))?;
+        .map_err(|_| Box::new(failure("REMOTE_WORKER_MALFORMED")))?;
     if envelope.protocol != WORKER_PROTOCOL || envelope.kind != kind {
-        return Err(failure("REMOTE_WORKER_MALFORMED"));
+        return Err(Box::new(failure("REMOTE_WORKER_MALFORMED")));
     }
     Ok(envelope.payload)
 }

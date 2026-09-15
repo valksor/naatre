@@ -28,7 +28,7 @@
     {"path": "sdk/typescript/sdkgen/generator.mjs", "sha256": "589b7add64f8ed133ff29c2157b782858c1fa89e563d800f61b0158bc06138ad"},
     {"path": "sdk/typescript/sdkgen/cli.mjs", "sha256": "62fbc2a1fbbd1970b7049567b60e33f08a4e9270ce1c65754ccda79a29aab4c0"},
     {"path": "sdk/typescript/sdkgen/generator.test.mjs", "sha256": "a8effca696e849345fc0753255cbe0ff504947ac3f1a328663c1f62a4dabb08e"},
-    {"path": "sdk/typescript/package.json", "sha256": "0b9168f0bab0b55a6dc227bc912670efd7e2993803262bf399139b9724a456fe"},
+    {"path": "sdk/typescript/package.json", "sha256": "f83c058c161baca65e20f3f9d8c05358a6290f3f12e2007110981643ff019c13"},
     {"path": "sdk/typescript/package-lock.json", "sha256": "85bc02f2e6dd89e0a74460d457c755932448f176db21156de646db9fae87ddb1"},
     {"path": "sdk/typescript/tsconfig.json", "sha256": "446a73efb92a8d940294018aaaa84873501a8ca76c9232c52fd777c301c57b6f"},
     {"path": "conformance/independent/verify-typescript-sdk.mjs", "sha256": "a2c165009746380fabc974b5e92f24d8761a88a658d23b46d58dfc002c869300"}

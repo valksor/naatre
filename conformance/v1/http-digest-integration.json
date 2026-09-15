@@ -32,7 +32,7 @@
       {"path":"client/digest_test.go","sha256":"bf082c5bb116e26a1697b9b419ca2459247c4083d0f81ce1f55babab120842c8"},
       {"path":"docs/http-digest-integration.md","sha256":"6a7bfcef4e431a722f2163d764336e88a0c705d128b647bd5a3eca00609d5654"},
       {"path":"conformance/independent/http-digest-integration.mjs","sha256":"c13eb6927a100e150c5370efd10379d7027a57cbef3aa8de30ce63c223904989"},
-      {"path":"conformance/independent/runner.mjs","sha256":"dea171b7f262cabf899b8f35950145c53a33a123a8e30327eb4b8280f79080f1"}
+      {"path":"conformance/independent/runner.mjs","sha256":"1bd79ad3390be35c49cdc53da9394ac6a288e3cd4e1c487b14ddc5f60f47d2e8"}
     ]
   },
   "runtimeBoundary": {
