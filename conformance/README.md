@@ -319,6 +319,15 @@ language-neutral existing-service example. The Go `interopadapter` package is
 the smallest runtime-consume reference path; #92, #93, #95, and #98 own full
 protocol integrations, while #69 owns multi-SDK execution.
 
+`v1/openrpc-jsonrpc.json` pins `adapter.openrpc-jsonrpc-1` to OpenRPC 1.4.1,
+JSON-RPC 2.0, the exact `core.adapters-1` dependency revision, and the Go
+`openrpcadapter` sources. Its offline Go and dependency-free JavaScript checks
+cover description import/export, policy non-inference, scalar and ID fidelity,
+result/error exclusivity, authentication safety, deadlines, cancellation,
+notifications, bounded batches, unsupported schema semantics, and resource
+limits. Listener, network, framework, non-Go, and certification claims remain
+explicitly unsupported.
+
 The `core.language-1` vectors cover every core composition tag and expression,
 response shaping, collection edge states, result-reference scopes, and the
 zero-handler boundary for invalid operations. Their document grammar is the

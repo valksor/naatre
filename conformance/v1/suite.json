@@ -527,6 +527,12 @@
       "profile": "core.adapters.protobuf-grpc-connect-1",
       "category": "transport",
       "sha256": "aff756d78ddca0652bfce79e344ad175ef18f006f089e8e6cd8d274dc53392b5"
+    },
+    {
+      "path": "v1/openrpc-jsonrpc.json",
+      "profile": "adapter.openrpc-jsonrpc-1",
+      "category": "transport",
+      "sha256": "9094c084089858fbc70e44eb2381dcf33635effd6ede63a7e2fdd868a7176327"
     }
   ],
   "normativeSources": [

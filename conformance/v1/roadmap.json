@@ -1208,12 +1208,12 @@
     "98": {
       "issue": 98,
       "state": "open",
-      "coverage": "deferred-to-owner",
+      "coverage": "implemented-contract",
       "ownerIssue": 98,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "adapter.openrpc-jsonrpc-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,

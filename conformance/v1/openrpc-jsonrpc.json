@@ -1,0 +1,82 @@
+{
+  "profile": "adapter.openrpc-jsonrpc-1",
+  "fixtureSuite": "1.0.0",
+  "specifications": {
+    "openrpc": "1.4.1",
+    "openrpcRevision": "https://github.com/open-rpc/spec/releases/tag/v1.4.1",
+    "jsonrpc": "2.0",
+    "jsonrpcSpecification": "https://www.jsonrpc.org/specification",
+    "naatreAdapterProfile": "core.adapters-1"
+  },
+  "implementation": {
+    "module": "github.com/valksor/naatre/openrpcadapter",
+    "minimumGo": "1.27",
+    "baseRevision": "8529bebc5650684b75c0c1788952a32a5310054d",
+    "coreAdapterDependencyRevision": "a93f33dffa5b351c04b4f229df91d098ed4df1b4",
+    "dependencies": [
+      {"path":"go.mod","sha256":"2624a288e366c96288c99fa925dc47e839e3d73146eba8ad659478f7a9ede206"},
+      {"path":"spec/v1/adapters.md","sha256":"c82bc36993539f17ac99b45ec8658a7a1f3542375a5c33642b4dd9c31a50494c"},
+      {"path":"conformance/v1/adapters.json","sha256":"4ada331660f6c692fbdfa518e0c70479daf28341d0ee3764d9d6f7a18e1ae28a"}
+    ],
+    "files": [
+      {"path":"openrpcadapter/doc.go","sha256":"b1d909a59c019cfe7486dc1077e8ca680066b9483c71d6baff033fbb4e853b83"},
+      {"path":"openrpcadapter/error.go","sha256":"688374bd5e54d81314711060073990fa1dd53ca3b93b71767f11c9146d8e74d8"},
+      {"path":"openrpcadapter/description.go","sha256":"6b879203a2e4649c4d1ec327b6225b3c69c6e8ffb6e3a4fdc264d8859dab138a"},
+      {"path":"openrpcadapter/jsonrpc.go","sha256":"a890e6d5d490b7c6cd1b6c5e757331e26e9ebfab6a910b5cbc3fa01ee6caa863"},
+      {"path":"openrpcadapter/client.go","sha256":"6c7fc324d696cdc4e26ff147cbd018e9c19b237e8cf8f20de0a622013029402a"},
+      {"path":"openrpcadapter/handler.go","sha256":"ed8884e0101670a1a5ab4fb85ba7ebb298018e45600adecc6e108d88e2c66026"},
+      {"path":"openrpcadapter/protocol_bridge.go","sha256":"f21f26e76c86ebb33f4a74646db6192461016757ac801486dd0a1315463fa96e"},
+      {"path":"openrpcadapter/README.md","sha256":"86daf39e828eb68a9aed1d429c21a4e2d2cd0919e9cfc12b1e5ab8ab39139d0b"},
+      {"path":"openrpcadapter/adapter_test.go","sha256":"8331ffece5affe06445a500180ef3167b8f782c93843130f8f7fdb16d08c2872"}
+    ]
+  },
+  "directions": ["schema-import", "schema-export", "runtime-consume", "runtime-expose"],
+  "fidelity": [
+    {"feature":"batch","classification":"explicitly-adapted","evidence":"bounded mixed batches preserve request IDs and independent member outcomes"},
+    {"feature":"notification","classification":"explicitly-adapted","evidence":"per-method application approval is required and no response is emitted"},
+    {"feature":"id","classification":"lossless","evidence":"absent, null, string, zero, and integral numeric IDs remain distinct"},
+    {"feature":"result-error","classification":"explicitly-adapted","evidence":"exactly one result or error member is accepted"},
+    {"feature":"scalar","classification":"lossless","evidence":"scalar result JSON and decimal-string extended integers are retained"},
+    {"feature":"deadline","classification":"explicitly-adapted","evidence":"the caller context propagates without deadline extension"},
+    {"feature":"authentication","classification":"application-supplied","evidence":"one explicit callback mutates the exact request and no cookie jar is used"},
+    {"feature":"effects-policy","classification":"application-supplied","evidence":"runtime descriptors provide effect, idempotency, retry, cache, cost, batching, transaction, and authorization policy"},
+    {"feature":"unsupported-schema","classification":"explicitly-adapted","evidence":"unknown keywords, remote references, cycles, ambiguous oneOf, and positional parameters reject mapping"}
+  ],
+  "fixtureClasses": {
+    "positive": ["description-import-export", "client-scalar-call", "handler-call", "mixed-batch", "approved-notification"],
+    "negative": ["wrong-openrpc-revision", "unknown-description-field", "unapproved-method", "unsafe-error", "both-result-and-error", "id-mismatch", "redirect", "malformed-required-keyword", "negative-size-bound", "non-positive-multiple"],
+    "boundary": ["absent-null-string-and-integral-id", "nullable-parameter", "kind-tagged-oneof", "scalar-result", "application-error-range"],
+    "cancellation": ["client-active-context-abort", "handler-cancelled-context", "deadline-propagation"],
+    "resourceLimit": ["description-bytes", "method-count", "schema-depth", "request-bytes", "response-bytes", "batch-count"],
+    "security": ["authentication-cause-redaction", "no-cookie-jar", "redirect-denial", "remote-ref-denial", "error-data-denial", "method-allowlist"]
+  },
+  "commands": {
+    "package": "go test ./openrpcadapter -count=1",
+    "vet": "go vet ./openrpcadapter",
+    "independent": "node conformance/independent/openrpc-jsonrpc.mjs"
+  },
+  "supported": [
+    "go-1.27-standard-library",
+    "openrpc-1.4.1-bounded-subset",
+    "jsonrpc-2.0-http-unary-consume-expose",
+    "canonical-description-import-export",
+    "bounded-batch-and-explicit-notification",
+    "context-deadline-and-cancellation",
+    "stable-redacted-public-errors"
+  ],
+  "unsupported": [
+    "other-openrpc-revisions",
+    "remote-description-or-reference-fetch",
+    "openrpc-servers-tags-external-docs-links-examples-callbacks-subscriptions-streaming",
+    "non-schema-component-registries",
+    "positional-or-either-parameters",
+    "unsupported-json-schema-vocabularies-and-untagged-unions",
+    "fractional-jsonrpc-ids",
+    "automatic-cancellation-methods-progress-streaming-subscriptions",
+    "websocket-sse-ipc-stdio-message-queue-and-http-get",
+    "cookies-redirects-retries-discovery-load-balancing-and-metadata-forwarding",
+    "automatic-authentication-authorization-effects-idempotency-or-retry-inference",
+    "atomic-or-transactional-jsonrpc-batches",
+    "listener-tls-quic-framework-native-runtime-non-go-and-certification-support"
+  ]
+}
