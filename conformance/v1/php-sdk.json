@@ -13,7 +13,7 @@
   },
   "evidence": [
     {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
-    {"path": "sdk/php/composer.json", "sha256": "59e8f915dbf50e658bd7d970082d5189dd10501ba1b3da6e97d6cc4f9e11991a"},
+    {"path": "sdk/php/composer.json", "sha256": "989aa2938cc9baec80033538b5f689f58532ec72cc2089ca18c18bd93939b8e2"},
     {"path": "sdk/php/phpstan.neon", "sha256": "92fd37f38937a7bd850b7259509403d2745d0e93557104e5f2ad4bc61cd1f11b"},
     {"path": "sdk/php/psalm.xml", "sha256": "379e955de445105543ed2273048bbfc69b2de68135e6f39e88d0c6e15698a422"},
     {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},

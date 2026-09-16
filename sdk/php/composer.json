@@ -16,6 +16,9 @@
     "phpstan/phpstan": "^2.1",
     "vimeo/psalm": "^6.0"
   },
+  "suggest": {
+    "naatre/naatre-ext": "Optional native accelerator (bounded JSON, RFC 8785 canonicalization, semantic hashing). Install with PIE: pie install naatre/naatre-ext. The client falls back to the pure-PHP implementation when it is absent."
+  },
   "autoload": {
     "psr-4": {
       "Naatre\\Sdk\\": "src/"

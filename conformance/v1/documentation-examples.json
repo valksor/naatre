@@ -13,7 +13,7 @@
   "components": [
     {"language":"go","path":"conformance/v1/go-sdk.json","sha256":"816f3023318a58f17061b537f1e9a82762e4276bb6e6389f7d35e4d26578eb21"},
     {"language":"javascript-typescript","path":"conformance/v1/typescript-sdk.json","sha256":"85fba24cf4db5f2a7a1c1601995ff5419fc255c885d7f61f691054c4992f926e"},
-    {"language":"php","path":"conformance/v1/php-sdk.json","sha256":"99b2860b271e58be95e5d721912ca03d86d8f46b5a184e2c3a2b5dee1f6cfc4a"},
+    {"language":"php","path":"conformance/v1/php-sdk.json","sha256":"5fff2cf2d5d23e5f48ee99f29da1f373968780b4dee4dfcb1ba3dc755f35c111"},
     {"language":"python","path":"conformance/v1/python-sdk.json","sha256":"4ad1c7931350de9f889fcfd5a05fdb7e9fb79f1e0ce447dbfc8ef8c0acbceb99"},
     {"language":"rust","path":"conformance/v1/rust-sdk.json","sha256":"d8b1ba3dc7886af7e834c46eb50b7c03a1e0ce465b49daf66bd650ba4c57b0c3"},
     {"language":"jvm","path":"conformance/v1/jvm-sdk.json","sha256":"7b2658c4966bc9dd871668b66e0566ffe569739a80b52866e6f96346c008393c"},
@@ -29,7 +29,7 @@
     {"path":"conformance/v1/remote-workers.json","sha256":"f9556bd1f19b365c5e4a1f2a828945422b731481bd42b34707a1fb727e73cf13"},
     {"path":"conformance/v1/remote-worker-gateway.json","sha256":"c6afa3ad58bb2191fed370d5fee1454892ad8dce0c2a0d616f451ee94d54db68"},
     {"path":"conformance/v1/typescript-worker.json","sha256":"697a3496a125ba7c761230ee0faa725dfa8404f7135b2188ec1ea25c1abc403e"},
-    {"path":"conformance/v1/php-server.json","sha256":"d5534332e3ccfae1d773f2f58f53b7950f9657f8e01e0ba5a24e85128165a03b"},
+    {"path":"conformance/v1/php-server.json","sha256":"78e17e5e2684615891f2c76a7d9bfddad3922bbddc846dcb6ffaeba583791b03"},
     {"path":"conformance/v1/rust-worker.json","sha256":"f108c6215b32a2804800f4c440b40b252251c9d5b185a79dfd1576fe0b6b0d77"},
     {"path":"conformance/v1/resources.json","sha256":"00e2d7ad6fb2bb168b5556847c08a35293c19f0bcdbc6462ac5124c5f3f3d1c4"},
     {"path":"conformance/v1/streaming.json","sha256":"8d93fe53a378a7ba458e6e7fb35758a2eb725f46ba3ff50be5643bc80d0a2749"},

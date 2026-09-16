@@ -6,7 +6,7 @@
     "core": {
       "profile": "sdk.php.core-1",
       "sourceRevision": "7e66a21c2ac7e4b984642ca2d1e90c077e786437",
-      "fixture": {"path": "conformance/v1/php-sdk.json", "sha256": "99b2860b271e58be95e5d721912ca03d86d8f46b5a184e2c3a2b5dee1f6cfc4a"}
+      "fixture": {"path": "conformance/v1/php-sdk.json", "sha256": "5fff2cf2d5d23e5f48ee99f29da1f373968780b4dee4dfcb1ba3dc755f35c111"}
     },
     "psr/http-client": "1.0.3",
     "psr/http-factory": "1.1.0",
@@ -87,7 +87,7 @@
   ],
   "evidence": [
     {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
-    {"path": "sdk/php/composer.json", "sha256": "59e8f915dbf50e658bd7d970082d5189dd10501ba1b3da6e97d6cc4f9e11991a"},
+    {"path": "sdk/php/composer.json", "sha256": "989aa2938cc9baec80033538b5f689f58532ec72cc2089ca18c18bd93939b8e2"},
     {"path": "sdk/php/src/Exception/ClientException.php", "sha256": "7399b2e9607a52e4315bd926e7d72ccfdd74b7da8d27e2bdae0fb39aac6500af"},
     {"path": "sdk/php/src/Transport/Psr18Client.php", "sha256": "e1e6da45387037ea99cd1f94b82c1df216f564164e40d96a23f28014ed5e5297"},
     {"path": "sdk/php/src/Transport/AuthenticationHeaders.php", "sha256": "1bbaea424cd60633a0c9a667bdc8de7af1d2de436a11e117916b4cd5fd0b1cc9"},

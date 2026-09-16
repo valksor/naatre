@@ -12,6 +12,22 @@ also compares `PHP_VERSION_ID`, ABI version, and pointer width before selecting
 the extension. Never copy one minor's module into another minor's extension
 directory.
 
+## Install (PIE)
+
+The extension is distributed with [PIE](https://github.com/php/pie), the
+PHP Foundation's Composer-based extension installer (the modern successor to
+PECL). Its metadata lives in [`composer.json`](composer.json) with
+`"type": "php-ext"`.
+
+```sh
+pie install naatre/naatre-ext
+```
+
+PIE resolves the package from Packagist, builds it against the active PHP
+(passing `--enable-naatre`), and installs and registers `naatre.so`. The
+userland library `naatre/sdk` `suggest`s this package and transparently falls
+back to its pure-PHP implementation when the extension is absent.
+
 ## Unix source build
 
 ```sh
@@ -46,13 +62,8 @@ USE_ZEND_ALLOC=0 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_
 for corpus in ext/naatre/fuzz/corpus/*.json; do USE_ZEND_ALLOC=0 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 php -d extension=ext/naatre/modules/naatre.so ext/naatre/fuzz/php-facing.php < "$corpus"; done
 ```
 
-Build the reproducible source package twice and compare it before publication:
-
-```sh
-ext/naatre/package-source.sh HEAD /tmp/naatre-first.tgz
-ext/naatre/package-source.sh HEAD /tmp/naatre-second.tgz
-cmp /tmp/naatre-first.tgz /tmp/naatre-second.tgz
-```
+Distribution is handled by PIE from the tagged Git source on Packagist (see
+"Install (PIE)" above); there is no separate PECL source tarball to build.
 
 ## Windows source build
 
