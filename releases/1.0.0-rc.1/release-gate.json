@@ -1,7 +1,7 @@
 {
   "protocol": "naatre.release-gate.report-1",
   "status": "passed",
-  "sourceRevision": "c7a6f22fb1f3203c6c70a45e7596bb82cb087b6b",
+  "sourceRevision": "f2ad07bd6fbfeed16fd177fab0b807c855ae2e27",
   "versions": {
     "gate": "1.0.0",
     "spec": "1",

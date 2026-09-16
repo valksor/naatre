@@ -6,14 +6,14 @@
       "profile": "release.stable-1",
       "report": {
         "path": "releases/1.0.0-rc.1/release-gate.json",
-        "sha256": "d3a4c139ed80095990cecaa5abff2d0e64562a44de9bbec4f28f8da1dc729997"
+        "sha256": "368361710673ba556f399fc51d6be1b847b16558c9dafbc8f7ef3c3886b831f1"
       }
     }
   ],
   "profile": "naatre.release-manifest-1",
   "release": {
     "id": "1.0.0-rc.1",
-    "sourceRevision": "c7a6f22fb1f3203c6c70a45e7596bb82cb087b6b"
+    "sourceRevision": "f2ad07bd6fbfeed16fd177fab0b807c855ae2e27"
   },
   "support": []
 }
