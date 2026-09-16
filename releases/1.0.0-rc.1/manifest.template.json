@@ -2,7 +2,7 @@
   "profile": "naatre.release-manifest-1",
   "release": {
     "id": "1.0.0-rc.1",
-    "sourceRevision": "f2ad07bd6fbfeed16fd177fab0b807c855ae2e27"
+    "sourceRevision": "0ccb673beb546ee4fc0d805c8c7e1daa3a7b66c6"
   },
   "support": [],
   "conformanceClaims": []
