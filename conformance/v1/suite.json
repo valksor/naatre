@@ -595,6 +595,12 @@
       "sha256": "6543dd2a34dc927d0368cb14c6eb2dfff4199bf3debb01219a63425d62a3c63e"
     },
     {
+      "path": "v1/dart-adapters.json",
+      "profile": "sdk.dart.adapters-1",
+      "category": "transport",
+      "sha256": "2a3825afaff8343cfac1f2a62a285398e0918b92fba1fc1dc5263f066c06e9b0"
+    },
+    {
       "path": "v1/swift-apple-adapters.json",
       "profile": "sdk.swift.apple-1",
       "category": "transport",

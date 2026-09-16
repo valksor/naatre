@@ -1,0 +1,157 @@
+{
+  "profile": "sdk.dart.adapters-1",
+  "fixtureSuite": "1.0.0",
+  "runtimeVersion": "naatre.dart.adapters-1",
+  "dependencies": [
+    {
+      "issue": 43,
+      "profile": "sdk.dart.core-1",
+      "gitCommit": "f5d1c4b530b861b0869245471347358deba5b740",
+      "fixture": {
+        "path": "conformance/v1/dart-sdk.json",
+        "sha256": "b6f1ead1b3d42550724d7f2e89e2313beecb9abd8b702c6dfb14987365722113"
+      },
+      "report": {
+        "issue": 43,
+        "profile": "sdk.dart.core-1",
+        "revision": "f5d1c4b530b861b0869245471347358deba5b740"
+      }
+    }
+  ],
+  "package": {
+    "name": "naatre",
+    "sdkConstraint": ">=3.10.0 <4.0.0",
+    "runtimeDependencies": [],
+    "lockfile": "sdk/dart/pubspec.lock",
+    "conditionalAdapterEntry": "sdk/dart/lib/adapters.dart",
+    "conditionalBindingSources": ["sdk/dart/lib/src/adapter_io.dart", "sdk/dart/lib/src/adapter_web.dart", "sdk/dart/lib/src/adapter_stub.dart"]
+  },
+  "advertisedProfiles": [
+    {"profile": "sdk.dart.core-1", "status": "passed", "vectors": "shared-profile-boundaries"},
+    {"profile": "sdk.dart.adapters-1", "status": "passed", "vectors": "shared-profile-boundaries-and-adapter-lifecycle"}
+  ],
+  "adapterContracts": [
+    {"name": "framework-neutral", "status": "passed", "binding": "conditional-dart-io-or-browser"},
+    {"name": "http-transport", "status": "passed", "contract": "HttpTransportAdapter"},
+    {"name": "post-sse-transport", "status": "passed", "contract": "PostSseTransportAdapter"},
+    {"name": "websocket-transport", "status": "passed-with-browser-boundary", "contract": "WebSocketTransportAdapter"}
+  ],
+  "executedTargets": ["vm", "native-aot", "dart2js-node"],
+  "conditionalBindings": {
+    "vm": "dart-io",
+    "nativeAot": "dart-io",
+    "dart2js": "browser",
+    "flutterNative": "source-supported-not-certified",
+    "flutterWeb": "source-supported-not-certified"
+  },
+  "platforms": [
+    {
+      "runtime": "dart-vm",
+      "version": "3.13.3",
+      "platform": "macos-arm64",
+      "status": "passed",
+      "profiles": ["sdk.dart.core-1", "sdk.dart.adapters-1"]
+    }
+  ],
+  "evidence": [
+    {"path": "sdk/dart/lib/adapters.dart", "sha256": "31c41aab0ba1a023d8a02d052d3351534c834d2423e6a235a53b1194a5a804ed"},
+    {"path": "sdk/dart/lib/src/adapters.dart", "sha256": "ca2dd6bf447cd0992202e170d92149389b5ae900268a70abd28ce9de725e7f45"},
+    {"path": "sdk/dart/lib/src/adapter_engine.dart", "sha256": "ef55e7985431c642cce0ddb802bef1bccab4406815dc1d121831e81c4f91389a"},
+    {"path": "sdk/dart/lib/src/adapter_io.dart", "sha256": "dc56cc94f9bf963d41f4cf29fac5eff24feaead1639b1f1e2c56aa63f5a296c9"},
+    {"path": "sdk/dart/lib/src/adapter_web.dart", "sha256": "93ba3a6085710eb01af1c4a3d53cfac5eb9322ef8ad4af3c4875a5e974182b9a"},
+    {"path": "sdk/dart/lib/src/adapter_stub.dart", "sha256": "fb97d0740ccd8693e30bad7120aa2b93a37dfe0c4fe90f32c836267547b89478"},
+    {"path": "sdk/dart/lib/src/transport.dart", "sha256": "59c438d9cc167406931196970c2a374e492890cd5c91e859b55351f74e17ba3c"},
+    {"path": "sdk/dart/lib/src/stream.dart", "sha256": "2fa5eb6be3ff8088a0e327263e37e4c5060b1d89dfc213a2c88c4890a9bcfa89"},
+    {"path": "sdk/dart/lib/src/worker.dart", "sha256": "36b44fbef965725539a3aa4f025795bcb157b59b32f578002957becc8742146e"},
+    {"path": "sdk/dart/lib/src/worker_vm.dart", "sha256": "2313c13f46776543bb578e711591a75ae9b995d876b536eaf74a0be4d15ea52e"},
+    {"path": "sdk/dart/lib/src/worker_web.dart", "sha256": "fecce8a69f8c34d757135f966c658d1711a41710455e3079f31a686ba7074fc6"},
+    {"path": "sdk/dart/test/adapter_test.dart", "sha256": "e4308e5ff4648d32b42379f6bd5351507f8bdd7a9139a56d931d39f1404765cd"},
+    {"path": "sdk/dart/test/worker_test.dart", "sha256": "5a3787ab2a1dd5558fe7521b946ec84d2c38ec98ef35511737bb6fb1a40f1c7f"},
+    {"path": "sdk/dart/test/stream_test.dart", "sha256": "c11d160ceccb4bb862b20907a649584023498795c37174cf72e26f048df65cc8"},
+    {"path": "sdk/dart/test/support.dart", "sha256": "2f2adc9cd0758b211dfe8220ef9b83f80f4842728584bd1d4d942412a6fba80e"},
+    {"path": "conformance/independent/verify-dart-adapters.mjs", "sha256": "c3a9123bdd6f00f3801ce6e397fca28a7057a331e1d09a6f2e391da08ad953d5"}
+  ],
+  "reports": [
+    {"path": "conformance/reports/dart-adapters-3.13.3-darwin-arm64.json", "sha256": "53c3bbbc4d07181e914c87caf56c15876cd8f19fd460a095ea0a1eb644375f6f"}
+  ],
+  "vectors": [
+    "canonical-request-and-persisted-hash-parity",
+    "web-safe-integer-rejection",
+    "conditional-io-browser-import-selection",
+    "warm-adapter-authentication-isolation",
+    "redirect-credential-and-protected-metadata-redaction",
+    "stable-public-failure-redaction",
+    "unary-cancellation-resource-release",
+    "stream-handshake-and-active-stream-cancellation-resource-release",
+    "compressed-and-decompressed-response-limits",
+    "sse-total-and-frame-limits",
+    "post-sse-terminal-and-resource-release",
+    "websocket-json-frames-and-resource-release"
+  ],
+  "failureCodes": [
+    "CLIENT_AUTHENTICATION_FAILED",
+    "CLIENT_CANCELLED",
+    "CLIENT_CAPABILITY_UNSUPPORTED",
+    "CLIENT_CONFIG_INVALID",
+    "CLIENT_DEADLINE_EXCEEDED",
+    "CLIENT_MALFORMED_RESPONSE",
+    "CLIENT_OPERATION_INVALID",
+    "CLIENT_PAGINATION_INVALID",
+    "CLIENT_PAGINATION_LIMIT",
+    "CLIENT_PROTOCOL_INVALID",
+    "CLIENT_REDIRECT_LIMIT",
+    "CLIENT_REDIRECT_REJECTED",
+    "CLIENT_REMOTE_ERROR",
+    "CLIENT_RESPONSE_LIMIT",
+    "CLIENT_RETRY_INVALID",
+    "CLIENT_SCALAR_INVALID",
+    "CLIENT_STREAM_INVALID",
+    "CLIENT_STREAM_LIMIT",
+    "CLIENT_STREAM_TRUNCATED",
+    "CLIENT_TRANSPORT_ERROR",
+    "CLIENT_UNSUPPORTED_ENCODING",
+    "CLIENT_UNSUPPORTED_MEDIA_TYPE",
+    "CLIENT_VALUE_INVALID",
+    "CLIENT_VALUE_PRECISION"
+  ],
+  "limits": {
+    "responseBytes": 8388608,
+    "decompressedBytes": 16777216,
+    "frameBytes": 1048576,
+    "redirects": 5
+  },
+  "ownership": {
+    "coreContract": "issue-43",
+    "adapterSlice": "issue-84",
+    "client": "caller-owned-immutable",
+    "requestCancellation": "request-owned-explicit-token",
+    "responseBody": "stream-or-execute-owned-until-close",
+    "streamCancellation": "subscription-owned-until-connection-close",
+    "certificationOwnerIssue": 69
+  },
+  "commands": {
+    "portable": "node conformance/independent/verify-dart-adapters.mjs",
+    "vm": "dart run test/adapter_test.dart",
+    "nativeAot": "dart compile exe sdk/dart/test/adapter_test.dart and execute",
+    "dart2js": "dart compile js -O2 sdk/dart/test/adapter_test.dart and execute with Node",
+    "analyze": "dart analyze sdk/dart --fatal-infos"
+  },
+  "deferred": [
+    "Flutter toolchain and device or simulator execution",
+    "live HTTP, SSE, and WebSocket loopback integration",
+    "browser DOM execution outside the dart2js Node probe"
+  ],
+  "unsupported": [
+    "automatic-authentication-refresh-and-token-persistence",
+    "cookie-jar-and-browser-credentialed-cookie-mode",
+    "caller-supplied-last-event-id-and-automatic-reconnect",
+    "browser-websocket-authentication-headers",
+    "websocket-subprotocol-and-compression-configuration",
+    "portable-browser-websocket-backpressure-guarantee",
+    "browser-pre-decompression-wire-byte-observation",
+    "http-get-persisted-query-optimization",
+    "proxy-custom-trust-store-and-certificate-pinning",
+    "flutter-version-and-device-matrix-certification",
+    "complete-official-sdk-matrix-owned-by-69"
+  ]
+}

@@ -112,6 +112,7 @@ node conformance/independent/verify-dotnet-adapters.mjs
 node conformance/independent/verify-swift-sdk.mjs
 node conformance/independent/verify-swift-apple-adapters.mjs
 node conformance/independent/verify-dart-sdk.mjs
+node conformance/independent/verify-dart-adapters.mjs
 node conformance/independent/verify-ruby-sdk.mjs
 node conformance/independent/verify-ruby-adapters.mjs
 
