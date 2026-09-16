@@ -1,8 +1,8 @@
 # PHP SDK and server core
 
 `naatre/sdk` is the framework-neutral `sdk.php.core-1` client and generated
-binding package. It supports PHP 8.3, 8.4, 8.5, and 8.6 with Composer 2, PHPStan at
-maximum level, and Psalm at error level 1. Generated files use PHP 8.3 syntax.
+binding package. It supports PHP 8.5 and 8.6 with Composer 2, PHPStan at
+maximum level, and Psalm at error level 1. Generated files use PHP 8.5 syntax.
 
 `ext-naatre` is an optional PHP 8.5/8.6 accelerator. The base package never
 requires it and auto mode remains on the portable path until profile-specific
@@ -68,7 +68,7 @@ singleton registration, then call `forRequest()` from request or job scope.
 The adapters do not call Symfony's native HTTP Client API or Laravel's native
 `PendingRequest` API and do not depend on either framework package.
 
-The supported package/runtime boundary is PHP 8.3, 8.4, 8.5, and 8.6, Composer 2,
+The supported package/runtime boundary is PHP 8.5 and 8.6, Composer 2,
 PSR HTTP Client 1.0.3, PSR HTTP Factory 1.1.0, and PSR HTTP Message 2.0. The
 framework profiles support synchronous unary requests through those PSR
 interfaces. Cancellation is deadline-only: `Naatre-Timeout-Ms` is propagated,

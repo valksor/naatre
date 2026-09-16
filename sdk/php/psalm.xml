@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <psalm
   errorLevel="1"
-  phpVersion="8.3"
+  phpVersion="8.5"
   resolveFromConfigFile="true"
   cacheDirectory="../../.tmp/psalm"
   findUnusedBaselineEntry="true"

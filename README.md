@@ -150,7 +150,7 @@ troubleshooting, and the third-party implementation path.
   [remote-worker deployment guide](docs/remote-workers.md). A single-endpoint
   TLS HTTP/2 transport is provided; production HTTP/2 connection pooling and
   process integration are post-v1 hardening tracked on the roadmap (#32).
-- `sdk/php`: the PHP 8.3-8.5 client plus explicit generated server-handler
+- `sdk/php`: the PHP 8.5-8.6 client plus explicit generated server-handler
   bindings, request-scoped dispatcher, FPM unary profile, and listener-free
   framed worker conformance for `sdk.php.server-1`, plus dependency-free
   Symfony, Laravel, FPM, RoadRunner, and Swoole host integration evidence for

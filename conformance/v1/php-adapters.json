@@ -6,7 +6,7 @@
     "core": {
       "profile": "sdk.php.core-1",
       "sourceRevision": "7e66a21c2ac7e4b984642ca2d1e90c077e786437",
-      "fixture": {"path": "conformance/v1/php-sdk.json", "sha256": "5fff2cf2d5d23e5f48ee99f29da1f373968780b4dee4dfcb1ba3dc755f35c111"}
+      "fixture": {"path": "conformance/v1/php-sdk.json", "sha256": "caa5352a90d6416453d7792feb7ebb520cf55fe84218c4fcc58bf708e821c3d3"}
     },
     "psr/http-client": "1.0.3",
     "psr/http-factory": "1.1.0",
@@ -19,7 +19,7 @@
     "frameworkBridgeRequirement": "application-supplied-psr18-and-psr17-services"
   },
   "runtimeBoundary": {
-    "php": ["8.3", "8.4", "8.5", "8.6"],
+    "php": ["8.5", "8.6"],
     "sapiFixtures": ["fpm-request-scope", "persistent-worker-request-scope"],
     "executedFixtureSapi": "cli-model",
     "networkRequired": false
@@ -86,8 +86,8 @@
     "CLIENT_TRANSPORT_ERROR"
   ],
   "evidence": [
-    {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
-    {"path": "sdk/php/composer.json", "sha256": "989aa2938cc9baec80033538b5f689f58532ec72cc2089ca18c18bd93939b8e2"},
+    {"path": "sdk/php/README.md", "sha256": "61c818f63cb7a237301134ef79071fbb649d14c860412d79d9e2e79c274d6dba"},
+    {"path": "sdk/php/composer.json", "sha256": "65bb1aa559cdb23d96e215000a1798b1b936987c9e7c6e10d0d47809f00a8b8c"},
     {"path": "sdk/php/src/Exception/ClientException.php", "sha256": "7399b2e9607a52e4315bd926e7d72ccfdd74b7da8d27e2bdae0fb39aac6500af"},
     {"path": "sdk/php/src/Transport/Psr18Client.php", "sha256": "e1e6da45387037ea99cd1f94b82c1df216f564164e40d96a23f28014ed5e5297"},
     {"path": "sdk/php/src/Transport/AuthenticationHeaders.php", "sha256": "1bbaea424cd60633a0c9a667bdc8de7af1d2de436a11e117916b4cd5fd0b1cc9"},

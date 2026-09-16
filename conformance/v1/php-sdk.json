@@ -12,10 +12,10 @@
     "manifest": {"path": "sdk/php/generated/operations.json", "sha256": "b7e2211237ed952fc0e0a8c423cb11a2ee9d087f2f2e4d5ef5e569826fef12c3"}
   },
   "evidence": [
-    {"path": "sdk/php/README.md", "sha256": "d77128308c09c24275bb21cd6e413617a40de62c80839661a34fe7adc43243b2"},
-    {"path": "sdk/php/composer.json", "sha256": "989aa2938cc9baec80033538b5f689f58532ec72cc2089ca18c18bd93939b8e2"},
-    {"path": "sdk/php/phpstan.neon", "sha256": "92fd37f38937a7bd850b7259509403d2745d0e93557104e5f2ad4bc61cd1f11b"},
-    {"path": "sdk/php/psalm.xml", "sha256": "379e955de445105543ed2273048bbfc69b2de68135e6f39e88d0c6e15698a422"},
+    {"path": "sdk/php/README.md", "sha256": "61c818f63cb7a237301134ef79071fbb649d14c860412d79d9e2e79c274d6dba"},
+    {"path": "sdk/php/composer.json", "sha256": "65bb1aa559cdb23d96e215000a1798b1b936987c9e7c6e10d0d47809f00a8b8c"},
+    {"path": "sdk/php/phpstan.neon", "sha256": "c8158a21a6de78e9d29bc36c274656fb2bf477d34a3b0976f641cc6163daf02e"},
+    {"path": "sdk/php/psalm.xml", "sha256": "447284b1b3e1e0e14ed87ea789cf63d1f0f4e5948e4dcdc5ae8d4bc77431d3cb"},
     {"path": "sdk/php/sdkgen/generate.php", "sha256": "246a626b23f7b615a7aad51dcecd3f28cfb90ef27fc04fa97e2a02100f75e7e0"},
     {"path": "sdk/php/tests/PsrStubs.php", "sha256": "0e45b63fd2d8d6fdc88cedd8c993a9100308918633eb3105f54b6afee7f44d34"},
     {"path": "sdk/php/tests/run.php", "sha256": "d8bc627f2708c511db4a12db7f83e4c9056b2ef4dfaa2aeb44014e24129e6045"},
@@ -31,7 +31,7 @@
     {"path": "conformance/independent/verify-php-sdk.mjs", "sha256": "405fae01650c4382a1d7de20547327bd9eb1e49cf800acceac9c71d45ce43402"}
   ],
   "support": {
-    "php": ["8.3", "8.4", "8.5", "8.6"],
+    "php": ["8.5", "8.6"],
     "composer": "2.x",
     "phpstanLevel": "max",
     "psalmErrorLevel": 1

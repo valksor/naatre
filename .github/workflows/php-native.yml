@@ -101,7 +101,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php-ref: ['PHP-8.5', 'php-8.6.0beta3', 'PHP-8.6']
+        php-ref: ['PHP-8.5', 'PHP-8.6']
         zts: ['no', 'yes']
         debug: ['no', 'yes']
         architecture: [x64, arm64]
