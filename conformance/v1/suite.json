@@ -220,7 +220,7 @@
       "path": "v1/roadmap.json",
       "profile": "suite.roadmap-1",
       "category": "evolution",
-      "sha256": "8cd2e8daf313bd2b51083948fde13fe6ccc4c6a98e28e57f5f98ae7005e371c5"
+      "sha256": "1eda3efa364c01fc95da88ada2df8dec016bf9622c8d05f1bcd87fe9afeabbe4"
     },
     {
       "path": "v1/scalars.json",
@@ -8107,8 +8107,8 @@
       "issue": 51,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/51",
+          "path": "v1/remote-workers.json",
+          "pointer": "/admissionCases",
           "polarity": "mixed"
         }
       ]
@@ -8230,8 +8230,8 @@
       "issue": 59,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/59",
+          "path": "v1/remote-workers.json",
+          "pointer": "/operations",
           "polarity": "mixed"
         }
       ]
@@ -8252,8 +8252,8 @@
       "issue": 61,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/61",
+          "path": "v1/rust-worker.json",
+          "pointer": "/vectors",
           "polarity": "mixed"
         }
       ]
@@ -8306,8 +8306,8 @@
       "issue": 65,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/65",
+          "path": "v1/cbor.json",
+          "pointer": "/vectors",
           "polarity": "mixed"
         }
       ]
@@ -8560,8 +8560,8 @@
       "issue": 84,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/84",
+          "path": "v1/dart-adapters.json",
+          "pointer": "/adapterContracts",
           "polarity": "mixed"
         }
       ]
@@ -8598,8 +8598,8 @@
       "issue": 87,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/87",
+          "path": "v1/large-value-adapters.json",
+          "pointer": "/fixtures",
           "polarity": "mixed"
         }
       ]
@@ -8657,8 +8657,8 @@
       "issue": 91,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/91",
+          "path": "tooling/playground-mock.json",
+          "pointer": "/cases",
           "polarity": "mixed"
         }
       ]
@@ -8668,8 +8668,8 @@
       "issue": 92,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/92",
+          "path": "v1/graphql-adapter.json",
+          "pointer": "/cases",
           "polarity": "mixed"
         }
       ]
@@ -8787,8 +8787,8 @@
       "issue": 101,
       "fixtureRefs": [
         {
-          "path": "v1/roadmap.json",
-          "pointer": "/issues/101",
+          "path": "v1/typescript-worker.json",
+          "pointer": "/requiredRuntimeVectors",
           "polarity": "mixed"
         }
       ]

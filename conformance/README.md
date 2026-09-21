@@ -79,10 +79,13 @@ support and unsupported-capability boundaries are documented in
 Its version is independent of Go module and implementation releases. The
 manifest binds every file by SHA-256, records the complete language matrix,
 maps every stable normative clause and all 110 repository issues to exact
-JSON pointers. `v1/roadmap.json` makes unimplemented issue ownership explicit;
-those deferred records are never counted as conformance passes. The manifest
-also declares downstream ownership for Go harnesses (#78) and complete profile
-execution (#69 and #70).
+JSON pointers. `v1/roadmap.json` records each issue's executable evidence: an
+`implemented-contract` record cites the owning profile or is covered elsewhere in
+the suite, and a `deferred-to-owner` record is never counted as a conformance pass.
+The only remaining deferred records are the release-gated aggregates #69 and #70,
+whose complete cross-language matrix pass is re-earned at each release revision
+rather than pinned as an evergreen pass. The manifest also declares downstream
+ownership for Go harnesses (#78) and complete profile execution (#69 and #70).
 
 `v1/profiles.json` defines the versioned certification profiles, their exact
 normative clauses and fixture digests, eligible evidence roles and paths, and
