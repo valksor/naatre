@@ -1,22 +1,24 @@
 {
   "profile": "suite.roadmap-1",
-  "description": "Explicit traceability records for repository issues whose executable feature fixtures are not yet part of suite 1.0.0. Deferred records are not conformance passes.",
+  "description": "Traceability records mapping every repository issue to its executable conformance evidence. Records marked implemented-contract cite the owning profile or are covered elsewhere in the suite. The remaining deferred records are release-gated aggregates (issues #69 and #70) whose complete cross-language matrix pass is re-earned at each release revision and is never an evergreen pass.",
   "issues": {
     "28": {
       "issue": 28,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 28,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.go.client-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.go.client-1"
+        ]
       }
     },
     "29": {
@@ -40,13 +42,13 @@
     },
     "31": {
       "issue": 31,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 31,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "not-applicable-or-covered-elsewhere",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
@@ -57,13 +59,13 @@
     },
     "32": {
       "issue": 32,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 32,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "not-applicable-or-covered-elsewhere",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
@@ -74,19 +76,21 @@
     },
     "35": {
       "issue": 35,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 35,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.generation-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.generation-1"
+        ]
       }
     },
     "36": {
@@ -110,7 +114,7 @@
     },
     "37": {
       "issue": 37,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 37,
       "execution": "sdk.php.core-1",
@@ -148,24 +152,26 @@
     },
     "39": {
       "issue": 39,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 39,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.rust.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.rust.core-1"
+        ]
       }
     },
     "40": {
       "issue": 40,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 40,
       "execution": "sdk.jvm.core-1",
@@ -203,13 +209,13 @@
     },
     "42": {
       "issue": 42,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 42,
       "execution": "sdk.swift.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
@@ -334,7 +340,7 @@
     },
     "49": {
       "issue": 49,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 49,
       "execution": "governance.release-1",
@@ -372,75 +378,83 @@
     },
     "51": {
       "issue": 51,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 51,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "worker.remote-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "worker.remote-1"
+        ]
       }
     },
     "52": {
       "issue": 52,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 52,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "mutation.update-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "mutation.update-1"
+        ]
       }
     },
     "53": {
       "issue": 53,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 53,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "collection.page-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "collection.page-1"
+        ]
       }
     },
     "54": {
       "issue": 54,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 54,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "core.validation-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "core.validation-1"
+        ]
       }
     },
     "55": {
       "issue": 55,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 55,
       "execution": "tooling.workflow-1",
@@ -459,19 +473,21 @@
     },
     "56": {
       "issue": 56,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 56,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "core.adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "core.adapters-1"
+        ]
       }
     },
     "57": {
@@ -493,7 +509,7 @@
     },
     "58": {
       "issue": 58,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 58,
       "execution": "sdk.php.server-1",
@@ -512,19 +528,21 @@
     },
     "59": {
       "issue": 59,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 59,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "worker.remote-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "worker.remote-1"
+        ]
       }
     },
     "60": {
@@ -541,41 +559,47 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": ["worker.javascript-typescript-1"]
+        "capabilities": [
+          "worker.javascript-typescript-1"
+        ]
       }
     },
     "61": {
       "issue": 61,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 61,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "worker.remote-1.rust",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "worker.remote-1.rust"
+        ]
       }
     },
     "62": {
       "issue": 62,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 62,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "adapter.asyncapi-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.asyncapi-1"
+        ]
       }
     },
     "63": {
@@ -618,24 +642,26 @@
     },
     "65": {
       "issue": 65,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 65,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "transport.cbor.unary-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "transport.cbor.unary-1"
+        ]
       }
     },
     "66": {
       "issue": 66,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 66,
       "execution": "schema.jtd-1",
@@ -688,10 +714,10 @@
     },
     "69": {
       "issue": 69,
-      "state": "open",
+      "state": "closed",
       "coverage": "deferred-to-owner",
       "ownerIssue": 69,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "release-gated-per-release-revision",
       "expected": {
         "phase": "runner",
         "code": "UNSUPPORTED",
@@ -705,10 +731,10 @@
     },
     "70": {
       "issue": 70,
-      "state": "open",
+      "state": "closed",
       "coverage": "deferred-to-owner",
       "ownerIssue": 70,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "release-gated-per-release-revision",
       "expected": {
         "phase": "runner",
         "code": "UNSUPPORTED",
@@ -772,7 +798,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "core.http-1"
+        ]
       }
     },
     "74": {
@@ -815,7 +843,7 @@
     },
     "76": {
       "issue": 76,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 76,
       "execution": "sdk.generator-plugin-host-1",
@@ -834,24 +862,26 @@
     },
     "77": {
       "issue": 77,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 77,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "documentation.examples-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "documentation.examples-1"
+        ]
       }
     },
     "78": {
       "issue": 78,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 78,
       "execution": "quality.go.harness-1",
@@ -870,7 +900,7 @@
     },
     "79": {
       "issue": 79,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 79,
       "execution": "sdk.php.adapters-1",
@@ -889,7 +919,7 @@
     },
     "80": {
       "issue": 80,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 80,
       "execution": "sdk.rust.adapters-1",
@@ -927,7 +957,7 @@
     },
     "82": {
       "issue": 82,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 82,
       "execution": "sdk.jvm.adapters-1",
@@ -948,7 +978,7 @@
     },
     "83": {
       "issue": 83,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 83,
       "execution": "sdk.ruby.adapters-1",
@@ -967,41 +997,45 @@
     },
     "84": {
       "issue": 84,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 84,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.dart.adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.dart.adapters-1"
+        ]
       }
     },
     "85": {
       "issue": 85,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 85,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.dotnet.adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.dotnet.adapters-1"
+        ]
       }
     },
     "86": {
       "issue": 86,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 86,
       "execution": "sdk.swift.apple-1",
@@ -1020,24 +1054,26 @@
     },
     "87": {
       "issue": 87,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 87,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "implementation.go.large-value-adapters-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "implementation.go.large-value-adapters-1"
+        ]
       }
     },
     "88": {
       "issue": 88,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 88,
       "execution": "implementation.go.remote-worker-1",
@@ -1056,92 +1092,102 @@
     },
     "89": {
       "issue": 89,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 89,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "operations.async-adapters-go-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "operations.async-adapters-go-1"
+        ]
       }
     },
     "90": {
       "issue": 90,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 90,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "events.webhook-adapters-go-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "events.webhook-adapters-go-1"
+        ]
       }
     },
     "91": {
       "issue": 91,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 91,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "naatre.playground-mock-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "naatre.playground-mock-1"
+        ]
       }
     },
     "92": {
       "issue": 92,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 92,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "core.adapters.graphql-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "core.adapters.graphql-1"
+        ]
       }
     },
     "93": {
       "issue": 93,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 93,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "adapter.openapi-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.openapi-1"
+        ]
       }
     },
     "94": {
       "issue": 94,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 94,
       "execution": "tooling.lsp-1",
@@ -1196,7 +1242,7 @@
     },
     "97": {
       "issue": 97,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 97,
       "execution": "sdk.php.worker-adapters-1",
@@ -1215,7 +1261,7 @@
     },
     "98": {
       "issue": 98,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 98,
       "execution": "adapter.openrpc-jsonrpc-1",
@@ -1227,12 +1273,14 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.openrpc-jsonrpc-1"
+        ]
       }
     },
     "99": {
       "issue": 99,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 99,
       "execution": "sdk.python.worker-adapters-1",
@@ -1251,7 +1299,7 @@
     },
     "100": {
       "issue": 100,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 100,
       "execution": "worker.remote-1.rust-tokio-axum-1",
@@ -1270,13 +1318,13 @@
     },
     "101": {
       "issue": 101,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 101,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "not-applicable-or-covered-elsewhere",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
@@ -1287,24 +1335,26 @@
     },
     "102": {
       "issue": 102,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 102,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "adapter.asyncapi.projection-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.asyncapi.projection-1"
+        ]
       }
     },
     "103": {
       "issue": 103,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 103,
       "execution": "adapter.mcp-go-runtime-1",
@@ -1323,7 +1373,7 @@
     },
     "104": {
       "issue": 104,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 104,
       "execution": "implementation.go.http-digest-1",
@@ -1342,7 +1392,7 @@
     },
     "105": {
       "issue": 105,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 105,
       "execution": "streaming.broker-adapters-go-1",
@@ -1361,87 +1411,97 @@
     },
     "106": {
       "issue": 106,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 106,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "schema.discovery.http-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "schema.discovery.http-1"
+        ]
       }
     },
     "107": {
       "issue": 107,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 107,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "operations.observability-integrations-go-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "operations.observability-integrations-go-1"
+        ]
       }
     },
     "108": {
       "issue": 108,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 108,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "collection.query.codegen-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "collection.query.codegen-1"
+        ]
       }
     },
     "109": {
       "issue": 109,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 109,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "runtime.go.federation-coordinator-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "runtime.go.federation-coordinator-1"
+        ]
       }
     },
     "110": {
       "issue": 110,
-      "state": "open",
-      "coverage": "deferred-to-owner",
+      "state": "closed",
+      "coverage": "implemented-contract",
       "ownerIssue": 110,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "sdk.php.native-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "sdk.php.native-1"
+        ]
       }
     }
   }
