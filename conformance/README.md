@@ -84,8 +84,10 @@ JSON pointers. `v1/roadmap.json` records each issue's executable evidence: an
 the suite, and a `deferred-to-owner` record is never counted as a conformance pass.
 The only remaining deferred records are the release-gated aggregates #69 and #70,
 whose complete cross-language matrix pass is re-earned at each release revision
-rather than pinned as an evergreen pass. The manifest also declares downstream
-ownership for Go harnesses (#78) and complete profile execution (#69 and #70).
+rather than pinned as an evergreen pass. See
+[`docs/v1/roadmap-reconciliation.md`](../docs/v1/roadmap-reconciliation.md) for the
+per-issue evidence map. The manifest also declares downstream ownership for Go
+harnesses (#78) and complete profile execution (#69 and #70).
 
 `v1/profiles.json` defines the versioned certification profiles, their exact
 normative clauses and fixture digests, eligible evidence roles and paths, and

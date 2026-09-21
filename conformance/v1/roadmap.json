@@ -114,7 +114,7 @@
     },
     "37": {
       "issue": 37,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 37,
       "execution": "sdk.php.core-1",
@@ -171,7 +171,7 @@
     },
     "40": {
       "issue": 40,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 40,
       "execution": "sdk.jvm.core-1",
@@ -209,13 +209,13 @@
     },
     "42": {
       "issue": 42,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 42,
       "execution": "sdk.swift.core-1",
       "expected": {
         "phase": "runner",
-        "code": "UNSUPPORTED",
+        "code": "",
         "source": {},
         "path": [],
         "data": null,
@@ -340,7 +340,7 @@
     },
     "49": {
       "issue": 49,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 49,
       "execution": "governance.release-1",
@@ -454,7 +454,7 @@
     },
     "55": {
       "issue": 55,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 55,
       "execution": "tooling.workflow-1",
@@ -509,7 +509,7 @@
     },
     "58": {
       "issue": 58,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 58,
       "execution": "sdk.php.server-1",
@@ -661,7 +661,7 @@
     },
     "66": {
       "issue": 66,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 66,
       "execution": "schema.jtd-1",
@@ -714,10 +714,10 @@
     },
     "69": {
       "issue": 69,
-      "state": "open",
+      "state": "closed",
       "coverage": "deferred-to-owner",
       "ownerIssue": 69,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "release-gated-per-release-revision",
       "expected": {
         "phase": "runner",
         "code": "UNSUPPORTED",
@@ -731,10 +731,10 @@
     },
     "70": {
       "issue": 70,
-      "state": "open",
+      "state": "closed",
       "coverage": "deferred-to-owner",
       "ownerIssue": 70,
-      "execution": "unsupported-until-owner-closes",
+      "execution": "release-gated-per-release-revision",
       "expected": {
         "phase": "runner",
         "code": "UNSUPPORTED",
@@ -798,7 +798,9 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "core.http-1"
+        ]
       }
     },
     "74": {
@@ -841,7 +843,7 @@
     },
     "76": {
       "issue": 76,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 76,
       "execution": "sdk.generator-plugin-host-1",
@@ -879,7 +881,7 @@
     },
     "78": {
       "issue": 78,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 78,
       "execution": "quality.go.harness-1",
@@ -898,7 +900,7 @@
     },
     "79": {
       "issue": 79,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 79,
       "execution": "sdk.php.adapters-1",
@@ -917,7 +919,7 @@
     },
     "80": {
       "issue": 80,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 80,
       "execution": "sdk.rust.adapters-1",
@@ -955,7 +957,7 @@
     },
     "82": {
       "issue": 82,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 82,
       "execution": "sdk.jvm.adapters-1",
@@ -976,7 +978,7 @@
     },
     "83": {
       "issue": 83,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 83,
       "execution": "sdk.ruby.adapters-1",
@@ -1033,7 +1035,7 @@
     },
     "86": {
       "issue": 86,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 86,
       "execution": "sdk.swift.apple-1",
@@ -1071,7 +1073,7 @@
     },
     "88": {
       "issue": 88,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 88,
       "execution": "implementation.go.remote-worker-1",
@@ -1185,7 +1187,7 @@
     },
     "94": {
       "issue": 94,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 94,
       "execution": "tooling.lsp-1",
@@ -1240,7 +1242,7 @@
     },
     "97": {
       "issue": 97,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 97,
       "execution": "sdk.php.worker-adapters-1",
@@ -1259,7 +1261,7 @@
     },
     "98": {
       "issue": 98,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 98,
       "execution": "adapter.openrpc-jsonrpc-1",
@@ -1271,12 +1273,14 @@
         "data": null,
         "errors": [],
         "canonicalBytes": "",
-        "capabilities": []
+        "capabilities": [
+          "adapter.openrpc-jsonrpc-1"
+        ]
       }
     },
     "99": {
       "issue": 99,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 99,
       "execution": "sdk.python.worker-adapters-1",
@@ -1295,7 +1299,7 @@
     },
     "100": {
       "issue": 100,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 100,
       "execution": "worker.remote-1.rust-tokio-axum-1",
@@ -1350,7 +1354,7 @@
     },
     "103": {
       "issue": 103,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 103,
       "execution": "adapter.mcp-go-runtime-1",
@@ -1369,7 +1373,7 @@
     },
     "104": {
       "issue": 104,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 104,
       "execution": "implementation.go.http-digest-1",
@@ -1388,7 +1392,7 @@
     },
     "105": {
       "issue": 105,
-      "state": "open",
+      "state": "closed",
       "coverage": "implemented-contract",
       "ownerIssue": 105,
       "execution": "streaming.broker-adapters-go-1",
