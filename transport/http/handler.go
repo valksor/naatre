@@ -722,7 +722,9 @@ type publicExecutionError struct {
 
 func (handler *Handler) writeOutcome(writer stdhttp.ResponseWriter, request *stdhttp.Request, decoded *protocol.Request, outcome runtime.Outcome, representation responseRepresentation) {
 	requestID := handler.safeRequestID()
-	envelope := responseEnvelope{RequestID: requestID, Capabilities: slices.Clone(outcome.Capabilities), Extensions: make(map[string]json.RawMessage)}
+	// The protocol requires a capabilities array; a request that negotiated none
+	// must still encode [] rather than null.
+	envelope := responseEnvelope{RequestID: requestID, Capabilities: append([]string{}, outcome.Capabilities...), Extensions: make(map[string]json.RawMessage)}
 	if id, ok := decoded.ID(); ok {
 		envelope.ID = id
 	}

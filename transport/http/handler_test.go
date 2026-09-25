@@ -33,6 +33,17 @@ func TestHandlerRequiresAuthenticationChallenge(t *testing.T) {
 	}
 }
 
+func TestHandlerResponseWithoutCapabilitiesDecodes(t *testing.T) {
+	t.Parallel()
+	response := serve(testHandler(t, Config{}), newRequest(validRequest))
+	if response.Code != stdhttp.StatusOK {
+		t.Fatalf("response = %d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := protocol.DecodeResponse(response.Body.Bytes(), protocol.DecodeOptions{}); err != nil {
+		t.Fatalf("DecodeResponse() error = %v body=%s", err, response.Body.String())
+	}
+}
+
 func TestHandlerStatusMediaEncodingAndProtocolParity(t *testing.T) {
 	t.Parallel()
 	handler := testHandler(t, Config{})
