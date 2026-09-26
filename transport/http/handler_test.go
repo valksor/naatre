@@ -18,6 +18,7 @@ import (
 	"github.com/valksor/naatre/protocol"
 	naatrecbor "github.com/valksor/naatre/protocol/cbor"
 	"github.com/valksor/naatre/runtime"
+	"github.com/valksor/naatre/schema"
 )
 
 const validRequest = `{"version":"1","id":"client-1","document":{"operations":[{"name":"Ping","kind":"query","select":[{"$call":{"name":"ping"}}]}]}}`
@@ -41,6 +42,55 @@ func TestHandlerResponseWithoutCapabilitiesDecodes(t *testing.T) {
 	}
 	if _, err := protocol.DecodeResponse(response.Body.Bytes(), protocol.DecodeOptions{}); err != nil {
 		t.Fatalf("DecodeResponse() error = %v body=%s", err, response.Body.String())
+	}
+}
+
+func TestHandlerCarriesApplicationErrorCodes(t *testing.T) {
+	t.Parallel()
+	types, err := schema.NewCatalog().Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := runtime.NewRegistry(types)
+	if err := registry.ConfigureAuthorization(runtime.AuthorizationConfig{Mode: runtime.AuthorizationAllowByDefault}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(runtime.BindInvocation[string](runtime.Descriptor{
+		Name: "ping", Scope: runtime.RootScope, Kind: protocol.Query, Member: runtime.CallMember,
+		Input: schema.TypeID(schema.String), InputNullable: true, Output: schema.TypeID(schema.String),
+		Metadata: runtime.Metadata{Effect: runtime.ReadEffect, ThreadSafety: runtime.ThreadSafe,
+			Batching: runtime.BatchIneligible, Transaction: runtime.TransactionNone, AuthorizationPolicy: "public"},
+	}, func(context.Context, runtime.Invocation) (string, error) {
+		return "", &runtime.Error{Code: "REVISION_CONFLICT", Message: "page is stale", Cause: errors.New("postgres://user:secret@db")}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A handler's domain error (CORE-505) keeps its code and public message; its
+	// cause never reaches the client.
+	domain := serve(testHandler(t, Config{Executor: RuntimeExecutor(snapshot, runtime.PrepareOptions{}, runtime.ExecuteOptions{})}), newRequest(validRequest))
+	decoded, err := protocol.DecodeResponse(domain.Body.Bytes(), protocol.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v body=%s", err, domain.Body.String())
+	}
+	if errs := decoded.Errors(); domain.Code != stdhttp.StatusOK || len(errs) != 1 || errs[0].Code() != "REVISION_CONFLICT" || errs[0].Message() != "page is stale" {
+		t.Fatalf("domain error response = %d %s", domain.Code, domain.Body.String())
+	}
+	if strings.Contains(domain.Body.String(), "secret") {
+		t.Fatalf("domain error leaked its cause: %s", domain.Body.String())
+	}
+
+	// The same code returned by an executor rather than chosen by a handler
+	// stays opaque.
+	raw := serve(testHandler(t, Config{Executor: func(context.Context, *protocol.Request) runtime.Outcome {
+		return runtime.Outcome{Errors: []runtime.ExecutionError{{Code: "REVISION_CONFLICT", Message: "page is stale"}}}
+	}}), newRequest(validRequest))
+	if raw.Code != stdhttp.StatusInternalServerError || !strings.Contains(raw.Body.String(), `"code":"INTERNAL"`) {
+		t.Fatalf("raw executor error response = %d %s", raw.Code, raw.Body.String())
 	}
 }
 

@@ -460,7 +460,7 @@
       "path": "v1/go-http.json",
       "profile": "core.http-1",
       "category": "transport",
-      "sha256": "52c9df94cdeb6beb77577650518fd83d4e4f362f52343b97f9352bd9e3f35dca"
+      "sha256": "e366a4d5c9e103f9f029ed5c6fa19efe2f1a81f127f4e73a8f49161955aa8646"
     },
     {
       "path": "v1/plan-cache.json",

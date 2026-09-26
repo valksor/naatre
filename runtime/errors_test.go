@@ -72,6 +72,10 @@ func TestExecuteMapsDomainErrorsOntoTheCoreShape(t *testing.T) {
 				t.Fatalf("Execute errors = %#v", outcome.Errors)
 			}
 			failure := outcome.Errors[0]
+			// Only a valid domain error keeps its code, so only it is marked.
+			if failure.Domain() != (failure.Code == test.wantCode && test.wantCode != naatreruntime.CodeHandlerFailed) {
+				t.Fatalf("Domain() = %v for code %s", failure.Domain(), failure.Code)
+			}
 			if failure.Code != test.wantCode || failure.Message != test.wantMessage {
 				t.Fatalf("error = %q/%q, want %q/%q", failure.Code, failure.Message, test.wantCode, test.wantMessage)
 			}

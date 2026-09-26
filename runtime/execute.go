@@ -47,6 +47,9 @@ type ExecutionError struct {
 	RetryAfter time.Duration
 	Details    map[string]any
 	internal   error
+	// domain is set only when a handler chose this code and message through
+	// Error (CORE-505); nothing outside the runtime can set it.
+	domain bool
 }
 
 // Error renders only the public code and message, so logging or wrapping an
@@ -57,6 +60,11 @@ func (e ExecutionError) Error() string { return e.Code + ": " + e.Message }
 // serialized by the public response shape. ExecutionError implements error so
 // a hook can reach the cause through errors.Unwrap, errors.Is, and errors.As.
 func (e ExecutionError) Unwrap() error { return e.internal }
+
+// Domain reports whether a handler selected this error's code and message
+// through Error (CORE-505). Only then are they the application's chosen public
+// failure; a transport must treat any other unknown code as opaque.
+func (e ExecutionError) Domain() bool { return e.domain }
 
 // EffectState reports what happened to the operation's effects, separately
 // from whether the response could be assembled. A mutation can apply an effect

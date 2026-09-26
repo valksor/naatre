@@ -15,10 +15,10 @@
       {"path":"conformance/v1/http.json","sha256":"f3ca29182fa9ad19a2e1b8a5ff4e5a0ff3e1d05311a95080aec91bcbd80a26a8"}
     ],
     "files": [
-      {"path":"transport/http/handler.go","sha256":"d8e7982107d5fcc80e3133e8ec961efc89fb58513c20d55d9ce0e3ac17fe2582"},
+      {"path":"transport/http/handler.go","sha256":"9d52dad8966338c563d84c07e91a4d082a6ad0be84326a54a120d25d1ec6bc09"},
       {"path":"transport/http/doc.go","sha256":"f43e8c91618e1f1e61b700dea0c88ce1bf328375de3786455079ac8a29bc331b"},
       {"path":"transport/http/README.md","sha256":"dbefa8f2ba357126d21c544b5a9bfb3d61979308b429faeeb126e74d8bfc7e91"},
-      {"path":"transport/http/handler_test.go","sha256":"226861c0ce9a99122e7fadfab7633f3ea4acf62902a86104ec03f7b57b533da3"}
+      {"path":"transport/http/handler_test.go","sha256":"58aae93ef5b9eab546f795224a7365d6952151a45486214ba8e7b78043a4ef67"}
     ]
   },
   "binding": {

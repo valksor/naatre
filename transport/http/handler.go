@@ -75,7 +75,8 @@ type AuthenticateFunc func(context.Context, *stdhttp.Request) (context.Context, 
 
 // Executor runs one strictly decoded request. It must return only public
 // runtime errors; the adapter additionally replaces unknown codes and messages
-// with safe stable failures before serialization.
+// with safe stable failures before serialization, keeping only a domain error
+// a handler chose through runtime.Error (CORE-505).
 type Executor func(context.Context, *protocol.Request) runtime.Outcome
 
 // Config owns the deployment decisions needed by the router-free handler.
@@ -781,7 +782,8 @@ func outcomeStatus(outcome runtime.Outcome) int {
 	}
 	status := stdhttp.StatusOK
 	for _, failure := range outcome.Errors {
-		if publicMessage(failure.Code) == "" {
+		// An application domain code is a handler failure, like HANDLER_FAILED.
+		if publicMessage(failure.Code) == "" && !failure.Domain() {
 			return stdhttp.StatusInternalServerError
 		}
 		switch failure.Code {
@@ -799,9 +801,15 @@ func outcomeStatus(outcome runtime.Outcome) int {
 }
 
 func sanitizeExecutionError(failure runtime.ExecutionError) publicExecutionError {
-	code := failure.Code
-	if publicMessage(code) == "" {
-		code = "INTERNAL"
+	code, message := failure.Code, publicMessage(failure.Code)
+	if message == "" {
+		// CORE-505: an application's own domain code reaches the client with the
+		// public message the handler chose; anything else stays opaque.
+		if failure.Domain() {
+			message = failure.Message
+		} else {
+			code, message = "INTERNAL", publicMessage("INTERNAL")
+		}
 	}
 	path := make([]any, 0, len(failure.Path))
 	for _, segment := range failure.Path {
@@ -818,7 +826,7 @@ func sanitizeExecutionError(failure runtime.ExecutionError) publicExecutionError
 			path = append(path, value)
 		}
 	}
-	return publicExecutionError{Code: code, Message: publicMessage(code), Path: path, Retryable: failure.Retryable}
+	return publicExecutionError{Code: code, Message: message, Path: path, Retryable: failure.Retryable}
 }
 
 func publicMessage(code string) string {

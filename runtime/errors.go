@@ -177,5 +177,6 @@ func applyDomainError(failure ExecutionError, err error) ExecutionError {
 	failure.Retryable = domain.Retryable
 	failure.RetryAfter = domain.RetryAfter
 	failure.Details = domain.publicDetails()
+	failure.domain = true
 	return failure
 }
