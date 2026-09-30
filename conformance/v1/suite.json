@@ -286,7 +286,7 @@
       "path": "v1/documentation-examples.json",
       "profile": "documentation.examples-1",
       "category": "document",
-      "sha256": "a749dd8479d7c559e67b7bb986b961f8a69c439328b009f35bab9e2b72c11b52"
+      "sha256": "52b23731bc520f0d3027d84f20940e503655a4aa6e7f7d0820f51b3e9d1a10fa"
     },
     {
       "path": "v1/validation.json",
@@ -352,7 +352,7 @@
       "path": "v1/php-sdk.json",
       "profile": "sdk.php.core-1",
       "category": "canonical",
-      "sha256": "caa5352a90d6416453d7792feb7ebb520cf55fe84218c4fcc58bf708e821c3d3"
+      "sha256": "ca4f64dd525cf981345b0c7860c39eacfc4977271a527f2101dfd494b6b0dfda"
     },
     {
       "path": "v1/python-sdk.json",
@@ -544,25 +544,25 @@
       "path": "v1/php-adapters.json",
       "profile": "sdk.php.adapters-1",
       "category": "integration",
-      "sha256": "0f44f720eadd189fc36eeaf2e40040d530e1fba9911311ed8443f1ef63c18d4d"
+      "sha256": "0be7df6366527d8326c664df4e55e1161734de3468131d1891c4caba97737367"
     },
     {
       "path": "v1/php-native.json",
       "profile": "sdk.php.native-1",
       "category": "integration",
-      "sha256": "d37a44a0cbe963fec2afc12e66da32acf6d2419bf7700161f2a6a726618d1be4"
+      "sha256": "01b17cf81af94f26b35500d48094ef9ec787da4b3f60a2b05c843b95d5f55dd3"
     },
     {
       "path": "v1/php-server.json",
       "profile": "sdk.php.server-1",
       "category": "integration",
-      "sha256": "1a7ea44a65fef302a9e54fb41ee022759b3690625201656c632620df5ada2dfc"
+      "sha256": "13d5e80d074d3d8bd0ee12e93905b181ca52cfd2e5a720f829588d78135ecdd2"
     },
     {
       "path": "v1/php-worker-adapters.json",
       "profile": "sdk.php.worker-adapters-1",
       "category": "integration",
-      "sha256": "97c03772b2a05ac96754d3256096bdfc2d8a1a3ada9d0551b5c7af277774cb48"
+      "sha256": "92b9feec50d37fd9515797467230024eedb3d3ff1d3c967db3f7009e619443ef"
     },
     {
       "path": "v1/rust-async-adapters.json",

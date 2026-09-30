@@ -1,5 +1,5 @@
 {
-  "name": "naatre/sdk",
+  "name": "valksor/php-naatre-sdk",
   "description": "Framework-neutral PHP client, generated bindings, and remote-worker server core for Naatre",
   "type": "library",
   "license": "Apache-2.0",

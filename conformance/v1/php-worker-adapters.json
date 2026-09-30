@@ -11,16 +11,16 @@
       "profile": "sdk.php.server-1",
       "manifest": {
         "path": "conformance/v1/php-server.json",
-        "sha256": "1a7ea44a65fef302a9e54fb41ee022759b3690625201656c632620df5ada2dfc"
+        "sha256": "13d5e80d074d3d8bd0ee12e93905b181ca52cfd2e5a720f829588d78135ecdd2"
       },
       "lock": {
         "path": "sdk/php/composer.lock",
-        "sha256": "68868f2bcd220ae40f5f29def8d81c0fa0bc1db2182f9b5c98231e0eb041247c"
+        "sha256": "69ccce8ea35c3164cb9293e94a3da50c06c98425be6837522543aa27d275ab83"
       }
     }
   ],
   "packageBoundary": {
-    "distribution": "naatre/sdk",
+    "distribution": "valksor/php-naatre-sdk",
     "namespace": "Naatre\\Sdk\\Server\\Integration",
     "workerAdapterRuntimeDependencies": [],
     "hostServices": ["dispatcher", "request-context-factory", "after-request-reset", "finite-request-budget"],
@@ -220,8 +220,8 @@
   ],
   "evidence": [
     {"path": "docs/php-worker-adapters.md", "sha256": "26bb8bd878787dee8bcdc022cadda61bf55ac41b250c17e4fc8ad6f44be88519"},
-    {"path": "sdk/php/README.md", "sha256": "61c818f63cb7a237301134ef79071fbb649d14c860412d79d9e2e79c274d6dba"},
-    {"path": "sdk/php/composer.json", "sha256": "65bb1aa559cdb23d96e215000a1798b1b936987c9e7c6e10d0d47809f00a8b8c"},
+    {"path": "sdk/php/README.md", "sha256": "131598bb9efcf4bf6c3932e3f34547fdc26c2f86985e5609c784da89e06f3f40"},
+    {"path": "sdk/php/composer.json", "sha256": "00a382dcd23d84795b6abe839b60edefb8cc2aac4ff4de17835fff20e1048197"},
     {"path": "sdk/php/src/Server/Integration/IntegrationProfile.php", "sha256": "134efad71b3b80c73bb3f57057830339bc0729e46176643f38526b40c92fab38"},
     {"path": "sdk/php/src/Server/Integration/LifecycleAdapter.php", "sha256": "cf526fa179dd6ad4583d27fa98efa328c14fb3201d1cdd3f79415f52508a7cd9"},
     {"path": "sdk/php/tests/worker-adapters.php", "sha256": "9ba870e88e82c39abf5e5c6e275b5226f8b36472b954696ae732b6aede9b39fc"},

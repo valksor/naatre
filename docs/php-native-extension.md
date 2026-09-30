@@ -1,7 +1,7 @@
 # PHP native accelerator
 
 The optional `ext-naatre` profile accelerates bounded deterministic primitives
-while `naatre/sdk` remains installable and fully functional without it. Public
+while `valksor/php-naatre-sdk` remains installable and fully functional without it. Public
 SDK/server APIs, stable `CLIENT_*` codes, redaction, generated bindings, and
 wire ownership remain in PHP. The companion `naatre/sdk-native` metapackage is
 the opt-in installation assertion that requires `ext-naatre`; the base package

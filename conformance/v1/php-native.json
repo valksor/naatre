@@ -63,8 +63,8 @@
     {"path": "ext/naatre/php_naatre.h", "sha256": "da3665408900c89f13433629608aca48c3c4e44ecf42ef029645e8a42a5b9159"},
     {"path": "ext/naatre/config.m4", "sha256": "8e9616e70130b49975dd286f5404fa75106760673faf353ec332a3942e193a73"},
     {"path": "ext/naatre/config.w32", "sha256": "4823613aa27d1d40d2880db34874256cea802ca6807ca3c389e18f347a2b9f5f"},
-    {"path": "ext/naatre/composer.json", "sha256": "9d4fdaea36fb3a2e4419ebd30ac9d1445d0e47f093bf8032584e71c1d7135964"},
-    {"path": "ext/naatre/README.md", "sha256": "8a190b87748079d70b37a5781a5b2f497adbdb15d8c302a7ff389a4eb29f7506"},
+    {"path": "ext/naatre/composer.json", "sha256": "6ecc34a7b90b72ccdadb2fadca87c67d25101713b3ea34ec0670fc0ced8a5857"},
+    {"path": "ext/naatre/README.md", "sha256": "07b289eaa907e28730e2af9475033765ce5f40845edd8b3d41bdc1e82ab70be2"},
     {"path": "ext/naatre/tests/001_info.phpt", "sha256": "4228810f4079abbb85d6c391ff4b5ae7771dde38b05f63d8bc9d78852eb89566"},
     {"path": "ext/naatre/tests/002_codec.phpt", "sha256": "353b25db3b0abca4b6f7e283f63a9f0a088d7a129727b92890921071233f3296"},
     {"path": "ext/naatre/fpm/isolation.php", "sha256": "eac76dface961efb5c7cafea8264b17c5ee83a91e49a90be63fd97199c75bc7f"},
@@ -82,10 +82,10 @@
     {"path": "sdk/php/src/Wire/PureJson.php", "sha256": "fb8f0f7d670c02bb3a52f102ed8d7cff0c43dd5c62b8645711bc764336217a4c"},
     {"path": "sdk/php/tests/native.php", "sha256": "54fc78460ab4de459f83989fdfc944b99edf0274cc712eda3295eedb0644bc4b"},
     {"path": "sdk/php/benchmarks/native.php", "sha256": "acd04e6b6736ac6ab93ccdd2cd67075b3e101fe1905d5f00adb81f4f2a78ca3e"},
-    {"path": "sdk/php/native/composer.json", "sha256": "4359b3e7b3ed1bb0f8b3f3eac3c1ba1b647a8dd9ba7688ef3fc106cda3a3f48c"},
+    {"path": "sdk/php/native/composer.json", "sha256": "16a34665987ac1c81acdd1cf005866047c69a9d18e5c5b10d98749779da19444"},
     {"path": "sdk/php/stubs/naatre.php", "sha256": "d6b6a12e58ddf6f5f7e5baaf873598f7f7b1a1122ae9b1381c8cefbd5b97fada"},
     {"path": "conformance/independent/verify-php-native.mjs", "sha256": "aea183bf657e10a19e70c59e0e4ca85170c6bcb434520026edbfeadbb1f48c57"},
-    {"path": "docs/php-native-extension.md", "sha256": "a4cdbfc730f54999f6b762eac46f5ab58190567936b3eba7f714dc38bd204c44"},
+    {"path": "docs/php-native-extension.md", "sha256": "8decbbdb72c2280973ae91985cbe1e4bb84bf7154676d4f4471663aee2e5662b"},
     {"path": ".github/workflows/php-native.yml", "sha256": "130614576943a8eb661977bfb4a139189e02301304253b0737ae2d3e37363041"}
   ]
 }

@@ -1,6 +1,6 @@
 {
     "name": "naatre/naatre-ext",
-    "description": "Optional native accelerator for the Naatre PHP SDK (naatre/sdk): bounded JSON parsing, RFC 8785 canonicalization, semantic hashing, and immutable operation-metadata primitives. Installed with PIE.",
+    "description": "Optional native accelerator for the Naatre PHP SDK (valksor/php-naatre-sdk): bounded JSON parsing, RFC 8785 canonicalization, semantic hashing, and immutable operation-metadata primitives. Installed with PIE.",
     "type": "php-ext",
     "license": "Apache-2.0",
     "authors": [

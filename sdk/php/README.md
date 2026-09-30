@@ -1,6 +1,6 @@
 # PHP SDK and server core
 
-`naatre/sdk` is the framework-neutral `sdk.php.core-1` client and generated
+`valksor/php-naatre-sdk` is the framework-neutral `sdk.php.core-1` client and generated
 binding package. It supports PHP 8.5 and 8.6 with Composer 2, PHPStan at
 maximum level, and Psalm at error level 1. Generated files use PHP 8.5 syntax.
 

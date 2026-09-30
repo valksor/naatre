@@ -1,6 +1,6 @@
 # ext-naatre
 
-`ext-naatre` 0.1 is an optional accelerator for `naatre/sdk`. The portable PHP
+`ext-naatre` 0.1 is an optional accelerator for `valksor/php-naatre-sdk`. The portable PHP
 implementation remains the public wire and error oracle. Native selection is
 request-local, explicit, introspectable, and disabled in `auto` mode until a
 published benchmark profile enables an individual capability.
@@ -25,7 +25,7 @@ pie install naatre/naatre-ext
 
 PIE resolves the package from Packagist, builds it against the active PHP
 (passing `--enable-naatre`), and installs and registers `naatre.so`. The
-userland library `naatre/sdk` `suggest`s this package and transparently falls
+userland library `valksor/php-naatre-sdk` `suggest`s this package and transparently falls
 back to its pure-PHP implementation when the extension is absent.
 
 ## Unix source build
