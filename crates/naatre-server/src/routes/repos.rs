@@ -1,0 +1,239 @@
+//! `/v1/repos`: cursor-paginated listing, repo creation, and repo stats.
+
+use axum::extract::{Path, Query, State};
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
+use crate::api_code::ApiCode;
+use crate::api_error::ApiError;
+use crate::auth::{AuthedPrincipal, Role, require_role};
+use crate::db;
+use crate::extract::AppJson;
+use crate::routes::{ListQuery, parse_limit, repo_id_or_404};
+use crate::state::AppState;
+
+/// One repo in a listing page.
+#[derive(Serialize, ToSchema)]
+pub struct RepoSummary {
+    pub id: i64,
+    pub name: String,
+    pub created_ns: u64,
+}
+
+/// A page of the repo list.
+///
+/// Pagination: request `?limit=<1..=200>` (default 50) and optionally
+/// `?cursor=after:<id>` — the `next_cursor` value of the previous page,
+/// i.e. `after:<id>` where `<id>` is the last repo id of that page. Follow
+/// `next_cursor` until `has_more` is false.
+#[derive(Serialize, ToSchema)]
+pub struct RepoListResponse {
+    pub repos: Vec<RepoSummary>,
+    /// `after:<id>` of this page's last repo, or null when done.
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+/// Request body of `POST /v1/repos`.
+#[derive(Deserialize, ToSchema)]
+pub struct CreateRepoRequest {
+    /// Repo name, `^[a-z0-9][a-z0-9-]{0,62}$`.
+    pub name: String,
+}
+
+/// Created repo body.
+#[derive(Serialize, ToSchema)]
+pub struct RepoCreated {
+    pub id: i64,
+    pub name: String,
+}
+
+/// Repo-scoped counters (`GET /v1/repos/{r}/stats`).
+#[derive(Serialize, ToSchema)]
+pub struct RepoStats {
+    pub changesets: u64,
+    /// Objects referenced by this repo via `repo_blobs`.
+    pub objects: u64,
+    /// Sum of uncompressed sizes over this repo's objects.
+    pub bytes: u64,
+    /// Sum of on-disk (compressed) sizes over this repo's objects.
+    pub cbytes: u64,
+}
+
+/// List repos, cursor-paginated. Any authenticated principal may list (the
+/// plan documents repo-level read ACLs arriving in M13).
+#[utoipa::path(
+    get,
+    path = "/v1/repos",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "A page of repos", body = RepoListResponse),
+        (status = 400, description = "Malformed cursor or limit"),
+        (status = 401, description = "Missing, unknown, revoked, or expired token"),
+        (status = 422, description = "limit out of the 1..=200 range")
+    )
+)]
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(_auth): Extension<AuthedPrincipal>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<RepoListResponse>, ApiError> {
+    let limit = parse_limit(&q)?;
+    let after = match q.cursor.as_deref() {
+        None => 0,
+        Some(cursor) => {
+            let id = cursor
+                .strip_prefix("after:")
+                .ok_or_else(bad_cursor)?
+                .parse::<i64>()
+                .map_err(|_| bad_cursor())?;
+            if id < 0 {
+                return Err(bad_cursor());
+            }
+            id
+        }
+    };
+    let rows = state
+        .read(move |store| {
+            db::repos_list(store.conn(), after, limit + 1).map_err(ApiError::log_internal)
+        })
+        .await?;
+    let has_more = rows.len() as i64 > limit;
+    let mut rows = rows;
+    rows.truncate(limit as usize);
+    let next_cursor = has_more.then(|| format!("after:{}", rows.last().map_or(0, |r| r.id)));
+    Ok(Json(RepoListResponse {
+        repos: rows
+            .into_iter()
+            .map(|r| RepoSummary {
+                id: r.id,
+                name: r.name,
+                created_ns: r.created_ns as u64,
+            })
+            .collect(),
+        next_cursor,
+        has_more,
+    }))
+}
+
+fn bad_cursor() -> ApiError {
+    ApiError::new(ApiCode::Malformed, "cursor is not a valid page cursor")
+}
+
+/// Creates a repo (admin, audited). 201 + `Location: /v1/repos/{name}`.
+#[utoipa::path(
+    post,
+    path = "/v1/repos",
+    request_body = CreateRepoRequest,
+    responses(
+        (status = 201, description = "Repo created", body = RepoCreated),
+        (status = 401, description = "Missing, unknown, revoked, or expired token"),
+        (status = 403, description = "Authenticated without the admin role"),
+        (status = 409, description = "A repo with that name already exists (`repo_exists`)"),
+        (status = 422, description = "Name does not match ^[a-z0-9][a-z0-9-]{0,62}$")
+    )
+)]
+pub async fn create(
+    state: State<AppState>,
+    Extension(auth): Extension<AuthedPrincipal>,
+    body: AppJson<CreateRepoRequest>,
+) -> Response {
+    match create_inner(&state, &auth, body.0).await {
+        Ok((id, name)) => (
+            StatusCode::CREATED,
+            [(header::LOCATION, format!("/v1/repos/{name}"))],
+            Json(RepoCreated { id, name }),
+        )
+            .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn create_inner(
+    state: &AppState,
+    auth: &AuthedPrincipal,
+    body: CreateRepoRequest,
+) -> Result<(i64, String), ApiError> {
+    require_role(auth, Role::Admin)?;
+    validate_repo_name(&body.name)?;
+    let name = body.name.clone();
+    let now_ns = state.now_ns() as i64;
+    let principal = auth.principal.clone();
+    let id = state
+        .write(move |store| {
+            let conn = store.conn();
+            if db::repo_id_by_name(conn, &name)
+                .map_err(ApiError::log_internal)?
+                .is_some()
+            {
+                return Err(ApiError::new(
+                    ApiCode::RepoExists,
+                    format!("repo {name:?} already exists"),
+                ));
+            }
+            let id = db::repos_create(conn, &name, now_ns).map_err(ApiError::log_internal)?;
+            db::audit_append(
+                conn,
+                now_ns,
+                &principal,
+                "repo_create",
+                &serde_json::json!({ "repo": name }).to_string(),
+            )
+            .map_err(ApiError::log_internal)?;
+            Ok(id)
+        })
+        .await?;
+    Ok((id, body.name))
+}
+
+/// Validates against `^[a-z0-9][a-z0-9-]{0,62}$` without a regex dep.
+fn validate_repo_name(name: &str) -> Result<(), ApiError> {
+    let ok = !name.is_empty()
+        && name.len() <= 63
+        && name.chars().enumerate().all(|(i, c)| {
+            let alnum = c.is_ascii_lowercase() || c.is_ascii_digit();
+            if i == 0 { alnum } else { alnum || c == '-' }
+        });
+    if ok {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            ApiCode::Validation,
+            "repo name must match ^[a-z0-9][a-z0-9-]{0,62}$",
+        ))
+    }
+}
+
+/// Repo-scoped counters (admin): changeset count and this repo's object
+/// membership totals (the fuller disk-usage view grows later).
+#[utoipa::path(
+    get,
+    path = "/v1/repos/{r}/stats",
+    params(("r" = String, Path, description = "Repo name")),
+    responses(
+        (status = 200, description = "Repo counters", body = RepoStats),
+        (status = 401, description = "Missing, unknown, revoked, or expired token"),
+        (status = 403, description = "Authenticated without the admin role"),
+        (status = 404, description = "No such repo")
+    )
+)]
+pub async fn stats(
+    state: State<AppState>,
+    Extension(auth): Extension<AuthedPrincipal>,
+    Path(name): Path<String>,
+) -> Result<Json<RepoStats>, ApiError> {
+    require_role(&auth, Role::Admin)?;
+    let repo_id = repo_id_or_404(&state, &name).await?;
+    let (changesets, objects, bytes, cbytes) = state
+        .read(move |store| db::repo_stats(store.conn(), repo_id).map_err(ApiError::log_internal))
+        .await?;
+    Ok(Json(RepoStats {
+        changesets: changesets as u64,
+        objects: objects as u64,
+        bytes: bytes as u64,
+        cbytes: cbytes as u64,
+    }))
+}

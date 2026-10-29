@@ -13,6 +13,7 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
     (ApiCode::Forbidden, "forbidden", 403),
     (ApiCode::NotFound, "not_found", 404),
     (ApiCode::RepoNotFound, "repo_not_found", 404),
+    (ApiCode::RepoExists, "repo_exists", 409),
     (ApiCode::ObjectNotFound, "object_not_found", 404),
     (ApiCode::RefConflict, "ref_conflict", 409),
     (
@@ -52,6 +53,7 @@ fn all_variants() -> Vec<ApiCode> {
         Forbidden,
         NotFound,
         RepoNotFound,
+        RepoExists,
         ObjectNotFound,
         RefConflict,
         IdempotencyKeySettled,
@@ -80,6 +82,7 @@ fn all_variants() -> Vec<ApiCode> {
                 | Forbidden
                 | NotFound
                 | RepoNotFound
+                | RepoExists
                 | ObjectNotFound
                 | RefConflict
                 | IdempotencyKeySettled

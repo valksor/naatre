@@ -1,0 +1,23 @@
+[package]
+name = "naatre-cli"
+description = "naatre CLI: host-local admin verbs (init, serve, token) and thin HTTP client verbs (binary: naatre)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "naatre"
+path = "src/main.rs"
+
+[dependencies]
+naatre-server = { path = "../naatre-server" }
+naatre-store = { path = "../naatre-store" }
+clap = { version = "4", features = ["derive"] }
+# Plain-HTTP client for localhost ops (no TLS backend pulled in on purpose:
+# client verbs target the local server; TLS lives behind the operator's proxy).
+ureq = { version = "3", default-features = false, features = ["json"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[dev-dependencies]
+tempfile = "3"

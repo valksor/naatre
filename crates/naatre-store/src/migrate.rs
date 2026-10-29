@@ -9,14 +9,15 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 1;
+pub const MAX_SUPPORTED: i64 = 2;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
 /// in a new, higher version.
-const MIGRATIONS: &[(i64, &str)] = &[(
-    1,
-    r#"
+const MIGRATIONS: &[(i64, &str)] = &[
+    (
+        1,
+        r#"
 CREATE TABLE repos(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_ns INTEGER NOT NULL);
 CREATE TABLE changesets(repo_id INTEGER NOT NULL, id BLOB PRIMARY KEY, canonical BLOB NOT NULL, author TEXT NOT NULL, message TEXT NOT NULL, timestamp_ns INTEGER NOT NULL, generation INTEGER NOT NULL, principal TEXT NOT NULL, root_tree_id BLOB);
 CREATE TABLE changeset_parents(repo_id INTEGER NOT NULL, cs BLOB NOT NULL, parent BLOB NOT NULL, ord INTEGER NOT NULL, PRIMARY KEY(repo_id, cs, ord));
@@ -35,7 +36,11 @@ CREATE INDEX idx_snapshots_expiry ON snapshots(expires_ns);
 CREATE TABLE audit_log(id INTEGER PRIMARY KEY, ts_ns INTEGER NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL, details_json TEXT NOT NULL);
 CREATE TABLE git_map(repo_id INTEGER NOT NULL, git_oid BLOB NOT NULL, cs_id BLOB NOT NULL, PRIMARY KEY(repo_id, git_oid));
 "#,
-)];
+    ),
+    // M1b2: per-token path-prefix scope (`None` = whole repo). Existing
+    // tokens get NULL, which the scope matcher treats as unrestricted.
+    (2, "ALTER TABLE tokens ADD COLUMN scope_path TEXT;"),
+];
 
 /// Brings the database at `conn` up to [`MAX_SUPPORTED`].
 ///

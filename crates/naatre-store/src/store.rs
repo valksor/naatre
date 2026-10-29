@@ -66,6 +66,8 @@ impl Store {
 mod tests {
     use super::*;
 
+    use crate::MAX_SUPPORTED;
+
     #[test]
     fn pragmas_stick() {
         let dir = tempfile::tempdir().unwrap();
@@ -89,6 +91,6 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
             .unwrap();
         assert_eq!(fk, 1);
-        assert_eq!(store.schema_version(), 1);
+        assert_eq!(store.schema_version(), MAX_SUPPORTED);
     }
 }

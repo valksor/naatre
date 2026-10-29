@@ -11,7 +11,7 @@ fn fresh_conn(dir: &tempfile::TempDir) -> Connection {
 }
 
 #[test]
-fn fresh_db_migrates_to_1() {
+fn fresh_db_migrates_to_current() {
     let dir = tempfile::tempdir().unwrap();
     let conn = fresh_conn(&dir);
     migrate(&conn).unwrap();
@@ -23,6 +23,11 @@ fn fresh_db_migrates_to_1() {
         )
         .unwrap();
     assert_eq!(v, MAX_SUPPORTED.to_string());
+    assert_eq!(MAX_SUPPORTED, 2);
+
+    // Migration 2 spot-check: the tokens table carries the scope column.
+    conn.execute_batch("SELECT scope_path FROM tokens LIMIT 0;")
+        .unwrap();
 
     // Spot-check the table set landed.
     let tables: i64 = conn
@@ -60,7 +65,7 @@ fn migrate_twice_is_a_noop() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, MAX_SUPPORTED);
 }
 
 #[test]
@@ -92,7 +97,7 @@ fn store_open_runs_migrations() {
     // in the real flow — here it is created directly to exercise open.
     std::fs::write(dd.db_path(), b"").unwrap();
     let store = Store::open(DataDir::open(dir.path()).unwrap()).unwrap();
-    assert_eq!(store.schema_version(), 1);
+    assert_eq!(store.schema_version(), MAX_SUPPORTED);
 }
 
 #[test]
@@ -103,7 +108,7 @@ fn invariant_blob_durable_before_reference() {
     // file is a valid empty SQLite database for Store::open to initialize.
     std::fs::write(dd.db_path(), b"").unwrap();
     let store1 = Store::open(DataDir::open(dir.path()).unwrap()).unwrap();
-    assert_eq!(store1.schema_version(), 1);
+    assert_eq!(store1.schema_version(), MAX_SUPPORTED);
     drop(store1);
 
     let cas = Cas::new(&dd).unwrap();
@@ -141,5 +146,5 @@ fn invariant_blob_durable_before_reference() {
 
     // (c) A second Store::open on the same DataDir sees a valid store.
     let store2 = Store::open(DataDir::open(dir.path()).unwrap()).unwrap();
-    assert_eq!(store2.schema_version(), 1);
+    assert_eq!(store2.schema_version(), MAX_SUPPORTED);
 }

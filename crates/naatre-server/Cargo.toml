@@ -18,6 +18,10 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
+rusqlite = { version = "0.41", features = ["bundled"] }
+blake3 = "1"
+getrandom = "0.3"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

@@ -23,6 +23,8 @@ pub enum ApiCode {
     NotFound,
     /// 404 — no repo with that name.
     RepoNotFound,
+    /// 409 — a repo with that name already exists.
+    RepoExists,
     /// 404 — no object with that id in this repo's membership.
     ObjectNotFound,
     /// 409 — ref move lost the compare-and-swap (stale version).
@@ -69,6 +71,7 @@ impl ApiCode {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::RepoNotFound => "repo_not_found",
+            Self::RepoExists => "repo_exists",
             Self::ObjectNotFound => "object_not_found",
             Self::RefConflict => "ref_conflict",
             Self::IdempotencyKeySettled => "idempotency_key_settled",
@@ -98,6 +101,7 @@ impl ApiCode {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound | Self::RepoNotFound | Self::ObjectNotFound => StatusCode::NOT_FOUND,
             Self::RefConflict
+            | Self::RepoExists
             | Self::IdempotencyKeySettled
             | Self::DirtyWorkingCopy
             | Self::GitHistoryDiverged

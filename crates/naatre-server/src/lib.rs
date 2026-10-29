@@ -1,11 +1,16 @@
 //! naatre server: the axum HTTP transport over [`naatre_store`].
 //!
-//! This slice (M1b1) is the transport sliver: the error envelope and its
-//! closed code registry ([`api_error`], [`api_code`]), the
-//! spawn_blocking/mutex bridge to the store ([`state`]), request-id
-//! middleware and ops logging ([`middleware`]), the anon unversioned routes
-//! ([`routes`]), the OpenAPI skeleton ([`openapi`]), and serve-with-drain
-//! ([`serve`]). Versioned `/v1/…` routes and auth land in M1b2.
+//! M1b1 laid the transport sliver: the error envelope and its closed code
+//! registry ([`api_error`], [`api_code`]), the spawn_blocking/mutex bridge
+//! to the store ([`state`]), request-id middleware and ops logging
+//! ([`middleware`]), the anon unversioned routes ([`routes`]), the OpenAPI
+//! skeleton ([`openapi`]), and serve-with-drain ([`serve`]).
+//!
+//! M1b2 completes M1b: bearer-token auth ([`auth`]), the segment-aligned
+//! scope matcher ([`authz`]), all SQL in one module ([`db`]), envelope-safe
+//! body extraction ([`extract`]), and the versioned `/v1/…` routes —
+//! repos, refs, objects, tokens, whoami, audit, openapi — wired into
+//! [`router`] behind the auth middleware with the route→role matrix.
 //!
 //! Conventions (plan "API conventions"): every error is the same JSON
 //! envelope; 5xx responses carry a generic message and a `request_id` only,
@@ -14,6 +19,10 @@
 
 pub mod api_code;
 pub mod api_error;
+pub mod auth;
+pub mod authz;
+pub mod db;
+pub mod extract;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;
@@ -29,20 +38,59 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const BODY_LIMIT_BYTES: usize = 96 * 1024 * 1024;
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::get;
+use axum::routing::{delete, get, post};
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::state::AppState;
 
-/// The application router: routes, body limit, request-id middleware, and a
-/// fallback so unknown routes get the same error envelope as everything else.
+/// The application router: the unversioned anon routes (`/healthz`,
+/// `/version`), the authenticated `/v1/…` API behind the auth middleware
+/// (each handler enforces its own role from the route→role matrix), the
+/// body limit, request-id middleware, and a fallback so unknown routes get
+/// the same error envelope as everything else.
 pub fn router(state: AppState) -> axum::Router {
-    let routes: axum::Router<AppState> = axum::Router::new()
+    let v1: axum::Router<AppState> = axum::Router::new()
+        .route(
+            "/v1/repos",
+            get(routes::repos::list).post(routes::repos::create),
+        )
+        .route("/v1/repos/{r}/stats", get(routes::repos::stats))
+        .route(
+            "/v1/repos/{r}/refs/{name}",
+            get(routes::refs::get_ref).post(routes::refs::cas_ref),
+        )
+        .route(
+            "/v1/repos/{r}/objects/present",
+            post(routes::objects::present),
+        )
+        .route("/v1/repos/{r}/objects", post(routes::objects::create_batch))
+        .route(
+            "/v1/repos/{r}/objects/get",
+            post(routes::objects::get_batch),
+        )
+        .route(
+            "/v1/repos/{r}/objects/{id}",
+            get(routes::objects::get_raw).put(routes::objects::put_raw),
+        )
+        .route(
+            "/v1/tokens",
+            get(routes::tokens::list).post(routes::tokens::create),
+        )
+        .route("/v1/tokens/{id}", delete(routes::tokens::revoke))
+        .route("/v1/whoami", get(routes::whoami::whoami))
+        .route("/v1/audit", get(routes::audit::list))
+        .route("/v1/openapi.json", get(routes::openapi::serve))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::authenticate,
+        ));
+
+    axum::Router::new()
         .route("/healthz", get(routes::health::healthz))
         .route("/version", get(routes::version::version))
-        .fallback(fallback);
-    routes
+        .merge(v1)
+        .fallback(fallback)
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)

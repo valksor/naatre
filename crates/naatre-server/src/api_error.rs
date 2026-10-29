@@ -59,9 +59,24 @@ impl ApiError {
         Self::new(ApiCode::Internal, "internal error")
     }
 
+    /// Logs `cause` (server logs only — it never reaches the client) and
+    /// returns [`ApiError::internal`]. The standard mapping for unexpected
+    /// store/IO failures in handlers.
+    pub fn log_internal(cause: impl std::fmt::Display) -> Self {
+        tracing::error!(error = %cause, "internal error");
+        Self::internal()
+    }
+
     /// Marks the error as retryable (clients back off per the API docs).
     pub fn retryable(mut self, retryable: bool) -> Self {
         self.retryable = retryable;
+        self
+    }
+
+    /// Attaches structured recovery data (e.g. `ref_conflict` carries the
+    /// current version + target). `details` must be a JSON object.
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = details;
         self
     }
 
