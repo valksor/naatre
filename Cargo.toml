@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/naatre-core"]
+members = ["crates/naatre-core", "crates/naatre-store"]
 
 [workspace.package]
 version = "0.1.0"

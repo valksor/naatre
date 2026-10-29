@@ -1,0 +1,16 @@
+[package]
+name = "naatre-store"
+description = "naatre store: SQLite metadata, content-addressed blob CAS, ephemeral snapshot storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+naatre-core = { path = "../naatre-core" }
+rusqlite = { version = "0.41", features = ["bundled"] }
+zstd = "0.14"
+thiserror = "2"
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
