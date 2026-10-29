@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "exec": false,
+      "kind": "file",
+      "name": "main.rs",
+      "object": "230e167a0f3024881fa813ed9de4c27e00a9784ca4e56129f560ca03a8899ca7",
+      "size": 13
+    },
+    {
+      "exec": false,
+      "kind": "dir",
+      "name": "src",
+      "object": "7aa9c3fe928211e831f8777912e8939a19d4ce2fe6ef10d646edbb614350b48c",
+      "size": 0
+    }
+  ],
+  "id": "0668cca08f7cf102c4aa5e1ac5d5be5097e357d1e2b22ee89dcc0bd1d7c0c565"
+}

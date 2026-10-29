@@ -1,0 +1,17 @@
+{
+  "author": "Ada <ada@example.com>",
+  "changes": [
+    {
+      "blob": "230e167a0f3024881fa813ed9de4c27e00a9784ca4e56129f560ca03a8899ca7",
+      "exec": false,
+      "op": "add",
+      "path": "src/main.rs",
+      "size": 13
+    }
+  ],
+  "id": "acfe2618d7f73ad5bb84ca051a18c584242df195f765dec8ad5841b73721a927",
+  "message": "first",
+  "parents": [],
+  "repo_id": 1,
+  "timestamp_ns": 1000000001
+}

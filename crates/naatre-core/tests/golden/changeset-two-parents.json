@@ -1,0 +1,27 @@
+{
+  "author": "Bob <bob@example.com>",
+  "changes": [
+    {
+      "blob": "b6e01f1a941b6808e987b02b07d5bd11b32cdd5aa7099673dd1c5861b47dc788",
+      "exec": false,
+      "op": "mod",
+      "path": "docs/a.txt",
+      "size": 7
+    },
+    {
+      "blob": null,
+      "exec": null,
+      "op": "del",
+      "path": "old.txt",
+      "size": null
+    }
+  ],
+  "id": "e88e70dae53ed0b97eded72c284017a128c48e95155a02edeafa844581ca3b17",
+  "message": "merge-ish\nsecond line",
+  "parents": [
+    "27d43104ecd19721311cfe5086305770d0b095e38a363516f8eeb68991f4abf2",
+    "c07ae3397da917f9176c5d02126c72b387795047d2b8198de6352d2911a35d3c"
+  ],
+  "repo_id": 7,
+  "timestamp_ns": 2000000002
+}

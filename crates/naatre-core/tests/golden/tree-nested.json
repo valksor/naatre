@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "exec": false,
+      "kind": "file",
+      "name": "a.txt",
+      "object": "275545ad0db528b84895384aefdfefd567e495a5c1fc046630d8bb629c42a882",
+      "size": 2
+    },
+    {
+      "exec": false,
+      "kind": "dir",
+      "name": "sub",
+      "object": "0668cca08f7cf102c4aa5e1ac5d5be5097e357d1e2b22ee89dcc0bd1d7c0c565",
+      "size": 126
+    }
+  ],
+  "id": "01c160040eee1a0e5bafebcb28ca1f8c2f1029155f80395c82a65a241f644e08"
+}
