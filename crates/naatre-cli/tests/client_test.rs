@@ -130,6 +130,28 @@ fn api(server: &TestServer, method: &str, path: &str, body: Option<Value>) -> (u
     api_as(server, &server.token, method, path, body)
 }
 
+/// Setup-call retry for the single-writer 503: the test config runs the
+/// derive queue at a 10 ms tick (default 5 s), so SETUP writes (repo create,
+/// blob puts, changeset seeds) collide with derive passes far more often
+/// than production ever will. Verbs UNDER TEST are never retried — their
+/// 503s are assertions. Bounded, backoff after the server's Retry-After.
+fn api_setup_retry(
+    server: &TestServer,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> (u16, Value) {
+    let mut waited = 0u64;
+    loop {
+        let (status, body) = api(server, method, path, body.clone());
+        if status != 503 || body["error"]["code"] != "writer_busy" || waited >= 2000 {
+            return (status, body);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        waited += 20;
+    }
+}
+
 fn api_as(
     server: &TestServer,
     token: &str,
@@ -228,7 +250,8 @@ fn changeset(
 
 /// Creates a repo; returns the name.
 fn create_repo(server: &TestServer, name: &str) {
-    let (status, body) = api(server, "POST", "/v1/repos", Some(json!({ "name": name })));
+    let (status, body) =
+        api_setup_retry(server, "POST", "/v1/repos", Some(json!({ "name": name })));
     assert!(
         status == 201 || (status == 409 && body["error"]["code"] == "repo_exists"),
         "repo create failed: {status} {body}"
