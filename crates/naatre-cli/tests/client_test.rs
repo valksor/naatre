@@ -192,11 +192,22 @@ fn blob_id(data: &[u8]) -> String {
 /// PUTs a blob (raw, hash-addressed) and asserts acceptance.
 fn put_blob(server: &TestServer, repo: &str, data: &[u8]) {
     let url = format!("{}/v1/repos/{repo}/objects/{}", server.base, blob_id(data));
-    let res = agent()
-        .put(&url)
-        .header("Authorization", format!("Bearer {}", server.token))
-        .send(data)
-        .expect("put blob");
+    // Same bounded writer_busy retry as api_setup_retry: raw ureq here, so
+    // inline the loop (setup write; the 503 is contention, not an assertion).
+    let mut waited = 0u64;
+    let res = loop {
+        let res = agent()
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", server.token))
+            .send(data)
+            .expect("put blob");
+        let retry = res.status().as_u16() == 503 && waited < 2000;
+        if !retry {
+            break res;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        waited += 20;
+    };
     assert!(
         (200..300).contains(&res.status().as_u16()),
         "blob PUT failed: {}",
@@ -238,7 +249,7 @@ fn changeset(
         "message": message,
         "changes": changes.into_iter().map(|(_, c)| c).collect::<Vec<_>>(),
     });
-    let (status, created) = api(
+    let (status, created) = api_setup_retry(
         server,
         "POST",
         &format!("/v1/repos/{repo}/changesets"),
