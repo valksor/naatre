@@ -35,7 +35,7 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_server::derive::{DeriveStatus, DerivedOut, derive_pass, status};
+use naatre_server::derive::{BusyAbort, DeriveStatus, DerivedOut, derive_pass, status};
 use naatre_server::serve::{ServeConfig, serve};
 use naatre_server::state::{AppState, ServerState};
 use naatre_store::DataDir;
@@ -2022,6 +2022,192 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
     assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
     assert_eq!(resp.body["degraded"], json!(false));
     assert_eq!(resp.body["entries"].as_array().unwrap().len(), 2);
+}
+
+// ---- 7b. the writer_busy abort A/B ------------------------------------------
+//
+// The deterministic form of the busy collision behind the queue_lifecycle
+// flake (an ATTEMPTS-ACCOUNTING failure: all four nodes derived, but one
+// burned an attempt via lease expiry after a `writer_busy` collision —
+// see the m6a pin): a queue pass aborted by `writer_busy` — the test's
+// own API writes colliding with the queue's writes on the single writer
+// slot. The hook (`ServerState::derive_test_busy_abort`) produces that
+// abort ONCE, at a chosen changeset's mid-derivation write, so the lease
+// handling can be A/B-tested without any timing race.
+
+/// The pre-fix5 `wait_done`, restored VERBATIM (from 6fc556c) for the A/B:
+/// progress-based, NO clock advance — a lease lost mid-pass can never
+/// expire on a frozen clock, so a held lease is a permanent wedge and the
+/// frozen snapshot trips the stall assert. The current [`wait_done`]
+/// advances the clock (+50 ms per poll) precisely so the expiry sweep can
+/// recover a lost lease on the queue's clock; this copy exists to prove
+/// the busy-abort lease release makes even the frozen helper safe.
+async fn wait_done_frozen_clock(state: &AppState, min_done: i64) {
+    let mut stalled = 0u32;
+    let mut last = None;
+    loop {
+        let snap = {
+            let state = Arc::clone(state);
+            state
+                .read(move |conn| {
+                    let done: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM derive_state WHERE state = 'done'",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    let pending: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM derive_state \
+                             WHERE state IN ('pending','deriving')",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    Ok((done, pending))
+                })
+                .await
+                .unwrap()
+        };
+        if snap.1 == 0 && snap.0 >= min_done {
+            return;
+        }
+        if last == Some(snap) {
+            stalled += 1;
+        } else {
+            stalled = 0;
+        }
+        last = Some(snap);
+        assert!(
+            stalled < 300,
+            "derive backlog stalled: done={} pending={}",
+            snap.0,
+            snap.1
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// The upgrade pin's scenario at A/B scale (three chained commits instead
+/// of four two-file ones — the smallest shape that shows the stall:
+/// aborting the root's derivation wedges its TWO descendants behind a
+/// 'deriving' row, the parents-first pick never passing a deriving
+/// parent), built and rewound exactly like
+/// [`backfill_after_in_place_upgrade_of_pre_derive_db`]: registry-less
+/// creates, schema stamped back to the M5 era, then booted with the
+/// production kinds. The one-shot writer_busy hook is armed on the ROOT
+/// changeset — the queue's first derive write of the boot (the
+/// first-registered kind's oldest row). Returns (ctx, root, mid, leaf).
+async fn upgrade_ab_ctx(dir: &Path) -> (Ctx, String, String, String) {
+    // Registry-less creates: the changesets land with no derive rows.
+    let (root, mid, _leaf) = {
+        let ctx = build_ctx(dir, false);
+        let mut parent: Option<String> = None;
+        let mut seen: Vec<&str> = Vec::new();
+        let mut ids = Vec::new();
+        for (path, content) in [("f.txt", "v1\n"), ("f.txt", "v2\n"), ("f.txt", "v3\n")] {
+            let op = if seen.contains(&path) { "mod" } else { "add" };
+            seen.push(path);
+            parent = Some(
+                ctx.commit(
+                    parent.as_deref(),
+                    "Ann <ann@example.com>",
+                    vec![Ch {
+                        path,
+                        op,
+                        content: Some(content.as_bytes().to_vec()),
+                        exec: false,
+                    }],
+                )
+                .await,
+            );
+            ids.push(parent.clone().unwrap());
+        }
+        (ids[0].clone(), ids[1].clone(), ids[2].clone())
+    };
+    // Rewind to the M5-era shape (the upgrade pin's exact stamp).
+    let data = dir.join("data");
+    {
+        let conn = Connection::open(data.join("naatre.db")).unwrap();
+        conn.execute_batch(
+            "DROP TABLE derive_state; DROP TABLE derive_reports; DROP TABLE derive_kinds;
+             DROP TABLE blame_state; DROP TABLE path_history;
+             UPDATE meta SET value = '3' WHERE key = 'schema_version';",
+        )
+        .unwrap();
+    }
+    // Boot with the production kinds; arm the hook on the root BEFORE the
+    // backfill/queue tasks can derive anything.
+    let ctx = open_ctx(&data, true);
+    *ctx.state.derive_test_busy_abort.lock().unwrap() = Some(BusyAbort::Derive(id_of(&root)));
+    (ctx, root, mid, _leaf)
+}
+
+/// A/B leg OLD: the same one-shot writer_busy abort under the OLD wait
+/// helper (frozen clock). The held lease this setup produces is the same
+/// root cause as the flake's burned attempt, taken to its frozen-clock
+/// limit: pre-fix, the aborted pass held blame's root lease to expiry —
+/// on a real (advancing) clock the sweep expires it and burns an attempt
+/// (the flake); on this FROZEN clock it can never expire at all, so the
+/// two descendants stay blocked behind the 'deriving' row forever
+/// (observed pre-fix: `derive backlog stalled: done=6 pending=3`, i.e.
+/// pending=2 + 1 deriving). With the fix the pass RELEASES the aborted
+/// lease straight back to pending (contention is not a derivation
+/// failure), the next tick re-derives the root, and the upgrade completes
+/// on a helper that cannot wait a lease out — no attempt burned, nothing
+/// in the stall shape left to recover from.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn upgrade_writer_busy_abort_completes_under_the_old_frozen_clock_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, _root, _mid, _leaf) = upgrade_ab_ctx(dir.path()).await;
+    serve_until_quiet(Arc::clone(&ctx.state)).await;
+    wait_done_frozen_clock(&ctx.state, 9).await;
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_state WHERE state = 'done'"),
+        9,
+        "every kind derived every changeset"
+    );
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_state WHERE attempts != 0"),
+        0,
+        "contention burns no attempt"
+    );
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_reports"),
+        0,
+        "zero poison after the aborted pass"
+    );
+}
+
+/// A/B leg NEW: the same abort under the current [`wait_done`] (advancing
+/// clock). Even pre-fix this recovered — the +50 ms polls let the sweep
+/// expire the held lease on the queue's clock — but the recovery cost a
+/// full lease period and burned one ATTEMPT on pure contention (the
+/// pre-fix run of this test: done=9 reached, then `attempts != 0` = 1).
+/// With the fix the row is back to pending before the first poll and no
+/// attempt burns at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn upgrade_writer_busy_abort_recovers_under_the_advancing_clock_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ctx, _root, _mid, _leaf) = upgrade_ab_ctx(dir.path()).await;
+    serve_until_quiet(Arc::clone(&ctx.state)).await;
+    wait_done(&ctx, 9).await;
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_state WHERE state = 'done'"),
+        9,
+        "every kind derived every changeset"
+    );
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_state WHERE attempts != 0"),
+        0,
+        "contention burns no attempt"
+    );
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_reports"),
+        0,
+        "zero poison after the aborted pass"
+    );
 }
 
 /// Pin 3: the UNROWED window. The kinds are registered, the changesets

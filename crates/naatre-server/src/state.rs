@@ -207,6 +207,18 @@ pub struct ServerState {
     /// so pins that read right after boot can be A/B-tested against a
     /// slow backfill.
     pub derive_backfill_delay: Duration,
+    /// Test-only ONE-SHOT writer_busy injection at the derive queue's
+    /// mid-derivation write ([`crate::derive`]'s drain step): when armed to
+    /// `Some(BusyAbort::Derive(cs))`, the queue's next write FOR that
+    /// changeset fails with 503 `writer_busy` — the same error a lost
+    /// single-writer-slot race produces — and the hook disarms
+    /// ([`crate::derive::BusyAbort::DeriveThenRelease`] additionally makes
+    /// the first lease-release attempt busy, exercising the release's
+    /// retry). Never armed in production; it exists so the busy-abort lease
+    /// handling is pinnable deterministically (the real collision is a
+    /// timing race). Same aiming pattern as the test derivers' `fail_for`
+    /// handles.
+    pub derive_test_busy_abort: Arc<Mutex<Option<crate::derive::BusyAbort>>>,
 }
 
 /// Shared handle to the server state.
@@ -254,6 +266,7 @@ impl ServerState {
             derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
             derive_backfill_enabled: true,
             derive_backfill_delay: Duration::ZERO,
+            derive_test_busy_abort: Arc::new(Mutex::new(None)),
         })
     }
 

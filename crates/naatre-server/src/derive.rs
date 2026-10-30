@@ -123,6 +123,24 @@ pub const DERIVE_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 /// a whole-repo INSERT..SELECT is not.
 pub const BACKFILL_BATCH: i64 = 10_000;
 
+/// The test-only one-shot [`crate::state::ServerState::derive_test_busy_abort`]
+/// hook's injection points (see that field; never armed in production).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BusyAbort {
+    /// The next mid-derivation write for this changeset fails with 503
+    /// `writer_busy` — the lease-held abort shape.
+    Derive(Id),
+    /// [`BusyAbort::Derive`], and THEN the first attempt of the lease
+    /// release that follows is busy too (the double-collision shape: the
+    /// release's busy-retry must still land with no attempt burned). The
+    /// release shot re-arms the hook as [`BusyAbort::Release`].
+    DeriveThenRelease(Id),
+    /// The next lease-release write for this changeset is busy (normally
+    /// armed by [`BusyAbort::DeriveThenRelease`]'s transition, not by
+    /// tests directly).
+    Release(Id),
+}
+
 /// The quarantine reason for the walk budget (shared by the queue and
 /// eager paths so reports read identically wherever the cap fires).
 fn walk_budget_reason(budget: u64) -> String {
@@ -622,9 +640,13 @@ impl std::ops::AddAssign for PassReport {
 /// then drain the eligible set (oldest pending with parents done-or-poison,
 /// one at a time). A busy write slot (`writer_busy`) ends the pass early —
 /// the queue never fights a request for the single writer; the next tick
-/// resumes. A deriver PANIC propagates as an error (the lease stays held
-/// and the expiry sweep re-runs the node — that is the crash-mid-derivation
-/// path, and it is idempotent by contract).
+/// resumes. A pass that already holds a lease when the slot turns busy
+/// releases it straight back to pending first ([`drain`] →
+/// [`release_lease_after_busy`]): contention is not a derivation failure,
+/// so no attempt burns and no lease period is lost. A deriver PANIC
+/// propagates as an error (the lease stays held and the expiry sweep
+/// re-runs the node — that is the crash-mid-derivation path, and it is
+/// idempotent by contract).
 pub async fn derive_pass(state: &AppState) -> Result<PassReport, ApiError> {
     let mut report = PassReport::default();
     for kind in state.derive.kinds() {
@@ -695,6 +717,80 @@ async fn sweep_expired(
         })
 }
 
+/// Busy-write retries before a post-abort lease release gives up and
+/// leaves the lease to the expiry sweep (the backstop, now genuinely for
+/// crashed holders). The release is one tiny UPDATE and contention
+/// episodes are transaction-length, so 100 × 10 ms is far past anything
+/// real; the bound exists so a pathological writer can never spin the
+/// queue task here forever.
+const LEASE_RELEASE_BUSY_RETRIES: u32 = 100;
+
+/// Releases the pass's held lease after a mid-pass `writer_busy` abort:
+/// state → pending, lease cleared, attempts UNCHANGED. The abort is
+/// write-slot contention, not a derivation failure — the old behavior
+/// held the lease to expiry, so every collision cost a full lease period
+/// of queue latency and the expiry sweep burned an ATTEMPT on pure
+/// contention: one collision was the queue_lifecycle flake (a derived
+/// node showing attempts=1 against the attempts==0 pin), and three
+/// consecutive collisions quarantined a healthy node outright. The
+/// release write itself can lose the slot race that aborted the pass, so
+/// it busy-retries; a final give-up leaves the lease held for the expiry
+/// sweep (the idempotent re-run). `lease_expires` is the exact value this
+/// pass set at lease time — the release matches on it, so a row swept or
+/// re-leased in between is left alone.
+async fn release_lease_after_busy(
+    state: &AppState,
+    kind: &Arc<RegisteredKind>,
+    repo_id: i64,
+    cs: &Id,
+    lease_expires: i64,
+) {
+    let mut tries = 0u32;
+    loop {
+        let kind = Arc::clone(kind);
+        let cs = *cs;
+        let busy_release = Arc::clone(&state.derive_test_busy_abort);
+        match state
+            .write(move |store| {
+                // Test-only one-shot busy injection on the release itself
+                // (the `BusyAbort::Release` shot armed by
+                // `DeriveThenRelease`): the helper's own retry loop is the
+                // path under test — the second attempt must land with no
+                // attempt burned.
+                let fire = {
+                    let mut hook = busy_release
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if matches!(*hook, Some(BusyAbort::Release(id)) if id == cs) {
+                        *hook = None;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if fire {
+                    return Err(ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true));
+                }
+                db::derive_release_lease(store.conn(), kind.id, repo_id, &cs, lease_expires)
+                    .map_err(ApiError::log_internal)
+            })
+            .await
+        {
+            Ok(_) => return,
+            Err(e) if e.code() == ApiCode::WriterBusy => {
+                tries += 1;
+                if tries > LEASE_RELEASE_BUSY_RETRIES {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // Any other error is traced by `log_internal`; the expiry
+            // sweep recovers the row the same way it recovers a crash.
+            Err(_) => return,
+        }
+    }
+}
+
 /// Drains the kind's currently-eligible set: pick → lease → derive →
 /// record, until nothing is eligible or the write slot turns busy. Each
 /// node costs its own write transactions (lease; the deriver's own writes;
@@ -720,17 +816,12 @@ async fn drain(
         // Lease. A stale pick (someone else took it — impossible within one
         // process, tolerated anyway) just falls through to the next pick.
         let now = state.now_ns() as i64;
+        let lease_expires = now.saturating_add(lease_ns);
         let kind_for_lease = Arc::clone(kind);
         let leased = match state
             .write(move |store| {
-                db::derive_lease(
-                    store.conn(),
-                    kind_for_lease.id,
-                    repo_id,
-                    &cs,
-                    now.saturating_add(lease_ns),
-                )
-                .map_err(ApiError::log_internal)
+                db::derive_lease(store.conn(), kind_for_lease.id, repo_id, &cs, lease_expires)
+                    .map_err(ApiError::log_internal)
             })
             .await
         {
@@ -749,8 +840,34 @@ async fn drain(
         // and the framework's done-record is a real crash point, covered by
         // the re-run idempotency contract.
         let kind_for_derive = Arc::clone(kind);
+        let busy_abort = Arc::clone(&state.derive_test_busy_abort);
         let derived = state
             .write(move |store| {
+                // Test-only one-shot writer_busy injection (see
+                // `ServerState::derive_test_busy_abort`): the pass sees
+                // exactly what a lost write-slot race produces, lease held.
+                let fire = {
+                    let mut hook = busy_abort
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    match *hook {
+                        Some(BusyAbort::Derive(id)) if id == cs => {
+                            *hook = None;
+                            true
+                        }
+                        // The double-collision shape: arm the release shot
+                        // before aborting, so the release's FIRST attempt
+                        // loses the slot race too.
+                        Some(BusyAbort::DeriveThenRelease(id)) if id == cs => {
+                            *hook = Some(BusyAbort::Release(id));
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if fire {
+                    return Err(ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true));
+                }
                 let conn = store.conn();
                 let parents = db::changeset_graph(conn, repo_id, &cs)
                     .map_err(ApiError::log_internal)?
@@ -779,7 +896,10 @@ async fn drain(
         let outcome = match derived {
             Ok(outcome) => outcome,
             Err(e) if e.code() == ApiCode::WriterBusy => {
-                // Lease still held; the sweep re-runs the node after expiry.
+                // Contention, not a derivation failure: release the lease
+                // straight back to pending (no attempt burned) and end the
+                // pass — the next tick re-picks the node.
+                release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
                 return Ok(());
             }
             // A deriver PANIC lands here as a join error: the lease stays
@@ -847,7 +967,17 @@ async fn drain(
                     // `None` = the immediate WalkBudget quarantine; `Some`
                     // = a failed attempt that poisons only at the cap.
                     Ok(quarantined) => report.poisoned += usize::from(quarantined.unwrap_or(true)),
-                    Err(e) if e.code() == ApiCode::WriterBusy => return Ok(()),
+                    Err(e) if e.code() == ApiCode::WriterBusy => {
+                        // The real failure could not be recorded yet:
+                        // release to pending (no attempt burned) — the
+                        // next tick re-derives, re-fails, and records the
+                        // attempt then. (No direct pin: the hook aborts
+                        // only the mid-derivation write; this arm is the
+                        // same `release_lease_after_busy` call that pin
+                        // exercises, at a different write.)
+                        release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                        return Ok(());
+                    }
                     Err(e) => return Err(e),
                 };
                 continue;
@@ -876,7 +1006,16 @@ async fn drain(
                 .await
             {
                 Ok(()) => (),
-                Err(e) if e.code() == ApiCode::WriterBusy => return Ok(()),
+                Err(e) if e.code() == ApiCode::WriterBusy => {
+                    // The quarantine could not be written: release to
+                    // pending — the next tick re-derives, trips the cap
+                    // again, and quarantines then. (No direct pin: the
+                    // hook aborts only the mid-derivation write; this arm
+                    // is the same `release_lease_after_busy` call that pin
+                    // exercises, at a different write.)
+                    release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                    return Ok(());
+                }
                 Err(e) => return Err(e),
             };
             report.poisoned += 1;
@@ -884,8 +1023,8 @@ async fn drain(
         }
 
         // Record done (the second transaction — see the module doc). A busy
-        // slot stops the pass with the lease held; the sweep re-runs the
-        // node after expiry (the same idempotent re-derivation path).
+        // slot releases the lease back to pending; the next tick re-runs
+        // the (idempotent) derivation and records then.
         let kind_for_record = Arc::clone(kind);
         let recorded = match state
             .write(move |store| {
@@ -903,7 +1042,17 @@ async fn drain(
             .await
         {
             Ok(recorded) => recorded,
-            Err(e) if e.code() == ApiCode::WriterBusy => return Ok(()),
+            Err(e) if e.code() == ApiCode::WriterBusy => {
+                // The output is derived (the deriver's own writes are
+                // idempotent upserts) but not recorded: release to pending
+                // — the next tick re-derives and records, instead of the
+                // node holding a lease for a full lease period. (No direct
+                // pin: the hook aborts only the mid-derivation write; this
+                // arm is the same `release_lease_after_busy` call that pin
+                // exercises, at a different write.)
+                release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                return Ok(());
+            }
             Err(e) => return Err(e),
         };
         if recorded {

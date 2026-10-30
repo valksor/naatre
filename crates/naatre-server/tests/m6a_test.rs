@@ -40,8 +40,8 @@ use tower::ServiceExt;
 
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_server::derive::{
-    DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DeriveCtx, DeriveFailure, DeriveStatus,
-    DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
+    BusyAbort, DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DeriveCtx, DeriveFailure,
+    DeriveStatus, DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
 };
 use naatre_server::serve::{ServeConfig, serve};
 use naatre_server::state::{AppState, ServerState};
@@ -895,6 +895,204 @@ async fn lease_expiry_rederives_idempotently() {
         h.calls.lock().unwrap().len(),
         2,
         "derived twice, once per attempt"
+    );
+}
+
+/// A pass aborted by write-slot contention — the `writer_busy` try_lock
+/// failure INSIDE the pass, here the test hook's one-shot injection at the
+/// mid-derivation write — must RELEASE its lease straight back to pending
+/// WITHOUT burning an attempt: the abort is contention, not a derivation
+/// failure. Regression pin (fix6): the queue_lifecycle flake was an
+/// ATTEMPTS-ACCOUNTING failure, not a node failing to derive —
+/// `wait_queue_done(4)` had passed and all four nodes derived; the
+/// captured `left: 3, right: 4` was the `attempts = 0` COUNT assertion,
+/// one node having burned an attempt via lease expiry after a busy
+/// collision (the old behavior held the lease to expiry, so the sweep
+/// burned an attempt on pure contention and each collision cost a full
+/// lease period). Here the chain completes in two passes — one lost to
+/// the abort, one re-picking the released node — never a lease period.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn writer_busy_abort_releases_the_lease_without_burning_an_attempt() {
+    let (deriver, h) = counter(KIND, false, 0, false);
+    let f = fixture_with(|state| {
+        state.derive_queue_enabled = false; // derive_pass driven directly
+        state.register_deriver(Arc::new(deriver)).unwrap();
+    });
+
+    let r1 = create_cs(&f, None, "root", 1).await;
+    let c1 = create_cs(&f, Some(&r1), "c1", 2).await;
+    let c2 = create_cs(&f, Some(&c1), "c2", 3).await;
+
+    // Arm the one-shot hook at the root's mid-derivation write: the pass
+    // leases the root, then loses the write slot exactly as it would to a
+    // colliding API write.
+    *f.t.state.derive_test_busy_abort.lock().unwrap() = Some(BusyAbort::Derive(id_of_hex(&r1)));
+
+    let report = derive_pass(&f.t.state).await.expect("busy pass still Ok");
+    assert_eq!(report.derived, 0, "the abort ended the pass early");
+    assert_eq!(
+        st(&f, &r1).await,
+        Some(DeriveStatus::Pending),
+        "the lease went straight back to pending"
+    );
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM derive_state WHERE lease_expires_ns IS NOT NULL"),
+        0,
+        "no lease left held"
+    );
+    assert_eq!(
+        f.t.attempts_of(id_of_hex(&r1)),
+        0,
+        "contention burns no attempt"
+    );
+
+    // The next tick re-picks the released node and the whole chain
+    // completes — two passes total, no lease period burned.
+    let report = derive_pass(&f.t.state).await.expect("recovery pass");
+    assert_eq!(report.derived, 3, "the whole chain derived");
+    assert_eq!(st(&f, &r1).await, Some(DeriveStatus::Done(count_out(1))));
+    assert_eq!(st(&f, &c1).await, Some(DeriveStatus::Done(count_out(2))));
+    assert_eq!(st(&f, &c2).await, Some(DeriveStatus::Done(count_out(3))));
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM derive_state WHERE attempts = 0"),
+        3,
+        "no node burned an attempt"
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM derive_reports"), 0);
+    assert_eq!(
+        h.calls.lock().unwrap().len(),
+        3,
+        "the aborted write never ran the deriver"
+    );
+}
+
+/// The contention/real-failure contrast, same pass machinery: three
+/// CONSECUTIVE busy aborts must NOT poison the node — the release burns no
+/// attempt, so contention however repeated can never reach
+/// [`DERIVE_MAX_ATTEMPTS`], and it derives on the next tick — while three
+/// REAL derive errors still DO quarantine at the cap (attempts 3 → poison
+/// + report; pre-fix each abort held the lease to expiry and the sweep
+/// burned one attempt, so three collisions quarantined a healthy node
+/// outright). The contrast leg needs a still-pending node — the busy leg
+/// leaves its node DONE, and done is terminal — so it runs on a fresh
+/// child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn three_writer_busy_aborts_never_poison_but_three_real_errors_do() {
+    let (deriver, h) = counter(KIND, false, 0, false);
+    let f = fixture_with(|state| {
+        state.derive_queue_enabled = false; // derive_pass driven directly
+        state.register_deriver(Arc::new(deriver)).unwrap();
+    });
+
+    let r1 = create_cs(&f, None, "root", 1).await;
+
+    // Three passes, each aborted at the root's mid-derivation write (the
+    // hook re-arms per pass — one shot per arm).
+    for _ in 0..3 {
+        *f.t.state.derive_test_busy_abort.lock().unwrap() = Some(BusyAbort::Derive(id_of_hex(&r1)));
+        let report = derive_pass(&f.t.state).await.expect("busy pass still Ok");
+        assert_eq!(report.derived, 0, "the abort ended the pass early");
+        assert_eq!(
+            st(&f, &r1).await,
+            Some(DeriveStatus::Pending),
+            "released straight back to pending, every time"
+        );
+    }
+    assert_eq!(
+        f.t.attempts_of(id_of_hex(&r1)),
+        0,
+        "contention burns no attempt, even three times"
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM derive_reports"), 0);
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM derive_state WHERE state = 'poison'"),
+        0
+    );
+
+    // Contention never touched it: the next tick derives normally.
+    let report = derive_pass(&f.t.state).await.expect("recovery pass");
+    assert_eq!(report.derived, 1);
+    assert_eq!(st(&f, &r1).await, Some(DeriveStatus::Done(count_out(1))));
+    assert_eq!(f.t.attempts_of(id_of_hex(&r1)), 0);
+    assert_eq!(
+        h.calls.lock().unwrap().len(),
+        1,
+        "only the real pass ran the deriver"
+    );
+
+    // The contrast: a REAL derive failure on a still-pending node — one
+    // pass burns all three attempts (it stays the oldest eligible) and
+    // quarantines with a report.
+    let c1 = create_cs(&f, Some(&r1), "child", 2).await;
+    *h.fail_for.lock().unwrap() = Some(id_of_hex(&c1));
+    let report = derive_pass(&f.t.state).await.expect("failing pass");
+    assert_eq!(report.derived, 0);
+    assert_eq!(report.poisoned, 1, "three real errors quarantine the node");
+    assert_eq!(st(&f, &c1).await, Some(DeriveStatus::Poison));
+    assert_eq!(f.t.attempts_of(id_of_hex(&c1)), DERIVE_MAX_ATTEMPTS);
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM derive_reports"), 1);
+}
+
+/// The release write's OWN busy path: the pass aborts at the
+/// mid-derivation write AND the first release attempt loses the slot race
+/// too ([`BusyAbort::DeriveThenRelease`]) — the release helper's
+/// busy-retry takes the second attempt and the lease still lands back on
+/// pending with no attempt burned, nothing for the expiry sweep to touch.
+/// (Residual, stated for the record: a writer holding the slot
+/// CONTINUOUSLY past `LEASE_RELEASE_BUSY_RETRIES` × 10 ms makes the
+/// release give up — the expiry sweep then burns one attempt per lease
+/// period, so three full lease periods of uninterrupted slot loss to
+/// poison a node. The give-up arm itself is not pinned: injecting 100
+/// consecutive losses needs a slot holder outliving the whole retry
+/// window.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn busy_first_release_attempt_retries_and_still_burns_no_attempt() {
+    let (deriver, h) = counter(KIND, false, 0, false);
+    let f = fixture_with(|state| {
+        state.derive_queue_enabled = false; // derive_pass driven directly
+        state.register_deriver(Arc::new(deriver)).unwrap();
+    });
+
+    let r1 = create_cs(&f, None, "root", 1).await;
+
+    // Arm the double collision: the root's mid-derivation write aborts,
+    // and the release's first attempt is busy right behind it.
+    *f.t.state.derive_test_busy_abort.lock().unwrap() =
+        Some(BusyAbort::DeriveThenRelease(id_of_hex(&r1)));
+
+    let report = derive_pass(&f.t.state)
+        .await
+        .expect("double-busy pass still Ok");
+    assert_eq!(report.derived, 0, "the abort ended the pass early");
+    assert_eq!(
+        st(&f, &r1).await,
+        Some(DeriveStatus::Pending),
+        "the retried release still put the row back to pending"
+    );
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM derive_state WHERE lease_expires_ns IS NOT NULL"),
+        0,
+        "no lease left held"
+    );
+    assert_eq!(
+        f.t.attempts_of(id_of_hex(&r1)),
+        0,
+        "two collisions, still no attempt burned"
+    );
+    assert!(
+        f.t.state.derive_test_busy_abort.lock().unwrap().is_none(),
+        "both one-shot shots fired"
+    );
+
+    // The next tick derives it normally.
+    let report = derive_pass(&f.t.state).await.expect("recovery pass");
+    assert_eq!(report.derived, 1);
+    assert_eq!(st(&f, &r1).await, Some(DeriveStatus::Done(count_out(1))));
+    assert_eq!(f.t.attempts_of(id_of_hex(&r1)), 0);
+    assert_eq!(
+        h.calls.lock().unwrap().len(),
+        1,
+        "neither aborted write ran the deriver"
     );
 }
 

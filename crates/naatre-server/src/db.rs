@@ -1397,6 +1397,32 @@ pub fn derive_lease(
     Ok(n == 1)
 }
 
+/// Releases a held lease straight back to 'pending' after the pass aborted
+/// on write-slot contention (`writer_busy`): the abort is not a derivation
+/// failure, so `attempts` is untouched and the next tick re-picks the node
+/// instead of the expiry sweep waiting out the full lease period (every
+/// abort used to cost one, so repeated collisions burned attempts — and
+/// three of them quarantined a healthy node). Guarded on state='deriving'
+/// AND on `lease_expires_ns` matching the exact value THIS pass set at
+/// lease time: a row already swept (lease cleared, attempt burned by the
+/// sweep) or somehow re-leased by another holder is left alone. Returns
+/// `false` when no matching row existed.
+pub fn derive_release_lease(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    lease_expires_ns: i64,
+) -> rusqlite::Result<bool> {
+    let n = conn.execute(
+        "UPDATE derive_state SET state = 'pending', lease_expires_ns = NULL \
+         WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 \
+           AND state = 'deriving' AND lease_expires_ns = ?4",
+        params![kind_id, repo_id, cs.0.as_slice(), lease_expires_ns],
+    )?;
+    Ok(n == 1)
+}
+
 /// One parent's contribution to a child derivation, in the parents' `ord`
 /// order: the output the child receives (the empty marker for a poisoned,
 /// pending, or row-less parent), whether the parent row is ITSELF poison,
