@@ -242,6 +242,34 @@ fn major_of(version: &str) -> Option<u64> {
     version.split('.').next()?.parse().ok()
 }
 
+/// Epoch-ns as ISO-8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`); sub-second truncated.
+fn iso8601_utc(ns: u64) -> String {
+    let secs = ns / 1_000_000_000;
+    let rem = secs % 86_400;
+    let (y, m, d) = civil_from_days((secs / 86_400) as i64);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Days since 1970-01-01 → (year, month, day) in the proleptic Gregorian
+/// calendar (Howard Hinnant's civil_from_days; no date dependency).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
 /// Percent-encodes a single URL path segment (repo names, ref names).
 pub fn uri_segment(segment: &str) -> String {
     let mut out = String::new();
@@ -272,7 +300,7 @@ pub fn repo_create(name: &str) -> i32 {
 /// `naatre repo stats <name>` (admin).
 pub fn repo_stats(name: &str) -> i32 {
     let client = Client::from_env();
-    match client.get_json(&format!("/v1/repos/{name}/stats"), &[]) {
+    match client.get_json(&format!("/v1/repos/{}/stats", uri_segment(name)), &[]) {
         Ok(value) => {
             println!("changesets: {}", value["changesets"]);
             println!("objects: {}", value["objects"]);
@@ -284,7 +312,8 @@ pub fn repo_stats(name: &str) -> i32 {
     }
 }
 
-/// `naatre token list` (HTTP, admin).
+/// `naatre token list` (HTTP, admin). Expiry renders as ISO-8601 UTC (or
+/// "never"), not raw epoch ns.
 pub fn token_list() -> i32 {
     let client = Client::from_env();
     match client.get_json("/v1/tokens", &[]) {
@@ -293,7 +322,7 @@ pub fn token_list() -> i32 {
             for t in value["tokens"].as_array().map_or(&[][..], Vec::as_slice) {
                 let expires = t["expires_ns"]
                     .as_u64()
-                    .map_or("never".to_string(), |ns| ns.to_string());
+                    .map_or("never".to_string(), iso8601_utc);
                 println!(
                     "{:<6} {:<16} {:<8} {}",
                     t["id"],
@@ -325,8 +354,10 @@ pub fn token_create(
     }
     match client.post_json("/v1/tokens", &body) {
         Ok((_, value)) => {
-            // Printed exactly once; the server stores only the hash.
+            // Printed exactly once; the server stores only the hash. The
+            // numeric id is what `token revoke` takes.
             println!("token: {}", value["token"].as_str().unwrap_or("?"));
+            println!("token id: {}", value["id"]);
             0
         }
         Err(e) => report(&e),

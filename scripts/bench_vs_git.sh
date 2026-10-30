@@ -2,7 +2,9 @@
 # A/B benchmark: naatre vs git on the same machine (plan M4b: "A/B vs git in
 # docs/bench.md — reported, not gated").
 #
-# Operations (each timed RUNS times, median reported):
+# Operations (3 runs each; every run times the WHOLE operation — the side's
+# commands are summed into one duration — and the median of the run sums is
+# reported):
 #   sparse clone of one directory:
 #     git:  clone --depth 1 --filter=blob:none --sparse  +  sparse-checkout set <dir>
 #     naatre: clone --sparse <dir>   (the one-time `naatre import` is EXCLUDED)
@@ -81,10 +83,8 @@ fi
 
 # ---- timing helpers ----------------------------------------------------------
 
-# timed <timesfile> <cmd…>: run the command, append its duration in seconds.
+# timed <cmd…>: run the command, print its duration in seconds.
 timed() {
-    local out="$1"
-    shift
     python3 -c '
 import subprocess, sys, time
 t = time.monotonic()
@@ -93,7 +93,16 @@ d = time.monotonic() - t
 if r.returncode != 0:
     sys.stderr.write(f"bench: command failed ({r.returncode}): {sys.argv[1:]}\n")
     sys.exit(1)
-print(f"{d:.4f}")' "$@" >> "$out"
+print(f"{d:.4f}")' "$@"
+}
+
+# append_sum <timesfile> <d1> <d2>: append one run's whole-operation duration
+# (the two commands of the run, summed) to <timesfile>.
+append_sum() {
+    python3 -c '
+import sys
+with open(sys.argv[1], "a") as f:
+    f.write(f"{float(sys.argv[2]) + float(sys.argv[3]):.4f}\n")' "$@"
 }
 
 # median <timesfile>
@@ -104,12 +113,12 @@ xs = sorted(float(x) for x in open(sys.argv[1]) if x.strip())
 print(f"{xs[len(xs)//2]:.4f}")' "$1"
 }
 
-# timed_in <dir> <timesfile> <cmd…>: run in <dir> (the cd itself is outside
-# the timed window), appending the duration in seconds.
+# timed_in <dir> <cmd…>: run in <dir> (the cd itself is outside the timed
+# window), printing the duration in seconds.
 timed_in() {
-    local dir="$1" out="$2"
-    shift 2
-    (cd "$dir" && timed "$out" "$@")
+    local dir="$1"
+    shift
+    (cd "$dir" && timed "$@")
 }
 
 # verdict <git-seconds> <naatre-seconds> — printed honestly, no cherry-picking.
@@ -132,9 +141,10 @@ GIT_T="$work/git-times"
 : > "$GIT_T"
 for _ in $(seq 1 "$RUNS"); do
     rm -rf "$work/git-clone"
-    timed "$GIT_T" git clone -q --depth 1 --filter=blob:none --sparse \
-        "file://$GIT_SRC" "$work/git-clone"
-    timed "$GIT_T" git -C "$work/git-clone" sparse-checkout set "$SPARSE_DIR"
+    t1="$(timed git clone -q --depth 1 --filter=blob:none --sparse \
+        "file://$GIT_SRC" "$work/git-clone")"
+    t2="$(timed git -C "$work/git-clone" sparse-checkout set "$SPARSE_DIR")"
+    append_sum "$GIT_T" "$t1" "$t2"
 done
 
 # ---- (b) naatre: import (excluded) + serve + sparse clone --------------------
@@ -161,10 +171,11 @@ NAATRE_T="$work/naatre-times"
 : > "$NAATRE_T"
 for _ in $(seq 1 "$RUNS"); do
     rm -rf "$work/naatre-clone"
-    timed "$NAATRE_T" env \
+    # One command per run: the run duration IS the operation duration.
+    timed env \
         NAATRE_URL="http://127.0.0.1:$PORT" NAATRE_TOKEN="$TOKEN" \
         "$BIN" clone "http://127.0.0.1:$PORT/bench" --sparse "$SPARSE_DIR" \
-        --into "$work/naatre-clone"
+        --into "$work/naatre-clone" >> "$NAATRE_T"
 done
 
 # ---- (c) one-line edit: commit (+ land) --------------------------------------
@@ -177,22 +188,24 @@ GIT_C="$work/git-commit-times"
 : > "$GIT_C"
 for i in $(seq 1 "$RUNS"); do
     echo "bench edit $i" >> "$work/git-clone/$EDIT_FILE"
-    timed "$GIT_C" git -C "$work/git-clone" add -A
-    timed "$GIT_C" git -C "$work/git-clone" \
+    t1="$(timed git -C "$work/git-clone" add -A)"
+    t2="$(timed git -C "$work/git-clone" \
         -c user.name="naatre bench" -c user.email=bench@naatre.local \
-        commit -q -m "bench $i"
+        commit -q -m "bench $i")"
+    append_sum "$GIT_C" "$t1" "$t2"
 done
 
 NAATRE_C="$work/naatre-commit-times"
 : > "$NAATRE_C"
 for i in $(seq 1 "$RUNS"); do
     echo "bench edit $i" >> "$work/naatre-clone/$EDIT_FILE"
-    timed_in "$work/naatre-clone" "$NAATRE_C" env \
+    t1="$(timed_in "$work/naatre-clone" env \
         NAATRE_URL="http://127.0.0.1:$PORT" NAATRE_TOKEN="$TOKEN" \
-        "$BIN" commit -m "bench $i"
-    timed_in "$work/naatre-clone" "$NAATRE_C" env \
+        "$BIN" commit -m "bench $i")"
+    t2="$(timed_in "$work/naatre-clone" env \
         NAATRE_URL="http://127.0.0.1:$PORT" NAATRE_TOKEN="$TOKEN" \
-        "$BIN" land --key "bench-$i"
+        "$BIN" land --key "bench-$i")"
+    append_sum "$NAATRE_C" "$t1" "$t2"
 done
 
 # ---- report ------------------------------------------------------------------
@@ -204,7 +217,7 @@ COMMIT_N="$(median "$NAATRE_C")"
 
 echo
 echo "- subject: ${1:-synthetic ($COMMITS commits x 3 files x ~$LINES lines)}; sparse prefix: $SPARSE_DIR"
-echo "- timings: median of $RUNS runs, dev build, seconds"
+echo "- timings: median of $RUNS runs, each run timing the whole operation, dev build, seconds"
 echo
 echo "| operation | git (s) | naatre (s) |"
 echo "|---|---|---|"

@@ -338,17 +338,20 @@ pub fn nfc(s: &str) -> String {
 }
 
 /// The default commit author: `NAATRE_AUTHOR`, else `user@host` from the
-/// environment, else the pinned fallback string.
+/// environment, else the pinned fallback string. A derived identity prints
+/// one stderr notice (git-style); the commit still succeeds.
 pub fn default_author() -> String {
     if let Some(a) = env_var("NAATRE_AUTHOR") {
         return a;
     }
     let user = env_var("USER").or_else(|| env_var("LOGNAME"));
     let host = env_var("HOSTNAME").or_else(|| env_var("HOST"));
-    match (user, host) {
+    let author = match (user, host) {
         (Some(u), Some(h)) => format!("{u}@{h}"),
         _ => "unknown <unknown@naatre.local>".to_string(),
-    }
+    };
+    eprintln!("identity not configured; using {author} — set NAATRE_AUTHOR to override");
+    author
 }
 
 /// System clock in nanoseconds since the epoch (commit timestamps).

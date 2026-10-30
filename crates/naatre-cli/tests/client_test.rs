@@ -733,7 +733,8 @@ fn doctor_rebuilds_a_broken_index() {
     );
     let out = run_binary(&server, &wc_dir, &["doctor"]);
     assert_ne!(out.status.code(), Some(0));
-    assert!(stdout_of(&out).contains("corrupt"), "{}", stdout_of(&out));
+    // A corrupt index is an error path: reported on stderr.
+    assert!(stderr_of(&out).contains("corrupt"), "{}", stdout_of(&out));
     assert_eq!(verbs::doctor::run(&wc_dir, true, &net(&server)), 0);
     let report = verbs::status::report(&wc_dir).unwrap();
     assert!(report.is_clean(), "status clean after rebuild: {report:?}");
@@ -1259,15 +1260,12 @@ fn report_json_shape_tracks_classification() {
 
 /// Test 9 — TWO-CLIENT SYNC over the REAL land route: A clones, commits,
 /// lands (FF); B — a working copy cloned from the same base — syncs up to
-/// A's content cleanly, and B's local edit to a NON-colliding file survives
-/// the sync (--force path: only incoming-colliding files are discarded).
-/// A colliding edit refuses with `dirty_working_copy` (exit 2) naming the
-/// file; --force discards exactly that edit and completes.
-///
-/// Note on the shipped M3 sync gate (sync.rs refuses ANY dirty tracked
-/// file, not only incoming-colliding ones): a non-colliding dirty sync
-/// therefore refuses first and needs --force to proceed — the edit itself
-/// still survives untouched. This test pins that behavior as shipped.
+/// A's content cleanly. B's local edit to a NON-colliding file (a path the
+/// incoming set does not touch) does NOT refuse the sync: it succeeds, the
+/// head advances, the edit survives untouched, and status afterwards still
+/// lists it as modified. A colliding edit — a path the incoming set DOES
+/// touch — refuses with `dirty_working_copy` (exit 2) naming the file;
+/// --force discards exactly that edit and completes.
 #[test]
 fn two_client_sync_after_a_real_land() {
     let server = start_server();
@@ -1352,28 +1350,28 @@ fn two_client_sync_after_a_real_land() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
     let out = run_binary(&server, &wc_a, &["land", "--key", "duo-a2"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let (_, refs2) = api(&server, "GET", "/v1/repos/duo/refs/main", None);
+    let landed2 = refs2["target"].as_str().unwrap().to_string();
 
-    // The dirty gate refuses (exit 2) and preserves everything — even the
-    // non-colliding edit (shipped gate: any dirty tracked file refuses).
+    // The non-colliding edit no longer refuses: B's sync SUCCEEDS, the head
+    // advances to A's second land, and the edit survives untouched —
+    // status afterwards still lists it as modified.
     let out = run_binary(&server, &wc_b, &["sync"]);
-    assert_eq!(out.status.code(), Some(2), "dirty sync refuses: {out:?}");
-    let stderr = stderr_of(&out);
-    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
-    assert!(
-        stderr.contains("b.txt"),
-        "the dirty list is named: {stderr:?}"
-    );
-    assert_eq!(std::fs::read(wc_b.join("b.txt")).unwrap(), b2);
-
-    // --force proceeds and the non-colliding edit SURVIVES the sync.
-    let out = run_binary(&server, &wc_b, &["sync", "--force"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
-    assert_eq!(std::fs::read(wc_b.join("a.txt")).unwrap(), a3);
+    assert_eq!(
+        std::fs::read(wc_b.join("a.txt")).unwrap(),
+        a3,
+        "B advanced to A's second landed content"
+    );
     assert_eq!(
         std::fs::read(wc_b.join("b.txt")).unwrap(),
         b2,
-        "B's non-colliding edit survives"
+        "B's non-colliding edit survives the sync"
     );
+    let report = verbs::status::report(&wc_b).unwrap();
+    assert_eq!(report.modified, vec!["b.txt".to_string()], "{report:?}");
+    let wc = naatre_cli::wc::Wc::open(&wc_b).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, landed2, "B's head advanced");
 
     // Scenario 2: B edits the SAME file A landed → refusal names it;
     // --force discards exactly that edit and completes.
@@ -1423,4 +1421,488 @@ fn two_client_sync_after_a_real_land() {
     );
     let report = verbs::status::report(&wc_b).unwrap();
     assert_eq!(report.modified, vec!["b.txt".to_string()], "{report:?}");
+}
+
+/// Test 10 — SYNC DEL HOLE: an untracked file at an incoming DELETION path
+/// must refuse (exit 2, `dirty_working_copy`, the path listed) and survive
+/// on disk; --force discards exactly it. An incoming del requires the path
+/// in the head tree, so the untracked state here is reached the way the
+/// public verbs leave it: `doctor --rebuild` rebuilds the index from disk
+/// only, so the locally-removed file loses its index row and the new file
+/// the user writes at that path is untracked (the same state a lost index
+/// file leaves). Full checkout = empty sparse list, so the del loop applies.
+#[test]
+fn sync_refuses_untracked_file_at_an_incoming_deletion() {
+    let server = start_server();
+    create_repo(&server, "delhole");
+    let k = b"k\n";
+    let p = b"server content\n";
+    put_blob(&server, "delhole", k);
+    put_blob(&server, "delhole", p);
+    let c1 = changeset(
+        &server,
+        "delhole",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "delhole", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/delhole", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // Server-side deletion on top of the client's head; main moves by seed.
+    let c2 = changeset(
+        &server,
+        "delhole",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("del", "gone/p.txt", b"")],
+        "c2 deletes p",
+    );
+    seed_main(&server, "delhole", c2["id"].as_str().unwrap());
+
+    // The user's own new file at the path, untracked: drop the old row the
+    // documented way (rebuild covers exactly what exists on disk), then
+    // write fresh content.
+    std::fs::remove_file(wc_dir.join("gone/p.txt")).unwrap();
+    assert_eq!(verbs::doctor::run(&wc_dir, true, &net(&server)), 0);
+    let mine = b"my own untracked work\n";
+    write_file(&wc_dir, "gone/p.txt", mine);
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(
+        report.untracked,
+        vec!["gone/p.txt".to_string()],
+        "test setup: the file is untracked: {report:?}"
+    );
+
+    // Non-force sync must refuse, name the path, and preserve the file.
+    let out = run_binary(&server, &wc_dir, &["sync"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "untracked file at an incoming del path refuses: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/p.txt"),
+        "the collider is listed: {stderr:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        mine,
+        "the untracked file survives the refusal"
+    );
+
+    // --force discards exactly it and completes the sync.
+    assert_eq!(verbs::sync::run(&wc_dir, true, &net(&server)), 0);
+    assert!(
+        !wc_dir.join("gone/p.txt").exists(),
+        "--force removes the colliding untracked file"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+}
+
+/// Binary clone usage: a URL whose scheme is not http (https included) is a
+/// usage error (exit 3) naming the scheme and stating the client speaks
+/// plain HTTP only — never silently downgraded.
+#[test]
+fn binary_clone_rejects_non_http_schemes() {
+    let dir = tempfile::tempdir().unwrap();
+    for url in ["https://example.test/repo", "ftp://example.test/repo"] {
+        let out = run_binary_no_env(dir.path(), &["clone", url]);
+        assert_eq!(out.status.code(), Some(3), "{url}: {out:?}");
+        let stderr = stderr_of(&out);
+        assert!(stderr.contains("plain HTTP"), "{url}: {stderr:?}");
+        let scheme = url.split(':').next().unwrap();
+        assert!(stderr.contains(scheme), "{url}: {stderr:?}");
+    }
+}
+
+/// Binary usage errors: clap flag/argument mistakes exit 3 (never 2 — that
+/// is the conflict class), with clap's message on stderr; `sync --help`
+/// still exits 0 and carries the relaxed-gate wording.
+#[test]
+fn binary_clap_usage_errors_exit_3() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_binary_no_env(dir.path(), &["sync", "--bogus"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(stderr_of(&out).contains("--bogus"), "{:?}", stderr_of(&out));
+    let out = run_binary_no_env(dir.path(), &["commit"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        stderr_of(&out).contains("--message"),
+        "{:?}",
+        stderr_of(&out)
+    );
+    let out = run_binary_no_env(dir.path(), &["sync", "--help"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains("collide"),
+        "help names the relaxed gate: {:?}",
+        stdout_of(&out)
+    );
+}
+
+/// Commit without NAATRE_AUTHOR prints the derived-identity notice on
+/// stderr and still succeeds; an explicit --author prints no notice.
+#[test]
+fn commit_without_author_prints_the_identity_notice() {
+    let server = start_server();
+    create_repo(&server, "author");
+    let v1 = b"v1\n";
+    put_blob(&server, "author", v1);
+    let c1 = changeset(
+        &server,
+        "author",
+        &[],
+        vec![change("add", "f.txt", v1)],
+        "c1",
+    );
+    seed_main(&server, "author", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/author", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // run_binary strips NAATRE_AUTHOR: the fallback fires.
+    write_file(&wc_dir, "f.txt", b"v2\n");
+    let out = run_binary(&server, &wc_dir, &["commit", "-m", "fallback author"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("identity not configured"), "{stderr:?}");
+    assert!(stderr.contains("set NAATRE_AUTHOR"), "{stderr:?}");
+
+    write_file(&wc_dir, "f.txt", b"v3\n");
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["commit", "-m", "explicit", "--author", "a <a@naatre.local>"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(
+        !stderr_of(&out).contains("identity not configured"),
+        "{:?}",
+        stderr_of(&out)
+    );
+}
+
+/// sparse add/remove honor --server/--token: they beat a poisoned config
+/// (flags > env > config.toml), like every other server-talking verb.
+#[test]
+fn binary_sparse_flags_beat_a_poisoned_config() {
+    let server = start_server();
+    create_repo(&server, "sflag");
+    let s = b"s\n";
+    let d = b"d\n";
+    put_blob(&server, "sflag", s);
+    put_blob(&server, "sflag", d);
+    let c1 = changeset(
+        &server,
+        "sflag",
+        &[],
+        vec![
+            change("add", "keep/k.txt", s),
+            change("add", "drop/x.txt", d),
+        ],
+        "c1",
+    );
+    seed_main(&server, "sflag", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/sflag", server.base),
+            &["keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // Point the config at a dead port; without flags the verb must fail.
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    let mut config = wc.load_config().unwrap();
+    config.server_url = "http://127.0.0.1:9".into();
+    wc.save_config(&config).unwrap();
+    let out = run_binary_no_env(&wc_dir, &["sparse", "add", "drop"]);
+    assert_ne!(out.status.code(), Some(0), "dead config must fail: {out:?}");
+
+    // With the flags the same command succeeds — and remove takes them too.
+    let out = run_binary_no_env(
+        &wc_dir,
+        &[
+            "sparse",
+            "add",
+            "drop",
+            "--server",
+            &server.base,
+            "--token",
+            &server.token,
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(wc_dir.join("drop/x.txt").exists());
+    let out = run_binary_no_env(
+        &wc_dir,
+        &[
+            "sparse",
+            "remove",
+            "keep",
+            "--server",
+            &server.base,
+            "--token",
+            &server.token,
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(!wc_dir.join("keep").exists());
+}
+
+/// Doctor's error path (no working copy) prints to stderr, not stdout.
+#[test]
+fn binary_doctor_errors_go_to_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_binary_no_env(dir.path(), &["doctor"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        stderr_of(&out).contains("not a naatre working copy"),
+        "{:?}",
+        stderr_of(&out)
+    );
+    assert!(
+        stdout_of(&out).is_empty(),
+        "errors are not stdout: {:?}",
+        stdout_of(&out)
+    );
+}
+
+/// Binary admin-HTTP family: `token create` prints the id revoke needs and
+/// `token list` renders expiry as ISO-8601 (or "never"); `repo stats` works.
+#[test]
+fn binary_admin_http_family() {
+    let server = start_server();
+    create_repo(&server, "adm");
+    let dir = server._dir.path().join("anywhere");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let out = run_binary(
+        &server,
+        &dir,
+        &["token", "create", "alice", "--role", "reader"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains("token: ntk_"), "{stdout:?}");
+    assert!(stdout.contains("token id:"), "{stdout:?}");
+
+    let out = run_binary(
+        &server,
+        &dir,
+        &[
+            "token",
+            "create",
+            "bob",
+            "--role",
+            "reader",
+            "--ttl-days",
+            "30",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+
+    let out = run_binary(&server, &dir, &["token", "list"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains("never"), "admin never expires: {stdout:?}");
+    assert!(
+        stdout.split_whitespace().any(|f| f.len() == 20
+            && f.as_bytes()[4] == b'-'
+            && f.as_bytes()[7] == b'-'
+            && f.as_bytes()[10] == b'T'
+            && f.as_bytes()[13] == b':'
+            && f.as_bytes()[16] == b':'
+            && f.as_bytes()[19] == b'Z'),
+        "an ISO-8601 expiry is listed: {stdout:?}"
+    );
+
+    let out = run_binary(&server, &dir, &["repo", "stats", "adm"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains("changesets:"),
+        "{:?}",
+        stdout_of(&out)
+    );
+}
+
+/// Re-landing a settled key with a different payload: exit 2 (conflict
+/// class) and the details — settled head + land-status pointer — printed.
+#[test]
+fn land_settled_key_prints_details_and_exits_2() {
+    let server = start_server();
+    create_repo(&server, "settled");
+    let v1 = b"v1\n";
+    put_blob(&server, "settled", v1);
+    let c1 = changeset(
+        &server,
+        "settled",
+        &[],
+        vec![change("add", "f.txt", v1)],
+        "c1",
+    );
+    seed_main(&server, "settled", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/settled", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // First land with the key settles it.
+    write_file(&wc_dir, "f.txt", b"v2\n");
+    let out = run_binary(&server, &wc_dir, &["commit", "-m", "one"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let out = run_binary(&server, &wc_dir, &["land", "--key", "settled-1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+
+    // Same key, new head → idempotency_key_settled (409, conflict class).
+    write_file(&wc_dir, "f.txt", b"v3\n");
+    let out = run_binary(&server, &wc_dir, &["commit", "-m", "two"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let out = run_binary(&server, &wc_dir, &["land", "--key", "settled-1"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("idempotency_key_settled"), "{stderr:?}");
+    assert!(stderr.contains("settled head:"), "{stderr:?}");
+    assert!(
+        stderr.contains("/v1/repos/settled/land/settled-1"),
+        "land-status pointer printed: {stderr:?}"
+    );
+}
+
+/// Test 11 — DELETION GATE ARMS, end to end (qa-B1): every dirty-tracked ×
+/// incoming-kind pair refuses — locally-modified vs incoming mod AND vs
+/// incoming del (the module doc's own callout), locally-deleted vs incoming
+/// mod AND vs incoming del (the fixed gate's chosen behavior: refuse) — each
+/// path listed, nothing on disk touched by the refusal. A clean file with an
+/// incoming del is NOT dirty (no refusal of unrelated work). --force then
+/// applies exactly the incoming set: edits discarded, deletions applied in
+/// both directions, and the checkout ends clean.
+#[test]
+fn sync_gate_refuses_deletion_collisions_and_force_applies_them() {
+    let server = start_server();
+    create_repo(&server, "delgate");
+    let files: [(&str, &[u8]); 5] = [
+        ("d.txt", b"d1\n"),   // clean; incoming del → applies (no refuse)
+        ("dd.txt", b"dd1\n"), // locally deleted; incoming del → refuse
+        ("l.txt", b"l1\n"),   // locally modified; incoming del → refuse
+        ("m.txt", b"m1\n"),   // locally modified; incoming mod → refuse
+        ("x.txt", b"x1\n"),   // locally deleted; incoming mod → refuse
+    ];
+    let mut changes = Vec::new();
+    for (path, data) in &files {
+        put_blob(&server, "delgate", data);
+        changes.push(change("add", path, data));
+    }
+    let c1 = changeset(&server, "delgate", &[], changes, "c1");
+    seed_main(&server, "delgate", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/delgate", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // Incoming: mod m.txt + x.txt; del d.txt + l.txt + dd.txt.
+    let m2 = b"m2 (server)\n";
+    let x2 = b"x2 (server)\n";
+    put_blob(&server, "delgate", m2);
+    put_blob(&server, "delgate", x2);
+    let c2 = changeset(
+        &server,
+        "delgate",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![
+            change("del", "d.txt", b""),
+            change("del", "dd.txt", b""),
+            change("del", "l.txt", b""),
+            change("mod", "m.txt", m2),
+            change("mod", "x.txt", x2),
+        ],
+        "c2",
+    );
+    seed_main(&server, "delgate", c2["id"].as_str().unwrap());
+
+    // Local: edit l.txt + m.txt; delete dd.txt + x.txt.
+    let mine_l = b"l local work\n";
+    let mine_m = b"m local work\n";
+    write_file(&wc_dir, "l.txt", mine_l);
+    write_file(&wc_dir, "m.txt", mine_m);
+    std::fs::remove_file(wc_dir.join("dd.txt")).unwrap();
+    std::fs::remove_file(wc_dir.join("x.txt")).unwrap();
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(
+        report.modified,
+        vec!["l.txt".to_string(), "m.txt".to_string()]
+    );
+    assert_eq!(
+        report.deleted,
+        vec!["dd.txt".to_string(), "x.txt".to_string()]
+    );
+
+    // Every colliding path refuses; the clean d.txt is not listed.
+    let out = run_binary(&server, &wc_dir, &["sync"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    for path in ["dd.txt", "l.txt", "m.txt", "x.txt"] {
+        assert!(stderr.contains(path), "{path} listed: {stderr:?}");
+    }
+    assert_eq!(std::fs::read(wc_dir.join("l.txt")).unwrap(), mine_l);
+    assert_eq!(std::fs::read(wc_dir.join("m.txt")).unwrap(), mine_m);
+    assert!(
+        wc_dir.join("d.txt").exists(),
+        "refusal preserves everything"
+    );
+
+    // --force applies the incoming set exactly; local colliders are gone.
+    assert_eq!(verbs::sync::run(&wc_dir, true, &net(&server)), 0);
+    assert_eq!(std::fs::read(wc_dir.join("m.txt")).unwrap(), m2);
+    assert_eq!(std::fs::read(wc_dir.join("x.txt")).unwrap(), x2);
+    assert!(
+        !wc_dir.join("d.txt").exists()
+            && !wc_dir.join("dd.txt").exists()
+            && !wc_dir.join("l.txt").exists(),
+        "incoming deletions applied"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
 }

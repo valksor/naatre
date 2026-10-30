@@ -2,11 +2,13 @@
 //! `main` (server-side rebase + CAS).
 //!
 //! The idempotency key defaults to a random 8-hex suffix and is PRINTED so
-//! a retry can reuse it (`--key`). A 503 (single-writer slot busy) prints
-//! the retry hint; a 409 `ref_conflict` prints the per-path conflicts and
-//! the server's resolution recipe (the same key re-lands after a conflict).
-//! On success the working copy advances onto the landed history (its head
-//! is rewritten server-side) and records the land base.
+//! a retry can reuse it (`--key`). A 503 (writer slot busy or the same key
+//! in flight) prints the retry hint; a 409 `ref_conflict` prints the
+//! per-path conflicts and the server's resolution recipe (the same key
+//! re-lands after a conflict); a 409 `idempotency_key_settled` prints the
+//! settled head and land-status pointer. On success the working copy
+//! advances onto the landed history (its head is rewritten server-side) and
+//! records the land base.
 
 use std::path::Path;
 
@@ -100,9 +102,26 @@ pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
                 }
                 "writer_busy" => {
                     eprintln!(
-                        "the land was NOT settled (key {key} is free); retry: naatre land --key {key}"
+                        "the land was NOT settled (writer slot busy, or another land with the \
+                         same key is in flight); retry with the same key: naatre land --key {key}"
                     );
                     1
+                }
+                // The key settled with a different payload: the details
+                // carry the settled head and the land-status pointer
+                // (409 → conflict class, exit 2).
+                "idempotency_key_settled" => {
+                    if let Some(d) = details.as_ref() {
+                        eprintln!(
+                            "  settled head: {}",
+                            d["settled_head"].as_str().unwrap_or("?")
+                        );
+                        eprintln!(
+                            "  land status: {}",
+                            d["land_status_pointer"].as_str().unwrap_or("?")
+                        );
+                    }
+                    2
                 }
                 _ => 1,
             }

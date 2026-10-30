@@ -9,7 +9,10 @@ use crate::data_dir::DataDir;
 use crate::error::StoreError;
 use crate::migrate;
 
-const BUSY_TIMEOUT_MS: u64 = 5000;
+/// The pinned SQLite busy timeout (ms), applied to every connection the
+/// store opens — the write connection in [`Store::open`] and the server's
+/// read-pool connections alike.
+pub const BUSY_TIMEOUT_MS: u64 = 5000;
 
 /// An open store: the SQLite metadata handle plus its data dir.
 ///
@@ -51,15 +54,22 @@ impl Store {
     /// the row exists, so an absent row is a broken invariant, not an
     /// expected condition.
     pub fn schema_version(&self) -> i64 {
-        self.conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'schema_version'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .map(|v| v.parse().expect("schema_version parses: migrate wrote it"))
-            .expect("schema_version row exists: migrate guarantees it")
+        schema_version(&self.conn)
     }
+}
+
+/// Current schema version of the connection's database, for callers that
+/// hold a bare connection (the server's read pool). `migrate` guarantees
+/// the row exists, so an absent row is a broken invariant, not an expected
+/// condition.
+pub fn schema_version(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = 'schema_version'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .map(|v| v.parse().expect("schema_version parses: migrate wrote it"))
+    .expect("schema_version row exists: migrate guarantees it")
 }
 
 #[cfg(test)]

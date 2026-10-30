@@ -9,12 +9,14 @@ git's partial clone on the same machine.
 
 `scripts/bench_vs_git.sh` builds a synthetic git repository — **200 commits ×
 3 files × ~50 lines** (600 blobs, growing in-place rewrites), via the git CLI
-in a tempdir — then measures, as the **median of 3 runs** each:
+in a tempdir — then measures each side as the **median of 3 runs, each run
+timing the whole operation** (the side's commands run inside one timed window
+and are summed into the run's duration):
 
 | Operation | git side | naatre side |
 |---|---|---|
-| Sparse clone of one directory | `git clone --depth 1 --filter=blob:none --sparse` + `git sparse-checkout set dir1` (fresh destination per run; both commands inside the timing) | `naatre clone --sparse dir1` (fresh destination per run; the one-time offline `naatre import` and the server process are **excluded** from the compare) |
-| One-line edit on the checkout | `git add -A` + `git commit` (both inside the timing) | `naatre commit` + `naatre land` (both inside the timing) |
+| Sparse clone of one directory | `git clone --depth 1 --filter=blob:none --sparse` + `git sparse-checkout set dir1` (fresh destination per run; both commands summed inside the run's timing) | `naatre clone --sparse dir1` (fresh destination per run; the one-time offline `naatre import` and the server process are **excluded** from the compare) |
+| One-line edit on the checkout | `git add -A` + `git commit` (both summed inside the run's timing) | `naatre commit` + `naatre land` (both summed inside the run's timing) |
 
 Both sides talk to their store over the same local disk; naatre's server runs
 on loopback (`127.0.0.1`). The git side needs `uploadpack.allowFilter` on the
@@ -30,11 +32,11 @@ Apple Silicon (Apple M2 Max), macOS 26.6, git 2.56.0, rustc 1.99.1 —
 
 | operation | git (s) | naatre (s) |
 |---|---|---|
-| sparse clone of one dir | 0.0876 | 0.0328 |
-| one-line edit: commit (+land) | 0.2236 | 0.0374 |
+| sparse clone of one dir | 0.1609 | 0.0359 |
+| one-line edit: commit (+land) | 0.2468 | 0.1169 |
 
-→ naatre wins: 2.67x faster than git (sparse clone of one dir)
-→ naatre wins: 5.98x faster than git (one-line edit: commit (+land))
+→ naatre wins: 4.48x faster than git (sparse clone of one dir)
+→ naatre wins: 2.11x faster than git (one-line edit: commit (+land))
 
 ## Reading it honestly
 
@@ -45,10 +47,9 @@ Apple Silicon (Apple M2 Max), macOS 26.6, git 2.56.0, rustc 1.99.1 —
   or a network hop would change the picture; this table is a dev-build
   roundtrip on one machine, not a product claim.
 - The commit row includes naatre's **land** (server rebase + CAS + a durable
-  fsync'd transaction) against git's local commit only — naatre does strictly
-  more work per edit (it publishes to the server atomically) and still pays
-  less wall clock here, which says more about git's process fan-out (`add`
-  + `commit` spawn several processes) than about either implementation.
+  fsync'd transaction) against git's local commit only — naatre pays less
+  wall clock here, which likely reflects git's process fan-out (`add` +
+  `commit` spawn several processes) — plausible, not measured.
 - Re-running the script varies the numbers by a few percent run to run; the
   verdict direction has been stable across repeated runs on this machine.
 

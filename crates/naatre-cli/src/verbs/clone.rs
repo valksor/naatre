@@ -18,14 +18,22 @@ use crate::wc::index::Index;
 use crate::wc::{Config, StageDir, State};
 
 /// Splits `http://host[:port]/<repo>` into (origin, repo), or treats a bare
-/// name as the repo on `NAATRE_URL` / `--server` / the default URL.
+/// name as the repo on `NAATRE_URL` / `--server` / the default URL. Any
+/// other scheme (https included) is a usage error — the client never
+/// downgrades a URL to plain http behind the user's back.
 fn split_url(url: &str, net: &Net) -> Result<(String, String), VerbError> {
     if let Some(rest) = url.strip_suffix('/')
         && !rest.is_empty()
     {
         return split_url(rest, net);
     }
-    if let Some(after) = url.split_once("://").map(|(_, after)| after) {
+    if let Some((scheme, after)) = url.split_once("://") {
+        if !scheme.eq_ignore_ascii_case("http") {
+            return Err(VerbError::Usage(format!(
+                "URL scheme {scheme:?} is not supported: the naatre client speaks plain HTTP \
+                 only (deploy behind a TLS-terminating proxy that forwards over http to loopback)"
+            )));
+        }
         let (authority, repo) = match after.split_once('/') {
             Some((a, r)) => (a, r),
             None => (after, ""),

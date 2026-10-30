@@ -37,7 +37,7 @@ pub fn run(root: &Path, rebuild: bool, net: &Net) -> i32 {
             1
         }
         Err(e) => {
-            println!("doctor: {e}");
+            eprintln!("doctor: {e}");
             1
         }
     }

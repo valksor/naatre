@@ -1,12 +1,20 @@
 //! `naatre sync [--force]` — advance the working copy to the server's
 //! `main`.
 //!
-//! Dirty check FIRST (the preserve-everything rule): any locally modified
-//! or deleted tracked file, or any untracked/normalization-folded disk file
-//! colliding with an incoming path, refuses with exit 2 and
-//! `dirty_working_copy`, listing BOTH lists. `--force` discards exactly the
-//! incoming-colliding files (deletes untracked colliders, resets modified
-//! ones) and proceeds; local edits to non-colliding files survive.
+//! Dirty check FIRST (the preserve-everything rule): the sync refuses with
+//! exit 2 and `dirty_working_copy` only when materialization would clobber
+//! local work — a locally modified or deleted tracked file whose path the
+//! incoming set touches (add/mod or del: a locally modified file that an
+//! incoming del removes would be lost too), or an untracked/
+//! normalization-folded disk file colliding with ANY incoming path (upsert
+//! or del: an incoming del must not silently eat an untracked file at the
+//! path either) — listing BOTH lists. Unrelated local edits survive the sync
+//! untouched (materialization only touches incoming paths; the head
+//! advances; status afterwards still lists them). `--force` discards exactly
+//! the incoming-colliding files (deletes untracked colliders, overwrites
+//! colliding tracked edits) and proceeds. Belt and braces: the del loop
+//! removes only paths still present in the index (tracked), so a
+//! tracked-absent path can never be deleted from disk as if it were ours.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -69,40 +77,48 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
         })
         .collect::<Vec<_>>();
 
-    // The dirty gate: classify disk vs index, intersect with incoming.
+    // The dirty gate (plan wording): only local work whose path the
+    // incoming set touches can be clobbered by materialization — a dirty
+    // tracked file on an incoming path (add/mod or del: a locally modified
+    // file that an incoming del removes would be lost too), or an
+    // untracked / normalization-folded disk file on ANY incoming path
+    // (upsert or del: an incoming del removes an untracked file at the path
+    // just as silently). Unrelated local edits survive the sync untouched.
     let report = crate::wc::scan::classify(root, &index)
         .map_err(|e| VerbError::Local(format!("scanning {}: {e}", root.display())))?;
     let mut dirty: BTreeSet<String> = BTreeSet::new();
     dirty.extend(report.modified.iter().cloned());
     dirty.extend(report.deleted.iter().cloned());
-    let incoming_paths: BTreeSet<&String> = incoming
+    let incoming_paths: BTreeSet<&str> = incoming.iter().map(|(p, _)| p.as_str()).collect();
+    let blocked: Vec<String> = dirty
         .iter()
-        .filter(|(_, kind)| kind != "del")
-        .map(|(path, _)| path)
+        .filter(|path| incoming_paths.contains(path.as_str()))
+        .cloned()
         .collect();
     let mut colliding: Vec<String> = Vec::new();
     for (norm, raws) in &report.folds {
-        if incoming_paths.contains(norm) {
+        if incoming_paths.contains(norm.as_str()) {
             colliding.extend(raws.iter().cloned());
         }
     }
     for norm in &report.untracked {
-        if incoming_paths.contains(norm) {
+        if incoming_paths.contains(norm.as_str()) {
             colliding.push(report.raw_of_untracked[norm].clone());
         }
     }
     colliding.sort();
     colliding.dedup();
 
-    if (!dirty.is_empty() || !colliding.is_empty()) && !force {
-        let dirty_list = dirty.iter().cloned().collect::<Vec<_>>().join(", ");
+    if (!blocked.is_empty() || !colliding.is_empty()) && !force {
+        let blocked_list = blocked.join(", ");
         let collide_list = colliding.join(", ");
         return Err(VerbError::Http(crate::client::HttpError::Envelope {
             status: 409,
             code: "dirty_working_copy".into(),
             message: format!(
-                "refusing to sync (nothing changed): local changes: [{dirty_list}]; \
-                 colliding untracked: [{collide_list}]; use --force to discard them"
+                "refusing to sync (nothing changed): local edits on incoming paths: \
+                 [{blocked_list}]; colliding untracked: [{collide_list}]; \
+                 use --force to discard them"
             ),
             details: None,
         }));
@@ -153,7 +169,10 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
         index.rows.insert(path.clone(), row);
     }
     for (path, kind) in &incoming {
-        if kind != "del" || !under_sparse(&state.sparse, path) {
+        // Belt and braces: only a tracked path can be deleted from disk —
+        // the gate above already refused any untracked file at an incoming
+        // del path, so a tracked-absent path here has nothing of ours.
+        if kind != "del" || !under_sparse(&state.sparse, path) || !index.rows.contains_key(path) {
             continue;
         }
         remove_and_prune(root, path)

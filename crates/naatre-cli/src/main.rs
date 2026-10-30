@@ -110,6 +110,8 @@ enum Cmd {
     Sparse {
         #[command(subcommand)]
         cmd: SparseCmd,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// Working-copy status: disk vs the stat index. Zero server calls.
     Status {
@@ -117,7 +119,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Advance the working copy to the server's main (dirty → exit 2).
+    /// Advance the working copy to the server's main (refuses only when
+    /// incoming paths collide with local edits/untracked files).
     Sync {
         /// Discard local changes to incoming-colliding files, then proceed.
         #[arg(long)]
@@ -235,11 +238,15 @@ enum SparseCmd {
     Add {
         /// Path prefix to materialize (must exist in the tree).
         prefix: String,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// Delete the indexed files under a prefix; drop it from the list.
     Remove {
         /// Path prefix currently in the sparse list.
         prefix: String,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// Print the sparse prefixes (empty = full checkout).
     List,
@@ -266,7 +273,15 @@ impl NetOpts {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    // Clap usage errors exit 3 (pinned usage code) — never 2, which is the
+    // conflict class. --help/--version print and exit 0 as before.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let _ = e.print();
+            std::process::exit(if e.use_stderr() { 3 } else { 0 });
+        }
+    };
     let cwd = std::path::Path::new(".");
     let code = match cli.cmd {
         Cmd::Init { data } => host::init(&data),
@@ -316,16 +331,14 @@ fn main() {
             into,
             net,
         } => verbs::clone::run(&url, &sparse, into.as_deref(), &net.net()),
-        Cmd::Sparse { cmd } => match cmd {
-            SparseCmd::Add { prefix } => {
-                verbs::sparse::run(cwd, verbs::sparse::Action::Add(prefix), &Net::default())
+        Cmd::Sparse { cmd, net } => match cmd {
+            SparseCmd::Add { prefix, net: n } => {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Add(prefix), &n.net())
             }
-            SparseCmd::Remove { prefix } => {
-                verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &Net::default())
+            SparseCmd::Remove { prefix, net: n } => {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &n.net())
             }
-            SparseCmd::List => {
-                verbs::sparse::run(cwd, verbs::sparse::Action::List, &Net::default())
-            }
+            SparseCmd::List => verbs::sparse::run(cwd, verbs::sparse::Action::List, &net.net()),
         },
         Cmd::Status { json } => verbs::status::run(cwd, json),
         Cmd::Sync { force, net } => verbs::sync::run(cwd, force, &net.net()),
