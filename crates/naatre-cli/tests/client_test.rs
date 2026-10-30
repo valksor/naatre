@@ -39,6 +39,15 @@ impl Drop for TestServer {
 }
 
 fn start_server() -> TestServer {
+    start_server_with(|_| {})
+}
+
+/// The serve shape with the M6b production kinds registered — the blame
+/// test's server. Kept out of [`start_server`]: the background queue's
+/// write transactions change the write-slot contention profile of every
+/// request, and the empty-registry shape keeps the rest of the suite
+/// exactly as deterministic as before M6b.
+fn start_server_with(register: impl FnOnce(&mut ServerState) + Send + 'static) -> TestServer {
     let dir = tempfile::tempdir().expect("tempdir");
     let data = DataDir::create(dir.path()).expect("create data dir");
     std::fs::write(data.db_path(), b"").expect("touch naatre.db");
@@ -53,7 +62,8 @@ fn start_server() -> TestServer {
             .expect("test runtime");
         rt.block_on(async move {
             let data = DataDir::open(&data_path).expect("open data dir");
-            let state = ServerState::open(data).expect("server state");
+            let mut state = ServerState::open(data).expect("server state");
+            register(&mut state);
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind ephemeral port");
@@ -3641,5 +3651,141 @@ fn restore_expired_snapshot_exits_non_zero_with_snapshot_expired() {
         stdout_of(&out).contains("restored"),
         "un-expired restore succeeds: {}",
         stdout_of(&out)
+    );
+}
+
+/// M6b — BLAME CLI: the pinned human line format (`<8-hex cs> <author> | <line>`),
+/// the pinned `--json` shape (`{"lines":[{cs,author,text}]}` with full hex
+/// ids), and the binary structured-empty note. Runs against the real
+/// server; the queue drains in the background, so the read waits for
+/// derivation with a bounded progress poll.
+#[test]
+fn blame_cli_prints_the_pinned_formats() {
+    let server = start_server_with(|state| {
+        for deriver in naatre_server::derived::production_kinds() {
+            state.register_deriver(deriver).expect("register deriver");
+        }
+    });
+    create_repo(&server, "blamecli");
+    let v1 = b"alpha\nbeta\ngamma\n";
+    let v2 = b"alpha\nBETA\ngamma\ndelta\n";
+    put_blob(&server, "blamecli", v1);
+    put_blob(&server, "blamecli", v2);
+    let c1 = changeset(
+        &server,
+        "blamecli",
+        &[],
+        vec![change("add", "story.txt", v1)],
+        "c1",
+    );
+    let c2 = changeset(
+        &server,
+        "blamecli",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("mod", "story.txt", v2)],
+        "c2",
+    );
+    let c1_hex = c1["id"].as_str().unwrap();
+    let c2_hex = c2["id"].as_str().unwrap();
+    seed_main(&server, "blamecli", c2_hex);
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/blamecli", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // Wait for the background queue: blame 503s (derivation_pending) until
+    // the derived index covers the chain; poll with progress, then act.
+    let mut derived = false;
+    for _ in 0..600 {
+        let (status, _) = api(
+            &server,
+            "GET",
+            &format!("/v1/repos/blamecli/blame?at={c2_hex}&path=story.txt"),
+            None,
+        );
+        if status == 200 {
+            derived = true;
+            break;
+        }
+        assert_eq!(status, 503, "pending until derived");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(derived, "queue never drained the blame index");
+
+    // Human format, pinned: <8-hex cs> <author> | <line>.
+    let out = run_binary(&server, &wc_dir, &["blame", "story.txt"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let c1_8 = &c1_hex[..8];
+    let c2_8 = &c2_hex[..8];
+    let expected = format!(
+        "{c1_8} test <test@naatre.local> | alpha\n\
+         {c2_8} test <test@naatre.local> | BETA\n\
+         {c1_8} test <test@naatre.local> | gamma\n\
+         {c2_8} test <test@naatre.local> | delta\n"
+    );
+    assert_eq!(stdout_of(&out), expected, "pinned human line format");
+
+    // --json shape, pinned: {"lines":[{cs,author,text}]} with full hex ids.
+    let out = run_binary(&server, &wc_dir, &["blame", "story.txt", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let v: Value = serde_json::from_str(stdout_of(&out).trim()).expect("json line");
+    let lines = v["lines"].as_array().expect("lines array");
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0]["cs"], json!(c1_hex));
+    assert_eq!(lines[0]["author"], json!("test <test@naatre.local>"));
+    assert_eq!(lines[0]["text"], json!("alpha"));
+    assert_eq!(lines[1]["cs"], json!(c2_hex));
+    assert_eq!(lines[1]["text"], json!("BETA"));
+    assert_eq!(v.as_object().unwrap().len(), 1, "exactly the lines key");
+
+    // A binary file is the structured empty result: exit 0, no stdout,
+    // the stable code on stderr.
+    let bin = [0x00u8, 0xFF, 0xFE, 0x01];
+    put_blob(&server, "blamecli", &bin);
+    let c3 = changeset(
+        &server,
+        "blamecli",
+        &[c2_hex.to_string()],
+        vec![change("add", "blob.bin", &bin)],
+        "c3",
+    );
+    seed_main(&server, "blamecli", c3["id"].as_str().unwrap());
+    let mut binary_ready = false;
+    for _ in 0..600 {
+        let (status, _) = api(
+            &server,
+            "GET",
+            &format!(
+                "/v1/repos/blamecli/blame?at={}&path=blob.bin",
+                c3["id"].as_str().unwrap()
+            ),
+            None,
+        );
+        if status == 200 {
+            binary_ready = true;
+            break;
+        }
+        assert_eq!(status, 503);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(binary_ready, "queue never drained the binary blame");
+    let out = run_binary(&server, &wc_dir, &["blame", "blob.bin", "--at", "main"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(
+        out.stdout.is_empty(),
+        "no blame lines for binary: {:?}",
+        stdout_of(&out)
+    );
+    let stderr = stderr_of(&out);
+    assert!(
+        stderr.contains("blame_binary"),
+        "the stable binary code is noted: {stderr:?}"
     );
 }

@@ -84,6 +84,25 @@ pub async fn serve(
     let app = crate::router(Arc::clone(&cfg.state));
     let drain_timeout = cfg.state.drain_timeout;
 
+    // Boot-time derived-data backfill (M6b, the plan's deferred-backfill
+    // check): enqueue every changeset each registered kind has no row for
+    // — offline imports and pre-derive databases. Runs in the BACKGROUND:
+    // a large repo must not delay accepting connections, and reads that
+    // land before their regions derive get the 503 derivation_pending
+    // contract (never empty-as-if-no-history). Idempotent; a failure logs
+    // and leaves those regions pending — backfill is enqueueing, not
+    // schema authority, so it must not block boot.
+    {
+        let state = std::sync::Arc::clone(&cfg.state);
+        tokio::spawn(async move {
+            if let Err(e) = crate::derive::backfill(&state).await {
+                tracing::error!(error = %e, "derive backfill failed; affected reads stay 503 derivation_pending");
+            } else {
+                tracing::info!("derive backfill enqueued");
+            }
+        });
+    }
+
     // The caller hands us a one-shot shutdown future, but two consumers need
     // to observe it (the graceful-shutdown hook and the drain-timeout race).
     // Fan it out through a watch channel; receivers are subscribed before the

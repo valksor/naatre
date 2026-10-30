@@ -5,12 +5,15 @@
 //! count is only reachable if its parent was done first), lease-expiry
 //! re-derivation and crash-mid-derivation both idempotent, poison
 //! quarantine with a report row whose descendants STILL derive (never
-//! head-of-line blocks — the plan's exact words), the DEPTH and SIZE caps
-//! (a chain past 1,000 ancestor levels and an over-cap output each
-//! quarantine immediately, children still deriving), eager-vs-deferred per
-//! kind, enqueue never blocking a create (1k changesets with the queue
-//! stopped), and the per-(kind, changeset) is-derived/is-pending query the
-//! M6b read routes build the 503 `derivation_pending` contract on.
+//! head-of-line blocks — the plan's exact words), the per-call WALK-BUDGET
+//! and SIZE caps (a deriver that over-walks its budget and an over-cap
+//! output each quarantine immediately, children still deriving) with the
+//! advisor-named regression pin: a 1,100-commit linear chain derives fully
+//! — long history is never capped, only per-call walks are —, eager-vs-
+//! deferred per kind, enqueue never blocking a create (1k changesets with
+//! the queue stopped), and the per-(kind, changeset) is-derived/is-pending
+//! query the M6b read routes build the 503 `derivation_pending` contract
+//! on.
 //!
 //! Test deriver: counts ancestors — output = sum(parent counts) + 1, so
 //! every assertion below proves real data flow through the parents_done
@@ -37,8 +40,8 @@ use tower::ServiceExt;
 
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_server::derive::{
-    DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DeriveStatus, DerivedOut, Deriver, PoisonReason,
-    derive_pass, status,
+    DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DeriveCtx, DeriveFailure, DeriveStatus,
+    DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
 };
 use naatre_server::serve::{ServeConfig, serve};
 use naatre_server::state::{AppState, ServerState};
@@ -81,19 +84,20 @@ impl Deriver for CountingDeriver {
 
     fn derive(
         &self,
+        _ctx: &DeriveCtx,
         conn: &rusqlite::Connection,
         repo_id: i64,
         cs: Id,
-        parents_done: &[DerivedOut],
-    ) -> Result<DerivedOut, PoisonReason> {
+        parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
         self.calls.lock().unwrap().push(cs);
         if *self.fail_for.lock().unwrap() == Some(cs) {
-            return Err(PoisonReason::new("boom: this node always fails"));
+            return Err(PoisonReason::new("boom: this node always fails").into());
         }
         if self.calls.lock().unwrap().len() <= self.panic_on_attempt && !self.panic_after_write {
             panic!("crash while holding the lease (before any write)");
         }
-        let sum: u64 = parents_done.iter().map(out_count).sum();
+        let sum: u64 = parents_done.iter().map(|p| out_count(&p.output)).sum();
         let n = sum + 1;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS derive_test_outputs(\
@@ -111,6 +115,47 @@ impl Deriver for CountingDeriver {
             panic!("crash after the output write, before the framework's done-record");
         }
         Ok(DerivedOut(n.to_be_bytes().to_vec()))
+    }
+}
+
+/// A deriver that deliberately over-walks: charges its whole (own, tiny)
+/// budget on the first call for its aimed-at changeset (the walk-budget
+/// poison path), passes everything else through like the plain counter.
+struct BudgetHog {
+    hog_for: Arc<Mutex<Option<Id>>>,
+}
+
+/// The hog's per-kind budget — deliberately tiny so the test proves the
+/// per-kind value binds (no shared constant to lean on).
+const HOG_BUDGET: u64 = 100;
+
+impl Deriver for BudgetHog {
+    fn kind(&self) -> &'static str {
+        "budget-hog"
+    }
+
+    fn walk_budget(&self) -> u64 {
+        HOG_BUDGET
+    }
+
+    fn derive(
+        &self,
+        ctx: &DeriveCtx,
+        _conn: &rusqlite::Connection,
+        _repo_id: i64,
+        cs: Id,
+        parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
+        if *self.hog_for.lock().unwrap() == Some(cs) {
+            // Simulates a runaway walk: charge the entire budget.
+            ctx.charge(HOG_BUDGET)?;
+        }
+        let n = parents_done
+            .iter()
+            .map(|p| out_count(&p.output))
+            .sum::<u64>()
+            + 1;
+        Ok(DerivedOut((n as u8).to_be_bytes().to_vec()))
     }
 }
 
@@ -474,7 +519,131 @@ async fn wait_queue_done(f: &Fixture, expected: i64) {
     }
 }
 
-// ---- caps: depth + size -----------------------------------------------------
+// ---- caps: per-call walk budget + size ---------------------------------------
+
+/// The advisor-named regression pin: LONG LINEAR HISTORY DERIVES FULLY.
+/// A 1,100-commit first-parent chain (a repo shape the product targets)
+/// runs through the queue with zero quarantines and correct outputs — the
+/// old absolute-generation depth cap poisoned every node past generation
+/// 1,000 here; the per-call walk budget never fires on it because each
+/// node is its own queue batch. The budget guards one deriver CALL, not
+/// history length.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn linear_chain_derives_to_the_end() {
+    let (deriver, h) = counter(KIND, false, 0, false);
+    let f = build_app_with(|state| {
+        state.derive_queue_enabled = false; // derive_pass is driven directly
+        state.register_deriver(Arc::new(deriver)).unwrap();
+    });
+    let repo_id = f.seed_repo(REPO);
+    let kind_id: i64 = f
+        .db()
+        .query_row("SELECT id FROM derive_kinds WHERE name = ?", [KIND], |r| {
+            r.get(0)
+        })
+        .unwrap();
+
+    // Deterministic synthetic ids; d(0)..d(1100) chained first-parent.
+    let d = |k: u64| {
+        let mut b = [0u8; 32];
+        b[..8].copy_from_slice(&k.to_be_bytes());
+        b[8] = 0xDD;
+        Id(b)
+    };
+    let conn = f.db();
+    conn.execute_batch("BEGIN").unwrap();
+    for k in 0..=1100u64 {
+        seed_node(
+            &conn,
+            repo_id,
+            kind_id,
+            d(k),
+            k as i64,
+            k.checked_sub(1).map(d),
+        );
+    }
+    conn.execute_batch("COMMIT").unwrap();
+
+    let report = derive_pass(&f.state).await.expect("pass");
+    assert_eq!(report.derived, 1101, "the whole chain derived");
+    assert_eq!(report.poisoned, 0, "no quarantine on long linear history");
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM derive_reports"),
+        0,
+        "zero quarantine reports"
+    );
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM derive_state WHERE state != 'done'"),
+        0
+    );
+    // Outputs prove the parents-done flow through the full depth.
+    assert_eq!(
+        status(&f.state, KIND, REPO, d(0)).await.expect("status"),
+        Some(DeriveStatus::Done(count_out(1)))
+    );
+    assert_eq!(
+        status(&f.state, KIND, REPO, d(1100)).await.expect("status"),
+        Some(DeriveStatus::Done(count_out(1101)))
+    );
+    assert_eq!(h.calls.lock().unwrap().len(), 1101);
+}
+
+/// The walk-budget cap: a deriver that over-walks its per-call budget is
+/// quarantined IMMEDIATELY (no attempt burned — retrying the same node
+/// would walk the same graph), rows a report naming the budget, and its
+/// child still derives on the empty marker (never head-of-line blocks).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn walk_budget_exhaustion_poisons_immediately() {
+    let hog_for = Arc::new(Mutex::new(None::<Id>));
+    let f = fixture_with(|state| {
+        state.derive_queue_interval = Duration::from_millis(10);
+        state
+            .register_deriver(Arc::new(BudgetHog {
+                hog_for: Arc::clone(&hog_for),
+            }))
+            .unwrap();
+    });
+    let hog_kind = "budget-hog";
+
+    let parent = create_cs(&f, None, "hogged", 1).await;
+    let child = create_cs(&f, Some(&parent), "after", 2).await;
+    *hog_for.lock().unwrap() = Some(id_of_hex(&parent));
+
+    let report = derive_pass(&f.t.state).await.expect("pass");
+    assert_eq!(report.poisoned, 1, "the over-walking node quarantined");
+    assert_eq!(report.derived, 1, "only the child derived");
+
+    assert_eq!(
+        st_kind(&f, hog_kind, &parent).await,
+        Some(DeriveStatus::Poison)
+    );
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT s.attempts FROM derive_state s JOIN derive_kinds k ON k.id = s.kind \
+             WHERE k.name = 'budget-hog' AND s.cs = x'{}'",
+            parent
+        )),
+        0,
+        "immediate poison burns no attempt"
+    );
+    let (reason, count): (String, i64) =
+        f.t.db()
+            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+    assert_eq!(count, 1, "one quarantine report");
+    assert!(
+        reason.contains("walk budget"),
+        "report names the cap: {reason}"
+    );
+
+    // The child derived on the empty marker.
+    assert_eq!(
+        st_kind(&f, hog_kind, &child).await,
+        Some(DeriveStatus::Done(DerivedOut(vec![1])))
+    );
+}
 
 /// A minimal deriver for the size-cap pin: returns an over-cap output for
 /// its aimed-at changeset, a parent-count byte for everything else.
@@ -490,11 +659,12 @@ impl Deriver for HugeOutDeriver {
 
     fn derive(
         &self,
+        _ctx: &DeriveCtx,
         _conn: &rusqlite::Connection,
         _repo_id: i64,
         cs: Id,
-        parents_done: &[DerivedOut],
-    ) -> Result<DerivedOut, PoisonReason> {
+        parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
         self.calls.lock().unwrap().push(cs);
         if *self.huge_for.lock().unwrap() == Some(cs) {
             return Ok(DerivedOut(vec![0u8; DERIVE_MAX_OUTPUT_BYTES + 1]));
@@ -534,115 +704,12 @@ fn seed_node(
     .unwrap();
 }
 
-/// The framework status for an already-parsed id.
-async fn st_id(f: &Fixture, cs: Id) -> Option<DeriveStatus> {
-    status(&f.t.state, KIND, REPO, cs)
-        .await
-        .expect("status query")
-}
-
 /// The framework status under an explicit kind name (the size-cap pin runs
 /// its own deriver kind).
 async fn st_kind(f: &Fixture, kind: &str, cs_hex: &str) -> Option<DeriveStatus> {
     status(&f.t.state, kind, REPO, id_of_hex(cs_hex))
         .await
         .expect("status query")
-}
-
-/// The depth cap: a first-parent chain deeper than [`DERIVE_MAX_DEPTH`]
-/// quarantines the node IMMEDIATELY (no attempt burned, retries cannot
-/// help — the cap is structural), rows the depth reason, and the
-/// never-head-of-line rule still holds: a child whose FIRST parent is
-/// shallow derives on the empty marker contributed by the poisoned deep
-/// head. The chain itself derives batch-by-batch up to the boundary —
-/// d1000's output is its full ancestor count, the running output carried
-/// per node through the queue (the iterative pattern the cap protects,
-/// not punishes).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn depth_cap_poisons_deep_chains_but_children_derive() {
-    let (deriver, _) = counter(KIND, false, 0, false);
-    let f = fixture_with(|state| {
-        state.derive_queue_interval = Duration::from_millis(10);
-        state.register_deriver(Arc::new(deriver)).unwrap();
-    });
-    let repo_id =
-        f.t.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
-    let kind_id: i64 =
-        f.t.db()
-            .query_row("SELECT id FROM derive_kinds WHERE name = ?", [KIND], |r| {
-                r.get(0)
-            })
-            .unwrap();
-
-    // Deterministic synthetic ids (tag byte distinguishes the shapes).
-    let cs_id = |tag: u8, k: u64| {
-        let mut b = [0u8; 32];
-        b[..8].copy_from_slice(&k.to_be_bytes());
-        b[8] = tag;
-        Id(b)
-    };
-    let s0 = cs_id(0xAA, 0); // shallow root
-    let d = |k: u64| cs_id(0xDD, k); // the deep chain, d0..d1001
-    let m = cs_id(0xBB, 0); // the merge child
-
-    // Insertion order = rowid = pick order: shallow root, chain
-    // oldest-first, merge child last.
-    let conn = f.t.db();
-    conn.execute_batch("BEGIN").unwrap();
-    seed_node(&conn, repo_id, kind_id, s0, 0, None);
-    seed_node(&conn, repo_id, kind_id, d(0), 0, None);
-    for k in 1..=1001 {
-        seed_node(&conn, repo_id, kind_id, d(k), k as i64, Some(d(k - 1)));
-    }
-    // m: first parent s0 (ord 0, within the cap), second parent the
-    // over-deep head (ord 1). m's own first-parent chain is one level.
-    seed_node(&conn, repo_id, kind_id, m, 1002, Some(s0));
-    conn.execute(
-        "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 1)",
-        rusqlite::params![repo_id, m.0.as_slice(), d(1001).0.as_slice()],
-    )
-    .unwrap();
-    conn.execute_batch("COMMIT").unwrap();
-
-    let report = derive_pass(&f.t.state).await.expect("pass");
-    assert_eq!(
-        report.derived, 1003,
-        "s0 + the 1001 within-cap chain nodes + m derived"
-    );
-    assert_eq!(report.poisoned, 1, "only the over-deep head quarantined");
-
-    let head = d(1001);
-    assert_eq!(st_id(&f, head).await, Some(DeriveStatus::Poison));
-    assert_eq!(
-        f.t.attempts_of(head),
-        0,
-        "immediate poison burns no attempt"
-    );
-    let (reason, count): (String, i64) =
-        f.t.db()
-            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .unwrap();
-    assert_eq!(count, 1, "one quarantine report");
-    assert!(
-        reason.contains("depth cap"),
-        "report names the cap: {reason}"
-    );
-
-    // The chain derived batch-by-batch up to the boundary.
-    assert_eq!(
-        st_id(&f, d(1000)).await,
-        Some(DeriveStatus::Done(count_out(1001)))
-    );
-    // The merge child derived on the empty marker: 1 (s0) + 0 (poison head)
-    // + 1 = 2 — never head-of-line blocked.
-    assert_eq!(st_id(&f, m).await, Some(DeriveStatus::Done(count_out(2))));
-    assert_eq!(
-        f.t.count("SELECT COUNT(*) FROM derive_state WHERE state = 'pending'"),
-        0,
-        "nothing left queued"
-    );
 }
 
 /// The size cap: a deriver's over-cap output is never recorded — the node

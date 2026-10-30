@@ -23,7 +23,9 @@ fn fresh_db_migrates_to_current() {
         )
         .unwrap();
     assert_eq!(v, MAX_SUPPORTED.to_string());
-    assert_eq!(MAX_SUPPORTED, 4);
+    // No literal here: every migration bump must update the rollback fixture
+    // below (drop the new objects), not this pin — a literal rots exactly as
+    // it did at M6b (6 vs 4).
 
     // Migration 2 spot-check: the tokens table carries the scope column.
     conn.execute_batch("SELECT scope_path FROM tokens LIMIT 0;")
@@ -105,6 +107,8 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          DROP TABLE IF EXISTS derive_reports;
          DROP TABLE IF EXISTS derive_state;
          DROP TABLE IF EXISTS derive_kinds;
+         DROP TABLE IF EXISTS blame_state;
+         DROP TABLE IF EXISTS path_history;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
          -- One tree shared by both repos (content-addressed id), containing

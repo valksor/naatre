@@ -1,8 +1,9 @@
-//! The read verbs: `cat`, `ls`, `diff`. Every one takes `--json` with a
-//! pinned shape (status's shape lives in [`crate::wc::scan::Report`]; ls
-//! mirrors the server's tree-entry shape; diff mirrors the server's
-//! diff-entry shape). `--at` accepts a changeset id or a ref name; the
-//! default for cat/ls/diff's server mode is head.
+//! The read verbs: `cat`, `blame`, `ls`, `diff`. Every one takes `--json`
+//! with a pinned shape (status's shape lives in [`crate::wc::scan::Report`];
+//! ls mirrors the server's tree-entry shape; diff mirrors the server's
+//! diff-entry shape; blame's shape is pinned in [`blame`]). `--at` accepts
+//! a changeset id or a ref name; the default for cat/blame/ls/diff's server
+//! mode is head.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -96,6 +97,68 @@ fn try_cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> Result<(), V
     std::io::stdout()
         .write_all(&bytes)
         .map_err(|e| VerbError::Local(format!("writing to stdout: {e}")))?;
+    Ok(())
+}
+
+/// `naatre blame <path> [--at REF|CS]` — per-line attribution from the
+/// server's derived blame. Pinned human line format:
+/// `<8-hex cs> <author> | <line>` (the first 8 hex of the changeset id).
+/// `--json` prints exactly `{"lines":[{cs,author,text}]}` with the full
+/// 64-hex ids. A binary file is the server's structured empty result:
+/// exit 0, nothing on stdout, the stable code noted on stderr. A degraded
+/// (quarantined chain) blame prints a stderr warning and exits 0.
+/// The stderr warning for a degraded blame (pinned: names every quarantined
+/// changeset; the verb still exits 0 — degraded results are results, not errors).
+pub(crate) fn degraded_blame_warning(poisoned: &[&str]) -> String {
+    format!(
+        "warning: blame degraded by quarantined changeset(s): {} — lines below the boundary are attributed to the oldest resolved changeset",
+        poisoned.join(", ")
+    )
+}
+
+pub fn blame(root: &Path, path: &str, at: Option<&str>, json_out: bool, net: &Net) -> i32 {
+    match try_blame(root, path, at, json_out, net) {
+        Ok(()) => 0,
+        Err(e) => e.report(),
+    }
+}
+
+fn try_blame(
+    root: &Path,
+    path: &str,
+    at: Option<&str>,
+    json_out: bool,
+    net: &Net,
+) -> Result<(), VerbError> {
+    let reader = open_reader(root, net)?;
+    let cs = resolve_at(&reader, at)?;
+    let path = nfc(path);
+    let v = reader.client.get_json(
+        &format!("/v1/repos/{}/blame", uri_segment(&reader.repo)),
+        &[("at", cs.to_hex().as_str()), ("path", path.as_str())],
+    )?;
+    let lines = v["lines"].as_array().cloned().unwrap_or_default();
+    if v["binary"].as_bool() == Some(true) {
+        eprintln!("blame: {path}: binary content (blame_binary)");
+        return Ok(());
+    }
+    if v["degraded"].as_bool() == Some(true) {
+        let poisoned: Vec<&str> = v["poisoned_cs"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        eprintln!("{}", degraded_blame_warning(&poisoned));
+    }
+    if json_out {
+        println!("{}", json!({ "lines": lines }));
+        return Ok(());
+    }
+    for l in &lines {
+        let cs8: String = l["cs"].as_str().unwrap_or("?").chars().take(8).collect();
+        let author = l["author"].as_str().unwrap_or("?");
+        let text = l["text"].as_str().unwrap_or("");
+        println!("{cs8} {author} | {text}");
+    }
     Ok(())
 }
 
@@ -301,4 +364,16 @@ fn local_diff(root: &Path, reader: &Reader) -> Result<Vec<Value>, VerbError> {
         }
     }
     Ok(changes)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn degraded_warning_names_the_poison_and_exit_stays_zero() {
+        let w = super::degraded_blame_warning(&["aa11", "bb22"]);
+        assert!(w.starts_with("warning: blame degraded"));
+        assert!(w.contains("aa11, bb22"));
+        // Exit-code contract: the caller returns 0 on a degraded 200 — the
+        // warning is on stderr, never a failure exit.
+    }
 }

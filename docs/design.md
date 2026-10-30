@@ -56,6 +56,54 @@ Every deliberate limit, with the milestone that lifts it — or an explicit
 | Snapshot TTL bounds | 60-second floor (plan-pinned) and a 366-day ceiling (server-side safety bound beyond the plan; supervisor judgment, flagged in the route contract). | **No milestone** — the ceiling is deliberate, not a pending relaxation |
 | Snapshot restore closure walks | The closure-membership check on `GET .../snapshots/{id}/trees/{tid}` re-walks the root closure per request (`db::tree_in_closure`, one entries-load per visited tree): an n-tree restore costs O(n²) server-side row loads — near the 10k-tree cap, minutes. Acceptable at today's snapshot sizes. | **No milestone** — a POST-time membership structure (tree → mounted paths) is the mitigation when large snapshots become real |
 | `snapshot_gc` audit rows | Written per collecting pass (never idle passes), actor `system`, details `{expired, rowless, rows_purged, trees_purged}`. | **No milestone** — recorded behavior, not a limit |
+| Derive walk budget (per kind, COOPERATIVE) | One derivation call may visit at most `walk_budget` rows / tree nodes / committed outputs through its `DeriveCtx` — a PER-KIND value (`Deriver::walk_budget`; bootstrap default 200,000 ≈ 2× the 100k-entry changeset cap): blame 1,000,000 (a parent-tree walk per touched path of a max changeset), path_history 400,000 (one visit per row), commit_graph 1,000 (two charges per skip entry, O(log chain) entries). The budget binds derivers that charge their visits; a deriver issuing raw SQL past the ctx is not capped by it. Exhaustion quarantines the node immediately (structural — a retry walks the same graph), with the reason in `derive_reports` and children proceeding on the empty marker. The budget bounds a deriver's per-CALL walk, never history length: long history derives batch-by-batch through the queue, and a 1,100-commit linear chain is the regression pin (`m6a_test.rs::linear_chain_derives_to_the_end`). | **No milestone** — raise a kind's value in code if a legitimate node shape trips it |
+| Derive-queue quiet passes | The background pass never occupies the single-writer slot on a quiet server: the lease sweep read-probes before taking a write transaction (same pattern as the snapshot-GC junction probe), and the drain writes only when a node is actually eligible. Writes a quiet server makes per tick: none. | **No milestone** — recorded behavior, not a limit |
+| Blame / path-history read cost | `GET /blame` walks the first-parent chain from `at`: two indexed point queries per visited node (queue state + diff-state), plus one CAS fetch per changed-blob version on the chain, plus the in-memory line diff of each touched pair — O(history of the file), never O(trees). `GET /log?path=` is two indexed queries per page off the `path_history` inverted index. | **No milestone** — the index shape, not a pending relaxation |
+| Derived-surface storage growth | `blame_state` grows with (changeset × touched paths) rows; `path_history` with (changeset × touched paths) index rows; `derive_state.output` carries ≤ ~49 bytes × O(log chain) skip entries per node for commit_graph. All bounded by the changeset caps (≤ 100k entries/changeset). | **No milestone** — GC/re-derivation of these rows is M10 redaction's contract |
+| On-demand derive compute | A derived read finding a pending region answers 503 `derivation_pending` + `Retry-After` and does NOT compute nodes inline. The plan's contract permits on-demand compute within the request timeout; the background queue (5 s tick) makes the 503 window short, so the inline path is unimplemented. | **No milestone** — revisit only if interactive freshness after bulk writes becomes a reported need |
+
+## Derived-data reads (M6b)
+
+The three production kinds — `blame`, `path_history`, `commit_graph` — are
+deferred: a write only enqueues, the background queue derives, and `naatre
+serve`'s boot-time backfill enqueues everything a registry-less process
+wrote (offline import) or a pre-derive database carried (in-place upgrade,
+same queue). The read contracts on top:
+
+- **Read-during-backlog**: `GET /log?path=` and `GET /blame` answer 503
+  `derivation_pending` + `Retry-After: 1` while any needed region is
+  queued or deriving — never an empty-as-if-no-history answer. After the
+  queue drains the same reads are exact.
+- **Poison degrades, never lies**: taint is stored on the queue rows — a
+  node that derived on a quarantined ancestor's empty marker records done
+  WITH `tainted = 1` and `poison_cs` = the nearest poisoned ancestor,
+  inherited by every descendant. A blame read raises `degraded: true`
+  with that `poisoned_cs` straight off the walked rows (O(1) per row); a
+  walk that reaches the quarantined node itself stops there and
+  attributes every line it could not resolve past the boundary to that
+  changeset (its blob provably contains those lines — attribution bounded
+  below by the quarantine, flagged, not silent). `?path=` flags a page
+  PRECISELY: only when a quarantined node's primary file changes touch
+  that path (exactly the touches the index may be missing) — an untouched
+  branch is never flagged. A pending node anywhere outranks a degraded
+  one: 503 wins.
+- **Merge-base never 503s**: the route runs the skip-list walk when both
+  endpoints' `commit_graph` outputs are done, and the plain
+  generation-bounded walk otherwise (kind unregistered, pending,
+  quarantined, undecodable) — pending derivation costs the acceleration,
+  never the read. Skip entries hop 1, 3, 7, 15, … first-parent levels;
+  only PURE spans (every spanned node single-parent) may be jumped, so no
+  spanned node's non-first parents are lost.
+- **Blame pins**: human format `<8-hex cs> <author> | <line>` (the CLI's);
+  `--json` shape `{"lines":[{cs,author,text}]}` with full 64-hex ids; a
+  binary file at `at` is a structured empty result — HTTP 200, empty
+  lines, `binary: true`, stable code `blame_binary`; an empty file blames
+  as empty lines. First-parent semantics throughout.
+- **`GET /log?path=`** lists every changeset touching the path (all
+  branches, newest first: generation DESC, id ASC) off the derived
+  inverted index, with `degraded`/`poisoned_cs` added to the log-page
+  shape. With the kind unregistered the same rows are scanned out of
+  `file_changes` — the fallback, and the parity oracle's brute force.
 
 ## Request-timeout shedding and in-flight writes
 

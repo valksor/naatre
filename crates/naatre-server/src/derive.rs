@@ -5,8 +5,9 @@
 //!
 //! A kind implements [`Deriver`] and registers on
 //! [`crate::state::ServerState::register_deriver`] (M6b registers the real
-//! kinds; production M6a ships none, and `derive_kinds` stays empty until
-//! then). The contract, per kind:
+//! kinds — blame, path_history, commit_graph, see [`crate::derived`] — in
+//! the CLI's `serve` verb; tests register throwaway kinds). The contract,
+//! per kind:
 //!
 //! - **Recursive from parents.** [`Deriver::derive`] receives every
 //!   parent's framework-stored output ([`DerivedOut`], in `ord` order) and
@@ -41,18 +42,30 @@
 //! the lease held — the expiry sweep re-runs the whole derivation, which
 //! is why the idempotency contract above exists.
 //!
-//! **Depth/size caps.** Two deriver-independent caps guard ONE derive call
-//! (plan: "depth/size caps"): [`DERIVE_MAX_DEPTH`] bounds the first-parent
-//! ancestor levels a node's chain offers a recursive deriver, and
-//! [`DERIVE_MAX_OUTPUT_BYTES`] bounds the framework-carried output per
-//! node. What they guard is runaway recursion and unbounded output, NOT
-//! long history: a deep chain derives batch-by-batch THROUGH this queue —
-//! each node is a batch of one, the running output carried in the
-//! parents' outputs — and that iterative pattern has no depth limit. A
-//! node that trips either cap is quarantined IMMEDIATELY
-//! ([`DERIVE_MAX_ATTEMPTS`] does not apply — the caps are structural, so
-//! retrying cannot help), rows a `derive_reports` reason, and its children
-//! still derive on the empty marker (the never-head-of-line rule above).
+//! **Per-call caps.** Two deriver-independent caps guard ONE derive call
+//! (plan: "depth/size caps"): the per-call COOPERATIVE walk budget —
+//! a per-kind value ([`Deriver::walk_budget`]) handed to every deriver
+//! as a [`DeriveCtx`] — and [`DERIVE_MAX_OUTPUT_BYTES`] on the
+//! framework-carried output per node. The budget binds derivers that
+//! charge their visits through `ctx.charge`; a deriver issuing raw SQL
+//! past the ctx is not capped by it. What they guard is a deriver's
+//! unbounded walking inside one call and unbounded output — NOT long
+//! history: a deep or long chain derives batch-by-batch THROUGH this
+//! queue, each node a batch of one, the running output carried in the
+//! parents' outputs, so a 10,000-commit linear repo derives fully (the
+//! regression pin in `m6a_test.rs`). A node that trips either cap is
+//! quarantined IMMEDIATELY ([`DERIVE_MAX_ATTEMPTS`] does not apply — the
+//! caps are structural, so retrying cannot help), rows a `derive_reports`
+//! reason, and its children still derive on the empty marker (the
+//! never-head-of-line rule above).
+//!
+//! **Poison taint.** A node that derived on an empty-marker parent
+//! (poisoned, or tainted itself) records `tainted = 1` with `poison_cs`
+//! naming the NEAREST poisoned ancestor; descendants inherit both through
+//! the parents' contributions ([`ParentOut`]). Done-with-taint is still
+//! done — the read routes raise their degraded flag off the row — so a
+//! poisoned mid-chain node never head-of-line blocks, and nothing
+//! downstream presents itself as exact.
 //!
 //! Single-process note: the lease exists for crash recovery, not for
 //! multi-writer safety — there is exactly one queue task per process and
@@ -66,6 +79,7 @@
 //! framework — the per-(kind, changeset) is-derived/is-pending query — is
 //! [`status`], tested in `m6a_test.rs`.
 
+use std::cell::Cell;
 use std::fmt;
 use std::sync::Arc;
 
@@ -83,28 +97,30 @@ use crate::state::AppState;
 /// `derive_reports` row (the plan's "skipped and reported").
 pub const DERIVE_MAX_ATTEMPTS: i64 = 3;
 
-/// Depth cap: the first-parent ancestor levels one derive call may span.
-/// A node whose first-parent chain is deeper is quarantined immediately —
-/// a deriver recursing that chain in a single call could not survive it.
-/// Long history is NOT capped: it derives batch-by-batch through the queue
-/// (each node a batch, the running output carried in the parents'
-/// outputs). The exact check is [`crate::db::derive_over_depth`]; the
-/// 1,000-ancestor default is an order-of-magnitude headroom over any
-/// plausible single-call recursion.
-pub const DERIVE_MAX_DEPTH: u64 = 1_000;
+/// The bootstrap per-call walk budget for kinds that do not override
+/// [`Deriver::walk_budget`]: the rows, tree nodes, and outputs one derive
+/// call may visit through its [`DeriveCtx`]. The budget is COOPERATIVE —
+/// it binds derivers that charge their visits through `ctx.charge`; a
+/// deriver issuing raw SQL past the ctx is not capped by it. It bounds a
+/// deriver's per-call work, NOT history depth: long history derives
+/// batch-by-batch through the queue (each node one call), so a linear repo
+/// of any length derives fully. The default covers a worst legitimate
+/// node — one visit per entry of a 100,000-entry (MAX_ENTRIES) changeset —
+/// with 2× headroom; kinds with heavier per-call shapes override with
+/// their own justified value.
+pub const DEFAULT_WALK_BUDGET: u64 = 200_000;
 
 /// Size cap on the framework-carried output of one node, matching the
 /// 16 MiB canonical-encoding cap. An over-cap output is never recorded —
 /// the node is quarantined immediately with the size reason.
 pub const DERIVE_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
-/// The quarantine reason for the depth cap (shared by the queue and eager
-/// paths so reports read identically wherever the cap fires).
-fn depth_cap_reason() -> String {
+/// The quarantine reason for the walk budget (shared by the queue and
+/// eager paths so reports read identically wherever the cap fires).
+fn walk_budget_reason(budget: u64) -> String {
     format!(
-        "derive depth cap exceeded: first-parent chain deeper than \
-         {DERIVE_MAX_DEPTH} ancestor levels; deep history must be derived \
-         iteratively per node through the queue"
+        "derive walk budget exhausted: a deriver's per-call budget of \
+         {budget} visits ran out"
     )
 }
 
@@ -114,6 +130,61 @@ fn size_cap_reason(len: usize) -> String {
         "derive output cap exceeded: {len} bytes exceeds the \
          {DERIVE_MAX_OUTPUT_BYTES}-byte per-node output cap"
     )
+}
+
+/// One derive call's walk budget (the kind's [`Deriver::walk_budget`]),
+/// handed to the deriver as part of the call. The budget is COOPERATIVE:
+/// it binds derivers that charge the rows, tree nodes, and outputs they
+/// visit through [`DeriveCtx::charge`] — a deriver issuing raw SQL past
+/// the ctx is not capped by it. An exhausted budget fails the call with
+/// [`DeriveFailure::WalkBudget`] — an immediate structural quarantine,
+/// since re-running the same node would walk the same graph.
+pub struct DeriveCtx {
+    remaining: Cell<u64>,
+}
+
+impl DeriveCtx {
+    fn new(walk_budget: u64) -> Self {
+        DeriveCtx {
+            remaining: Cell::new(walk_budget),
+        }
+    }
+
+    /// The budget left (tests and derivers that adapt their strategy).
+    pub fn remaining(&self) -> u64 {
+        self.remaining.get()
+    }
+
+    /// Charges `n` visits; `Err` once the budget is exhausted (the call is
+    /// then quarantined with the walk-budget reason). Charging zero is a
+    /// no-op that never fails.
+    pub fn charge(&self, n: u64) -> Result<(), DeriveFailure> {
+        let left = self.remaining.get();
+        if n >= left {
+            self.remaining.set(0);
+            return Err(DeriveFailure::WalkBudget);
+        }
+        self.remaining.set(left - n);
+        Ok(())
+    }
+}
+
+/// Why a derivation failed. `Fail` counts toward
+/// [`DERIVE_MAX_ATTEMPTS`] (a transient deriver error may succeed on
+/// retry); `WalkBudget` is structural and quarantines immediately.
+#[derive(Debug, Clone)]
+pub enum DeriveFailure {
+    /// A deriver-reported failure — the reason rowed into
+    /// `derive_reports` when the node is quarantined.
+    Fail(PoisonReason),
+    /// The per-call walk budget ran out (see [`DeriveCtx`]).
+    WalkBudget,
+}
+
+impl From<PoisonReason> for DeriveFailure {
+    fn from(reason: PoisonReason) -> Self {
+        DeriveFailure::Fail(reason)
+    }
 }
 
 /// One parent's derived output, opaque to the framework (the bytes are
@@ -167,15 +238,63 @@ pub trait Deriver: Send + Sync {
         false
     }
 
-    /// Derives this node from its parents' outputs, in parent `ord` order.
-    /// `Err` poisons the node after [`DERIVE_MAX_ATTEMPTS`] attempts.
+    /// This kind's per-call COOPERATIVE walk budget (see
+    /// [`DEFAULT_WALK_BUDGET`] for the bootstrap default and its
+    /// justification). It binds derivers that charge their visits through
+    /// `ctx.charge`; a deriver issuing raw SQL past the ctx is not capped
+    /// by it. Override with a comment justifying the value.
+    fn walk_budget(&self) -> u64 {
+        DEFAULT_WALK_BUDGET
+    }
+
+    /// Derives this node from its parents' contributions, in parent `ord`
+    /// order. A [`DeriveFailure::Fail`] poisons the node after
+    /// [`DERIVE_MAX_ATTEMPTS`] attempts; a [`DeriveFailure::WalkBudget`]
+    /// (the [`DeriveCtx`] budget ran out) quarantines immediately. The
+    /// framework reads the poison taint off the same contributions — a
+    /// node that derived on an empty-marker parent records done WITH
+    /// taint, never as silently-exact data.
     fn derive(
         &self,
+        ctx: &DeriveCtx,
         conn: &Connection,
         repo_id: i64,
         cs: Id,
-        parents_done: &[DerivedOut],
-    ) -> Result<DerivedOut, PoisonReason>;
+        parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure>;
+}
+
+/// One parent's contribution to a child derivation: the output the child
+/// receives (the empty marker when the parent is poisoned, pending, or
+/// row-less), whether the parent row is ITSELF poison, and the parent's
+/// inherited taint. The framework derives the child's own taint from this
+/// slice — see [`collapse_taint`] — and the deriver may read it too.
+#[derive(Debug, Clone)]
+pub struct ParentOut {
+    pub output: DerivedOut,
+    /// The parent row is state='poison' (this parent is itself the
+    /// nearest poisoned ancestor for the child).
+    pub poisoned: bool,
+    /// The parent derived on an empty-marker parent somewhere up ITS
+    /// ancestor set.
+    pub tainted: bool,
+    /// The parent's nearest poisoned ancestor, when tainted.
+    pub poison_cs: Option<Id>,
+}
+
+/// Collapses the parents' contributions into the child's own taint:
+/// tainted when ANY parent carried taint (directly poisoned parents are
+/// tainted by definition); `poison_cs` names the NEAREST poisoned
+/// ancestor — a directly poisoned first parent (in `ord` order) outranks
+/// an inherited one, being one edge closer.
+pub(crate) fn collapse_taint(parents: &[ParentOut]) -> (bool, Option<Id>) {
+    if let Some(p) = parents.iter().find(|p| p.poisoned) {
+        return (true, p.poison_cs);
+    }
+    match parents.iter().find(|p| p.tainted) {
+        Some(p) => (true, p.poison_cs),
+        None => (false, None),
+    }
 }
 
 /// A registered kind: the deriver plus its stable `derive_kinds` id
@@ -235,18 +354,14 @@ pub fn enqueue_changeset(
     for kind in &registry.kinds {
         if kind.deriver.eager() {
             // The caps gate the eager path exactly as they gate the queue:
-            // an over-depth chain or an over-cap output quarantines the
-            // node immediately instead of deriving (inside the create's
-            // transaction, so the quarantine is atomic with the write).
-            if db::derive_over_depth(conn, repo_id, &cs, DERIVE_MAX_DEPTH)? {
-                db::derive_poison_now(conn, kind.id, repo_id, &cs, &depth_cap_reason(), now_ns)?;
-                continue;
-            }
-            let outs = db::derive_parent_outputs(conn, kind.id, repo_id, parents)?
-                .into_iter()
-                .map(|o| o.map(DerivedOut).unwrap_or_else(DerivedOut::empty))
-                .collect::<Vec<_>>();
-            match kind.deriver.derive(conn, repo_id, cs, &outs) {
+            // an exhausted walk budget or an over-cap output quarantines
+            // the node immediately instead of deriving (inside the
+            // create's transaction, so the quarantine is atomic with the
+            // write).
+            let outs = db::derive_parent_outputs(conn, kind.id, repo_id, parents)?;
+            let (tainted, poison_cs) = collapse_taint(&outs);
+            let ctx = DeriveCtx::new(kind.deriver.walk_budget());
+            match kind.deriver.derive(&ctx, conn, repo_id, cs, &outs) {
                 Ok(out) if out.as_bytes().len() > DERIVE_MAX_OUTPUT_BYTES => {
                     db::derive_poison_now(
                         conn,
@@ -257,10 +372,27 @@ pub fn enqueue_changeset(
                         now_ns,
                     )?;
                 }
-                Ok(out) => {
-                    db::derive_state_insert_done(conn, kind.id, repo_id, &cs, out.as_bytes())?
+                Ok(out) => db::derive_state_insert_done(
+                    conn,
+                    kind.id,
+                    repo_id,
+                    &cs,
+                    out.as_bytes(),
+                    tainted,
+                    poison_cs.as_ref(),
+                )?,
+                Err(DeriveFailure::WalkBudget) => {
+                    let budget = kind.deriver.walk_budget();
+                    db::derive_poison_now(
+                        conn,
+                        kind.id,
+                        repo_id,
+                        &cs,
+                        &walk_budget_reason(budget),
+                        now_ns,
+                    )?;
                 }
-                Err(reason) => {
+                Err(DeriveFailure::Fail(reason)) => {
                     db::derive_fail_attempt(conn, kind.id, repo_id, &cs, &reason.0, now_ns)?;
                 }
             }
@@ -284,8 +416,8 @@ pub enum DeriveStatus {
     /// Derived; carries the framework-stored output.
     Done(DerivedOut),
     /// Quarantined — [`DERIVE_MAX_ATTEMPTS`] failed attempts, or one of
-    /// the structural caps (depth, output size) immediately; the reason is
-    /// in `derive_reports`.
+    /// the structural caps (walk budget, output size) immediately; the
+    /// reason is in `derive_reports`.
     Poison,
 }
 
@@ -318,6 +450,29 @@ pub async fn status(
                 // The CHECK constraint admits exactly these four states.
                 _ => DeriveStatus::Poison,
             }))
+        })
+        .await
+}
+
+/// Boot-time backfill (the plan's deferred-backfill check): for every
+/// registered kind, enqueue every changeset that has no row yet — the
+/// changesets a registry-less process wrote (offline import) or a
+/// pre-derive database carried (in-place upgrade). `serve` runs this once
+/// before the accept loop and the background tasks start, so the first
+/// queue pass sees the whole backlog already ordered parents-first
+/// ([`crate::db::derive_backfill`]'s generation ordering). Idempotent: a
+/// reboot with a drained queue enqueues nothing.
+pub async fn backfill(state: &AppState) -> Result<(), ApiError> {
+    if state.derive.is_empty() {
+        return Ok(());
+    }
+    let kind_ids: Vec<i64> = state.derive.kinds().iter().map(|k| k.id).collect();
+    state
+        .write(move |store| {
+            for kind_id in kind_ids {
+                db::derive_backfill(store.conn(), kind_id).map_err(ApiError::log_internal)?;
+            }
+            Ok(())
         })
         .await
 }
@@ -358,14 +513,33 @@ pub async fn derive_pass(state: &AppState) -> Result<PassReport, ApiError> {
     Ok(report)
 }
 
-/// Sweeps the kind's expired leases inside one write transaction: each
-/// expired holder loses its lease and burns one attempt (`lease expired`
-/// as the reason when it poisons).
+/// Sweeps the kind's expired leases: each expired holder loses its lease
+/// and burns one attempt (`lease expired` as the reason when it poisons).
+/// Read-probe first, exactly like the snapshot-GC pass: a quiet server's
+/// periodic sweep must never occupy the single-writer slot (that would
+/// 503 concurrent writes); the write transaction runs only when there is
+/// something to sweep.
 async fn sweep_expired(
     state: &AppState,
     kind: &Arc<RegisteredKind>,
 ) -> Result<PassReport, ApiError> {
     let now = state.now_ns() as i64;
+    let probe_kind = Arc::clone(kind);
+    let has_expired = {
+        let kind_id = probe_kind.id;
+        state
+            .read(move |conn| {
+                Ok::<bool, ApiError>(
+                    !db::derive_expired_leases(conn, kind_id, now)
+                        .map_err(ApiError::log_internal)?
+                        .is_empty(),
+                )
+            })
+            .await?
+    };
+    if !has_expired {
+        return Ok(PassReport::default());
+    }
     let kind = Arc::clone(kind);
     state
         .write(move |store| {
@@ -422,48 +596,6 @@ async fn drain(
             return Ok(());
         };
 
-        // Depth cap, BEFORE the lease (no attempt burned — the caps are
-        // structural): a first-parent chain deeper than DERIVE_MAX_DEPTH is
-        // exactly what a recursive deriver could not survive in one call.
-        // Quarantine immediately; the children proceed on the empty marker.
-        // The generation pre-check inside keeps the common short-chain case
-        // O(1); the bounded exact walk runs only on generation-over-cap
-        // nodes. Long history itself derives batch-by-batch through this
-        // very loop.
-        let over_depth = {
-            let cs_for_depth = cs;
-            state
-                .read(move |conn| {
-                    db::derive_over_depth(conn, repo_id, &cs_for_depth, DERIVE_MAX_DEPTH)
-                        .map_err(ApiError::log_internal)
-                })
-                .await?
-        };
-        if over_depth {
-            let now = state.now_ns() as i64;
-            let reason = depth_cap_reason();
-            let kind_for_poison = Arc::clone(kind);
-            match state
-                .write(move |store| {
-                    let conn = store.conn();
-                    let tx = conn
-                        .unchecked_transaction()
-                        .map_err(ApiError::log_internal)?;
-                    db::derive_poison_now(&tx, kind_for_poison.id, repo_id, &cs, &reason, now)
-                        .map_err(ApiError::log_internal)?;
-                    tx.commit().map_err(ApiError::log_internal)?;
-                    Ok(())
-                })
-                .await
-            {
-                Ok(()) => (),
-                Err(e) if e.code() == ApiCode::WriterBusy => return Ok(()),
-                Err(e) => return Err(e),
-            };
-            report.poisoned += 1;
-            continue;
-        }
-
         // Lease. A stale pick (someone else took it — impossible within one
         // process, tolerated anyway) just falls through to the next pick.
         let now = state.now_ns() as i64;
@@ -508,16 +640,18 @@ async fn drain(
                     // then (the same shape a parentless node has).
                     .unwrap_or_default();
                 let outs = db::derive_parent_outputs(conn, kind_for_derive.id, repo_id, &parents)
-                    .map_err(ApiError::log_internal)?
-                    .into_iter()
-                    .map(|o| o.map(DerivedOut).unwrap_or_else(DerivedOut::empty))
-                    .collect::<Vec<_>>();
-                // Inner result on purpose: a deriver `Err` is a FAILED
-                // ATTEMPT (attempted below), not an API error — the outer
-                // error type stays the write-slot's.
-                match kind_for_derive.deriver.derive(conn, repo_id, cs, &outs) {
-                    Ok(out) => Ok(Ok((cs, out))),
-                    Err(reason) => Ok(Err(reason)),
+                    .map_err(ApiError::log_internal)?;
+                let ctx = crate::derive::DeriveCtx::new(kind_for_derive.deriver.walk_budget());
+                // Inner result on purpose: a deriver failure is a FAILED
+                // NODE (handled below), not an API error — the outer error
+                // type stays the write-slot's.
+                let taint = collapse_taint(&outs);
+                match kind_for_derive
+                    .deriver
+                    .derive(&ctx, conn, repo_id, cs, &outs)
+                {
+                    Ok(out) => Ok(Ok((cs, out, taint))),
+                    Err(failure) => Ok(Err(failure)),
                 }
             })
             .await;
@@ -532,38 +666,69 @@ async fn drain(
             // contract), and the pass reports the failure to its caller.
             Err(e) => return Err(e),
         };
-        let (cs, out) = match outcome {
-            Ok(pair) => pair,
-            Err(reason) => {
-                // Failed attempt: attempts+1, poison + report at the cap —
-                // one transaction so the row and its report commit together.
+        let (cs, out, taint) = match outcome {
+            Ok(triple) => triple,
+            Err(failure) => {
+                // Structural failure (walk budget): immediate quarantine —
+                // retrying the same node would walk the same graph. A
+                // plain `Fail` is a failed attempt: attempts+1, poison +
+                // report at the cap. Either way one transaction puts the
+                // row and (when poisoned) its report in together.
                 let now = state.now_ns() as i64;
                 let kind_for_fail = Arc::clone(kind);
-                let poisoned = match state
-                    .write(move |store| {
-                        let conn = store.conn();
-                        let tx = conn
-                            .unchecked_transaction()
-                            .map_err(ApiError::log_internal)?;
-                        let poisoned = db::derive_fail_attempt(
-                            &tx,
-                            kind_for_fail.id,
-                            repo_id,
-                            &cs,
-                            &reason.0,
-                            now,
-                        )
-                        .map_err(ApiError::log_internal)?;
-                        tx.commit().map_err(ApiError::log_internal)?;
-                        Ok(poisoned)
-                    })
-                    .await
-                {
-                    Ok(poisoned) => poisoned,
+                let outcome = match &failure {
+                    DeriveFailure::WalkBudget => {
+                        let reason = walk_budget_reason(kind_for_fail.deriver.walk_budget());
+                        state
+                            .write(move |store| {
+                                let conn = store.conn();
+                                let tx = conn
+                                    .unchecked_transaction()
+                                    .map_err(ApiError::log_internal)?;
+                                db::derive_poison_now(
+                                    &tx,
+                                    kind_for_fail.id,
+                                    repo_id,
+                                    &cs,
+                                    &reason,
+                                    now,
+                                )
+                                .map_err(ApiError::log_internal)?;
+                                tx.commit().map_err(ApiError::log_internal)?;
+                                Ok(None::<bool>)
+                            })
+                            .await
+                    }
+                    DeriveFailure::Fail(reason) => {
+                        let reason = reason.0.clone();
+                        state
+                            .write(move |store| {
+                                let conn = store.conn();
+                                let tx = conn
+                                    .unchecked_transaction()
+                                    .map_err(ApiError::log_internal)?;
+                                let poisoned = db::derive_fail_attempt(
+                                    &tx,
+                                    kind_for_fail.id,
+                                    repo_id,
+                                    &cs,
+                                    &reason,
+                                    now,
+                                )
+                                .map_err(ApiError::log_internal)?;
+                                tx.commit().map_err(ApiError::log_internal)?;
+                                Ok(Some(poisoned))
+                            })
+                            .await
+                    }
+                };
+                match outcome {
+                    // `None` = the immediate WalkBudget quarantine; `Some`
+                    // = a failed attempt that poisons only at the cap.
+                    Ok(quarantined) => report.poisoned += usize::from(quarantined.unwrap_or(true)),
                     Err(e) if e.code() == ApiCode::WriterBusy => return Ok(()),
                     Err(e) => return Err(e),
                 };
-                report.poisoned += usize::from(poisoned);
                 continue;
             }
         };
@@ -609,6 +774,8 @@ async fn drain(
                     repo_id,
                     &cs,
                     out.as_bytes(),
+                    taint.0,
+                    taint.1.as_ref(),
                 )
                 .map_err(ApiError::log_internal)
             })

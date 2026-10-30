@@ -161,6 +161,20 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
+    /// Blame a file: per-line attribution to the changeset that introduced
+    /// it (first-parent semantics; default: at head).
+    Blame {
+        /// Repo-relative path.
+        path: String,
+        /// Changeset id or ref name (default: head).
+        #[arg(long)]
+        at: Option<String>,
+        /// Emit {"lines":[{cs,author,text}]}.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
     /// List a tree's entries (default: the root at head).
     Ls {
         /// Directory path (default: the root).
@@ -377,6 +391,12 @@ fn main() {
         } => verbs::commit::run(cwd, &message, author.as_deref(), &net.net()),
         Cmd::Land { key, net } => verbs::land::run(cwd, key.as_deref(), &net.net()),
         Cmd::Cat { path, at, net } => verbs::reads::cat(cwd, &path, at.as_deref(), &net.net()),
+        Cmd::Blame {
+            path,
+            at,
+            json,
+            net,
+        } => verbs::reads::blame(cwd, &path, at.as_deref(), json, &net.net()),
         Cmd::Ls {
             path,
             at,

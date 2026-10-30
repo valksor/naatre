@@ -946,11 +946,12 @@ impl naatre_server::derive::Deriver for QueueProbe {
 
     fn derive(
         &self,
+        _ctx: &naatre_server::derive::DeriveCtx,
         _conn: &rusqlite::Connection,
         _repo_id: i64,
         cs: Id,
-        parents_done: &[naatre_server::derive::DerivedOut],
-    ) -> Result<naatre_server::derive::DerivedOut, naatre_server::derive::PoisonReason> {
+        parents_done: &[naatre_server::derive::ParentOut],
+    ) -> Result<naatre_server::derive::DerivedOut, naatre_server::derive::DeriveFailure> {
         self.calls.lock().unwrap().push(cs);
         Ok(naatre_server::derive::DerivedOut(vec![
             (parents_done.len() + 1) as u8,

@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 4;
+pub const MAX_SUPPORTED: i64 = 6;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -93,6 +93,35 @@ CREATE TABLE derive_state(kind INTEGER NOT NULL, repo_id INTEGER NOT NULL, cs BL
 CREATE INDEX idx_derive_state_kind_state ON derive_state(kind, state);
 CREATE TABLE derive_reports(kind INTEGER NOT NULL, repo_id INTEGER NOT NULL, cs BLOB NOT NULL, reason TEXT NOT NULL, ts_ns INTEGER NOT NULL);
 CREATE INDEX idx_derive_reports_node ON derive_reports(kind, repo_id, cs);
+"#,
+    ),
+    // M6b: the served-surface tables of the blame and path_history derived
+    // kinds. `derive_state.output` carries the framework's inter-node
+    // handoff; these are the kinds' own keyed, idempotent stores the read
+    // routes query (commit_graph keeps its state entirely in the handoff
+    // output and needs no table). `blame_state` is the per-changeset
+    // DIFF-STATE: for every path the changeset touched, its blob id and the
+    // PARENT's blob id — never whole-file annotations — so a blame walk is
+    // two point lookups per visited chain node. `path_history` is the
+    // by-path inverted index (path → the (generation, changeset, op)
+    // touches), newest-first by the PK order.
+    (
+        5,
+        r#"
+CREATE TABLE blame_state(repo_id INTEGER NOT NULL, cs BLOB NOT NULL, path TEXT NOT NULL, blob_id BLOB, parent_blob_id BLOB, PRIMARY KEY(repo_id, cs, path));
+CREATE TABLE path_history(repo_id INTEGER NOT NULL, path TEXT NOT NULL, gen INTEGER NOT NULL, cs BLOB NOT NULL, op INTEGER NOT NULL, PRIMARY KEY(repo_id, path, gen, cs));
+"#,
+    ),
+    // M6b round 2: poison TAINT on the queue rows. A node that derived on
+    // an empty-marker parent (poison, or a poison-bearing ancestor) records
+    // tainted=1 with poison_cs = the NEAREST poisoned ancestor's changeset
+    // id; descendants inherit both. Reads raise their degraded flag off
+    // this row in O(1) instead of re-deriving where the poison sits.
+    (
+        6,
+        r#"
+ALTER TABLE derive_state ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derive_state ADD COLUMN poison_cs BLOB;
 "#,
     ),
 ];

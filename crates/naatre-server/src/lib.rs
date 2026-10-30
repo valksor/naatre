@@ -23,6 +23,7 @@ pub mod auth;
 pub mod authz;
 pub mod db;
 pub mod derive;
+pub mod derived;
 pub mod extract;
 pub mod import;
 pub mod land;
@@ -76,6 +77,7 @@ pub fn router(state: AppState) -> axum::Router {
         )
         .route("/v1/repos/{r}/trees/{id}", get(routes::trees::get_tree))
         .route("/v1/repos/{r}/log", get(routes::history::log))
+        .route("/v1/repos/{r}/blame", get(routes::history::blame))
         .route("/v1/repos/{r}/diff", get(routes::history::diff))
         .route("/v1/repos/{r}/merge-base", get(routes::history::merge_base))
         .route("/v1/repos/{r}/file", get(routes::history::file))

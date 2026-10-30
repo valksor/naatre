@@ -106,6 +106,15 @@ pub async fn serve(data: &Path, listen: &str, log_level: &str) -> i32 {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
+    // The production derived-data kinds (M6b): blame, path_history,
+    // commit_graph. The offline `import` verb registers none — the backlog
+    // backfills on the serving side (`serve`'s boot-time backfill).
+    let mut state = state;
+    for deriver in naatre_server::derived::production_kinds() {
+        if let Err(e) = state.register_deriver(deriver) {
+            return fail(e);
+        }
+    }
     naatre_server::middleware::logging_setup(log_level);
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
@@ -173,7 +182,11 @@ pub fn import(data: &Path, into: Option<&str>, skip_unsupported: bool, git_path:
         skip_unsupported,
     };
     println!("import: source {}", opts.git_path.display());
-    match naatre_server::import::run(data, &opts) {
+    // No derived-data kinds are registered in the offline import process
+    // (kinds belong to `serve`); the backlog backfills through the queue on
+    // the serving side (M6b's registration step).
+    let derive = naatre_server::derive::DeriveRegistry::default();
+    match naatre_server::import::run(data, &opts, &derive) {
         Ok(report) => {
             print_report(&report);
             i32::from(report.status != "ok")

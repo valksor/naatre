@@ -113,8 +113,10 @@ impl IntoResponse for ApiError {
         let request_id = current_request_id();
         let status = self.code.status();
         let mut response = (status, Json(self.body(&request_id))).into_response();
-        if self.code == ApiCode::WriterBusy {
-            // Backpressure hint for the single-writer slot (API conventions).
+        if self.code == ApiCode::WriterBusy || self.code == ApiCode::DerivationPending {
+            // Backpressure hint: the single-writer slot, and the
+            // read-during-backlog contract's derived reads (M6). The
+            // README pins `Retry-After: 1` for every retryable 503.
             response
                 .headers_mut()
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));

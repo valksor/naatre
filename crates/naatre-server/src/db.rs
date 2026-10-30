@@ -1239,6 +1239,12 @@ pub struct DeriveStateRow {
     pub lease_expires_ns: Option<i64>,
     pub attempts: i64,
     pub output: Option<Vec<u8>>,
+    /// Poison taint (migration 6): the node derived on an empty-marker
+    /// parent somewhere up its ancestor set. `poison_cs` names the NEAREST
+    /// poisoned ancestor. Reads raise their degraded flag off these two in
+    /// O(1).
+    pub tainted: bool,
+    pub poison_cs: Option<Id>,
 }
 
 /// The id of registered kind `name`, or `None`.
@@ -1285,18 +1291,28 @@ pub fn derive_enqueue_pending(
 
 /// Records a COMPLETED eager derivation straight to state='done' (the eager
 /// path runs inside the changeset's own write transaction — there is no
-/// lease to take and nothing can interleave).
+/// lease to take and nothing can interleave). Taint comes from the
+/// parents the derivation consumed, exactly as in the queue's record step.
 pub fn derive_state_insert_done(
     conn: &Connection,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     output: &[u8],
+    tainted: bool,
+    poison_cs: Option<&Id>,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO derive_state(kind, repo_id, cs, state, attempts, output) \
-         VALUES (?1, ?2, ?3, 'done', 0, ?4)",
-        params![kind_id, repo_id, cs.0.as_slice(), output],
+        "INSERT INTO derive_state(kind, repo_id, cs, state, attempts, output, tainted, poison_cs) \
+         VALUES (?1, ?2, ?3, 'done', 0, ?4, ?5, ?6)",
+        params![
+            kind_id,
+            repo_id,
+            cs.0.as_slice(),
+            output,
+            tainted as i64,
+            poison_cs.map(|c| c.0.as_slice()),
+        ],
     )?;
     Ok(())
 }
@@ -1310,7 +1326,8 @@ pub fn derive_get(
     cs: &Id,
 ) -> rusqlite::Result<Option<DeriveStateRow>> {
     conn.query_row(
-        "SELECT state, lease_expires_ns, attempts, output FROM derive_state \
+        "SELECT state, lease_expires_ns, attempts, output, tainted, poison_cs \
+         FROM derive_state \
          WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
         params![kind_id, repo_id, cs.0.as_slice()],
         |row| {
@@ -1319,6 +1336,10 @@ pub fn derive_get(
                 lease_expires_ns: row.get(1)?,
                 attempts: row.get(2)?,
                 output: row.get(3)?,
+                tainted: row.get::<_, i64>(4)? != 0,
+                poison_cs: row
+                    .get::<_, Option<Vec<u8>>>(5)?
+                    .map(|b| Id(b.try_into().expect("poison cs id is 32 bytes"))),
             })
         },
     )
@@ -1376,38 +1397,65 @@ pub fn derive_lease(
     Ok(n == 1)
 }
 
-/// One parent's framework-stored output: `Some(bytes)` only for a DONE
-/// parent; poison, deriving, pending, and row-less parents yield `None`
-/// (the caller maps that to the empty-marker [`crate::derive::DerivedOut`]),
-/// in the parents' `ord` order.
+/// One parent's contribution to a child derivation, in the parents' `ord`
+/// order: the output the child receives (the empty marker for a poisoned,
+/// pending, or row-less parent), whether the parent row is ITSELF poison,
+/// and the parent's inherited taint (see [`DeriveStateRow::tainted`]).
 pub fn derive_parent_outputs(
     conn: &Connection,
     kind_id: i64,
     repo_id: i64,
     parents: &[Id],
-) -> rusqlite::Result<Vec<Option<Vec<u8>>>> {
+) -> rusqlite::Result<Vec<crate::derive::ParentOut>> {
     parents
         .iter()
         .map(|p| {
-            Ok(db_match_done(
-                conn.query_row(
-                    "SELECT state, output FROM derive_state \
+            let row = conn
+                .query_row(
+                    "SELECT state, output, tainted, poison_cs FROM derive_state \
                      WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
                     params![kind_id, repo_id, p.0.as_slice()],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<Vec<u8>>>(1)?,
+                            row.get::<_, i64>(2)? != 0,
+                            row.get::<_, Option<Vec<u8>>>(3)?,
+                        ))
+                    },
                 )
-                .optional()?,
-            ))
+                .optional()?;
+            Ok(match row {
+                Some((state, output, tainted, poison_cs)) if state == "done" => {
+                    crate::derive::ParentOut {
+                        output: crate::derive::DerivedOut(output.unwrap_or_default()),
+                        poisoned: false,
+                        tainted,
+                        poison_cs: poison_cs
+                            .map(|b| Id(b.try_into().expect("poison cs id is 32 bytes"))),
+                    }
+                }
+                // A poisoned parent hands down the empty marker and IS the
+                // nearest poisoned ancestor for this child.
+                Some((state, _, _, _)) if state == "poison" => crate::derive::ParentOut {
+                    output: crate::derive::DerivedOut::empty(),
+                    poisoned: true,
+                    tainted: true,
+                    poison_cs: Some(*p),
+                },
+                // Pending, deriving, or no row: the documented empty-marker
+                // fallback with no taint (the framework re-runs the child
+                // if the parent's real output lands later — see the lease
+                // re-derivation contract).
+                _ => crate::derive::ParentOut {
+                    output: crate::derive::DerivedOut::empty(),
+                    poisoned: false,
+                    tainted: false,
+                    poison_cs: None,
+                },
+            })
         })
         .collect()
-}
-
-/// `(state, output)` → the done-parent output, `None` for everything else.
-fn db_match_done(row: Option<(String, Option<Vec<u8>>)>) -> Option<Vec<u8>> {
-    match row {
-        Some((state, output)) if state == "done" => output,
-        _ => None,
-    }
 }
 
 /// Records a finished queue derivation: state → 'done' with the output
@@ -1420,11 +1468,21 @@ pub fn derive_record_done(
     repo_id: i64,
     cs: &Id,
     output: &[u8],
+    tainted: bool,
+    poison_cs: Option<&Id>,
 ) -> rusqlite::Result<bool> {
     let n = conn.execute(
-        "UPDATE derive_state SET state = 'done', output = ?4, lease_expires_ns = NULL \
+        "UPDATE derive_state SET state = 'done', output = ?4, lease_expires_ns = NULL, \
+         tainted = ?5, poison_cs = ?6 \
          WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 AND state = 'deriving'",
-        params![kind_id, repo_id, cs.0.as_slice(), output],
+        params![
+            kind_id,
+            repo_id,
+            cs.0.as_slice(),
+            output,
+            tainted as i64,
+            poison_cs.map(|c| c.0.as_slice()),
+        ],
     )?;
     Ok(n == 1)
 }
@@ -1492,56 +1550,24 @@ pub fn derive_expired_leases(
     rows.collect()
 }
 
-/// Whether `cs`'s first-parent chain (the canonical recursion axis, the one
-/// `log_chain` walks) exceeds `cap` ancestor levels — the exact check behind
-/// the derive depth cap. Bounded walk: at most cap+1 steps. Callers pre-skip
-/// with the O(1) generation bound (a node whose generation is at or under
-/// the cap cannot exceed it — every first-parent step drops generation by at
-/// least one, merges only inflate it), so the walk runs only for
-/// generation-over-cap nodes, where it is the exact answer.
-pub fn derive_over_depth(
-    conn: &Connection,
-    repo_id: i64,
-    cs: &Id,
-    cap: u64,
-) -> rusqlite::Result<bool> {
-    let node_gen: Option<i64> = conn
-        .query_row(
-            "SELECT generation FROM changesets WHERE repo_id = ?1 AND id = ?2",
-            params![repo_id, cs.0.as_slice()],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let Some(node_gen) = node_gen else {
-        // Not a changeset of this repo: not a depth problem (the deriver
-        // sees an empty parent list, the same shape a parentless node has).
-        return Ok(false);
-    };
-    if node_gen <= 0 || node_gen as u64 <= cap {
-        return Ok(false);
-    }
-    let mut stmt = conn.prepare_cached(
-        "SELECT parent FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2 \
-         ORDER BY ord ASC LIMIT 1",
-    )?;
-    let mut current = *cs;
-    let mut steps: u64 = 0;
-    loop {
-        let parent: Option<Vec<u8>> = stmt
-            .query_row(params![repo_id, current.0.as_slice()], |r| r.get(0))
-            .optional()?;
-        let Some(parent) = parent else {
-            return Ok(false); // reached the root within the cap
-        };
-        steps += 1;
-        if steps > cap {
-            return Ok(true);
-        }
-        current = Id(parent.try_into().expect("parent id is 32 bytes"));
-    }
+/// Backfills one kind's queue: enqueues every changeset that has no
+/// `derive_state` row for `kind_id` (an M6b kind registered after its
+/// changesets existed — bulk import through a registry-less process, or an
+/// in-place upgrade of a pre-derive database). Insertion order follows
+/// `generation ASC`, so the queue's `rowid`-ordered pick derives parents
+/// before children with no extra sequencing. `OR IGNORE`: a row that
+/// already exists (eager-derived, previously enqueued) is never clobbered.
+/// Returns the number of rows enqueued.
+pub fn derive_backfill(conn: &Connection, kind_id: i64) -> rusqlite::Result<usize> {
+    conn.execute(
+        "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
+         SELECT ?1, c.repo_id, c.id, 'pending' FROM changesets c \
+         ORDER BY c.generation ASC, c.rowid ASC",
+        params![kind_id],
+    )
 }
 
-/// Immediate quarantine for the structural caps (depth, output size):
+/// Immediate quarantine for the structural caps (walk budget, output size):
 /// state='poison' plus a `derive_reports` row, NO attempt arithmetic — the
 /// caps are structural, so retrying cannot help (unlike
 /// [`derive_fail_attempt`]). UPSERT: the eager path calls this before any
@@ -1567,6 +1593,244 @@ pub fn derive_poison_now(
         params![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
     )?;
     Ok(())
+}
+
+// ---- derived kinds' served-surface storage (M6b) ---------------------------
+//
+// The blame and path_history kinds keep their read-surface rows here (the
+// migration-5 tables); commit_graph keeps its state entirely in the
+// framework handoff output. All statements are keyed upserts — the
+// framework re-runs derivations after lost leases, so a repeat write must
+// be a no-op, never a duplicate.
+
+/// One path's entry of a changeset's blame DIFF-STATE: the path's blob id
+/// in this changeset and its blob id in the FIRST parent (`None` = the
+/// path does not exist there — an add at this node, or the node's del).
+pub struct BlameStateEntry {
+    pub path: String,
+    pub blob_id: Option<Id>,
+    pub parent_blob_id: Option<Id>,
+}
+
+/// Writes one changeset's blame diff-state (a keyed `OR REPLACE` per path:
+/// a re-run after a lost lease replaces, never duplicates).
+pub fn blame_state_put(
+    conn: &Connection,
+    repo_id: i64,
+    cs: &Id,
+    entries: &[BlameStateEntry],
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR REPLACE INTO blame_state(repo_id, cs, path, blob_id, parent_blob_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for e in entries {
+        stmt.execute(params![
+            repo_id,
+            cs.0.as_slice(),
+            e.path,
+            e.blob_id.as_ref().map(|b| b.0.as_slice()),
+            e.parent_blob_id.as_ref().map(|b| b.0.as_slice()),
+        ])?;
+    }
+    Ok(())
+}
+
+/// One path's blame diff-state row for a changeset:
+/// `(blob_id, parent_blob_id)`, both optional (del / add), or `None` when
+/// the changeset did not touch the path. The blame walk's per-node
+/// question — indexed point query, one per visited chain node.
+pub fn blame_state_get(
+    conn: &Connection,
+    repo_id: i64,
+    cs: &Id,
+    path: &str,
+) -> rusqlite::Result<Option<(Option<Id>, Option<Id>)>> {
+    conn.query_row(
+        "SELECT blob_id, parent_blob_id FROM blame_state \
+         WHERE repo_id = ?1 AND cs = ?2 AND path = ?3",
+        params![repo_id, cs.0.as_slice(), path],
+        |row| {
+            let blob: Option<Vec<u8>> = row.get(0)?;
+            let parent: Option<Vec<u8>> = row.get(1)?;
+            Ok((
+                blob.map(|b| Id(b.try_into().expect("blob id is 32 bytes"))),
+                parent.map(|b| Id(b.try_into().expect("parent blob id is 32 bytes"))),
+            ))
+        },
+    )
+    .optional()
+}
+
+/// Writes one changeset's path-history index rows (an `OR IGNORE` per
+/// path: the PK (repo_id, path, gen, cs) makes a re-run a no-op).
+pub fn path_history_put(
+    conn: &Connection,
+    repo_id: i64,
+    generation: i64,
+    cs: &Id,
+    changes: &[FileChangeRow],
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT OR IGNORE INTO path_history(repo_id, path, gen, cs, op) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for c in changes {
+        stmt.execute(params![repo_id, c.path, generation, cs.0.as_slice(), c.op,])?;
+    }
+    Ok(())
+}
+
+/// One page of the derived path history for one path, newest first
+/// (generation DESC, changeset id ASC), resuming after a cursor row.
+/// Joins `changesets` so the page carries the log-entry fields.
+pub fn path_history_page(
+    conn: &Connection,
+    repo_id: i64,
+    path: &str,
+    after: Option<(i64, Vec<u8>)>,
+    limit: i64,
+) -> rusqlite::Result<Vec<LogRow>> {
+    let (after_gen, after_cs) = match after {
+        Some((g, id)) => (Some(g), id),
+        None => (None, Vec::new()),
+    };
+    let mut stmt = conn.prepare_cached(
+        "SELECT c.id, c.author, c.message, c.timestamp_ns, c.generation, c.principal \
+         FROM path_history h \
+         JOIN changesets c ON c.repo_id = h.repo_id AND c.id = h.cs \
+         WHERE h.repo_id = ?1 AND h.path = ?2 \
+           AND (?3 IS NULL OR h.gen < ?3 OR (h.gen = ?3 AND h.cs > ?4)) \
+         ORDER BY h.gen DESC, h.cs ASC LIMIT ?5",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![repo_id, path, after_gen, after_cs, limit],
+            log_row_from,
+        )?
+        .collect::<rusqlite::Result<Vec<LogRow>>>()?;
+    Ok(rows)
+}
+
+/// The un-accelerated path history: a full `file_changes` scan by path —
+/// the same rows the derived index holds, computed on the fly. This is the
+/// fallback for a server on which the path_history kind is not registered,
+/// and the parity oracle's brute force.
+pub fn path_history_scan(
+    conn: &Connection,
+    repo_id: i64,
+    path: &str,
+    after: Option<(i64, Vec<u8>)>,
+    limit: i64,
+) -> rusqlite::Result<Vec<LogRow>> {
+    let (after_gen, after_cs) = match after {
+        Some((g, id)) => (Some(g), id),
+        None => (None, Vec::new()),
+    };
+    let mut stmt = conn.prepare_cached(
+        "SELECT c.id, c.author, c.message, c.timestamp_ns, c.generation, c.principal \
+         FROM file_changes f \
+         JOIN changesets c ON c.repo_id = f.repo_id AND c.id = f.cs \
+         WHERE f.repo_id = ?1 AND f.path = ?2 \
+           AND (?3 IS NULL OR c.generation < ?3 OR (c.generation = ?3 AND c.id > ?4)) \
+         ORDER BY c.generation DESC, c.id ASC LIMIT ?5",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![repo_id, path, after_gen, after_cs, limit],
+            log_row_from,
+        )?
+        .collect::<rusqlite::Result<Vec<LogRow>>>()?;
+    Ok(rows)
+}
+
+fn log_row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
+    Ok(LogRow {
+        id: row.get(0)?,
+        author: row.get(1)?,
+        message: row.get(2)?,
+        timestamp_ns: row.get(3)?,
+        generation: row.get(4)?,
+        principal: row.get(5)?,
+    })
+}
+
+/// Whether ANY node of `kind_id` in the repo is still queued or deriving —
+/// the read-during-backlog probe: a derived read answered while this is
+/// true could silently miss matches (the empty-as-if-no-history lie), so
+/// the routes answer 503 `derivation_pending` first.
+pub fn derive_any_pending(conn: &Connection, kind_id: i64, repo_id: i64) -> rusqlite::Result<bool> {
+    let hit: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM derive_state \
+             WHERE kind = ?1 AND repo_id = ?2 AND state IN ('pending','deriving') LIMIT 1",
+            params![kind_id, repo_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(hit.is_some())
+}
+
+/// The kind's quarantined nodes in the repo whose PRIMARY file_changes
+/// touch `path` — the precise degraded signal for a `?path=` page: the
+/// index may be missing exactly those nodes' touches, and no others. (The
+/// primary rows exist regardless of derivation, so this is checkable
+/// exactly.)
+pub fn derive_poison_touching_path(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    path: &str,
+) -> rusqlite::Result<Vec<Id>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT d.cs FROM derive_state d \
+         WHERE d.kind = ?1 AND d.repo_id = ?2 AND d.state = 'poison' \
+           AND EXISTS (SELECT 1 FROM file_changes f \
+                       WHERE f.repo_id = d.repo_id AND f.cs = d.cs AND f.path = ?3)",
+    )?;
+    let rows = stmt
+        .query_map(params![kind_id, repo_id, path], |row| {
+            row.get::<_, Vec<u8>>(0)
+                .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))
+        })?
+        .collect::<rusqlite::Result<Vec<Id>>>()?;
+    Ok(rows)
+}
+
+/// Resolves one path in a tree to its blob id (`None` = absent, or the
+/// path crosses a file, or names a directory). The blame deriver's
+/// parent-blob resolution and the blame route's existence pre-check.
+pub fn tree_lookup_path(conn: &Connection, root: &Id, path: &str) -> rusqlite::Result<Option<Id>> {
+    let mut tree = *root;
+    let components: Vec<&str> = path.split('/').collect();
+    for (i, name) in components.iter().enumerate() {
+        let entries = tree_entries_load(conn, &tree)?;
+        let Some(entry) = entries.iter().find(|e| e.name.as_str() == *name) else {
+            return Ok(None);
+        };
+        let object = Id(entry
+            .object_id
+            .clone()
+            .try_into()
+            .expect("object id is 32 bytes"));
+        let last = i == components.len() - 1;
+        match (entry.kind, last) {
+            (0, true) => return Ok(Some(object)),
+            (1, false) => tree = object,
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// A changeset's parent count (the commit-graph deriver's purity check: a
+/// skip over a span may not lose a spanned node's non-first parents).
+pub fn changeset_parent_count(conn: &Connection, repo_id: i64, cs: &Id) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2",
+        params![repo_id, cs.0.as_slice()],
+        |r| r.get(0),
+    )
 }
 
 // ---- audit ---------------------------------------------------------------
