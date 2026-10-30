@@ -1790,9 +1790,19 @@ async fn deep_shared_subtree_chain_stays_linear() {
     let leaf = b"deep chain leaf".to_vec();
     let snap = snap_hex(37);
     put_snap_blob(&f, &f.writer_a, &snap, &leaf).await;
-    let (tree_hex, canons) = diamond_chain(20);
+    // 40 levels: an occurrence-enumerating walk spans 2^40 paths and cannot
+    // finish — the wall-clock bound turns that regression into a test failure
+    // instead of a hang. 20 levels would NOT discriminate (2^20 ~ 1M finishes
+    // in seconds).
+    let (tree_hex, canons) = diamond_chain(40);
+    let started = std::time::Instant::now();
 
     let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, canons, 3600).await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "scope walk took {:?} — regressed to occurrence enumeration?",
+        started.elapsed()
+    );
     assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
 }
 
