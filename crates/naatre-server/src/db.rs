@@ -1550,20 +1550,36 @@ pub fn derive_expired_leases(
     rows.collect()
 }
 
-/// Backfills one kind's queue: enqueues every changeset that has no
-/// `derive_state` row for `kind_id` (an M6b kind registered after its
-/// changesets existed — bulk import through a registry-less process, or an
-/// in-place upgrade of a pre-derive database). Insertion order follows
+/// Backfills ONE BATCH of kind `kind_id`'s queue: enqueues up to `limit`
+/// changesets that have no `derive_state` row for the kind (an M6b kind
+/// registered after its changesets existed — bulk import through a
+/// registry-less process, or an in-place upgrade of a pre-derive
+/// database), oldest generation first. Insertion order follows
 /// `generation ASC`, so the queue's `rowid`-ordered pick derives parents
-/// before children with no extra sequencing. `OR IGNORE`: a row that
-/// already exists (eager-derived, previously enqueued) is never clobbered.
-/// Returns the number of rows enqueued.
-pub fn derive_backfill(conn: &Connection, kind_id: i64) -> rusqlite::Result<usize> {
+/// before children with no extra sequencing — including across batch
+/// boundaries (a parent's generation is always below its child's). The
+/// `NOT EXISTS` predicate is the batch cursor: each call takes the first
+/// not-yet-rowed changesets in that order, so the caller simply loops
+/// until zero rows come back. `OR IGNORE`: a row that already exists
+/// (eager-derived, previously enqueued) is never clobbered. Returns the
+/// number of rows enqueued; 0 means the kind's backfill is complete. One
+/// batch per call is deliberate: the caller (async) yields the
+/// single-writer slot between batches — a whole-repo INSERT..SELECT would
+/// hold the slot, and 503 every concurrent write, for the whole backfill.
+pub fn derive_backfill_batch(
+    conn: &Connection,
+    kind_id: i64,
+    limit: i64,
+) -> rusqlite::Result<usize> {
     conn.execute(
         "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
          SELECT ?1, c.repo_id, c.id, 'pending' FROM changesets c \
-         ORDER BY c.generation ASC, c.rowid ASC",
-        params![kind_id],
+         WHERE NOT EXISTS (\
+             SELECT 1 FROM derive_state d \
+             WHERE d.kind = ?1 AND d.repo_id = c.repo_id AND d.cs = c.id) \
+         ORDER BY c.generation ASC, c.rowid ASC \
+         LIMIT ?2",
+        params![kind_id, limit],
     )
 }
 
@@ -1755,16 +1771,100 @@ fn log_row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
     })
 }
 
-/// Whether ANY node of `kind_id` in the repo is still queued or deriving —
-/// the read-during-backlog probe: a derived read answered while this is
-/// true could silently miss matches (the empty-as-if-no-history lie), so
-/// the routes answer 503 `derivation_pending` first.
+/// The read-during-backlog gate's statements, exported for the scan-proof
+/// pin (`m6b_test` EXPLAIN QUERY PLAN: none may scan `changesets`). An
+/// earlier anti-join form — "OR any changeset of the repo has no derive
+/// row" — probed `derive_state` once per changeset of the repo on EVERY
+/// gated read, and cannot short-circuit when nothing is missing: seconds
+/// per read on a deep repo. The helpers run exactly these strings.
+pub const DERIVE_PENDING_KIND_NAME_SQL: &str = "SELECT name FROM derive_kinds WHERE id = ?1";
+pub const DERIVE_PENDING_BACKFILL_DONE_SQL: &str = "SELECT value FROM meta WHERE key = ?1";
+pub const DERIVE_PENDING_PROBE_SQL: &str = "SELECT 1 FROM derive_state \
+     WHERE kind = ?1 AND repo_id = ?2 AND state IN ('pending','deriving') LIMIT 1";
+
+/// Whether ANY node of `kind_id` in the repo is still gated: the kind's
+/// boot backfill has not completed, or a node is queued or deriving — the
+/// read-during-backlog probe. A derived read answered while this is true
+/// could silently miss matches (the empty-as-if-no-history lie), so the
+/// routes answer 503 `derivation_pending` first. O(1) by design — three
+/// indexed point lookups ([`DERIVE_PENDING_KIND_NAME_SQL`],
+/// [`DERIVE_PENDING_BACKFILL_DONE_SQL`], [`DERIVE_PENDING_PROBE_SQL`]):
+///
+/// 1. the kind's completion marker ([`derive_backfill_done_set`]) unset →
+///    this boot's backfill is unfinished, or the previous one FAILED, or
+///    an offline import added changesets the current boot has not
+///    re-enqueued yet — changesets may have no derive row at all, and the
+///    index provably holds nothing for them;
+/// 2. marker set → every changeset has a row (the backfill enqueued
+///    everything that predated it; every write path enqueues its own
+///    changeset inside the writer's own transaction), so pending/deriving
+///    rows are the only possible gap, and the indexed probe catches them.
 pub fn derive_any_pending(conn: &Connection, kind_id: i64, repo_id: i64) -> rusqlite::Result<bool> {
+    let kind_name: Option<String> = conn
+        .query_row(DERIVE_PENDING_KIND_NAME_SQL, params![kind_id], |r| r.get(0))
+        .optional()?;
+    let Some(kind_name) = kind_name else {
+        // Unreachable from the routes (they resolve the id via
+        // `derive_kind_id` first); unknown kind id stays on the safe side.
+        return Ok(true);
+    };
+    if !derive_backfill_done_get(conn, &kind_name)? {
+        return Ok(true);
+    }
     let hit: Option<i64> = conn
+        .query_row(DERIVE_PENDING_PROBE_SQL, params![kind_id, repo_id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(hit.is_some())
+}
+
+/// The meta key of kind `name`'s boot-backfill completion marker.
+fn derive_backfill_marker_key(kind_name: &str) -> String {
+    format!("derive_backfill_done:{kind_name}")
+}
+
+/// Marks kind `name`'s boot backfill COMPLETE (the meta row
+/// `derive_backfill_done:<name>`, value = completion ts): the batch loop
+/// ended on a zero scan, so every changeset in the database now has a
+/// derive row for the kind. The read gate ([`derive_any_pending`]) trusts
+/// this — which is why a FAILED backfill never sets it and every boot
+/// clears it before re-running ([`derive_backfill_done_clear`]).
+pub fn derive_backfill_done_set(
+    conn: &Connection,
+    kind_name: &str,
+    completed_ns: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![
+            derive_backfill_marker_key(kind_name),
+            completed_ns.to_string()
+        ],
+    )?;
+    Ok(())
+}
+
+/// Clears kind `name`'s backfill completion marker. Each boot's backfill
+/// clears FIRST: while it runs, changesets written since the last boot —
+/// in particular an offline import's — may have no derive row, and a
+/// marker left from the previous boot would let reads answer from the
+/// incomplete index.
+pub fn derive_backfill_done_clear(conn: &Connection, kind_name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM meta WHERE key = ?1",
+        params![derive_backfill_marker_key(kind_name)],
+    )?;
+    Ok(())
+}
+
+/// Whether kind `name`'s boot backfill completion marker is set.
+pub fn derive_backfill_done_get(conn: &Connection, kind_name: &str) -> rusqlite::Result<bool> {
+    let hit: Option<String> = conn
         .query_row(
-            "SELECT 1 FROM derive_state \
-             WHERE kind = ?1 AND repo_id = ?2 AND state IN ('pending','deriving') LIMIT 1",
-            params![kind_id, repo_id],
+            DERIVE_PENDING_BACKFILL_DONE_SQL,
+            params![derive_backfill_marker_key(kind_name)],
             |r| r.get(0),
         )
         .optional()?;

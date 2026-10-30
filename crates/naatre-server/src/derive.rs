@@ -81,7 +81,9 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rusqlite::Connection;
 
@@ -114,6 +116,12 @@ pub const DEFAULT_WALK_BUDGET: u64 = 200_000;
 /// 16 MiB canonical-encoding cap. An over-cap output is never recorded —
 /// the node is quarantined immediately with the size reason.
 pub const DERIVE_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Rows per boot-backfill batch ([`backfill`]): one batch is one
+/// single-writer-slot hold, so its size bounds how long a concurrent write
+/// can 503 behind the backfill. 10,000 indexed inserts are milliseconds;
+/// a whole-repo INSERT..SELECT is not.
+pub const BACKFILL_BATCH: i64 = 10_000;
 
 /// The quarantine reason for the walk budget (shared by the queue and
 /// eager paths so reports read identically wherever the cap fires).
@@ -457,24 +465,137 @@ pub async fn status(
 /// Boot-time backfill (the plan's deferred-backfill check): for every
 /// registered kind, enqueue every changeset that has no row yet — the
 /// changesets a registry-less process wrote (offline import) or a
-/// pre-derive database carried (in-place upgrade). `serve` runs this once
-/// before the accept loop and the background tasks start, so the first
-/// queue pass sees the whole backlog already ordered parents-first
-/// ([`crate::db::derive_backfill`]'s generation ordering). Idempotent: a
-/// reboot with a drained queue enqueues nothing.
+/// pre-derive database carried (in-place upgrade). `serve` runs this as a
+/// background task beside the queue (a large repo must not delay accepting
+/// connections), in batches of [`BACKFILL_BATCH`] — each batch one write
+/// slot, the slot yielded between batches so requests interleave with the
+/// backfill. Every batch inserts in generation order
+/// ([`crate::db::derive_backfill_batch`]), so a queue draining
+/// concurrently always sees parents rowed before children.
+///
+/// Per kind the task batches, then sets the completion marker
+/// ([`crate::db::derive_backfill_done_set`]): until the marker is set,
+/// derived reads stay on the 503 `derivation_pending` contract
+/// ([`crate::db::derive_any_pending`]) — a FAILED backfill never sets it,
+/// so those reads stay 503 until a boot completes the backfill. The
+/// markers are cleared before this task runs
+/// ([`backfill_clear_markers`], `serve`'s synchronous pre-accept step).
+/// Idempotent: a reboot with a drained queue re-enqueues nothing and
+/// re-sets the marker.
 pub async fn backfill(state: &AppState) -> Result<(), ApiError> {
     if state.derive.is_empty() {
         return Ok(());
     }
-    let kind_ids: Vec<i64> = state.derive.kinds().iter().map(|k| k.id).collect();
-    state
-        .write(move |store| {
-            for kind_id in kind_ids {
-                db::derive_backfill(store.conn(), kind_id).map_err(ApiError::log_internal)?;
+    // Test-only A/B hook (ZERO in production): widen the boot race window
+    // deterministically before the first batch lands.
+    let delay = state.derive_backfill_delay;
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+    let kinds: Vec<(i64, &'static str)> = state
+        .derive
+        .kinds()
+        .iter()
+        .map(|k| (k.id, k.name))
+        .collect();
+    for (kind_id, kind_name) in kinds {
+        loop {
+            let inserted = backfill_step(|| async {
+                state
+                    .write(move |store| {
+                        db::derive_backfill_batch(store.conn(), kind_id, BACKFILL_BATCH)
+                            .map_err(ApiError::log_internal)
+                    })
+                    .await
+            })
+            .await?;
+            if inserted == 0 {
+                break;
             }
-            Ok(())
+        }
+        // The loop ended on a zero scan: every changeset has a row for the
+        // kind — publish the marker the reads have been gating on.
+        let completed_ns = state.now_ns() as i64;
+        backfill_step(|| async {
+            state
+                .write(move |store| {
+                    db::derive_backfill_done_set(store.conn(), kind_name, completed_ns)
+                        .map_err(ApiError::log_internal)
+                })
+                .await
         })
-        .await
+        .await?;
+    }
+    Ok(())
+}
+
+/// Clears every registered kind's boot-backfill completion marker (one
+/// transaction, one DELETE per kind). `serve` runs this SYNCHRONOUSLY,
+/// before the accept loop and the backfill task: a marker left from a
+/// previous boot must never survive into the new boot's unrowed window —
+/// an offline import (which runs under the same data-dir flock, i.e. only
+/// while the server is down) may have added changesets with no derive
+/// rows, and a stale marker would let reads skip the 503
+/// `derivation_pending` contract and answer from the incomplete index. A
+/// kind registered for the first time has no marker at all — same rule:
+/// its reads stay 503 until its first backfill completes.
+pub async fn backfill_clear_markers(state: &AppState) -> Result<(), ApiError> {
+    if state.derive.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<&'static str> = state.derive.kinds().iter().map(|k| k.name).collect();
+    // Busy-retried like every backfill step: `serve` propagates an error
+    // here as a failed boot, and serve_until_quiet-style callers would
+    // never see it — ordinary boot contention must not cost the queue and
+    // backfill tasks their spawn.
+    backfill_step(|| {
+        let names = names.clone();
+        async move {
+            state
+                .write(move |store| {
+                    let conn = store.conn();
+                    for name in &names {
+                        db::derive_backfill_done_clear(conn, name)
+                            .map_err(ApiError::log_internal)?;
+                    }
+                    Ok(())
+                })
+                .await
+        }
+    })
+    .await
+}
+
+/// Busy-write retries before a backfill step gives up and propagates (the
+/// step has waited 10 s at 1,000 × 10 ms — serve's failure log fires and
+/// reads stay 503 until a boot completes the backfill).
+const BACKFILL_BUSY_RETRIES: u32 = 1_000;
+
+/// One backfill write under the backfill's busy policy: ordinary
+/// contention is waited out (once rows exist, the queue drains
+/// concurrently, and the backfill must survive it to finish), and only
+/// then propagated. `make` rebuilds the write future per attempt — the
+/// `state.write` future is single-shot.
+async fn backfill_step<T, F, Fut>(mut make: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    Fut: Future<Output = Result<T, ApiError>> + Send,
+    F: FnMut() -> Fut,
+{
+    let mut attempts = 0u32;
+    loop {
+        match make().await {
+            Ok(v) => return Ok(v),
+            Err(e) if e.code() == ApiCode::WriterBusy => {
+                attempts += 1;
+                if attempts > BACKFILL_BUSY_RETRIES {
+                    return Err(e);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// What one queue pass did (for logs and tests).

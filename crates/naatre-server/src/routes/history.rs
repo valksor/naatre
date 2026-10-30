@@ -510,13 +510,14 @@ pub struct MergeBaseResponse {
 /// Finds the best common ancestor of two changesets (any authenticated
 /// principal). Unknown ids → 404; unrelated histories → `merge_base: null`.
 ///
-/// Acceleration contract: when both endpoints' commit_graph rows are done,
-/// the walk runs on the derived skip lists (`merge_base_skip`); anything
-/// else — kind unregistered, a pending or quarantined endpoint,
-/// undecodable output — falls back to the plain generation-bounded walk.
-/// Merge-base never answers 503 `derivation_pending`: the fallback walk is
-/// exact and cheap, so pending derivation costs only the acceleration, not
-/// the read (a quarantined node degrades it the same way).
+/// Acceleration contract: when both endpoints' commit_graph rows are done
+/// and untainted, the walk runs on the derived skip lists
+/// (`merge_base_skip`); anything else — kind unregistered, a pending,
+/// quarantined, or tainted endpoint, undecodable output — falls back to
+/// the plain generation-bounded walk. Merge-base never answers 503
+/// `derivation_pending`: the fallback walk is exact and cheap, so pending
+/// derivation costs only the acceleration, not the read (a quarantined or
+/// tainted node degrades it the same way).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/merge-base",
@@ -554,8 +555,12 @@ pub async fn merge_base(
                     ));
                 }
             }
-            // The derived fetch: generation + parents + skip entries when
-            // both the kind and the node's done output exist.
+            // The derived fetch: generation + parents (primary rows,
+            // always sound) plus skip entries only off a DONE and UNTAINTED
+            // row. A tainted row derived over a poisoned ancestor's empty
+            // marker — the plan's taint contract says such data is not
+            // exact, so the exact acceleration must not consume it; the
+            // plain-walk fallback covers that span.
             let graph_fetch = |id: &Id| -> Result<Option<SkipNode>, ApiError> {
                 let Some(g) =
                     db::changeset_graph(conn, repo_id, id).map_err(ApiError::log_internal)?
@@ -570,7 +575,7 @@ pub async fn merge_base(
                             .ok()
                             .flatten()
                     })
-                    .filter(|row| row.state == "done")
+                    .filter(|row| row.state == "done" && !row.tainted)
                     .and_then(|row| row.output)
                     .and_then(|out| crate::derived::decode_skip_entries(&out))
                     .unwrap_or_default()

@@ -9,8 +9,10 @@
 //! an imported merge history; the in-memory skip-list unit tests live in
 //! `routes/history.rs`); the read-during-backlog contract (?path= and
 //! blame 503 `derivation_pending` + `Retry-After`, never
-//! empty-as-if-no-history; merge-base never 503s — it falls back to the
-//! walk); poison reads degrade with a flag and `poisoned_cs` instead of
+//! empty-as-if-no-history — including the UNROWED window, the boot
+//! backfill held; merge-base never 503s — it falls back to the
+//! walk, and the skip acceleration never consumes a TAINTED commit-graph
+//! row); poison reads degrade with a flag and `poisoned_cs` instead of
 //! lying or retrying forever; and the two deferred-backfill pins — after
 //! bulk import and after an in-place upgrade of a pre-derive (M5-era)
 //! database, everything derives through the SAME queue.
@@ -50,6 +52,9 @@ struct Ctx {
     _dir: Option<tempfile::TempDir>,
     app: Router,
     state: AppState,
+    /// The injected clock's handle (the m6a fixture pattern): wait helpers
+    /// advance it so lease expiry runs on the queue's clock.
+    clock: Arc<std::sync::atomic::AtomicU64>,
     writer: String,
     db_path: PathBuf,
 }
@@ -74,6 +79,17 @@ fn in_memory_ctx(register: bool) -> Ctx {
 /// the test clock and optional production registration, seeds a writer,
 /// and builds the router. The production shape of `naatre serve`.
 fn open_ctx(data_path: &Path, register: bool) -> Ctx {
+    open_ctx_with(data_path, register, |_| {})
+}
+
+/// [`open_ctx`] with a pre-`Arc` configuration hook (the m5a
+/// `fixture_with` pattern): the serve-task switches live on `ServerState`
+/// and must be set before the state is shared.
+fn open_ctx_with(
+    data_path: &Path,
+    register: bool,
+    configure: impl FnOnce(&mut ServerState),
+) -> Ctx {
     static LOG: std::sync::Once = std::sync::Once::new();
     LOG.call_once(|| naatre_server::middleware::logging_setup("error"));
     let mut state = ServerState::open(DataDir::open(data_path).unwrap()).unwrap();
@@ -85,6 +101,7 @@ fn open_ctx(data_path: &Path, register: bool) -> Ctx {
             state.register_deriver(deriver).unwrap();
         }
     }
+    configure(&mut state);
     let state = Arc::new(state);
     let app = naatre_server::router(Arc::clone(&state));
     // Seed a writer principal + token the way the m6a harness does.
@@ -141,6 +158,7 @@ fn open_ctx(data_path: &Path, register: bool) -> Ctx {
         _dir: None,
         app,
         state,
+        clock,
         writer,
         db_path: data_path.join("naatre.db"),
     }
@@ -334,7 +352,10 @@ impl Ctx {
 
     /// Drives the queue directly until nothing is pending (these tests
     /// run no serve task, so one pass is enough; loop against a busy slot
-    /// anyway).
+    /// anyway), then marks every production kind's boot backfill complete:
+    /// a drained queue is only half of the settled state these tests model
+    /// — the read routes also gate on the backfill marker, which only
+    /// serve's own boot task would have set.
     async fn drain(&self) {
         for _ in 0..100 {
             derive_pass(&self.state).await.expect("pass");
@@ -348,6 +369,19 @@ impl Ctx {
             0,
             "queue drained"
         );
+        for kind in [
+            naatre_server::derived::KIND_BLAME,
+            naatre_server::derived::KIND_PATH_HISTORY,
+            naatre_server::derived::KIND_COMMIT_GRAPH,
+        ] {
+            self.db()
+                .execute(
+                    "INSERT INTO meta(key, value) VALUES (?1, '0') \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![format!("derive_backfill_done:{kind}")],
+                )
+                .unwrap();
+        }
     }
 
     async fn blame(&self, at: &str, path: &str) -> Resp {
@@ -493,12 +527,19 @@ fn id_of(hex: &str) -> Id {
     Id::from_hex(hex).expect("64-hex id")
 }
 
-/// Progress-based wait until at least `min_done` rows are done and nothing
-/// is pending (the m6a pattern, for the tests that run the REAL serve
-/// task — the boot-time backfill plus the background queue drain while
-/// the test watches; a frozen state fails fast with the counts). The done
+/// Progress-based wait until at least `min_done` rows are done, the
+/// queue is quiet, and every kind's backfill marker is set (the m6a
+/// `wait_queue_done` pattern, for the tests that run the REAL serve
+/// task — boot backfill plus background queue drain while the test
+/// watches; a frozen state fails fast with the counts). Each poll also
+/// ADVANCES the injected clock (+50 ms): a lease lost to a WriterBusy
+/// mid-pass recovers by lease expiry — on the queue's clock. A frozen
+/// test clock would make that recovery impossible and turn one lost
+/// lease into an artificial permanent wedge (the sweep can never fire;
+/// every node blocked behind one lost lease waits forever). The done
 /// floor keeps an empty pre-backfill state from passing vacuously.
-async fn wait_done(state: &AppState, min_done: i64) {
+async fn wait_done(ctx: &Ctx, min_done: i64) {
+    let state = &ctx.state;
     let mut stalled = 0u32;
     let mut last = None;
     loop {
@@ -521,12 +562,23 @@ async fn wait_done(state: &AppState, min_done: i64) {
                             |r| r.get(0),
                         )
                         .unwrap();
-                    Ok((done, pending))
+                    let markers: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM meta \
+                             WHERE key LIKE 'derive_backfill_done:%'",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    Ok((done, pending, markers))
                 })
                 .await
                 .unwrap()
         };
-        if snap.1 == 0 && snap.0 >= min_done {
+        // Settled = everything derived AND every kind's backfill marker
+        // set (a drained queue alone can pass while a batch is still in
+        // flight — then the route reads would 503 on the missing marker).
+        if snap.1 == 0 && snap.0 >= min_done && snap.2 >= 3 {
             return;
         }
         if last == Some(snap) {
@@ -537,11 +589,41 @@ async fn wait_done(state: &AppState, min_done: i64) {
         last = Some(snap);
         assert!(
             stalled < 300,
-            "derive backlog stalled: done={} pending={}",
+            "derive backlog stalled: done={} pending={} markers={} now={} stuck={:?}",
             snap.0,
-            snap.1
+            snap.1,
+            snap.2,
+            state.now_ns(),
+            {
+                let state = Arc::clone(state);
+                state
+                    .read(move |conn| {
+                        let mut stmt = conn
+                            .prepare(
+                                "SELECT lower(hex(cs)), state, lease_expires_ns \
+                                 FROM derive_state \
+                                 WHERE state IN ('pending','deriving')",
+                            )
+                            .unwrap();
+                        Ok(stmt
+                            .query_map([], |r| {
+                                Ok((
+                                    r.get::<_, String>(0)?,
+                                    r.get::<_, String>(1)?,
+                                    r.get::<_, Option<i64>>(2)?,
+                                ))
+                            })
+                            .unwrap()
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                            .unwrap())
+                    })
+                    .await
+                    .unwrap()
+            }
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
+        ctx.clock
+            .fetch_add(50_000_000, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -1097,7 +1179,7 @@ proptest! {
             };
             let ctx = open_ctx(&data, true);
             serve_until_quiet(Arc::clone(&ctx.state)).await;
-            wait_done(&ctx.state, 3 * imported).await;
+            wait_done(&ctx, 3 * imported).await;
 
             // Continue the generator on TOP of the imported main.
             let main_hex = {
@@ -1185,6 +1267,20 @@ async fn serve_until_quiet(state: AppState) {
         let _ = rx.await;
     }));
     std::mem::forget((tx, task));
+}
+
+/// One full serve boot that STOPS before returning (shutdown fires, the
+/// task is awaited, the state — and its data-dir flock — drops). For the
+/// multi-boot pins: a forgotten [`serve_until_quiet`] task would hold the
+/// flock forever and the next boot could not open the data dir.
+async fn serve_shutdown(state: AppState) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (tx, rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(serve(ServeConfig { listener, state }, async move {
+        let _ = rx.await;
+    }));
+    let _ = tx.send(());
+    task.await.unwrap().expect("serve stopped cleanly");
 }
 
 fn cs_gen_db_from(conn: &Connection, cs_hex: &str) -> Option<i64> {
@@ -1529,6 +1625,139 @@ async fn poison_degrades_path_history_reads() {
     assert_eq!(resp.body["merge_base"], json!(c2));
 }
 
+/// The merge-base skip acceleration must not consume TAINTED commit-graph
+/// rows. Poison a mid-chain node (direct db manipulation, the pins above),
+/// let the descendants derive done-with-taint (the natural quarantine
+/// shape), and the route must still equal the brute-force base across the
+/// poison. Then hand the tainted endpoint a WRONG skip entry (direct db
+/// manipulation): the answer must not move — tainted skips are not used —
+/// and flipping ONLY the taint bit off (same bogus bytes) moves it,
+/// proving the harness really exercises the skip path and the taint
+/// filter is what holds it exact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_base_ignores_tainted_commit_graph_skips() {
+    let ctx = in_memory_ctx(true);
+    // Linear mainline c0..c19 (generations 0..19); s1 branches off c10
+    // (generation 11): the best common ancestor of c19 and s1 is c10.
+    let mut prev = ctx
+        .commit(None, "Ann <ann@example.com>", vec![add_ch("f.txt", b"0\n")])
+        .await;
+    let mut chain = vec![prev.clone()];
+    for i in 1..=19u32 {
+        prev = ctx
+            .commit(
+                Some(&prev),
+                "Ann <ann@example.com>",
+                vec![ch("f.txt", format!("{i}\n").as_bytes())],
+            )
+            .await;
+        chain.push(prev.clone());
+    }
+    let (c10, c19) = (chain[10].clone(), chain[19].clone());
+    let s1 = ctx
+        .commit(
+            Some(&c10),
+            "Ann <ann@example.com>",
+            vec![add_ch("s.txt", b"s\n")],
+        )
+        .await;
+
+    // Poison c10 on the commit-graph kind BEFORE the descendants derive;
+    // the queue then derives c11..c19 and s1 done-with-taint.
+    ctx.force_poison(naatre_server::derived::KIND_COMMIT_GRAPH, &c10, false);
+    ctx.drain().await;
+    let graph_row = |cs: &str| -> (String, i64) {
+        ctx.db()
+            .query_row(
+                "SELECT s.state, s.tainted FROM derive_state s \
+                 JOIN derive_kinds k ON k.id = s.kind \
+                 WHERE k.name = ?1 AND s.cs = ?2",
+                rusqlite::params![
+                    naatre_server::derived::KIND_COMMIT_GRAPH,
+                    id_of(cs).0.as_slice()
+                ],
+                |r| Ok((r.get::<_, String>(0).unwrap(), r.get::<_, i64>(1).unwrap())),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        graph_row(&c19),
+        ("done".to_string(), 1),
+        "the endpoint derived done-with-taint over the poison"
+    );
+
+    // Natural leg: every row below the poison is tainted, the skips are
+    // degraded — the route still equals the brute force across it.
+    let resp = ctx
+        .get(&format!("/v1/repos/{REPO}/merge-base?a={c19}&b={s1}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let natural = resp.body["merge_base"].as_str().expect("base");
+    assert_eq!(natural, c10, "the true base across the poison");
+    assert_eq!(
+        cs_gen_db_from(&ctx.db(), natural),
+        brute_force_merge_base_gen(&ctx.db(), &c19, &s1),
+        "route equals brute force"
+    );
+
+    // Crafted leg: a tainted-done row carrying a WRONG but usable skip
+    // (target s1, pure, generation at the lower side — exactly the jump
+    // that would steer the climb onto the WRONG side). The answer must
+    // stay c10: tainted skips are not used.
+    let bogus = naatre_server::derived::encode_skip_entries(&[naatre_server::derived::SkipEntry {
+        target: id_of(&s1),
+        hop: 9,
+        generation: 11,
+        pure: true,
+    }]);
+    ctx.db()
+        .execute(
+            "UPDATE derive_state SET output = ?1 \
+             WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?2) AND cs = ?3",
+            rusqlite::params![
+                bogus,
+                naatre_server::derived::KIND_COMMIT_GRAPH,
+                id_of(&c19).0.as_slice()
+            ],
+        )
+        .unwrap();
+    let resp = ctx
+        .get(&format!("/v1/repos/{REPO}/merge-base?a={c19}&b={s1}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(
+        resp.body["merge_base"],
+        json!(c10),
+        "the tainted skip is not used: the answer cannot move"
+    );
+
+    // Control: flip ONLY the taint bit off — same bogus bytes, now a
+    // clean-looking row the acceleration is allowed to trust — and the
+    // bogus skip steers the climb to s1. (A corrupt-but-clean row is
+    // undetectable by design; this leg documents that the pin
+    // discriminates: the taint filter, not the output bytes, is what the
+    // fix reads.)
+    ctx.db()
+        .execute(
+            "UPDATE derive_state SET tainted = 0 \
+             WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?1) AND cs = ?2",
+            rusqlite::params![
+                naatre_server::derived::KIND_COMMIT_GRAPH,
+                id_of(&c19).0.as_slice()
+            ],
+        )
+        .unwrap();
+    let resp = ctx
+        .get(&format!("/v1/repos/{REPO}/merge-base?a={c19}&b={s1}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(
+        resp.body["merge_base"],
+        json!(s1),
+        "the same skip, untainted, IS taken — the pin discriminates"
+    );
+}
+
 // ---- 6. binary + empty blame --------------------------------------------------
 
 /// A binary blob blames as the structured empty result: HTTP 200, empty
@@ -1615,7 +1844,7 @@ async fn backfill_after_bulk_import() {
     // background queue drain.
     let ctx = open_ctx(&data, true);
     serve_until_quiet(Arc::clone(&ctx.state)).await;
-    wait_done(&ctx.state, 3 * imported).await;
+    wait_done(&ctx, 3 * imported).await;
 
     let conn = ctx.db();
     assert_eq!(
@@ -1775,7 +2004,7 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
         );
     }
     serve_until_quiet(Arc::clone(&ctx.state)).await;
-    wait_done(&ctx.state, 12).await;
+    wait_done(&ctx, 12).await;
     assert_eq!(
         ctx.count("SELECT COUNT(*) FROM derive_reports"),
         0,
@@ -1793,6 +2022,316 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
     assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
     assert_eq!(resp.body["degraded"], json!(false));
     assert_eq!(resp.body["entries"].as_array().unwrap().len(), 2);
+}
+
+/// Pin 3: the UNROWED window. The kinds are registered, the changesets
+/// exist, and NOT ONE derive row does — the creates ran registry-less
+/// (the import/upgrade shape, so create-time enqueue wrote nothing) and
+/// the boot backfill is held (`derive_backfill_enabled = false`). A
+/// changeset with no row counts as pending exactly because the index
+/// provably holds nothing for it: ?path= and blame must answer 503
+/// `derivation_pending`, never an empty-as-if-no-history page.
+/// (Regression pin: `derive_any_pending` saw only pending/deriving rows,
+/// so `?path=` answered an empty 200 over the missing index.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unrowed_backlog_503s_never_empty_as_if_no_history() {
+    let dir = tempfile::tempdir().unwrap();
+    // Registry-less creates: the changesets land with no derive rows.
+    let (c1, c2, data_path) = {
+        let ctx = build_ctx(dir.path(), false);
+        let c1 = ctx
+            .commit(
+                None,
+                "Ann <ann@example.com>",
+                vec![add_ch("f.txt", b"one\n")],
+            )
+            .await;
+        let c2 = ctx
+            .commit(
+                Some(&c1),
+                "Ann <ann@example.com>",
+                vec![ch("f.txt", b"one\ntwo\n")],
+            )
+            .await;
+        (c1, c2, dir.path().join("data"))
+    };
+    // Serve with the production kinds registered and the boot backfill
+    // HELD: the unrowed window, indefinitely. (The queue is off too —
+    // there is nothing for it to drain: the unrowed backlog is invisible
+    // to the queue by construction, which is the point of the pin.)
+    let ctx = open_ctx_with(&data_path, true, |state| {
+        state.derive_backfill_enabled = false;
+        state.derive_queue_enabled = false;
+    });
+    serve_until_quiet(Arc::clone(&ctx.state)).await;
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM derive_state"),
+        0,
+        "the unrowed precondition: no derive rows at all"
+    );
+
+    // ?path=: 503 derivation_pending, NOT an empty 200.
+    let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], "derivation_pending");
+    assert!(resp.headers.get(header::RETRY_AFTER).is_some());
+
+    // Blame: the same contract.
+    let resp = ctx.blame(&c2, "f.txt").await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], "derivation_pending");
+
+    // Merge-base never 503s: the plain walk answers, exactly.
+    let resp = ctx
+        .get(&format!("/v1/repos/{REPO}/merge-base?a={c1}&b={c2}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["merge_base"], json!(c1));
+}
+
+/// The settled pending gate is O(1): on a 20k-changeset repo, the three
+/// exported statements behind `derive_any_pending` plan as indexed point
+/// lookups and NEVER scan `changesets` (the deleted anti-join form probed
+/// `derive_state` once per changeset of the repo on every gated read —
+/// it cannot short-circuit when nothing is missing, so a deep repo pays
+/// the full scan per read). End to end, both gate legs: marker set →
+/// settled 200; marker deleted → 503 `derivation_pending`, however quiet
+/// the queue.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settled_pending_check_never_scans_changesets() {
+    let ctx = in_memory_ctx(true);
+    // 20k changesets inserted DIRECTLY (the offline-import shape: no
+    // create-time enqueue, so no derive rows at all).
+    {
+        let mut conn = ctx.db();
+        let tx = conn.transaction().unwrap();
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+                     timestamp_ns, generation, principal, root_tree_id) \
+                     SELECT (SELECT id FROM repos WHERE name = ?1), ?2, x'', 'A', 'm', 0, ?3, 'A', NULL",
+                )
+                .unwrap();
+            for i in 0..20_000i64 {
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&i.to_be_bytes());
+                stmt.execute(rusqlite::params![REPO, id, i]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+    }
+    // The settled state: drain marks the backfill complete, nothing is
+    // pending — the read must answer from the (empty) index, 200.
+    ctx.drain().await;
+    let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["degraded"], json!(false));
+    assert_eq!(resp.body["entries"], json!([]));
+
+    // The pin: none of the gate's statements may scan changesets. (EXPLAIN
+    // does not execute, but rusqlite still checks the bind count — bind a
+    // NULL per parameter.)
+    let plan_of = |sql: &str| -> Vec<String> {
+        let conn = ctx.db();
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let nulls = vec![None::<i64>; stmt.parameter_count()];
+        stmt.query_map(rusqlite::params_from_iter(nulls.iter()), |r| {
+            r.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+    };
+    for sql in [
+        naatre_server::db::DERIVE_PENDING_KIND_NAME_SQL,
+        naatre_server::db::DERIVE_PENDING_BACKFILL_DONE_SQL,
+        naatre_server::db::DERIVE_PENDING_PROBE_SQL,
+    ] {
+        let plans = plan_of(sql);
+        // Any SCAN at all is a violation — SQLite prints the alias for a
+        // scanned table ("SCAN c"), so a table-name match would not catch
+        // a re-aliased anti-join. The gate must be all index searches.
+        assert!(
+            plans.iter().all(|p| !p.contains("SCAN")),
+            "the settled pending gate must not scan: {sql} -> {plans:?}"
+        );
+    }
+    // Positive: the pending probe searches the derive_state index.
+    let probe_plans = plan_of(naatre_server::db::DERIVE_PENDING_PROBE_SQL);
+    assert!(
+        probe_plans
+            .iter()
+            .any(|p| p.contains("SEARCH derive_state")),
+        "the pending probe must search the derive_state index: {probe_plans:?}"
+    );
+
+    // Gate leg 1, end to end: marker gone → 503 derivation_pending, even
+    // with the queue fully drained.
+    ctx.db()
+        .execute(
+            "DELETE FROM meta WHERE key LIKE 'derive_backfill_done:%'",
+            [],
+        )
+        .unwrap();
+    let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], "derivation_pending");
+}
+
+/// The stale-marker pin: a boot whose backfill completes leaves the
+/// completion marker set; an OFFLINE import (registry-less, server down —
+/// the flock makes "while the server runs" impossible) then adds
+/// changesets with no derive rows. The next boot must clear the marker
+/// BEFORE the accept loop: reads during its backfill 503
+/// `derivation_pending`, never answer from the incomplete index. A held
+/// backfill (the flag off) freezes that pre-completion state
+/// deterministically; a full boot + drain recovers the exact history.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_backfill_marker_cleared_at_boot() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_path = dir.path().join("data");
+    // Boot 1, settled: the queue drains and the markers are set.
+    let c1 = {
+        let ctx = build_ctx(dir.path(), true);
+        let c1 = ctx
+            .commit(
+                None,
+                "Ann <ann@example.com>",
+                vec![add_ch("f.txt", b"one\n")],
+            )
+            .await;
+        ctx.drain().await;
+        let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+        c1
+    };
+    // Offline import: changeset c2 with NO derive rows (the exact store
+    // effect of a registry-less import while the server is down).
+    let c2 = {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0xC2;
+        let conn = Connection::open(data_path.join("naatre.db")).unwrap();
+        conn.execute(
+            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+             timestamp_ns, generation, principal, root_tree_id) \
+             SELECT id, ?2, x'', 'Bob', 'imported', 0, 1, 'Bob', NULL \
+             FROM repos WHERE name = ?1",
+            rusqlite::params![REPO, bytes],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) \
+             SELECT (SELECT id FROM repos WHERE name = ?1), ?2, ?3, 0",
+            rusqlite::params![REPO, bytes, id_of(&c1).0.as_slice()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
+             SELECT id, ?2, 'f.txt', 0, NULL, NULL, 0 \
+             FROM repos WHERE name = ?1",
+            rusqlite::params![REPO, bytes],
+        )
+        .unwrap();
+        Id(bytes).to_hex()
+    };
+
+    // Boot 2 with the backfill HELD (the flag off): the pre-completion
+    // state, frozen. The marker must be GONE — cleared before the accept
+    // loop — and the read must 503, never answer from the index that
+    // cannot know about c2.
+    {
+        let ctx = open_ctx_with(&data_path, true, |state| {
+            state.derive_backfill_enabled = false;
+            state.derive_queue_enabled = false;
+        });
+        // Managed shutdown: boot 3 opens the same data dir, and a
+        // forgotten serve task would hold the flock forever.
+        serve_shutdown(Arc::clone(&ctx.state)).await;
+        let markers: i64 = ctx
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE key LIKE 'derive_backfill_done:%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the stale marker was cleared at boot");
+        let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+        assert_eq!(
+            resp.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            resp.body
+        );
+        assert_eq!(resp.body["error"]["code"], "derivation_pending");
+    }
+
+    // Boot 3, full: backfill + queue run — the imported changeset derives,
+    // the marker returns, and the read is exact (newest first).
+    {
+        let ctx = open_ctx_with(&data_path, true, |_| {});
+        serve_until_quiet(Arc::clone(&ctx.state)).await;
+        let mut stalled = 0u32;
+        loop {
+            let snap = {
+                let state = Arc::clone(&ctx.state);
+                state
+                    .read(move |conn| {
+                        let markers: i64 = conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM meta \
+                                 WHERE key LIKE 'derive_backfill_done:%'",
+                                [],
+                                |r| r.get(0),
+                            )
+                            .unwrap();
+                        let pending: i64 = conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM derive_state \
+                                 WHERE state IN ('pending','deriving')",
+                                [],
+                                |r| r.get(0),
+                            )
+                            .unwrap();
+                        Ok((markers, pending))
+                    })
+                    .await
+                    .unwrap()
+            };
+            if snap.0 >= 3 && snap.1 == 0 {
+                break;
+            }
+            stalled += 1;
+            assert!(stalled < 300, "boot 3 never settled: {snap:?}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+        assert_eq!(resp.body["degraded"], json!(false));
+        let ids: Vec<&str> = resp.body["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec![c2.as_str(), c1.as_str()], "newest first");
+    }
 }
 
 // ---- 8. the fallback surface ---------------------------------------------------

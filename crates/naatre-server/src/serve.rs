@@ -86,13 +86,23 @@ pub async fn serve(
 
     // Boot-time derived-data backfill (M6b, the plan's deferred-backfill
     // check): enqueue every changeset each registered kind has no row for
-    // — offline imports and pre-derive databases. Runs in the BACKGROUND:
-    // a large repo must not delay accepting connections, and reads that
-    // land before their regions derive get the 503 derivation_pending
-    // contract (never empty-as-if-no-history). Idempotent; a failure logs
-    // and leaves those regions pending — backfill is enqueueing, not
-    // schema authority, so it must not block boot.
-    {
+    // — offline imports and pre-derive databases. The completion markers
+    // are cleared SYNCHRONOUSLY, before the accept loop: an offline import
+    // (registry-less, server down) may have added changesets with no
+    // derive rows, and a marker left from the previous boot would let
+    // reads skip the 503 `derivation_pending` contract and answer from
+    // the incomplete index. The backfill itself runs in the BACKGROUND
+    // (a large repo must not delay accepting connections) and sets the
+    // markers on completion; a FAILED backfill leaves them unset — reads
+    // stay 503 until a boot completes the backfill. Idempotent; a failure
+    // logs and leaves those regions pending — backfill is enqueueing, not
+    // schema authority, so it must not block boot. The off-switch
+    // (`derive_backfill_enabled`) is for tests that hold the backfill to
+    // build the unrowed window, same pattern as `derive_queue_enabled`.
+    crate::derive::backfill_clear_markers(&cfg.state)
+        .await
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    if cfg.state.derive_backfill_enabled {
         let state = std::sync::Arc::clone(&cfg.state);
         tokio::spawn(async move {
             if let Err(e) = crate::derive::backfill(&state).await {

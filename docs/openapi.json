@@ -2141,7 +2141,7 @@
     },
     "/v1/repos/{r}/merge-base": {
       "get": {
-        "description": "Acceleration contract: when both endpoints' commit_graph rows are done,\nthe walk runs on the derived skip lists (`merge_base_skip`); anything\nelse — kind unregistered, a pending or quarantined endpoint,\nundecodable output — falls back to the plain generation-bounded walk.\nMerge-base never answers 503 `derivation_pending`: the fallback walk is\nexact and cheap, so pending derivation costs only the acceleration, not\nthe read (a quarantined node degrades it the same way).",
+        "description": "Acceleration contract: when both endpoints' commit_graph rows are done\nand untainted, the walk runs on the derived skip lists\n(`merge_base_skip`); anything else — kind unregistered, a pending,\nquarantined, or tainted endpoint, undecodable output — falls back to\nthe plain generation-bounded walk. Merge-base never answers 503\n`derivation_pending`: the fallback walk is exact and cheap, so pending\nderivation costs only the acceleration, not the read (a quarantined or\ntainted node degrades it the same way).",
         "operationId": "merge_base",
         "parameters": [
           {

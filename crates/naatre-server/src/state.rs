@@ -196,6 +196,17 @@ pub struct ServerState {
     /// also the lease horizon's base — a lease lasts twice the interval).
     /// Default: [`crate::serve::DERIVE_QUEUE_INTERVAL`].
     pub derive_queue_interval: Duration,
+    /// Boot-time derive-backfill switch: `serve`'s startup task checks it.
+    /// Off-switch for tests that hold the backfill to build the unrowed
+    /// window (changesets with no `derive_state` rows) and assert the
+    /// read-during-backlog contract deterministically (same pattern as
+    /// `derive_queue_enabled`).
+    pub derive_backfill_enabled: bool,
+    /// Test-only delay before the backfill's first batch ([`Duration`]:
+    /// ZERO in production). Widens the boot race window deterministically
+    /// so pins that read right after boot can be A/B-tested against a
+    /// slow backfill.
+    pub derive_backfill_delay: Duration,
 }
 
 /// Shared handle to the server state.
@@ -241,6 +252,8 @@ impl ServerState {
             derive: Arc::new(crate::derive::DeriveRegistry::default()),
             derive_queue_enabled: true,
             derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
+            derive_backfill_enabled: true,
+            derive_backfill_delay: Duration::ZERO,
         })
     }
 
