@@ -1223,6 +1223,352 @@ pub fn auth_lookup(conn: &Connection, blake3: &[u8; 32]) -> rusqlite::Result<Opt
     .optional()
 }
 
+// ---- derived data (M6a) ----------------------------------------------------
+//
+// The generic derived-data framework's SQL: the kind registry rows, the
+// per-(kind, repo, changeset) queue/state machine, and the poison reports.
+// Policy (leases, attempt caps, the parents-done pick semantics) lives in
+// [`crate::derive`]; every statement is here. Multi-statement steps
+// (`derive_fail_attempt`) are transaction-free on purpose: callers either
+// run them standalone (autocommit per statement) or inside their own
+// enclosing transaction (the lease sweep).
+
+/// One row of `derive_state`.
+pub struct DeriveStateRow {
+    pub state: String,
+    pub lease_expires_ns: Option<i64>,
+    pub attempts: i64,
+    pub output: Option<Vec<u8>>,
+}
+
+/// The id of registered kind `name`, or `None`.
+pub fn derive_kind_id(conn: &Connection, name: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT id FROM derive_kinds WHERE name = ?1",
+        params![name],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Seeds (or finds) the registry row for kind `name`; returns its id.
+/// `INSERT OR IGNORE` keeps the id stable across processes: the first
+/// registrant of a name owns its id forever.
+pub fn derive_kind_seed(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT OR IGNORE INTO derive_kinds(name) VALUES (?1)",
+        params![name],
+    )?;
+    conn.query_row(
+        "SELECT id FROM derive_kinds WHERE name = ?1",
+        params![name],
+        |r| r.get(0),
+    )
+}
+
+/// Enqueues one changeset for kind `kind_id` (state='pending', attempts=0).
+/// `OR IGNORE`: an existing row (done from an eager derive, or an earlier
+/// enqueue) is never clobbered.
+pub fn derive_enqueue_pending(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
+         VALUES (?1, ?2, ?3, 'pending')",
+        params![kind_id, repo_id, cs.0.as_slice()],
+    )?;
+    Ok(())
+}
+
+/// Records a COMPLETED eager derivation straight to state='done' (the eager
+/// path runs inside the changeset's own write transaction — there is no
+/// lease to take and nothing can interleave).
+pub fn derive_state_insert_done(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    output: &[u8],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO derive_state(kind, repo_id, cs, state, attempts, output) \
+         VALUES (?1, ?2, ?3, 'done', 0, ?4)",
+        params![kind_id, repo_id, cs.0.as_slice(), output],
+    )?;
+    Ok(())
+}
+
+/// One row of `derive_state`, or `None` (unknown kind/cs — the M6b read
+/// routes' "is derived / is pending" lookup goes through here).
+pub fn derive_get(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+) -> rusqlite::Result<Option<DeriveStateRow>> {
+    conn.query_row(
+        "SELECT state, lease_expires_ns, attempts, output FROM derive_state \
+         WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+        params![kind_id, repo_id, cs.0.as_slice()],
+        |row| {
+            Ok(DeriveStateRow {
+                state: row.get(0)?,
+                lease_expires_ns: row.get(1)?,
+                attempts: row.get(2)?,
+                output: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// The oldest pending node of `kind_id` whose parents are all out of
+/// `pending`/`deriving` — done and poison parents never block (the plan's
+/// never-head-of-line rule; a poison parent's children proceed on the
+/// empty-marker fallback). Parents with NO row at all also never block:
+/// within the framework every enqueued changeset gets a row per registered
+/// kind, so a missing row means a kind registered after the fact (M6b's
+/// backfill enqueues oldest-first, parents before children). Enqueue order
+/// (`rowid`) is the "oldest" order.
+pub fn derive_pick_next(conn: &Connection, kind_id: i64) -> rusqlite::Result<Option<(i64, Id)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT s.repo_id, s.cs FROM derive_state s \
+         WHERE s.kind = ?1 AND s.state = 'pending' \
+         AND NOT EXISTS (\
+             SELECT 1 FROM changeset_parents p \
+             WHERE p.repo_id = s.repo_id AND p.cs = s.cs \
+               AND EXISTS (SELECT 1 FROM derive_state d \
+                           WHERE d.kind = s.kind AND d.repo_id = p.repo_id \
+                             AND d.cs = p.parent \
+                             AND d.state IN ('pending','deriving'))) \
+         ORDER BY s.rowid ASC LIMIT 1",
+    )?;
+    let row = stmt
+        .query_row(params![kind_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)
+                    .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))?,
+            ))
+        })
+        .optional()?;
+    Ok(row)
+}
+
+/// Takes the lease on a pending node: state → 'deriving' with
+/// `lease_expires_ns` set. Returns `false` when the node was no longer
+/// pending (the pick was stale).
+pub fn derive_lease(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    lease_expires_ns: i64,
+) -> rusqlite::Result<bool> {
+    let n = conn.execute(
+        "UPDATE derive_state SET state = 'deriving', lease_expires_ns = ?4 \
+         WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 AND state = 'pending'",
+        params![kind_id, repo_id, cs.0.as_slice(), lease_expires_ns],
+    )?;
+    Ok(n == 1)
+}
+
+/// One parent's framework-stored output: `Some(bytes)` only for a DONE
+/// parent; poison, deriving, pending, and row-less parents yield `None`
+/// (the caller maps that to the empty-marker [`crate::derive::DerivedOut`]),
+/// in the parents' `ord` order.
+pub fn derive_parent_outputs(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    parents: &[Id],
+) -> rusqlite::Result<Vec<Option<Vec<u8>>>> {
+    parents
+        .iter()
+        .map(|p| {
+            Ok(db_match_done(
+                conn.query_row(
+                    "SELECT state, output FROM derive_state \
+                     WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+                    params![kind_id, repo_id, p.0.as_slice()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
+                )
+                .optional()?,
+            ))
+        })
+        .collect()
+}
+
+/// `(state, output)` → the done-parent output, `None` for everything else.
+fn db_match_done(row: Option<(String, Option<Vec<u8>>)>) -> Option<Vec<u8>> {
+    match row {
+        Some((state, output)) if state == "done" => output,
+        _ => None,
+    }
+}
+
+/// Records a finished queue derivation: state → 'done' with the output
+/// bytes, lease released. Guarded on state='deriving' — a node swept to
+/// pending between derive and record is left to the next attempt (returns
+/// `false`).
+pub fn derive_record_done(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    output: &[u8],
+) -> rusqlite::Result<bool> {
+    let n = conn.execute(
+        "UPDATE derive_state SET state = 'done', output = ?4, lease_expires_ns = NULL \
+         WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 AND state = 'deriving'",
+        params![kind_id, repo_id, cs.0.as_slice(), output],
+    )?;
+    Ok(n == 1)
+}
+
+/// Records one failed attempt (a deriver `Err`, or the lease sweep's
+/// expiry): attempts+1; at the cap the node is QUARANTINED to 'poison' with
+/// a `derive_reports` row, otherwise it goes back to 'pending'. Returns
+/// `true` when the node was poisoned. Plain statements — see the module
+/// note on transactions.
+pub fn derive_fail_attempt(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    reason: &str,
+    now_ns: i64,
+) -> rusqlite::Result<bool> {
+    let attempts: i64 = conn.query_row(
+        "SELECT attempts FROM derive_state WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+        params![kind_id, repo_id, cs.0.as_slice()],
+        |r| r.get(0),
+    )?;
+    let attempts = attempts + 1;
+    if attempts >= crate::derive::DERIVE_MAX_ATTEMPTS {
+        conn.execute(
+            "UPDATE derive_state SET state = 'poison', lease_expires_ns = NULL, attempts = ?4 \
+             WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+            params![kind_id, repo_id, cs.0.as_slice(), attempts],
+        )?;
+        conn.execute(
+            "INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
+        )?;
+        Ok(true)
+    } else {
+        conn.execute(
+            "UPDATE derive_state SET state = 'pending', lease_expires_ns = NULL, attempts = ?4 \
+             WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+            params![kind_id, repo_id, cs.0.as_slice(), attempts],
+        )?;
+        Ok(false)
+    }
+}
+
+/// The kind's expired leases: (repo_id, cs) of 'deriving' rows whose lease
+/// ran out — a crashed or hung derivation holder. The caller feeds each
+/// back through [`derive_fail_attempt`] inside one transaction.
+pub fn derive_expired_leases(
+    conn: &Connection,
+    kind_id: i64,
+    now_ns: i64,
+) -> rusqlite::Result<Vec<(i64, Id)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT repo_id, cs FROM derive_state \
+         WHERE kind = ?1 AND state = 'deriving' \
+           AND lease_expires_ns IS NOT NULL AND lease_expires_ns < ?2",
+    )?;
+    let rows = stmt.query_map(params![kind_id, now_ns], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Vec<u8>>(1)
+                .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))?,
+        ))
+    })?;
+    rows.collect()
+}
+
+/// Whether `cs`'s first-parent chain (the canonical recursion axis, the one
+/// `log_chain` walks) exceeds `cap` ancestor levels — the exact check behind
+/// the derive depth cap. Bounded walk: at most cap+1 steps. Callers pre-skip
+/// with the O(1) generation bound (a node whose generation is at or under
+/// the cap cannot exceed it — every first-parent step drops generation by at
+/// least one, merges only inflate it), so the walk runs only for
+/// generation-over-cap nodes, where it is the exact answer.
+pub fn derive_over_depth(
+    conn: &Connection,
+    repo_id: i64,
+    cs: &Id,
+    cap: u64,
+) -> rusqlite::Result<bool> {
+    let node_gen: Option<i64> = conn
+        .query_row(
+            "SELECT generation FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            params![repo_id, cs.0.as_slice()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(node_gen) = node_gen else {
+        // Not a changeset of this repo: not a depth problem (the deriver
+        // sees an empty parent list, the same shape a parentless node has).
+        return Ok(false);
+    };
+    if node_gen <= 0 || node_gen as u64 <= cap {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT parent FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2 \
+         ORDER BY ord ASC LIMIT 1",
+    )?;
+    let mut current = *cs;
+    let mut steps: u64 = 0;
+    loop {
+        let parent: Option<Vec<u8>> = stmt
+            .query_row(params![repo_id, current.0.as_slice()], |r| r.get(0))
+            .optional()?;
+        let Some(parent) = parent else {
+            return Ok(false); // reached the root within the cap
+        };
+        steps += 1;
+        if steps > cap {
+            return Ok(true);
+        }
+        current = Id(parent.try_into().expect("parent id is 32 bytes"));
+    }
+}
+
+/// Immediate quarantine for the structural caps (depth, output size):
+/// state='poison' plus a `derive_reports` row, NO attempt arithmetic — the
+/// caps are structural, so retrying cannot help (unlike
+/// [`derive_fail_attempt`]). UPSERT: the eager path calls this before any
+/// row exists; an existing pending/deriving row is quarantined in place.
+/// Plain statements — see the module note on transactions.
+pub fn derive_poison_now(
+    conn: &Connection,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    reason: &str,
+    now_ns: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
+         VALUES (?1, ?2, ?3, 'poison', 0) \
+         ON CONFLICT(kind, repo_id, cs) DO UPDATE SET \
+           state = 'poison', lease_expires_ns = NULL",
+        params![kind_id, repo_id, cs.0.as_slice()],
+    )?;
+    conn.execute(
+        "INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
+    )?;
+    Ok(())
+}
+
 // ---- audit ---------------------------------------------------------------
 
 /// Appends one audit row.

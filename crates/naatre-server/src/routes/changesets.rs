@@ -371,6 +371,7 @@ async fn persist(
     let cs_id = *cs_id;
     let canonical = canonical.to_vec();
     let cas = Arc::clone(&state.cas);
+    let derive = Arc::clone(&state.derive);
 
     state
         .write(move |store| {
@@ -433,6 +434,18 @@ async fn persist(
                     trees: &trees,
                     now_ns: timestamp_ns as i64,
                 },
+            )
+            .map_err(ApiError::log_internal)?;
+            // Derived data (M6a): enqueue (or eagerly derive) the new
+            // changeset for every registered kind, inside the same
+            // transaction — a rolled-back create leaves no queue rows.
+            crate::derive::enqueue_changeset(
+                conn,
+                &derive,
+                repo_id,
+                cs_id,
+                &cs.parents,
+                timestamp_ns as i64,
             )
             .map_err(ApiError::log_internal)?;
             Ok(root_tree_id)

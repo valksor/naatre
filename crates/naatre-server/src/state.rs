@@ -183,6 +183,19 @@ pub struct ServerState {
     /// manual [`crate::snapshots_gc::gc_snapshots`] call. Default:
     /// [`crate::serve::SNAPSHOT_GC_INTERVAL`].
     pub snapshot_gc_interval: Duration,
+    /// Registered derived-data kinds (M6a). Empty until
+    /// [`ServerState::register_deriver`] — M6b registers the real kinds;
+    /// tests register throwaway kinds.
+    pub derive: Arc<crate::derive::DeriveRegistry>,
+    /// Derive-queue switch: `serve`'s background pass checks it. Off-switch
+    /// for tests that drive [`crate::derive::derive_pass`] directly and
+    /// assert its effects deterministically (same pattern as
+    /// `snapshot_gc_enabled`).
+    pub derive_queue_enabled: bool,
+    /// Derive-queue background-pass interval (`serve`'s task ticks on this;
+    /// also the lease horizon's base — a lease lasts twice the interval).
+    /// Default: [`crate::serve::DERIVE_QUEUE_INTERVAL`].
+    pub derive_queue_interval: Duration,
 }
 
 /// Shared handle to the server state.
@@ -225,7 +238,27 @@ impl ServerState {
             join_deadline: JOIN_DEADLINE,
             snapshot_gc_enabled: true,
             snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
+            derive: Arc::new(crate::derive::DeriveRegistry::default()),
+            derive_queue_enabled: true,
+            derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
         })
+    }
+
+    /// Registers one derived-data kind: seeds its `derive_kinds` row (the
+    /// id is stable across processes — `INSERT OR IGNORE`) and adds the
+    /// deriver to the registry. Called before the state is shared (boot, or
+    /// a test's pre-`Arc` tweak); a duplicate kind name panics in the
+    /// registry (two derivers must never share one id).
+    pub fn register_deriver(
+        &mut self,
+        deriver: Arc<dyn crate::derive::Deriver>,
+    ) -> Result<(), StoreError> {
+        let name = deriver.kind();
+        let store = lock_store(&self.store);
+        let id = crate::db::derive_kind_seed(store.conn(), name).map_err(StoreError::Sqlite)?;
+        let registry = Arc::make_mut(&mut self.derive);
+        registry.register(crate::derive::RegisteredKind { name, id, deriver });
+        Ok(())
     }
 
     /// Current time in ns since the epoch, read through the injected clock.

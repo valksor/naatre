@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
@@ -22,6 +23,7 @@ use naatre_core::changeset::{Changeset, FileChange, Op};
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_server::db;
 use naatre_server::import::{ImportError, ImportOptions, Report};
+use naatre_server::state::ServerState;
 use naatre_server::tree_derive::MemNode;
 use naatre_store::cas::Cas;
 use naatre_store::{DataDir, Store};
@@ -252,7 +254,7 @@ impl Env {
             into: Some(into.into()),
             skip_unsupported: skip,
         };
-        naatre_server::import::run(&self.data, &opts).unwrap()
+        naatre_server::import::run(&self.data, &opts, &Default::default()).unwrap()
     }
 
     fn main_target(&self, name: &str) -> Option<Id> {
@@ -795,6 +797,7 @@ fn import_while_serving_is_refused_by_the_flock() {
             into: Some("imp".into()),
             skip_unsupported: false,
         },
+        &Default::default(),
     )
     .unwrap_err();
     let message = err.to_string();
@@ -925,4 +928,116 @@ fn import_audit_rows_carry_via_import() {
     for v in details.iter().chain(moves.iter()) {
         assert_eq!(v["via"], "import", "provenance lost: {v}");
     }
+}
+
+// ---- M6a: the import enqueue hook -------------------------------------------
+
+/// A minimal derived-data kind for the import-hook pin: output = the count
+/// of parents' outputs + 1 (one byte), so the child's output proves the
+/// parent's output flowed through the queue's parents-done gate.
+struct QueueProbe {
+    calls: Arc<Mutex<Vec<Id>>>,
+}
+
+impl naatre_server::derive::Deriver for QueueProbe {
+    fn kind(&self) -> &'static str {
+        "queue-probe"
+    }
+
+    fn derive(
+        &self,
+        _conn: &rusqlite::Connection,
+        _repo_id: i64,
+        cs: Id,
+        parents_done: &[naatre_server::derive::DerivedOut],
+    ) -> Result<naatre_server::derive::DerivedOut, naatre_server::derive::PoisonReason> {
+        self.calls.lock().unwrap().push(cs);
+        Ok(naatre_server::derive::DerivedOut(vec![
+            (parents_done.len() + 1) as u8,
+        ]))
+    }
+}
+
+/// Importing with a REGISTERED derive kind enqueues every imported commit
+/// (the hook runs inside each commit's transaction); the serving side's
+/// queue (`derive_pass` over a ServerState on the same data dir) drains it
+/// parents-first. The offline `naatre import` process itself registers no
+/// kinds — that no-op path is every pre-existing import test.
+#[test]
+fn import_enqueues_registered_derive_kinds() {
+    if !git_works() {
+        return;
+    }
+    let mut f = Fixture::new("deriveq");
+    f.write("a.txt", b"one\n");
+    f.commit("root");
+    f.write("a.txt", b"two\n");
+    f.commit("second");
+
+    let env = Env::new();
+    let mut state = ServerState::open(DataDir::open(&env.data).unwrap()).unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    state
+        .register_deriver(Arc::new(QueueProbe {
+            calls: Arc::clone(&calls),
+        }))
+        .unwrap();
+    let registry = state.derive.clone();
+    let state = Arc::new(state);
+
+    let report = naatre_server::import::run(
+        &env.data,
+        &ImportOptions {
+            git_path: f.path.clone(),
+            into: Some("imp".into()),
+            skip_unsupported: false,
+        },
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(report.status, "ok", "{}", report.to_json_line());
+    assert_eq!(report.imported, 2);
+
+    // Both commits enqueued, pending, under the registered kind's id.
+    let kind: i64 = env
+        .conn()
+        .query_row(
+            "SELECT id FROM derive_kinds WHERE name = 'queue-probe'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        env.count(&format!(
+            "SELECT COUNT(*) FROM derive_state WHERE kind = {kind} AND state = 'pending'"
+        )),
+        2
+    );
+
+    // The queue drains it: parents first (the child's output counts its
+    // parent's), everything done. Rowid order is enqueue order, and the
+    // import walks parents before children.
+    let rep = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async { naatre_server::derive::derive_pass(&state).await.unwrap() });
+    assert_eq!(rep.derived, 2);
+    let order = calls.lock().unwrap().clone();
+    let outs: Vec<Vec<u8>> = {
+        let conn = env.conn();
+        let mut stmt = conn
+            .prepare("SELECT output FROM derive_state WHERE kind = ?1 ORDER BY rowid ASC")
+            .unwrap();
+        let rows = stmt.query_map([kind], |r| r.get::<_, Vec<u8>>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(outs.len(), 2);
+    assert_eq!(outs[0], vec![1], "root derives with no parents");
+    assert_eq!(outs[1], vec![2], "child derives FROM its parent's output");
+    assert_eq!(order.len(), 2);
+    assert_eq!(
+        env.count(&format!(
+            "SELECT COUNT(*) FROM derive_state WHERE kind = {kind} AND state = 'done'"
+        )),
+        2
+    );
 }

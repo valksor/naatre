@@ -174,8 +174,17 @@ pub enum ImportError {
 }
 
 /// Runs one import against the data dir at `data`, holding its exclusive
-/// flock for the duration. Silent: the caller renders [`Report`].
-pub fn run(data: &Path, opts: &ImportOptions) -> Result<Report, ImportError> {
+/// flock for the duration. Silent: the caller renders [`Report`]. `derive`
+/// is the caller's derived-data registry: every imported commit is
+/// enqueued (or eagerly derived) for every registered kind, inside its own
+/// commit transaction — the serving process's `naatre import` passes an
+/// EMPTY registry (kinds are registered by `serve`/M6b; the backlog
+/// backfills through the same queue on the serving side).
+pub fn run(
+    data: &Path,
+    opts: &ImportOptions,
+    derive: &crate::derive::DeriveRegistry,
+) -> Result<Report, ImportError> {
     reject_url(&opts.git_path)?;
     let repo_name = match &opts.into {
         Some(name) => {
@@ -343,7 +352,7 @@ pub fn run(data: &Path, opts: &ImportOptions) -> Result<Report, ImportError> {
     // file changes, blob membership, git_map row, derived trees, and audit.
     let mut git_map = git_map;
     for p in &importable {
-        import_commit(&git, &cas, conn, repo_id, &repo_name, p)?;
+        import_commit(&git, &cas, conn, repo_id, &repo_name, derive, p)?;
         git_map.insert(p.git_oid, p.cs_id);
         report.imported += 1;
         if p.sanitized {
@@ -1185,6 +1194,7 @@ fn import_commit(
     conn: &Connection,
     repo_id: i64,
     repo_name: &str,
+    derive: &crate::derive::DeriveRegistry,
     p: &PreparedCommit,
 ) -> Result<(), ImportError> {
     // Blobs first (durability invariant 1): the diff's Add/Mod blobs.
@@ -1236,6 +1246,9 @@ fn import_commit(
             git_map_oid: Some(p.git_oid.as_bytes()),
         },
     )?;
+    // Derived data (M6a): the imported commit enqueues (or eagerly
+    // derives) for every registered kind, in the commit's own transaction.
+    crate::derive::enqueue_changeset(&tx, derive, repo_id, p.cs_id, &p.cs.parents, now_ns())?;
     tx.commit()?;
     Ok(())
 }

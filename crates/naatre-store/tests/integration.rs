@@ -23,7 +23,7 @@ fn fresh_db_migrates_to_current() {
         )
         .unwrap();
     assert_eq!(v, MAX_SUPPORTED.to_string());
-    assert_eq!(MAX_SUPPORTED, 3);
+    assert_eq!(MAX_SUPPORTED, 4);
 
     // Migration 2 spot-check: the tokens table carries the scope column.
     conn.execute_batch("SELECT scope_path FROM tokens LIMIT 0;")
@@ -33,27 +33,38 @@ fn fresh_db_migrates_to_current() {
     conn.execute_batch("SELECT repo_id, tree_id FROM repo_trees LIMIT 0;")
         .unwrap();
 
+    // Migration 4 spot-check: the derived-data framework's tables exist and
+    // the state CHECK admits exactly the four framework states.
+    conn.execute_batch(
+        "SELECT kind, repo_id, cs, state, lease_expires_ns, attempts, output \
+         FROM derive_state LIMIT 0;
+         SELECT id, name FROM derive_kinds LIMIT 0;
+         SELECT kind, repo_id, cs, reason, ts_ns FROM derive_reports LIMIT 0;",
+    )
+    .unwrap();
     // Spot-check the table set landed.
     let tables: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
              AND name IN ('meta','repos','changesets','changeset_parents','file_changes',\
              'repo_blobs','refs','trees','tree_entries','objects','principals','tokens',\
-             'lands','snapshots','audit_log','git_map','repo_trees')",
+             'lands','snapshots','audit_log','git_map','repo_trees',\
+             'derive_kinds','derive_state','derive_reports')",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(tables, 17);
+    assert_eq!(tables, 20);
     let indexes: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
-             AND name IN ('idx_cs_parents_parent','idx_snapshots_expiry')",
+             AND name IN ('idx_cs_parents_parent','idx_snapshots_expiry',\
+             'idx_derive_state_kind_state','idx_derive_reports_node')",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(indexes, 2);
+    assert_eq!(indexes, 4);
 }
 
 #[test]
@@ -83,11 +94,17 @@ fn migration3_backfills_tree_membership_from_existing_data() {
     migrate(&conn).unwrap();
     conn.execute_batch(
         // Roll the schema back to the pre-3 world (drop everything
-        // migration 3 creates) and stage v2-era data.
+        // migrations 3 and 4 create — an M5-era data dir predates both)
+        // and stage v2-era data.
         "DROP INDEX IF EXISTS idx_repo_trees_tree;
          DROP INDEX IF EXISTS idx_changesets_root;
          DROP INDEX IF EXISTS idx_tree_entries_object;
          DROP TABLE repo_trees;
+         DROP INDEX IF EXISTS idx_derive_state_kind_state;
+         DROP INDEX IF EXISTS idx_derive_reports_node;
+         DROP TABLE IF EXISTS derive_reports;
+         DROP TABLE IF EXISTS derive_state;
+         DROP TABLE IF EXISTS derive_kinds;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
          -- One tree shared by both repos (content-addressed id), containing

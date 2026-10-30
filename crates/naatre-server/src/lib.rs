@@ -22,6 +22,7 @@ pub mod api_error;
 pub mod auth;
 pub mod authz;
 pub mod db;
+pub mod derive;
 pub mod extract;
 pub mod import;
 pub mod land;

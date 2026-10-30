@@ -151,6 +151,7 @@ fn id_of(bytes: &[u8]) -> Option<Id> {
 pub(crate) fn execute(
     store: &mut Store,
     cas: &Cas,
+    derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
 ) -> Result<LandDone, ApiError> {
     let conn = store.conn();
@@ -165,7 +166,7 @@ pub(crate) fn execute(
             )
         })?;
     let guard = TxnGuard::begin(conn)?;
-    match land_in_txn(conn, cas, cmd, repo_id) {
+    match land_in_txn(conn, cas, derive, cmd, repo_id) {
         Ok(done) => {
             guard.commit()?;
             crash_point("after_commit");
@@ -185,6 +186,7 @@ pub(crate) fn execute(
 fn land_in_txn(
     conn: &Connection,
     cas: &Cas,
+    derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
     repo_id: i64,
 ) -> Result<LandDone, ApiError> {
@@ -475,6 +477,11 @@ fn land_in_txn(
             db::ChangesetExtras::NONE,
         )
         .map_err(ApiError::log_internal)?;
+        // Derived data (M6a): the rebased changeset is a brand-new node —
+        // enqueue (or eagerly derive) it for every registered kind, inside
+        // the land's single transaction like every other row here.
+        crate::derive::enqueue_changeset(conn, derive, repo_id, new_id, &cs.parents, cmd.now_ns)
+            .map_err(ApiError::log_internal)?;
 
         tip_id = new_id;
         tip_tree = merged.node;

@@ -1085,6 +1085,7 @@ async fn every_history_subtree_is_junctioned_across_write_paths() {
             into: Some("m2a".to_string()),
             skip_unsupported: false,
         },
+        &Default::default(),
     )
     .expect("import runs");
     assert_eq!(report.status, "ok", "{}", report.to_json_line());

@@ -28,6 +28,16 @@ use crate::state::AppState;
 /// the background task off to keep effects deterministic).
 pub const SNAPSHOT_GC_INTERVAL: Duration = Duration::from_secs(60);
 
+/// The default background derive-queue interval (5 s): with M6a's deferred
+/// kinds the queue drains continuously in the background; M6b's read routes
+/// answer 503 `derivation_pending` + `Retry-After` for anything not yet
+/// derived. The pass itself is [`crate::derive::derive_pass`]; a node's
+/// lease lasts twice this interval (crash-recovery horizon). The off-switch
+/// and per-state interval live on [`crate::state::ServerState`]
+/// (`derive_queue_enabled`, `derive_queue_interval`), same pattern as the
+/// GC pair above.
+pub const DERIVE_QUEUE_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Everything [`serve`] needs: the bound listener and the shared state.
 pub struct ServeConfig {
     pub listener: TcpListener,
@@ -97,6 +107,24 @@ pub async fn serve(
                 interval.tick().await;
                 if let Err(e) = crate::snapshots_gc::gc_snapshots(&gc_state).await {
                     tracing::warn!(error = %e, "background snapshot GC failed");
+                }
+            }
+        });
+    }
+
+    // Background derive queue (M6a): same pattern — a pass per tick on the
+    // state's interval, beside the GC task, dropped with the serving
+    // runtime on shutdown; a failed pass is logged and retried on the next
+    // tick.
+    if cfg.state.derive_queue_enabled {
+        let dq_state = Arc::clone(&cfg.state);
+        let dq_interval = cfg.state.derive_queue_interval;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(dq_interval);
+            loop {
+                interval.tick().await;
+                if let Err(e) = crate::derive::derive_pass(&dq_state).await {
+                    tracing::warn!(error = %e, "background derive pass failed");
                 }
             }
         });

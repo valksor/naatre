@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 3;
+pub const MAX_SUPPORTED: i64 = 4;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -71,6 +71,28 @@ WITH RECURSIVE reach(repo_id, tree_id) AS (
 )
 INSERT INTO repo_trees(repo_id, tree_id)
 SELECT DISTINCT repo_id, tree_id FROM reach;
+"#,
+    ),
+    // M6a: the generic derived-data framework's tables. `derive_kinds` is
+    // seeded EMPTY — kinds are registered in code (the `Deriver` trait) and
+    // seed their row at registration (M6b registers the real kinds; tests
+    // register throwaway kinds). `derive_state` is the per-(kind, repo,
+    // changeset) queue and state machine: pending → deriving (under a lease)
+    // → done, with poison as the quarantine terminal state for a node that
+    // failed `attempts` times; `output` carries the framework-owned opaque
+    // output handed to CHILD derivations (kind-specific served-surface
+    // storage stays the deriver's job). `derive_reports` rows the poison
+    // quarantine records (one per poison event). The index backs the
+    // queue's oldest-pending pick (a scan over (kind, state) must stay
+    // indexed — the table grows with the changeset count).
+    (
+        4,
+        r#"
+CREATE TABLE derive_kinds(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+CREATE TABLE derive_state(kind INTEGER NOT NULL, repo_id INTEGER NOT NULL, cs BLOB NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','deriving','done','poison')), lease_expires_ns INTEGER, attempts INTEGER NOT NULL DEFAULT 0, output BLOB, PRIMARY KEY(kind, repo_id, cs));
+CREATE INDEX idx_derive_state_kind_state ON derive_state(kind, state);
+CREATE TABLE derive_reports(kind INTEGER NOT NULL, repo_id INTEGER NOT NULL, cs BLOB NOT NULL, reason TEXT NOT NULL, ts_ns INTEGER NOT NULL);
+CREATE INDEX idx_derive_reports_node ON derive_reports(kind, repo_id, cs);
 "#,
     ),
 ];

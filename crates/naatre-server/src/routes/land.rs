@@ -170,8 +170,9 @@ pub async fn land(
         now_ns: state.now_ns() as i64,
     };
     let cas = Arc::clone(&state.cas);
+    let derive = Arc::clone(&state.derive);
     let result = state
-        .write(move |store| land::execute(store, &cas, &cmd))
+        .write(move |store| land::execute(store, &cas, &derive, &cmd))
         .await;
     // Share the outcome with joiners, then deregister (Drop). The write slot
     // is free again by the time this runs: a joiner sees the entry with its
