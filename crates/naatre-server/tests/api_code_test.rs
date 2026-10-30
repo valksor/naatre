@@ -132,6 +132,12 @@ fn table_maps_every_variant_exactly_once() {
             rows.len()
         );
     }
+    // The published-enum list (ApiCode::ALL feeds the OpenAPI ErrorCode
+    // component) must equal the exhaustive variant list, in order.
+    assert_eq!(ApiCode::ALL.len(), all.len(), "ALL length drifted");
+    for (published, variant) in ApiCode::ALL.iter().zip(all.iter()) {
+        assert_eq!(published, variant, "ALL order drifted at {variant:?}");
+    }
 }
 
 #[test]

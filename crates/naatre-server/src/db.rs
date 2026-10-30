@@ -479,7 +479,10 @@ pub fn tree_entries_load(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Ve
     rows.collect()
 }
 
-/// The repo that owns a tree row, or `None` (unknown tree id).
+/// The repo a `trees` row is attributed to (the first writer, since rows
+/// are `INSERT OR IGNORE`), or `None` (unknown tree id). Informational
+/// only — reads are gated on `repo_trees` membership (`repo_has_tree`),
+/// never on this column.
 pub fn tree_repo(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
         "SELECT repo_id FROM trees WHERE id = ?1",
@@ -489,31 +492,168 @@ pub fn tree_repo(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Option<i64
     .optional()
 }
 
-/// Persists derived trees: one `trees` row (canonical bytes) plus its flat
-/// `tree_entries` rows each. `INSERT OR REPLACE` keyed by id makes repeats
-/// idempotent (shared subtrees re-derived by a child changeset are no-ops).
+/// Persists HISTORY-derived trees (changeset create, land, import): one
+/// `trees` row (canonical bytes), its flat `tree_entries` rows, and this
+/// repo's `repo_trees` membership row each. `INSERT OR IGNORE` keyed by id
+/// makes repeats idempotent (shared subtrees re-derived by a child
+/// changeset are no-ops; identical id implies identical bytes). The
+/// membership row is what later gates bare-id tree reads. Snapshot trees
+/// must NOT go through here — use [`trees_write_snapshot`].
 pub fn trees_write(conn: &Connection, repo_id: i64, trees: &[TreeWrite]) -> rusqlite::Result<()> {
     for tree in trees {
+        write_tree_rows(conn, repo_id, tree)?;
         conn.execute(
-            "INSERT OR REPLACE INTO trees(id, repo_id, canonical) VALUES (?1, ?2, ?3)",
-            params![tree.id.0.as_slice(), repo_id, tree.canonical],
+            "INSERT OR IGNORE INTO repo_trees(repo_id, tree_id) VALUES (?1, ?2)",
+            params![repo_id, tree.id.0.as_slice()],
         )?;
-        for e in &tree.entries {
-            conn.execute(
-                "INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    tree.id.0.as_slice(),
-                    e.name,
-                    e.kind,
-                    e.object_id,
-                    e.size,
-                    e.exec as i64,
-                ],
-            )?;
-        }
     }
     Ok(())
+}
+
+/// Persists SNAPSHOT trees (the snapshot POST path): `trees` +
+/// `tree_entries` rows with NO `repo_trees` membership. Snapshot trees are
+/// own-principal data served only through the owner-gated snapshot routes;
+/// a membership row would expose their path names and blob ids to every
+/// repo reader via the bare-id tree route, and those rows carry no TTL. GC
+/// purges snapshot-only tree rows once no live snapshot reaches them
+/// ([`purge_snapshot_only_trees`]).
+pub fn trees_write_snapshot(conn: &Connection, trees: &[TreeWrite]) -> rusqlite::Result<()> {
+    for tree in trees {
+        write_tree_rows(conn, 0, tree)?;
+    }
+    Ok(())
+}
+
+/// One `trees` row plus its flat `tree_entries` rows (`INSERT OR IGNORE` /
+/// `INSERT OR REPLACE`, idempotent repeats). `repo_id` is informational.
+fn write_tree_rows(conn: &Connection, repo_id: i64, tree: &TreeWrite) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO trees(id, repo_id, canonical) VALUES (?1, ?2, ?3)",
+        params![tree.id.0.as_slice(), repo_id, tree.canonical],
+    )?;
+    for e in &tree.entries {
+        conn.execute(
+            "INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                tree.id.0.as_slice(),
+                e.name,
+                e.kind,
+                e.object_id,
+                e.size,
+                e.exec as i64,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether any `trees` row lacks a `repo_trees` junction row. Read-only
+/// idle probe for the GC pass: with no junction-less rows there is nothing
+/// snapshot-created to sweep, so the pass can skip the write slot entirely
+/// (a quiet server's periodic pass must never occupy the single-writer
+/// slot — that would 503 concurrent writes).
+pub fn any_junctionless_trees(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM trees t \
+         WHERE NOT EXISTS (SELECT 1 FROM repo_trees rt WHERE rt.tree_id = t.id) LIMIT 1",
+        [],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|hit| hit.is_some())
+}
+
+/// The `trees` rows to sweep: the ZERO-JUNCTION candidates (no
+/// `repo_trees` row — indexed probe) that no retention path protects.
+/// Protection is TRANSITIVE through candidates: a candidate is protected
+/// if it (a) sits in an unexpired snapshot's closure, (b) is a changeset
+/// root, (c) has a RETAINED parent — a tree with a junction row or a
+/// changeset root pointing at it as a child (reverse lookup, indexed) —
+/// or is a candidate child of an already-protected candidate. (b)/(c) and
+/// the recursion are the safety net for junction completeness: a future
+/// write path that forgets junction rows for a whole SUBTREE cannot get
+/// its live history silently swept — a junction-less chain under a
+/// retained parent survives in full (depth-one protection would orphan
+/// the chain's children; see `m5a_test.rs::gc_spares_a_deeper_
+/// junctionless_chain`).
+///
+/// Zero-junction candidacy is sound because every history-tree write path
+/// inserts junction rows and migration 3's backfill covered pre-migration
+/// rows — which is why no provenance marker column is needed (and why
+/// half-adding one later would be wrong: the invariant lives in junction
+/// completeness). The walk stays inside the candidate set, so cost scales
+/// with candidates (plus one indexed probe per tree row to find them),
+/// not with history. The caller runs this inside the same transaction as
+/// the expired-row purge, so a snapshot POST reusing a shared subtree
+/// cannot land between mark and delete (both go through the
+/// single-writer slot).
+pub fn unprotected_trees(conn: &Connection, now_ns: i64) -> rusqlite::Result<Vec<Id>> {
+    let mut stmt = conn.prepare_cached(
+        "WITH RECURSIVE
+         live(tree_id) AS (
+             SELECT tree_id FROM snapshots WHERE expires_ns > ?1
+             UNION
+             SELECT te.object_id FROM live l
+             JOIN tree_entries te ON te.tree_id = l.tree_id AND te.kind = 1
+         ),
+         candidates AS (
+             SELECT t.id FROM trees t
+             WHERE NOT EXISTS (SELECT 1 FROM repo_trees rt WHERE rt.tree_id = t.id)
+         ),
+         protected(tree_id) AS (
+             SELECT c.id FROM candidates c
+             WHERE c.id IN (SELECT tree_id FROM live)
+                OR EXISTS (SELECT 1 FROM changesets cs WHERE cs.root_tree_id = c.id)
+                OR EXISTS (SELECT 1 FROM tree_entries te
+                           WHERE te.kind = 1 AND te.object_id = c.id
+                           AND (EXISTS (SELECT 1 FROM repo_trees rt
+                                        WHERE rt.tree_id = te.tree_id)
+                                OR EXISTS (SELECT 1 FROM changesets cs
+                                           WHERE cs.root_tree_id = te.tree_id)))
+             UNION
+             SELECT te.object_id
+             FROM protected p
+             JOIN tree_entries te ON te.tree_id = p.tree_id AND te.kind = 1
+             WHERE EXISTS (SELECT 1 FROM candidates c WHERE c.id = te.object_id)
+         )
+         SELECT c.id FROM candidates c
+         WHERE c.id NOT IN (SELECT tree_id FROM protected)",
+    )?;
+    let rows = stmt.query_map(params![now_ns], |row| {
+        row.get::<_, Vec<u8>>(0)
+            .map(|b| Id(b.try_into().expect("tree id is 32 bytes")))
+    })?;
+    rows.collect()
+}
+
+/// Deletes the given `trees` rows and their `tree_entries` rows; returns
+/// the number of `trees` rows deleted. The write-side half of the sweep.
+pub fn delete_tree_rows(conn: &Connection, ids: &[Id]) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for id in ids {
+        conn.execute(
+            "DELETE FROM tree_entries WHERE tree_id = ?1",
+            params![id.0.as_slice()],
+        )?;
+        n += conn.execute("DELETE FROM trees WHERE id = ?1", params![id.0.as_slice()])?;
+    }
+    Ok(n)
+}
+
+/// Whether `repo_id` wrote `tree_id` (a `repo_trees` membership row) — the
+/// read gate for the bare-id tree route. A tree is readable from every repo
+/// that wrote it and from no other: content-addressing shares the row, the
+/// junction shares readability only with writers.
+pub fn repo_has_tree(conn: &Connection, repo_id: i64, tree_id: &Id) -> rusqlite::Result<bool> {
+    let hit: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM repo_trees WHERE repo_id = ?1 AND tree_id = ?2",
+            params![repo_id, tree_id.0.as_slice()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(hit.is_some())
 }
 
 /// Everything one successful changeset create commits, atomically: the

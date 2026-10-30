@@ -62,7 +62,13 @@ pub fn walk_tree(
     root: &Id,
     prefixes: &[String],
 ) -> Result<Vec<TreeFile>, FetchError> {
-    walk_tree_inner(client, repo, root, prefixes, true)
+    walk_tree_inner(
+        client,
+        &format!("/v1/repos/{repo}/trees"),
+        root,
+        prefixes,
+        true,
+    )
 }
 
 /// The uniform rule for walks over an EXISTING checkout's cone (sync's
@@ -77,12 +83,38 @@ pub fn walk_tree_allowing_missing_prefixes(
     root: &Id,
     prefixes: &[String],
 ) -> Result<Vec<TreeFile>, FetchError> {
-    walk_tree_inner(client, repo, root, prefixes, false)
+    walk_tree_inner(
+        client,
+        &format!("/v1/repos/{repo}/trees"),
+        root,
+        prefixes,
+        false,
+    )
+}
+
+/// The snapshot-tree walk: lists through the owner-gated snapshot routes
+/// (`/v1/repos/{repo}/snapshots/{sid}/trees/{tid}`) — snapshot trees carry
+/// no `repo_trees` membership, so the bare-id repo tree route 404s them.
+/// A prefix the snapshot lacks is an empty subtree (restore's rule).
+pub fn walk_snapshot_tree(
+    client: &Client,
+    repo: &str,
+    snap_id: &Id,
+    root: &Id,
+    prefixes: &[String],
+) -> Result<Vec<TreeFile>, FetchError> {
+    walk_tree_inner(
+        client,
+        &format!("/v1/repos/{repo}/snapshots/{}/trees", snap_id.to_hex()),
+        root,
+        prefixes,
+        false,
+    )
 }
 
 fn walk_tree_inner(
     client: &Client,
-    repo: &str,
+    list_base: &str,
     root: &Id,
     prefixes: &[String],
     require_prefixes: bool,
@@ -98,7 +130,7 @@ fn walk_tree_inner(
         if !visited.insert(tree_id) {
             continue;
         }
-        let v = client.get_json(&format!("/v1/repos/{repo}/trees/{}", tree_id.to_hex()), &[])?;
+        let v = client.get_json(&format!("{list_base}/{}", tree_id.to_hex()), &[])?;
         let entries = v["entries"]
             .as_array()
             .ok_or_else(|| FetchError::Local("server sent a malformed tree listing".into()))?;

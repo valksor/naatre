@@ -81,6 +81,44 @@ pub enum ApiCode {
 }
 
 impl ApiCode {
+    /// Every variant, in registry order. `tests/api_code_test.rs`
+    /// cross-checks this list against the exhaustive variant list and the
+    /// wire-string table, so the published enum cannot silently drift from
+    /// the registry.
+    pub const ALL: [ApiCode; 31] = [
+        ApiCode::TokenInvalid,
+        ApiCode::TokenExpired,
+        ApiCode::TokenRevoked,
+        ApiCode::Forbidden,
+        ApiCode::NotFound,
+        ApiCode::RepoNotFound,
+        ApiCode::RepoExists,
+        ApiCode::ObjectNotFound,
+        ApiCode::RefConflict,
+        ApiCode::IdempotencyKeySettled,
+        ApiCode::DirtyWorkingCopy,
+        ApiCode::GitHistoryDiverged,
+        ApiCode::ConflictMarkersPresent,
+        ApiCode::Malformed,
+        ApiCode::Validation,
+        ApiCode::PathNotNormalized,
+        ApiCode::EmptyChangeset,
+        ApiCode::NotFastForward,
+        ApiCode::UnknownParent,
+        ApiCode::Duality,
+        ApiCode::UnsortedChanges,
+        ApiCode::DuplicatePath,
+        ApiCode::TooLarge,
+        ApiCode::SnapshotExpired,
+        ApiCode::ObjectCollected,
+        ApiCode::ObjectRedacted,
+        ApiCode::WriterBusy,
+        ApiCode::DerivationPending,
+        ApiCode::RequestTimeout,
+        ApiCode::ServerBusy,
+        ApiCode::Internal,
+    ];
+
     /// The wire form of the code (`error.code` in the envelope).
     pub const fn as_str(self) -> &'static str {
         match self {

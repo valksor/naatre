@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 2;
+pub const MAX_SUPPORTED: i64 = 3;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -40,6 +40,39 @@ CREATE TABLE git_map(repo_id INTEGER NOT NULL, git_oid BLOB NOT NULL, cs_id BLOB
     // M1b2: per-token path-prefix scope (`None` = whole repo). Existing
     // tokens get NULL, which the scope matcher treats as unrestricted.
     (2, "ALTER TABLE tokens ADD COLUMN scope_path TEXT;"),
+    // M5b redo: per-repo tree membership for HISTORY trees. Tree ids are
+    // content-addressed, so identical subtrees share one `trees` row across
+    // repos; bare-id reads are gated on this junction (repo-membership-
+    // gated, the plan's cross-repo posture — trees carry path names and
+    // blob ids), not on `trees.repo_id` (informational). Snapshot trees get
+    // NO junction rows: they are own-principal data, TTL'd, served only
+    // through the owner-gated snapshot routes. One-time backfill inside the
+    // migration: membership for every history tree is derivable from each
+    // changeset's root tree plus the `tree_entries` closure below it (kind=1
+    // is a dir entry whose object_id is a child tree id). UNION dedups the
+    // DAG walk, so the recursion terminates. The indexes back the GC
+    // sweep's per-candidate point-lookups (candidates are zero-junction
+    // rows; each is kept if any indexed lookup retains it): the junction
+    // probe ("no junction row = only a snapshot ever wrote this tree" —
+    // the PK alone leads on repo_id), changeset roots, and child entries
+    // pointing at the candidate from retained trees.
+    (
+        3,
+        r#"
+CREATE TABLE repo_trees(repo_id INTEGER NOT NULL, tree_id BLOB NOT NULL, PRIMARY KEY(repo_id, tree_id));
+CREATE INDEX idx_repo_trees_tree ON repo_trees(tree_id);
+CREATE INDEX idx_changesets_root ON changesets(root_tree_id);
+CREATE INDEX idx_tree_entries_object ON tree_entries(object_id);
+WITH RECURSIVE reach(repo_id, tree_id) AS (
+    SELECT repo_id, root_tree_id FROM changesets WHERE root_tree_id IS NOT NULL
+    UNION
+    SELECT r.repo_id, te.object_id FROM reach r
+    JOIN tree_entries te ON te.tree_id = r.tree_id AND te.kind = 1
+)
+INSERT INTO repo_trees(repo_id, tree_id)
+SELECT DISTINCT repo_id, tree_id FROM reach;
+"#,
+    ),
 ];
 
 /// Brings the database at `conn` up to [`MAX_SUPPORTED`].

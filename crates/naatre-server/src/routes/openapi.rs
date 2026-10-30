@@ -7,13 +7,13 @@ use axum::Json;
 use axum::extract::State;
 use serde_json::Value;
 
-use utoipa::OpenApi as _;
-
 use crate::auth::AuthedPrincipal;
 use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
-/// Serves the utoipa OpenAPI document.
+/// Serves the OpenAPI document — the same [`ApiDoc::document_json`] render
+/// the checked `docs/openapi.json` artifact uses, including the error-code
+/// registry components.
 #[utoipa::path(
     get,
     path = "/v1/openapi.json",
@@ -26,5 +26,5 @@ pub async fn serve(
     _state: State<AppState>,
     Extension(_auth): Extension<AuthedPrincipal>,
 ) -> Json<Value> {
-    Json(serde_json::to_value(ApiDoc::openapi()).expect("ApiDoc serializes to JSON"))
+    Json(ApiDoc::document_json())
 }

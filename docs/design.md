@@ -1,0 +1,191 @@
+# naatre design notes
+
+The durability invariants the server enforces, the limits registry (every
+limit naming the milestone that lifts it, or saying plainly that none does),
+and the honest-scope boundaries — what the security and consistency model
+does and does not claim. Facts here are as built at M5b; each entry names
+the code that carries it.
+
+## Durability invariants
+
+Enforced by the store API (`naatre-store`, `naatre-server/src/land.rs`,
+`db.rs`) and pinned by tests. SQLite runs in WAL with `synchronous=FULL`;
+every connection sits behind `spawn_blocking` with `busy_timeout`.
+
+1. **A blob is durable before any row referencing it commits.** Object and
+   snapshot writes go tmp → rename → fsync into the CAS before the insert
+   in the same transaction. The failure direction is an orphan blob (harm-
+   less, swept later), never a dangling reference. This is what makes the
+   README's backup ordering safe: DB snapshot first, then `objects/`.
+2. **Land is one transaction.** `BEGIN IMMEDIATE` → pending `lands` row →
+   rebase → CAS `main` → done → COMMIT. A crash before COMMIT leaves
+   nothing: the key stays unsettled, a retry replays from scratch; a crash
+   after it means replay-by-key returns the settled state
+   (`m4b_crash_test.rs` walks the deterministic crash-point enum).
+3. **Ephemeral GC is whole-directory and never touches history.** A pass
+   deletes expired snapshots' whole `ephemeral/<snap-id>/` directories and
+   their rows (dirs first, rows after: a crash mid-pass leaves an expired
+   row whose fetch answers 410, never a live row whose blobs are gone), and
+   sweeps rowless dirs older than the max TTL — the convergence rule for an
+   upload that crashed between blob PUTs and the snapshot POST. Restore
+   re-checks expiry at fetch time, so expiry is enforced at every read, not
+   only at GC time.
+
+**Schema migration authority**: `serve` auto-applies migrations on boot; a
+binary older than the database's schema version refuses to start with a
+clear error. The schema, not any binary, is the authority.
+
+## Limits registry
+
+Every deliberate limit, with the milestone that lifts it — or an explicit
+"no milestone", where the limit is structural rather than temporary.
+
+| Limit (as built) | Value / behavior | Lifted by |
+|---|---|---|
+| Single-writer per database | One write transaction at a time per data dir; a contended write slot answers 503 `writer_busy` + `Retry-After` instead of queueing. The SQLite-level `busy_timeout` is pinned at **5000 ms** (`naatre-store/src/store.rs`, `BUSY_TIMEOUT_MS`) — a write that cannot take the DB inside it surfaces as an error, never an unbounded wait. Reads run on a separate read-only pool and never contend with the writer (WAL). | **M13** (DB-per-repo turns this into per-repo; global until then) |
+| Whole-directory tree rewrite | Derivation is path-copy: a change re-canonicalizes every directory node on the changed paths' ancestor chain, O(change × depth) rows per changeset. Structural to the derived-tree design (Mononoke/Bonsai precedent); per-changeset caps bound the cost. | **No milestone** — accepted, not a temporary limit |
+| Single-process working copy | One `naatre` process per working copy; concurrent processes in one tree are undetected until M8's coordination. | **M8** (mount clients get their own coordination) |
+| No per-client request rate limiting | The server rate-limits nothing by client: transport caps (below) shed overload, auth-failure auditing has its own caps, and ordinary requests are admitted unconditionally. Behind a proxy, load-shedding per client is the proxy's job. | **M10** (per-principal rate quotas) |
+| Transport caps | Blob ≤ **64 MiB** pre-compression (413 over); request body ≤ **96 MiB**; canonical changeset object ≤ **16 MiB** with ≤ **100 000** entries and ≤ **2** parents; path ≤ 4096 bytes, components ≤ 255 bytes; request time budget **30 s**; concurrent requests ≤ **256**; pagination `limit` 1–**200** (default 50); batch PUT is effectively one-max-blob-per-request because the base64 payload of a max blob dominates the body cap — a raw `PUT /v1/repos/{r}/objects/{id}` exists for large blobs. | **No milestone** — these are the design's shape, not a pending relaxation |
+| Repo-name visibility | `GET /v1/repos` lists every repo name to every authenticated principal; names are visible, contents are not (per-repo reads still gate on auth and membership). | **M13** (repo read ACLs) |
+| Cursor-during-land duplicates | Keyset pagination is anchored on changeset ids; a concurrent land can make a page boundary re-serve a changeset the next window also contains. Duplicates are possible; **skips are not** — the pinned contract, tested in M4. | **No milestone** — inherent to pagination over an append-only log; documented, not fixed |
+| Proxy audit degradation | naatre logs no peer address anywhere (access logs are method/path/status/elapsed/request-id only) and keys auth-failure auditing by presented credential. Behind a TLS proxy, every request shares the proxy's address — but since nothing keys on addresses, the practical degradation is narrow: an anonymous flood presents no credential, keys to the single `anon` bucket, and is visible only through the global counters (see auth-failure caps below). Attribution is by principal, never by network origin. | **M10** (per-principal quotas reduce reliance on origin identity further) |
+
+## Request-timeout shedding and in-flight writes
+
+The 30 s per-request budget sheds by dropping the handler's future
+(`middleware::request_timeout`, 503 `request_timeout`, retryable). The drop
+does not roll back work already handed to `spawn_blocking`: a write closure
+past its DB commit point **may still commit after the client saw 503**.
+Healing is by class:
+
+- **Keyed writes** (land, keyed changeset creates): the client retries with
+  the same key; the settled-row replay returns the identical outcome. No
+  duplication by construction.
+- **Unkeyed writes** (e.g. token create, repo create): a retry after a shed
+  request may produce a second row. Tokens are inert until used; an
+  unreferenced duplicate is harmless. Idempotency keys are the tool for
+  anything where that is not acceptable.
+
+## Trees: repo-membership-gated reads
+
+Tree ids are content-addressed (BLAKE3 over canonical bytes), so two repos
+committing an identical subtree derive the **same** id and share one
+`trees` row. Which repos may read a tree is tracked in the
+**`repo_trees(repo_id, tree_id)` junction** (schema migration 3), written
+by the HISTORY tree paths only — changeset create, land, and import all
+funnel through `db::trees_write`. `GET /v1/repos/{r}/trees/{id}` answers
+200 iff a membership row exists for (this repo, id):
+
+- **A tree is readable by every repo that wrote it** — including the
+  shared-subtree case where two repos independently derive one id.
+- **A repo that never wrote the tree gets 404 even though the id exists**
+  on the server: trees carry path names and blob ids, so reads stay
+  repo-membership-gated (the plan's cross-repo posture; the same rule the
+  by-id objects boundary applies through `repo_blobs`).
+- An unknown id is 404 everywhere (`m2a_test.rs::trees_are_repo_membership_gated`
+  pins all three cases).
+
+**Snapshot trees are outside the junction.** The snapshot POST writes its
+trees junction-less (`db::trees_write_snapshot`): a snapshot's tree is
+own-principal data with a TTL, and a membership row would expose its path
+names and blob ids to every repo reader through the bare-id tree route.
+Snapshot trees are served only through the owner-gated snapshot routes
+(`GET /v1/repos/{r}/snapshots/{id}`, another principal's id is 404), and
+principals other than the owner get 404 on the tree route too
+(`m5a_test.rs::snapshot_trees_have_no_membership_and_gc_purges_them`).
+
+**GC of snapshot-only trees is mark-and-sweep, candidates = zero-junction
+rows, protection TRANSITIVE through candidates.** A candidate (tree row
+with no `repo_trees` junction row — zero-junction means snapshot-only by
+definition, because every history-tree write path inserts junction rows
+and migration 3's backfill covered pre-migration rows; backfill
+completeness is the trust condition, and no provenance marker is needed or
+wanted) is PROTECTED if any of: (a) it sits in the closure of an UNEXPIRED
+snapshot's tree (content-addressing shares rows between snapshots, so the
+mark is what keeps a live sibling's shared subtree alive when another
+expires); (b) it is a changeset root; (c) it has a RETAINED parent — a
+tree with a junction row or a changeset root pointing at it as a child
+(reverse lookup via `idx_tree_entries_object`); or (d) it is a candidate
+child of an already-protected candidate, recursively — so a junction-less
+CHAIN under a retained parent survives in full; depth-one protection alone
+would orphan the chain's children. (b)–(d) are the safety net for junction
+completeness: a future write path that forgets junction rows for a whole
+subtree cannot get its live history silently swept
+(`m5a_test.rs::gc_spares_a_deeper_junctionless_chain`), while a chain whose
+only reference is an expired snapshot sweeps fully, children included
+(`gc_sweeps_an_expired_snapshot_chain_fully`). The walk stays inside the
+candidate set: cost is one indexed junction probe per tree row
+(`idx_repo_trees_tree`) plus indexed lookups per candidate
+(`idx_changesets_root`, `idx_tree_entries_object`) — it grows with total
+tree rows, not only with snapshots. The sweep deletes unprotected
+candidates in ONE write-slot transaction together with the expired-row
+purge — a snapshot POST reusing a shared subtree cannot land between mark
+and delete, because both paths run through `state.write` (the
+single-writer slot; the snapshot POST's whole row commit already does).
+The pass probes on a read connection first (are there junction-less tree
+rows at all, or expired rows to purge?) so a quiet server's periodic pass
+never occupies the write slot. Rule as implemented: `db::unprotected_trees`
++ `db::delete_tree_rows`, driven by `snapshots_gc::gc_snapshots`
+(`m5a_test.rs::shared_snapshot_subtree_survives_gc_for_live_sibling`,
+`history_tree_identical_to_snapshot_subtree_survives_purge`,
+`gc_spares_history_trees_whose_junction_row_was_lost`).
+
+`trees.repo_id` is informational (the first writer; rows are `INSERT OR
+IGNORE`) and gates nothing. **Backfill**: migration 3 derived membership
+for existing history trees inside the migration itself — a recursive CTE
+seeded from every changeset's `root_tree_id`, walking the `tree_entries`
+closure (dir entries point at child trees); re-running is impossible by
+construction (each migration applies once, atomically with its version
+bump).
+
+## Honest-scope boundaries
+
+- **Path scopes gate writes and filter listings; by-id fetches are
+  repo-level.** Within a repo, a token's segment-aligned path scope gates
+  writes and filters the listing endpoints (`log`, `trees`, `diff`
+  listings); every by-id fetch endpoint (objects, `changesets/{id}`,
+  `file`, `merge-base`) is repo-level — ids and path metadata are
+  repo-visible, not path-private. The authz matrix asserts both halves.
+- **Tree reads are repo-membership-gated** (see above): every repo that
+  wrote a tree can read it; no other repo can, id existing or not.
+- **Repo listing is visible to every authenticated principal** until M13's
+  read ACLs (limits registry).
+- **Symlink defense is check-then-write, with the TOCTOU window accepted.**
+  Every path component under a checkout root is checked with
+  `symlink_metadata` (no dereference); a planted link is refused before the
+  write. The check fails open on a stat error (reads as "not a symlink") by
+  design: the subsequent write fails loudly on the same underlying error —
+  an EACCES is never mistaken for a planted link — so the net is the write,
+  not the stat. A symlink planted *between* check and write is inside the
+  accepted TOCTOU window; this is defense in depth on a single-user working
+  copy, not a sandbox boundary.
+- **Sync/restore dirty gates refuse, never merge.** `sync` and `restore`
+  with local edits to incoming paths, colliding untracked files, or
+  symlinks on any affected path component refuse with 409
+  `dirty_working_copy`, whose `details` enumerate the dirty **and
+  colliding-untracked** paths (plus the symlink colliders) — exactly the
+  list `--force` discards. `--force` deletes those named paths and nothing
+  else; symlinks on them are unlinked, never followed. Without the flag
+  nothing on disk is touched.
+- **Auth-failure auditing is capped twice and the overflow is the signal.**
+  Per key (a BLAKE3 prefix of the presented credential, never the peer
+  address): 10 rows per 60 s sliding window. Globally: 200 rows per 60 s.
+  Beyond either limit a failure is **counted, not rowed**, under any
+  keying — an anonymous flood cannot exhaust the audit budget under fresh
+  fake keys faster than the global cap drains. The alert signal is the
+  aggregate delta `(global_count − rows_written)` from
+  `auth_fail_stats()`; a non-zero sustained delta means failures are being
+  suppressed by design and someone should be looking at the auth logs.
+
+## Import mutations and sanitization
+
+One documented content mutation on import: `\r\n` → `\n` in commit
+messages. Author and message strings go through the same closed character
+rule as changeset create (Unicode Cc + Cf), but on import a violation is
+**never a skip**: every offending character is replaced with U+FFFD
+(always-on; the escaped-verbatim `--sanitize` mode is an M11 item) and the
+commit is listed in the import report's `sanitized` array.
+`--skip-unsupported` skips a commit **and all its descendants** (the
+`cascaded` list reports the cascade) — one offending early commit skips
+everything after it.

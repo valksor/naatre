@@ -28,7 +28,7 @@ use std::path::Path;
 use naatre_core::ids::Id;
 
 use super::{Net, VerbError};
-use crate::wc::fetch::{materialize, walk_tree_allowing_missing_prefixes};
+use crate::wc::fetch::{materialize, walk_snapshot_tree};
 use crate::wc::{Wc, remove_and_prune};
 
 /// Runs restore; prints the outcome and returns the exit code.
@@ -61,8 +61,10 @@ fn try_run(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<(), Ver
         .ok_or_else(|| VerbError::Local("server sent a malformed snapshot tree id".into()))?;
 
     // The snapshot's files, within the sparse cone (a prefix the snapshot
-    // lacks is an empty subtree — restore brings what it has).
-    let files = walk_tree_allowing_missing_prefixes(&client, repo, &tree_id, &state.sparse)?;
+    // lacks is an empty subtree — restore brings what it has). Walks the
+    // owner-gated snapshot tree route: snapshot trees carry no repo_trees
+    // membership, so the bare-id repo tree route 404s them.
+    let files = walk_snapshot_tree(&client, repo, &sid, &tree_id, &state.sparse)?;
 
     // The dirty gate (sync's, plus symlink colliders): local work at a
     // restored path would be clobbered by materialization — edited or

@@ -48,7 +48,8 @@ struct TestApp {
     clock: Arc<AtomicU64>,
 }
 
-fn build_app() -> TestApp {
+/// `build_app` with a state tweak applied before the `Arc` wrap.
+fn build_app_with(tweak: impl FnOnce(&mut ServerState)) -> TestApp {
     static LOG: std::sync::Once = std::sync::Once::new();
     LOG.call_once(|| naatre_server::middleware::logging_setup("error"));
     let dir = tempfile::tempdir().unwrap();
@@ -59,6 +60,7 @@ fn build_app() -> TestApp {
     let clock = Arc::new(AtomicU64::new(BASE_NS));
     let clock_for_closure = Arc::clone(&clock);
     state.clock = Arc::new(move || clock_for_closure.load(Ordering::Relaxed));
+    tweak(&mut state);
     let db_path = dir.path().join("naatre.db");
     let data_dir = dir.path().to_path_buf();
     let state = Arc::new(state);
@@ -207,7 +209,7 @@ fn snap_hex(seed: u8) -> String {
 
 /// Encodes a flat one-directory tree; returns (root id hex, [canonical b64]).
 fn flat_tree(files: &[(&str, Id, u64, bool)]) -> (String, Vec<String>) {
-    let mut entries: Vec<TreeEntry> = files
+    let entries: Vec<TreeEntry> = files
         .iter()
         .map(|(name, blob, size, exec)| TreeEntry {
             name: name.to_string(),
@@ -217,11 +219,37 @@ fn flat_tree(files: &[(&str, Id, u64, bool)]) -> (String, Vec<String>) {
             exec: *exec,
         })
         .collect();
+    tree_with_id(entries)
+}
+
+/// Encodes one tree from entries (any mix of files and dirs); returns
+/// (id hex, canonical b64) — the building block for nested snapshot trees.
+fn tree_with_id(mut entries: Vec<TreeEntry>) -> (String, Vec<String>) {
     entries.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
     let t = Tree { entries };
     let id = tree::tree_id(&t).unwrap();
     let canonical = tree::encode(&t).unwrap();
     (id.to_hex(), vec![STANDARD.encode(canonical)])
+}
+
+fn file_entry(name: &str, blob: Id, size: u64, exec: bool) -> TreeEntry {
+    TreeEntry {
+        name: name.to_string(),
+        kind: EntryKind::File,
+        object: blob,
+        size,
+        exec,
+    }
+}
+
+fn dir_entry(name: &str, child_tree_hex: &str, size: u64) -> TreeEntry {
+    TreeEntry {
+        name: name.to_string(),
+        kind: EntryKind::Dir,
+        object: Id::from_hex(child_tree_hex).unwrap(),
+        size,
+        exec: false,
+    }
 }
 
 /// The shared fixture: app + two writer tokens + a reader + repo "m5a".
@@ -234,7 +262,13 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let t = build_app();
+    fixture_with(|_| {})
+}
+
+/// The fixture with a state tweak applied before the `Arc` wrap (the only
+/// window where `ServerState` is mutable — e.g. the snapshot-GC off-switch).
+fn fixture_with(tweak: impl FnOnce(&mut ServerState)) -> Fixture {
+    let t = build_app_with(tweak);
     let writer_a = t.seed_token("writer-a", "writer");
     let writer_b = t.seed_token("writer-b", "writer");
     let reader = t.seed_token("reader-p", "reader");
@@ -465,7 +499,16 @@ async fn ttl_below_minimum_is_422() {
 /// history CAS stays byte-identical.
 #[tokio::test]
 async fn expiry_enforced_at_both_gates_and_gc_deletes_dir_and_row() {
-    let f = fixture();
+    let f = fixture_with(|state| {
+        // The snapshot POST spawns an opportunistic GC task; this test
+        // drives `gc_snapshots` itself with the clock pushed past expiry,
+        // and the spawned pass interleaving with it makes `rows_purged`
+        // nondeterministic (whichever pass runs second purges the row, the
+        // other sees 0). The off-switch exists for exactly this (see
+        // `ServerState::snapshot_gc_enabled`): only this test's own GC may
+        // run.
+        state.snapshot_gc_enabled = false;
+    });
     let history = b"history before snapshot".to_vec();
     let (status, _, _) = send_bytes(
         &f.t.app,
@@ -528,6 +571,568 @@ async fn expiry_enforced_at_both_gates_and_gc_deletes_dir_and_row() {
     // A second pass converges (idempotent).
     let report = gc_snapshots(&f.t.state).await.unwrap();
     assert_eq!(report, Default::default());
+}
+
+/// Snapshot trees carry NO `repo_trees` membership (own-principal, TTL'd
+/// data): the bare-id tree route 404s them for every principal — owner and
+/// second writer alike; they are served only through the owner-gated
+/// snapshot routes. The GC pass purges their rows once no live snapshot
+/// reaches them, while history trees (which have membership) survive the
+/// same pass byte-for-byte.
+#[tokio::test]
+async fn snapshot_trees_have_no_membership_and_gc_purges_them() {
+    // Only this test's own GC may run (the POST spawns an opportunistic
+    // pass; see `snapshot_gc_enabled`).
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+
+    // History first: a changeset whose derived trees carry junction rows.
+    let hb = b"history blob".to_vec();
+    let (status, _, _) = send_bytes(
+        &f.t.app,
+        "PUT",
+        &format!("/v1/repos/{}/objects/{}", REPO, blob_hex(&hb)),
+        &f.writer_a,
+        Some(hb.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let cs = post_json(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &f.writer_a,
+        &json!({
+            "parents": [],
+            "author": "A <a@naatre.dev>",
+            "message": "history",
+            "changes": [
+                { "path": "h.txt", "op": "add", "blob": blob_hex(&hb), "size": hb.len(), "exec": false }
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(cs.status, StatusCode::CREATED, "{}", cs.body);
+    let hist_root = cs.body["root_tree_id"].as_str().unwrap().to_string();
+
+    // A snapshot as writer_a: one flat root tree over its own blob.
+    let alpha = b"alpha snap".to_vec();
+    let snap = snap_hex(9);
+    put_snap_blob(&f, &f.writer_a, &snap, &alpha).await;
+    let (snap_root, trees) = flat_tree(&[("s.txt", object_id(Kind::Blob, &alpha), 10, false)]);
+    let resp = create_snapshot(&f, &f.writer_a, &snap, &snap_root, json!(trees)).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // (a) The trees route 404s the snapshot tree for the second writer AND
+    // for the owning principal: membership is repo-level and junction-only,
+    // and the snapshot wrote none.
+    for (who, token) in [("second writer", &f.writer_b), ("owner", &f.writer_a)] {
+        let resp = get(
+            &f.t.app,
+            &format!("/v1/repos/{REPO}/trees/{snap_root}"),
+            token,
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::NOT_FOUND,
+            "{who} via GET /trees: {body}",
+            body = resp.body
+        );
+        assert_eq!(code_of(&resp), "not_found");
+    }
+
+    // (c, pre-GC) The history tree is readable — membership gates it in.
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/trees/{hist_root}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    // Expire the snapshot and run one GC pass.
+    f.t.clock
+        .store(BASE_NS + DEFAULT_TTL_NS + 1, Ordering::Relaxed);
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report.expired, 1);
+    assert_eq!(report.rows_purged, 1);
+    assert_eq!(
+        report.trees_purged, 1,
+        "the snapshot's single root tree row"
+    );
+
+    // (b) The snapshot-only tree rows are gone.
+    let snap_root_blob = Id::from_hex(&snap_root).unwrap();
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+            hex_encode(snap_root_blob.0)
+        )),
+        0
+    );
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT COUNT(*) FROM tree_entries WHERE tree_id = x'{}'",
+            hex_encode(snap_root_blob.0)
+        )),
+        0
+    );
+
+    // (c) The history tree survived the same pass, still readable.
+    let hist = Id::from_hex(&hist_root).unwrap();
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+            hex_encode(hist.0)
+        )),
+        1
+    );
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/trees/{hist_root}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    // A second pass converges (idempotent).
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report, Default::default());
+}
+
+/// Two snapshots share a content-addressed subtree; A expires while B
+/// stays live. The mark-and-sweep GC must keep every row of B's closure
+/// (B restores byte-identically — its metadata and tree walk all answer
+/// through the owner-gated snapshot routes) and remove only A-unique
+/// rows.
+#[tokio::test]
+async fn shared_snapshot_subtree_survives_gc_for_live_sibling() {
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+
+    // shared/x.txt — the shared subtree (identical canonical bytes in both
+    // snapshots → one tree id). aonly/ belongs to A alone, bonly/ to B.
+    let xs = b"shared x".to_vec();
+    let xb = object_id(Kind::Blob, &xs);
+    let (shared, shared_canon) = tree_with_id(vec![file_entry("x.txt", xb, 8, false)]);
+    let ys = b"a only".to_vec();
+    let yb = object_id(Kind::Blob, &ys);
+    let (aonly, aonly_canon) = tree_with_id(vec![file_entry("y.txt", yb, 6, false)]);
+    let zs = b"b only".to_vec();
+    let zb = object_id(Kind::Blob, &zs);
+    let (bonly, bonly_canon) = tree_with_id(vec![file_entry("z.txt", zb, 6, false)]);
+    let (root_a, root_a_canon) = tree_with_id(vec![
+        dir_entry("aonly", &aonly, 6),
+        dir_entry("shared", &shared, 8),
+    ]);
+    let (root_b, root_b_canon) = tree_with_id(vec![
+        dir_entry("bonly", &bonly, 6),
+        dir_entry("shared", &shared, 8),
+    ]);
+
+    let snap_a = snap_hex(11);
+    let snap_b = snap_hex(12);
+    for (token, snap, blob) in [
+        (&f.writer_a, &snap_a, &xs),
+        (&f.writer_a, &snap_a, &ys),
+        (&f.writer_b, &snap_b, &xs),
+        (&f.writer_b, &snap_b, &zs),
+    ] {
+        put_snap_blob(&f, token, snap, blob).await;
+    }
+    let resp = post_snapshot(
+        &f,
+        &f.writer_a,
+        &snap_a,
+        &root_a,
+        [root_a_canon, shared_canon.clone(), aonly_canon].concat(),
+        60,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let resp = post_snapshot(
+        &f,
+        &f.writer_b,
+        &snap_b,
+        &root_b,
+        [root_b_canon, shared_canon, bonly_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // Expire A (60s), keep B (3600s), run one pass.
+    f.t.clock.store(BASE_NS + 61_000_000_000, Ordering::Relaxed);
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report.expired, 1, "A expired");
+    assert_eq!(report.rows_purged, 1);
+    assert_eq!(
+        report.trees_purged, 2,
+        "root_a and aonly swept, shared kept"
+    );
+
+    // A-unique rows are gone; the shared subtree and B's own rows remain.
+    for (tree, want) in [
+        (&root_a, 0),
+        (&aonly, 0),
+        (&shared, 1),
+        (&bonly, 1),
+        (&root_b, 1),
+    ] {
+        let id = Id::from_hex(tree).unwrap();
+        assert_eq!(
+            f.t.count(&format!(
+                "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+                hex_encode(id.0)
+            )),
+            want,
+            "tree {tree} row count"
+        );
+    }
+
+    // B restores byte-identically: its metadata and EVERY tree route its
+    // restore walk needs answer 200 for its owner.
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/snapshots/{snap_b}"),
+        &f.writer_b,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    for tree in [&root_b, shared.as_str(), bonly.as_str()] {
+        let resp = get(
+            &f.t.app,
+            &format!("/v1/repos/{REPO}/snapshots/{snap_b}/trees/{tree}"),
+            &f.writer_b,
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::OK,
+            "B's tree walk needs {tree}: {body}",
+            body = resp.body
+        );
+    }
+    // A is gone: the pass purged its row, so its metadata 404s (the 410
+    // `snapshot_expired` gate while the row still exists is pinned by the
+    // expiry test above).
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/snapshots/{snap_a}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+
+    // A second pass converges (idempotent).
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report, Default::default());
+}
+
+/// A history tree whose content equals a snapshot subtree carries a
+/// `repo_trees` junction row, so it stays marked — and readable through
+/// the repo tree route — even after every snapshot that shared the id has
+/// expired and been swept.
+#[tokio::test]
+async fn history_tree_identical_to_snapshot_subtree_survives_purge() {
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+
+    // History first: a changeset adding shared/x.txt derives the `shared`
+    // tree (and writes its junction row).
+    let xs = b"shared x".to_vec();
+    let xb = object_id(Kind::Blob, &xs);
+    let (shared, shared_canon) = tree_with_id(vec![file_entry("x.txt", xb, 8, false)]);
+    let (status, _, _) = send_bytes(
+        &f.t.app,
+        "PUT",
+        &format!("/v1/repos/{REPO}/objects/{}", blob_hex(&xs)),
+        &f.writer_a,
+        Some(xs.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let cs = post_json(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &f.writer_a,
+        &json!({
+            "parents": [],
+            "author": "A <a@naatre.dev>",
+            "message": "history",
+            "changes": [
+                { "path": "shared/x.txt", "op": "add", "blob": blob_hex(&xs), "size": 8, "exec": false }
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(cs.status, StatusCode::CREATED, "{}", cs.body);
+
+    // A snapshot whose root IS that same content-addressed tree (its
+    // closure is the root alone: one flat file entry).
+    let snap = snap_hex(13);
+    put_snap_blob(&f, &f.writer_a, &snap, &xs).await;
+    let resp = create_snapshot(&f, &f.writer_a, &snap, &shared, json!(shared_canon)).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // Expire the snapshot; the pass sweeps its rows but must keep the
+    // junction-marked tree.
+    f.t.clock
+        .store(BASE_NS + DEFAULT_TTL_NS + 1, Ordering::Relaxed);
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report.expired, 1);
+    assert_eq!(report.trees_purged, 0, "the shared tree is junction-marked");
+
+    let id = Id::from_hex(&shared).unwrap();
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+            hex_encode(id.0)
+        )),
+        1
+    );
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/trees/{shared}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+}
+
+/// The sweep's safety net, independent of write-path discipline: a history
+/// subtree whose junction row is HAND-DELETED still survives GC, because a
+/// RETAINED tree (its parent: junctioned and a changeset root) has a
+/// tree_entries row pointing at it. Junction completeness is the cheap
+/// first filter; the retention lookups are what protects live history.
+#[tokio::test]
+async fn gc_spares_history_trees_whose_junction_row_was_lost() {
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+
+    // History with a nested subtree: root and `shared`, both junctioned.
+    let xs = b"shared x".to_vec();
+    let xb = object_id(Kind::Blob, &xs);
+    let (shared, _) = tree_with_id(vec![file_entry("x.txt", xb, 8, false)]);
+    let (status, _, _) = send_bytes(
+        &f.t.app,
+        "PUT",
+        &format!("/v1/repos/{REPO}/objects/{}", blob_hex(&xs)),
+        &f.writer_a,
+        Some(xs.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let cs = post_json(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &f.writer_a,
+        &json!({
+            "parents": [],
+            "author": "A <a@naatre.dev>",
+            "message": "history",
+            "changes": [
+                { "path": "shared/x.txt", "op": "add", "blob": blob_hex(&xs), "size": 8, "exec": false }
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(cs.status, StatusCode::CREATED, "{}", cs.body);
+    let root = cs.body["root_tree_id"].as_str().unwrap().to_string();
+
+    // Hand-delete the CHILD subtree's junction row (simulating a write path
+    // that forgot it). The row now looks exactly like a snapshot-created
+    // tree: zero junction.
+    let shared_id = Id::from_hex(&shared).unwrap();
+    let deleted =
+        f.t.db()
+            .execute(
+                "DELETE FROM repo_trees WHERE tree_id = ?1",
+                [shared_id.0.as_slice()],
+            )
+            .unwrap();
+    assert_eq!(deleted, 1, "the subtree had a junction row to lose");
+
+    // GC runs (the junction-less row trips the idle probe) — and spares it.
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(
+        report.trees_purged, 0,
+        "the retained parent still points at the de-junctioned subtree"
+    );
+    for tree in [&root, &shared] {
+        let id = Id::from_hex(tree).unwrap();
+        assert_eq!(
+            f.t.count(&format!(
+                "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+                hex_encode(id.0)
+            )),
+            1,
+            "history tree {tree} survives the sweep"
+        );
+        assert_eq!(
+            f.t.count(&format!(
+                "SELECT COUNT(*) FROM tree_entries WHERE tree_id = x'{}'",
+                hex_encode(id.0)
+            )),
+            1,
+            "history tree {tree} keeps its entries"
+        );
+    }
+
+    // A second pass converges (idempotent — the net still catches it).
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report, Default::default());
+}
+
+/// Depth-two safety: a JUNCTION-LESS CHAIN (S1 → S2) under a retained
+/// parent survives in full. Depth-one protection alone would orphan S2
+/// (its parent S1 is not "retained"); protection recurses through
+/// candidate children.
+#[tokio::test]
+async fn gc_spares_a_deeper_junctionless_chain() {
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+
+    // History: changeset adding deep/a/b.txt derives root → deep → deep/a.
+    let bs = b"deep leaf".to_vec();
+    let bb = object_id(Kind::Blob, &bs);
+    let (s2, s2_canon) = tree_with_id(vec![file_entry("b.txt", bb, 9, false)]);
+    let (s1, s1_canon) = tree_with_id(vec![dir_entry("a", &s2, 9)]);
+    let (root, _) = tree_with_id(vec![dir_entry("deep", &s1, 9)]);
+    let (status, _, _) = send_bytes(
+        &f.t.app,
+        "PUT",
+        &format!("/v1/repos/{REPO}/objects/{}", blob_hex(&bs)),
+        &f.writer_a,
+        Some(bs.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let cs = post_json(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &f.writer_a,
+        &json!({
+            "parents": [],
+            "author": "A <a@naatre.dev>",
+            "message": "history",
+            "changes": [
+                { "path": "deep/a/b.txt", "op": "add", "blob": blob_hex(&bs), "size": 9, "exec": false }
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(cs.status, StatusCode::CREATED, "{}", cs.body);
+    let root_hex = cs.body["root_tree_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        root_hex, root,
+        "the derived chain matches the hand-built one"
+    );
+
+    // Hand-delete the junction rows for BOTH chain levels (simulating a
+    // write path that forgot a whole subtree). Root stays junctioned.
+    for tree in [&s1, &s2] {
+        let id = Id::from_hex(tree).unwrap();
+        let deleted =
+            f.t.db()
+                .execute(
+                    "DELETE FROM repo_trees WHERE tree_id = ?1",
+                    [id.0.as_slice()],
+                )
+                .unwrap();
+        assert_eq!(deleted, 1, "{tree} had a junction row to lose");
+    }
+
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(
+        report.trees_purged, 0,
+        "the retained root protects the whole junction-less chain"
+    );
+    for tree in [&root, &s1, &s2] {
+        let id = Id::from_hex(tree).unwrap();
+        assert_eq!(
+            f.t.count(&format!(
+                "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+                hex_encode(id.0)
+            )),
+            1,
+            "chain tree {tree} survives"
+        );
+    }
+    let _ = (s1_canon, s2_canon);
+}
+
+/// Inverse of the safety net: a junction-less chain whose ONLY reference
+/// is an EXPIRED snapshot sweeps fully — the expired owner protects
+/// nothing, children included.
+#[tokio::test]
+async fn gc_sweeps_an_expired_snapshot_chain_fully() {
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+
+    let fs = b"chain file".to_vec();
+    let fb = object_id(Kind::Blob, &fs);
+    let (s2, s2_canon) = tree_with_id(vec![file_entry("f.txt", fb, 10, false)]);
+    let (root_s, root_s_canon) = tree_with_id(vec![dir_entry("sdir", &s2, 10)]);
+
+    let snap = snap_hex(14);
+    put_snap_blob(&f, &f.writer_a, &snap, &fs).await;
+    let resp = post_snapshot(
+        &f,
+        &f.writer_a,
+        &snap,
+        &root_s,
+        [root_s_canon, s2_canon].concat(),
+        60,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    f.t.clock.store(BASE_NS + 61_000_000_000, Ordering::Relaxed);
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report.expired, 1);
+    assert_eq!(
+        report.trees_purged, 2,
+        "the expired chain's root AND child sweep"
+    );
+    for tree in [&root_s, &s2] {
+        let id = Id::from_hex(tree).unwrap();
+        assert_eq!(
+            f.t.count(&format!(
+                "SELECT COUNT(*) FROM trees WHERE id = x'{}'",
+                hex_encode(id.0)
+            )),
+            0,
+            "expired-chain tree {tree} is gone"
+        );
+    }
+
+    // A second pass converges (idempotent).
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(report, Default::default());
+}
+
+/// Lowercase-hex SQL blob literal (`x'…'`) for id lookups in raw SQL.
+fn hex_encode(bytes: [u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// POSTs a snapshot with an explicit TTL (the shared helper pins the
+/// default).
+async fn post_snapshot(
+    f: &Fixture,
+    token: &str,
+    snap: &str,
+    tree: &str,
+    canons: Vec<String>,
+    ttl_secs: u64,
+) -> Resp {
+    post_json(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/snapshots"),
+        token,
+        &json!({
+            "snap_id": snap,
+            "tree_id": tree,
+            "trees": canons,
+            "ttl_secs": ttl_secs,
+        }),
+    )
+    .await
 }
 
 /// The rowless-sweep pin: blobs uploaded straight into

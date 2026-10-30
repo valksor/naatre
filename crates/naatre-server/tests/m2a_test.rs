@@ -831,6 +831,271 @@ async fn derivation_oracle_chain_and_tree_reads() {
     );
 }
 
+/// Tree reads are repo-membership-gated (`repo_trees` junction): identical
+/// content in two repos derives one shared content-addressed tree that BOTH
+/// can read, a third repo that never wrote it gets 404 even though the id
+/// exists on the server, and an unknown id is 404 everywhere (see
+/// `docs/design.md`, honest-scope section).
+#[tokio::test]
+async fn trees_are_repo_membership_gated() {
+    let f = fixture();
+    f.t.seed_repo("beta");
+    f.t.seed_repo("gamma");
+
+    // Same blob content, same path, no parents → identical derived trees in
+    // both repos (tree canonical bytes carry no repo identity).
+    let b1 = put_blob(&f, b"alpha").await;
+    let body = cs_body(json!([]), json!([add("a/b.txt", &b1, 5, false)]));
+    let (_, root, _) = create_ok(&f, body.clone()).await;
+    let resp = post_json(&f.t.app, "/v1/repos/beta/changesets", &f.writer, &body).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "body: {}", resp.body);
+    let root_beta = resp.body["root_tree_id"].as_str().unwrap().to_string();
+    assert_eq!(root, root_beta, "identical content must derive equal roots");
+
+    // The root and its "a" subtree both carry membership for m2a AND beta.
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM repo_trees"),
+        4,
+        "two trees × two writing repos"
+    );
+
+    // (a) Shared subtree: both writing repos read it, including the "a"
+    // subtree neither changeset named directly (it is inside the root).
+    let root_entries = get(&f.t.app, &format!("/v1/repos/m2a/trees/{root}"), &f.reader).await;
+    assert_eq!(root_entries.status, StatusCode::OK);
+    let subtree = root_entries.body["entries"][0]["object_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for repo in ["m2a", "beta"] {
+        for tree in [&root, subtree.as_str()] {
+            let resp = get(
+                &f.t.app,
+                &format!("/v1/repos/{repo}/trees/{tree}"),
+                &f.reader,
+            )
+            .await;
+            assert_eq!(
+                resp.status,
+                StatusCode::OK,
+                "{repo} wrote {tree}: {body}",
+                body = resp.body
+            );
+        }
+    }
+
+    // (b) gamma never wrote anything: 404 on the shared ids even though
+    // they exist (and are served) for m2a and beta.
+    for tree in [&root, subtree.as_str()] {
+        let resp = get(
+            &f.t.app,
+            &format!("/v1/repos/gamma/trees/{tree}"),
+            &f.reader,
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::NOT_FOUND,
+            "gamma has no membership for {tree}: {body}",
+            body = resp.body
+        );
+        assert_eq!(code_of(&resp), "not_found");
+    }
+
+    // (c) An unknown id is 404 in every repo — the gate is membership, and
+    // nothing exists to have membership for.
+    let ghost = object_id(Kind::Tree, b"ghost").to_hex();
+    for repo in ["m2a", "beta", "gamma"] {
+        let resp = get(
+            &f.t.app,
+            &format!("/v1/repos/{repo}/trees/{ghost}"),
+            &f.reader,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+        assert_eq!(code_of(&resp), "not_found");
+    }
+
+    // gamma's own write gives gamma its own membership: the 404s above are
+    // the gate, not a broken route.
+    let body = cs_body(json!([]), json!([add("g.txt", &b1, 5, false)]));
+    let resp = post_json(&f.t.app, "/v1/repos/gamma/changesets", &f.writer, &body).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "body: {}", resp.body);
+    let root_gamma = resp.body["root_tree_id"].as_str().unwrap().to_string();
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/gamma/trees/{root_gamma}"),
+        &f.reader,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+}
+
+/// The write-time completeness invariant behind the GC sweep: EVERY tree
+/// reachable from ANY changeset root carries a `repo_trees` junction row —
+/// after a changeset create with nested paths, after a land whose rebase
+/// derives NEW subtrees, and after an import. This pins that `trees_write`
+/// junctions every node it persists, not just roots — which is what lets
+/// the sweep treat zero-junction as snapshot-only. (The GC-side net for a
+/// LOST row is pinned separately in m5a.)
+#[tokio::test]
+async fn every_history_subtree_is_junctioned_across_write_paths() {
+    let f = fixture();
+
+    // The walk: trees reachable from any changeset root of the repo that
+    // lack a junction row. Must always be empty.
+    let junctionless = |repo: i64, conn: &Connection| -> i64 {
+        conn.query_row(
+            "WITH RECURSIVE reach(tree_id) AS (
+                 SELECT root_tree_id FROM changesets
+                 WHERE repo_id = ?1 AND root_tree_id IS NOT NULL
+                 UNION
+                 SELECT te.object_id FROM reach r
+                 JOIN tree_entries te ON te.tree_id = r.tree_id AND te.kind = 1
+             )
+             SELECT COUNT(*) FROM reach
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM repo_trees rt WHERE rt.tree_id = reach.tree_id)",
+            [repo],
+            |r| r.get(0),
+        )
+        .expect("junction-less reachable tree count")
+    };
+    let repo_id = f.t.count("SELECT id FROM repos WHERE name = 'm2a'");
+
+    // 1. Changeset create with nested paths (derives root, a, a/c).
+    let b1 = put_blob(&f, b"alpha").await;
+    let bd = put_blob(&f, b"deep").await;
+    let (c1, _, _) = create_ok(
+        &f,
+        cs_body(
+            json!([]),
+            json!([
+                add("a/b.txt", &b1, 5, false),
+                add("a/c/d.txt", &bd, 4, false)
+            ]),
+        ),
+    )
+    .await;
+    let conn = f.t.db();
+    assert_eq!(
+        junctionless(repo_id, &conn),
+        0,
+        "create: every derived subtree junctioned"
+    );
+    drop(conn);
+
+    // 2. Land whose rebase derives NEW subtrees: seed main at c1 (the way
+    // land leaves it), land c2 on top (fast-forwards main), then land a
+    // SIBLING branch c3 — its rebase onto the moved main derives genuinely
+    // new subtrees with new ids.
+    f.t.seed_ref(repo_id, "main", &c1);
+    let b2 = put_blob(&f, b"pqr").await;
+    let (c2, _, _) = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([add("p/q/r.txt", &b2, 3, false)]),
+        ),
+    )
+    .await;
+    let resp = post_json(
+        &f.t.app,
+        "/v1/repos/m2a/land",
+        &f.writer,
+        &json!({ "head": c2, "key": "junction-invariant" }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let b3 = put_blob(&f, b"zzz").await;
+    let (c3, _, _) = create_ok(
+        &f,
+        cs_body(json!([c1.clone()]), json!([add("z.txt", &b3, 3, false)])),
+    )
+    .await;
+    let resp = post_json(
+        &f.t.app,
+        "/v1/repos/m2a/land",
+        &f.writer,
+        &json!({ "head": c3, "key": "junction-invariant-2" }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    assert_ne!(
+        resp.body["landed"],
+        c3.as_str(),
+        "the sibling branch must be genuinely rebased onto the moved main"
+    );
+    let conn = f.t.db();
+    assert_eq!(
+        junctionless(repo_id, &conn),
+        0,
+        "land: every rebase-derived subtree junctioned"
+    );
+    drop(conn);
+
+    // 3. Import: a real git repo with nested dirs, imported through the
+    // product's own path. git is a test dependency here (the import tests
+    // skip without it; here the caller environment always has it).
+    if !matches!(
+        std::process::Command::new("git").arg("--version").output(),
+        Ok(out) if out.status.success()
+    ) {
+        eprintln!("skipping the import leg: git not available");
+        return;
+    }
+    let g = f.t._dir.path().join("seed-git");
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .expect("run git")
+    };
+    assert!(
+        run(&["-c", "init.defaultBranch=main", "init", g.to_str().unwrap()])
+            .status
+            .success()
+    );
+    std::fs::create_dir_all(g.join("x/y")).unwrap();
+    std::fs::write(g.join("x/y/deep.txt"), b"deep import\n").unwrap();
+    assert!(
+        run(&["-C", g.to_str().unwrap(), "add", "."])
+            .status
+            .success()
+    );
+    assert!(
+        run(&[
+            "-C",
+            g.to_str().unwrap(),
+            "-c",
+            "user.email=seed@example.com",
+            "-c",
+            "user.name=seed",
+            "commit",
+            "-m",
+            "seed"
+        ])
+        .status
+        .success()
+    );
+    let report = naatre_server::import::run(
+        f.t._dir.path(),
+        &naatre_server::import::ImportOptions {
+            git_path: g.clone(),
+            into: Some("m2a".to_string()),
+            skip_unsupported: false,
+        },
+    )
+    .expect("import runs");
+    assert_eq!(report.status, "ok", "{}", report.to_json_line());
+    let conn = f.t.db();
+    assert_eq!(
+        junctionless(repo_id, &conn),
+        0,
+        "import: every imported subtree junctioned"
+    );
+}
+
 // ---- 3. reads ---------------------------------------------------------------
 
 /// The 5-chain over distinct single-file changes, returning the ids oldest

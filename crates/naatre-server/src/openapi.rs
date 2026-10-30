@@ -4,6 +4,7 @@
 
 use utoipa::OpenApi;
 
+use crate::api_code::ApiCode;
 use crate::routes;
 
 /// The naatre API document.
@@ -29,6 +30,7 @@ use crate::routes;
         routes::snapshots::get_metadata,
         routes::snapshots::get_blob,
         routes::snapshots::put_blob,
+        routes::snapshots::get_snapshot_tree,
         routes::land::land,
         routes::land::land_status,
         routes::objects::present,
@@ -110,3 +112,76 @@ use crate::routes;
     )
 )]
 pub struct ApiDoc;
+
+impl ApiDoc {
+    /// The full contract as one JSON value: the utoipa-rendered document
+    /// plus the error-registry components (`ErrorCode` enum and
+    /// `ErrorEnvelope`), built at render time from the closed [`ApiCode`]
+    /// registry so they cannot drift from the wire strings.
+    ///
+    /// `GET /v1/openapi.json` (`routes::openapi`) and the checked
+    /// `docs/openapi.json` artifact (`tests/openapi_artifact_test.rs`, which
+    /// CI regenerates and diffs) both render through this function — one
+    /// source, two consumers.
+    pub fn document_json() -> serde_json::Value {
+        let mut doc = serde_json::to_value(Self::openapi()).expect("ApiDoc serializes to JSON");
+        let doc_obj = doc
+            .as_object_mut()
+            .expect("the OpenAPI document serializes as an object");
+        let components = doc_obj
+            .entry("components")
+            .or_insert_with(|| serde_json::json!({}));
+        let schemas = components
+            .as_object_mut()
+            .expect("components serializes as an object")
+            .entry("schemas")
+            .or_insert_with(|| serde_json::json!({}));
+        let map = schemas
+            .as_object_mut()
+            .expect("schemas serializes as an object");
+        let codes: Vec<&str> = ApiCode::ALL.iter().map(|c| c.as_str()).collect();
+        map.insert(
+            "ErrorCode".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "description": "The closed error-code registry: every value `error.code` \
+                               may take. Each code's pinned HTTP status and recovery `details` \
+                               are documented in the README error-code table.",
+                "enum": codes,
+            }),
+        );
+        map.insert(
+            "ErrorEnvelope".to_string(),
+            serde_json::json!({
+                "description": "The envelope every error response uses.",
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "$ref": "#/components/schemas/ErrorCode"
+                            },
+                            "message": { "type": "string" },
+                            "retryable": { "type": "boolean" },
+                            "details": {
+                                "type": "object",
+                                "additionalProperties": true,
+                                "description": "Structured recovery data; recoverable codes \
+                                               carry it (e.g. `ref_conflict` carries the \
+                                               current ref version, land conflicts carry the \
+                                               resolution recipe)."
+                            },
+                            "request_id": { "type": "string" }
+                        },
+                        "required": [
+                            "code", "message", "retryable", "details", "request_id"
+                        ]
+                    }
+                },
+                "required": ["error"]
+            }),
+        );
+        doc
+    }
+}

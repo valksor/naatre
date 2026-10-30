@@ -1,0 +1,47 @@
+# naatre server systemd unit.
+#
+# Install: copy the binary to /usr/local/bin/naatre, create the data dir:
+#   sudo useradd --system --home /var/lib/naatre --shell /usr/sbin/nologin naatre
+#   sudo install -d -o naatre -g naatre -m 0700 /var/lib/naatre
+#   sudo -u naatre /usr/local/bin/naatre init --data /var/lib/naatre
+#   sudo cp deploy/naatre.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now naatre
+#
+# The unit binds 127.0.0.1:7400 (loopback only). Publish through a
+# TLS-terminating reverse proxy; see README "TLS and reverse proxies".
+
+[Unit]
+Description=naatre VCS server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=naatre
+Group=naatre
+# Access logs are debug-level (off by default); raise for triage only.
+Environment=NAATRE_LOG=info
+ExecStart=/usr/local/bin/naatre serve --data /var/lib/naatre --listen 127.0.0.1:7400
+Restart=on-failure
+RestartSec=2
+
+# Hardening: the data dir (0700) is the only writable path.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/naatre
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

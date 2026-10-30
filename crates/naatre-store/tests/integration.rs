@@ -23,10 +23,14 @@ fn fresh_db_migrates_to_current() {
         )
         .unwrap();
     assert_eq!(v, MAX_SUPPORTED.to_string());
-    assert_eq!(MAX_SUPPORTED, 2);
+    assert_eq!(MAX_SUPPORTED, 3);
 
     // Migration 2 spot-check: the tokens table carries the scope column.
     conn.execute_batch("SELECT scope_path FROM tokens LIMIT 0;")
+        .unwrap();
+
+    // Migration 3 spot-check: the membership junction exists.
+    conn.execute_batch("SELECT repo_id, tree_id FROM repo_trees LIMIT 0;")
         .unwrap();
 
     // Spot-check the table set landed.
@@ -35,12 +39,12 @@ fn fresh_db_migrates_to_current() {
             "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
              AND name IN ('meta','repos','changesets','changeset_parents','file_changes',\
              'repo_blobs','refs','trees','tree_entries','objects','principals','tokens',\
-             'lands','snapshots','audit_log','git_map')",
+             'lands','snapshots','audit_log','git_map','repo_trees')",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(tables, 16);
+    assert_eq!(tables, 17);
     let indexes: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
@@ -66,6 +70,75 @@ fn migrate_twice_is_a_noop() {
         )
         .unwrap();
     assert_eq!(v, MAX_SUPPORTED);
+}
+
+/// The migration-3 backfill: a pre-3 data dir (dropped here to version 2
+/// with trees written the old way — one shared `trees` row, no membership)
+/// comes back from `migrate` with `repo_trees` rows for every writing repo,
+/// derived from changesets' root trees plus the `tree_entries` closure.
+#[test]
+fn migration3_backfills_tree_membership_from_existing_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = fresh_conn(&dir);
+    migrate(&conn).unwrap();
+    conn.execute_batch(
+        // Roll the schema back to the pre-3 world (drop everything
+        // migration 3 creates) and stage v2-era data.
+        "DROP INDEX IF EXISTS idx_repo_trees_tree;
+         DROP INDEX IF EXISTS idx_changesets_root;
+         DROP INDEX IF EXISTS idx_tree_entries_object;
+         DROP TABLE repo_trees;
+         INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
+         INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
+         -- One tree shared by both repos (content-addressed id), containing
+         -- a dir entry whose child tree is a second tree.
+         INSERT INTO trees(id, repo_id, canonical)
+             VALUES (x'0101', 1, x'00'), (x'0202', 1, x'00');
+         INSERT INTO tree_entries(tree_id, name, kind, object_id, size, exec)
+             VALUES (x'0101', 'd', 1, x'0202', 0, 0);
+         -- Two changesets, one per repo, both rooted at the shared tree.
+         INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns,
+                                generation, principal, root_tree_id)
+             VALUES (1, x'aa', x'00', 'a', 'm', 1, 1, 'p', x'0101'),
+                    (7, x'bb', x'00', 'a', 'm', 1, 1, 'p', x'0101');",
+    )
+    .unwrap();
+
+    migrate(&conn).unwrap();
+
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repo_trees", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 4, "both repos get membership for root AND child tree");
+    let beta_missing: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM repo_trees WHERE repo_id = 7 \
+             AND tree_id IN (x'0101', x'0202')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        beta_missing, 2,
+        "the later repo (first writer was 1) still backfills"
+    );
+
+    // Trust condition for the GC sweep: "zero junction rows = snapshot-
+    // only" holds only because the backfill is COMPLETE — a pre-migration
+    // history tree gets its junction row here and is therefore never a
+    // sweep candidate. Assert exactly that: no junction-less trees remain.
+    let junctionless: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM trees t \
+             WHERE NOT EXISTS (SELECT 1 FROM repo_trees rt WHERE rt.tree_id = t.id)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        junctionless, 0,
+        "backfill completeness: every pre-migration history tree is junctioned"
+    );
 }
 
 #[test]

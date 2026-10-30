@@ -3,6 +3,26 @@
 //! the max TTL (the convergence rule for an upload that crashed between the
 //! blob PUTs and the snapshot POST — no row will ever come for it).
 //!
+//! The pass also sweeps snapshot-created tree rows: the `trees`/
+//! `tree_entries` rows a snapshot POST wrote carry no `repo_trees`
+//! membership, and ZERO-JUNCTION means snapshot-only by definition — every
+//! history-tree write path inserts a junction row and migration 3's
+//! backfill covered pre-migration rows, so no provenance marker is needed
+//! (do not half-add one later; the invariant lives in junction
+//! completeness). A zero-junction candidate survives if PROTECTED, and
+//! protection is TRANSITIVE through candidates: seeds are candidates in an
+//! unexpired snapshot's closure, candidates that are changeset roots, and
+//! candidates with a RETAINED parent (junctioned tree or changeset root
+//! pointing at them as a child); then candidate children of protected
+//! candidates, recursively — a junction-less chain under a retained
+//! parent survives in full. The walk stays inside the candidate set, so
+//! the cost is one indexed probe per tree row plus indexed lookups per
+//! candidate. Mark and sweep run in ONE write-slot transaction with the
+//! expired-row purge, so a snapshot POST reusing a shared subtree cannot
+//! land between mark and delete; because the sweep is stated over
+//! reachability (not this pass's expired set), a crash between a row purge
+//! and the sweep also converges on the next pass.
+//!
 //! The pass never touches `objects/` (the history CAS is not TTL'd), and
 //! its ordering follows the orphan-direction rule: dirs are deleted first,
 //! rows purged after, so a crash mid-pass leaves an orphan ROW (expired —
@@ -39,6 +59,9 @@ pub struct GcReport {
     pub rowless: usize,
     /// Snapshot rows purged.
     pub rows_purged: usize,
+    /// Snapshot-only `trees`/`tree_entries` rows purged (no junction
+    /// membership, no changeset reference, unreachable from live snapshots).
+    pub trees_purged: usize,
 }
 
 /// Runs one full GC pass against `state` (its clock, its ephemeral store,
@@ -113,36 +136,57 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
             .await?
     };
 
-    // Then the rows of the expired snapshots whose dirs are gone.
-    let rows_purged = if expired.is_empty() {
-        0
+    // All remaining DB-side work — the expired-row purge AND the
+    // snapshot-tree sweep — runs in ONE write-slot transaction: mark
+    // (reachable from live snapshots ∪ junction ∪ changeset roots), purge
+    // expired rows, sweep unmarked tree rows, commit atomically. A
+    // snapshot POST reusing a shared subtree cannot land between mark and
+    // delete: both paths go through `state.write`, the single-writer slot.
+    // The idle probe (below) is what keeps a quiet server's periodic pass
+    // off the write slot entirely.
+    let purgable: Vec<Id> = expired
+        .iter()
+        .filter(|id| deleted.contains(*id))
+        .copied()
+        .collect();
+    let needs_write = !purgable.is_empty() || {
+        state
+            .read(|conn| db::any_junctionless_trees(conn).map_err(ApiError::log_internal))
+            .await?
+    };
+    let (rows_purged, trees_purged) = if !needs_write {
+        (0, 0)
     } else {
-        let purgable: Vec<Id> = expired
-            .iter()
-            .filter(|id| deleted.contains(*id))
-            .copied()
-            .collect();
-        if purgable.is_empty() {
-            0
-        } else {
-            state
-                .write(move |store| {
-                    db::snapshots_purge(store.conn(), &purgable).map_err(ApiError::log_internal)
-                })
-                .await?
-        }
+        let now_i = now as i64;
+        state
+            .write(move |store| {
+                let conn = store.conn();
+                let tx = conn
+                    .unchecked_transaction()
+                    .map_err(ApiError::log_internal)?;
+                let rows_purged =
+                    db::snapshots_purge(&tx, &purgable).map_err(ApiError::log_internal)?;
+                let garbage = db::unprotected_trees(&tx, now_i).map_err(ApiError::log_internal)?;
+                let trees_purged =
+                    db::delete_tree_rows(&tx, &garbage).map_err(ApiError::log_internal)?;
+                tx.commit().map_err(ApiError::log_internal)?;
+                Ok((rows_purged, trees_purged))
+            })
+            .await?
     };
 
     let report = GcReport {
         expired: expired.iter().filter(|id| deleted.contains(*id)).count(),
         rowless: rowless.iter().filter(|id| deleted.contains(*id)).count(),
         rows_purged,
+        trees_purged,
     };
-    if report.expired > 0 || report.rowless > 0 {
+    if report.expired > 0 || report.rowless > 0 || report.trees_purged > 0 {
         tracing::info!(
             expired = report.expired,
             rowless = report.rowless,
             rows_purged = report.rows_purged,
+            trees_purged = report.trees_purged,
             "snapshot GC pass"
         );
     }

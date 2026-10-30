@@ -481,7 +481,9 @@ mod tests {
             "CREATE TABLE trees(id BLOB PRIMARY KEY, repo_id INTEGER NOT NULL, canonical BLOB NOT NULL);
              CREATE TABLE tree_entries(tree_id BLOB NOT NULL, name TEXT NOT NULL, kind INTEGER NOT NULL, \
               object_id BLOB NOT NULL, size INTEGER NOT NULL, exec INTEGER NOT NULL DEFAULT 0, \
-              PRIMARY KEY(tree_id, name));",
+              PRIMARY KEY(tree_id, name));
+             CREATE TABLE repo_trees(repo_id INTEGER NOT NULL, tree_id BLOB NOT NULL, \
+              PRIMARY KEY(repo_id, tree_id));",
         )
         .unwrap();
 

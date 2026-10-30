@@ -87,6 +87,10 @@ pub fn router(state: AppState) -> axum::Router {
             "/v1/repos/{r}/snapshots/{id}/objects/{oid}",
             get(routes::snapshots::get_blob).put(routes::snapshots::put_blob),
         )
+        .route(
+            "/v1/repos/{r}/snapshots/{id}/trees/{tid}",
+            get(routes::snapshots::get_snapshot_tree),
+        )
         .route("/v1/repos/{r}/land", post(routes::land::land))
         .route("/v1/repos/{r}/land/{key}", get(routes::land::land_status))
         .route(

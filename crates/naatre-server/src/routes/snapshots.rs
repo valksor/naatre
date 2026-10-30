@@ -189,7 +189,10 @@ pub async fn create(
                         .collect(),
                 })
                 .collect();
-            db::trees_write(&tx, repo_id, &writes).map_err(ApiError::log_internal)?;
+            // Snapshot trees carry NO repo_trees membership (own-principal
+            // data, TTL'd): they are served only through the owner-gated
+            // snapshot routes below, never through the bare-id tree route.
+            db::trees_write_snapshot(&tx, &writes).map_err(ApiError::log_internal)?;
 
             // Presence walk over the rows just written: every blob the tree
             // references must exist under ephemeral/<snap-id>/.
@@ -356,6 +359,57 @@ pub async fn get_blob(
         HeaderValue::from_static("nosniff"),
     );
     Ok(response)
+}
+
+/// Lists one of a snapshot's trees' entries. Snapshot trees carry NO
+/// `repo_trees` membership (own-principal, TTL'd data), so the bare-id
+/// repo tree route 404s them; this owner-gated route is their only server
+/// surface — same gate as the blob fetch: the snapshot must exist for this
+/// principal in this repo and be unexpired (expiry re-checked FIRST).
+#[utoipa::path(
+    get,
+    path = "/v1/repos/{r}/snapshots/{id}/trees/{tid}",
+    params(
+        ("r" = String, Path, description = "Repo name"),
+        ("id" = String, Path, description = "Snapshot id, 64 lowercase hex"),
+        ("tid" = String, Path, description = "Tree id, 64 lowercase hex")
+    ),
+    responses(
+        (status = 200, description = "The tree's entries", body = crate::routes::trees::TreeResponse),
+        (status = 400, description = "An id is not 64 lowercase hex"),
+        (status = 401, description = "Missing, unknown, revoked, or expired token"),
+        (status = 404, description = "No such repo; or the snapshot does not exist for this principal, or the tree is not part of it"),
+        (status = 410, description = "The snapshot is past its TTL (`snapshot_expired`)")
+    )
+)]
+pub async fn get_snapshot_tree(
+    state: State<AppState>,
+    Extension(auth): Extension<AuthedPrincipal>,
+    Path((repo, id_hex, tid_hex)): Path<(String, String, String)>,
+) -> Result<Json<crate::routes::trees::TreeResponse>, ApiError> {
+    let snap_id = parse_id(&id_hex)?;
+    let tree_id = parse_id(&tid_hex)?;
+    let repo_id = repo_id_or_404(&state, &repo).await?;
+    load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
+
+    let rows = state
+        .read(move |conn| db::tree_entries_load(conn, &tree_id).map_err(ApiError::log_internal))
+        .await?;
+    Ok(Json(crate::routes::trees::TreeResponse {
+        entries: rows
+            .into_iter()
+            .map(|e| crate::routes::trees::TreeEntryOut {
+                name: e.name,
+                kind: match e.kind {
+                    0 => "file".into(),
+                    _ => "dir".into(),
+                },
+                object_id: Id(e.object_id.try_into().expect("object id is 32 bytes")).to_hex(),
+                size: e.size as u64,
+                exec: e.exec,
+            })
+            .collect(),
+    }))
 }
 
 /// PUTs one blob into `ephemeral/<snap-id>/` (writer and above, repo-level):

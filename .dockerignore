@@ -1,0 +1,11 @@
+# The build context is only Cargo.toml, Cargo.lock, and crates/ (see
+# deploy/Dockerfile); keep everything else out of it — target/ is
+# gigabytes and .research/ is untrusted local study material that must
+# never enter an image.
+target
+.research
+.git
+.claude
+docs
+scripts
+deploy
