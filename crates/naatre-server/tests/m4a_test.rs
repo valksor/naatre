@@ -929,6 +929,84 @@ async fn rebase_land_content_oracle() {
     assert_eq!(resp.status, StatusCode::OK);
 }
 
+// ---- 5b. every conflicting path is named, not just the first ---------------
+
+#[tokio::test]
+async fn conflict_lists_every_conflicting_path() {
+    let f = fixture();
+    let base_a = b"a1\na2\n".to_vec();
+    let base_b = b"b1\nb2\n".to_vec();
+    let ba = put_blob(&f, &base_a).await;
+    let bb2 = put_blob(&f, &base_b).await;
+    let (c1, _) = create_ok(
+        &f,
+        cs_body(
+            json!([]),
+            json!([
+                add("a.txt", &ba, base_a.len()),
+                add("b.txt", &bb2, base_b.len()),
+            ]),
+            "c1",
+        ),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+
+    // Both files divergently edited on both sides: two independent conflicts.
+    let ours_a = b"A-ours\na2\n".to_vec();
+    let theirs_a = b"A-main\na2\n".to_vec();
+    let ours_b = b"b1\nB-ours\n".to_vec();
+    let theirs_b = b"b1\nB-main\n".to_vec();
+    let bo_a = put_blob(&f, &ours_a).await;
+    let bt_a = put_blob(&f, &theirs_a).await;
+    let bo_b = put_blob(&f, &ours_b).await;
+    let bt_b = put_blob(&f, &theirs_b).await;
+    let (c2, _) = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([
+                mod_("a.txt", &bo_a, ours_a.len()),
+                mod_("b.txt", &bo_b, ours_b.len()),
+            ]),
+            "c2",
+        ),
+    )
+    .await;
+    let (c2p, _) = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([
+                mod_("a.txt", &bt_a, theirs_a.len()),
+                mod_("b.txt", &bt_b, theirs_b.len()),
+            ]),
+            "c2-prime",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c2p);
+
+    let resp = land(&f, &c2, "k-multi").await;
+    assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
+    let conflicts = resp.body["error"]["details"]["conflicts"]
+        .as_array()
+        .expect("conflicts array");
+    assert_eq!(
+        conflicts.len(),
+        2,
+        "every conflicting path is named: {conflicts:?}"
+    );
+    let paths: Vec<&str> = conflicts
+        .iter()
+        .filter_map(|c| c["path"].as_str())
+        .collect();
+    assert!(
+        paths.contains(&"a.txt") && paths.contains(&"b.txt"),
+        "{paths:?}"
+    );
+}
+
 // ---- 5. conflict: recipe + unsettled key ------------------------------------
 
 #[tokio::test]

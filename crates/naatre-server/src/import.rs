@@ -1421,7 +1421,7 @@ fn ref_move(
     expected_version: Option<i64>,
     target: &Id,
 ) -> Result<(), ImportError> {
-    let outcome = db::ref_cas(
+    let outcome = db::ref_cas_via(
         conn,
         db::RefMove {
             repo_id,
@@ -1432,6 +1432,7 @@ fn ref_move(
             principal: PRINCIPAL,
             now_ns: now_ns(),
         },
+        "import",
     )?;
     match outcome {
         db::RefCas::Created | db::RefCas::Updated { .. } => Ok(()),

@@ -165,6 +165,21 @@ pub struct RefMove<'a> {
 /// Compare-and-swap ref move, atomic with its `ref_move` audit row
 /// (successes only; conflicts are answered, not audited).
 pub fn ref_cas(conn: &Connection, mv: RefMove<'_>) -> rusqlite::Result<RefCas> {
+    ref_cas_inner(conn, mv, None)
+}
+
+/// [`ref_cas`] with provenance: the audit row carries `via` so an
+/// import-driven ref move stays distinguishable from a land or a manual
+/// move (the audit trail's whole point).
+pub fn ref_cas_via(conn: &Connection, mv: RefMove<'_>, via: &str) -> rusqlite::Result<RefCas> {
+    ref_cas_inner(conn, mv, Some(via))
+}
+
+fn ref_cas_inner(
+    conn: &Connection,
+    mv: RefMove<'_>,
+    via: Option<&str>,
+) -> rusqlite::Result<RefCas> {
     let RefMove {
         repo_id,
         repo_name,
@@ -234,6 +249,7 @@ pub fn ref_cas(conn: &Connection, mv: RefMove<'_>) -> rusqlite::Result<RefCas> {
                 "repo": repo_name,
                 "ref": name,
                 "target": target.to_hex(),
+                "via": via,
             })
             .to_string(),
         )?;

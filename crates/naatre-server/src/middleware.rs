@@ -110,8 +110,10 @@ pub async fn request_cap(
     req: Request,
     next: Next,
 ) -> Response {
-    let Ok(permit) = permits.clone().acquire_owned().await else {
-        tracing::warn!("request shed: concurrency cap (semaphore closed)");
+    // try_acquire, never wait: the cap sheds rather than queues (a queued
+    // request would pile up behind the very load the cap exists to bound).
+    let Ok(permit) = permits.clone().try_acquire_owned() else {
+        tracing::warn!("request shed: concurrency cap reached");
         return shed(ApiCode::ServerBusy, "server is at its request limit");
     };
     let _permit = permit;
