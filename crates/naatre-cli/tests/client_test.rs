@@ -3233,3 +3233,330 @@ fn binary_sparse_add_force_parses_and_proceeds() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
     assert!(stdout_of(&out).contains("gone"), "{}", stdout_of(&out));
 }
+
+// ---- M5a: snapshot + restore ------------------------------------------------
+
+/// Runs the real binary's `snapshot` verb and parses its JSON line.
+fn run_snapshot(server: &TestServer, wc_dir: &Path, extra: &[&str]) -> Value {
+    let mut args = vec!["snapshot"];
+    args.extend_from_slice(extra);
+    let out = run_binary(server, wc_dir, &args);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    serde_json::from_str(stdout_of(&out).trim()).expect("snapshot prints {\"id\",\"expires_ns\"}")
+}
+
+/// (relative path → bytes) for every file under the data dir's `objects/`.
+fn objects_dir(server: &TestServer) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![server._dir.path().join("objects")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.insert(
+                    path.strip_prefix(server._dir.path())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    std::fs::read(&path).expect("object bytes"),
+                );
+            }
+        }
+    }
+    out
+}
+
+fn set_exec(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Test — SNAPSHOT/RESTORE ROUNDTRIP: the snapshot's blobs live under
+/// `ephemeral/<sid>/` and never under `objects/`; a fresh working copy
+/// restores the exact bytes and exec bits; the history CAS is untouched and
+/// the restored copy's head is unchanged (snapshots are working state, not
+/// history).
+#[test]
+fn snapshot_restore_roundtrip_is_byte_identical_and_spares_history_cas() {
+    let server = start_server();
+    create_repo(&server, "snap");
+    let base = b"base content\n";
+    put_blob(&server, "snap", base);
+    let c1 = changeset(
+        &server,
+        "snap",
+        &[],
+        vec![change("add", "base.txt", base)],
+        "c1",
+    );
+    seed_main(&server, "snap", c1["id"].as_str().unwrap());
+
+    let wc_a = server._dir.path().join("wc-a");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/snap", server.base),
+            &[],
+            Some(wc_a.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let a_txt = b"alpha bytes\n";
+    let f_txt = b"#!/bin/sh\necho hi\n";
+    let nested = b"nested payload\n";
+    write_file(&wc_a, "a.txt", a_txt);
+    write_file(&wc_a, "sub/f.txt", f_txt);
+    write_file(&wc_a, "sub/n.bin", nested);
+    set_exec(&wc_a.join("sub/f.txt"));
+
+    let before = objects_dir(&server);
+    let snap = run_snapshot(&server, &wc_a, &[]);
+    let sid = snap["id"].as_str().unwrap().to_string();
+    assert_eq!(sid.len(), 64, "64-hex snapshot id");
+    assert!(snap["expires_ns"].as_u64().unwrap() > 0);
+
+    // Blobs under ephemeral/<sid>/objects/, absent from objects/.
+    let eph = server
+        ._dir
+        .path()
+        .join("ephemeral")
+        .join(&sid)
+        .join("objects");
+    assert!(eph.is_dir(), "snapshot namespace exists");
+    for content in [&a_txt[..], &f_txt[..], &nested[..]] {
+        let hex = blob_id(content);
+        assert!(
+            eph.join(&hex[0..2])
+                .join(&hex[2..4])
+                .join(&hex[4..])
+                .exists(),
+            "blob {hex} stored in the snapshot namespace"
+        );
+    }
+    assert_eq!(
+        objects_dir(&server),
+        before,
+        "history CAS untouched by snapshot"
+    );
+
+    // Fresh dir: a second clone restores the snapshot byte-identically.
+    let wc_b = server._dir.path().join("wc-b");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/snap", server.base),
+            &[],
+            Some(wc_b.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let out = run_binary(&server, &wc_b, &["restore", &sid]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(std::fs::read(wc_b.join("a.txt")).unwrap(), a_txt);
+    assert_eq!(std::fs::read(wc_b.join("sub/f.txt")).unwrap(), f_txt);
+    assert_eq!(std::fs::read(wc_b.join("sub/n.bin")).unwrap(), nested);
+    use std::os::unix::fs::MetadataExt as _;
+    assert!(
+        std::fs::metadata(wc_b.join("sub/f.txt")).unwrap().mode() & 0o111 != 0,
+        "exec bit restored"
+    );
+    assert!(
+        std::fs::metadata(wc_b.join("a.txt")).unwrap().mode() & 0o111 == 0,
+        "non-exec stays non-exec"
+    );
+    // Head unchanged; the index moved to the restored state → clean status.
+    let state_b = naatre_cli::wc::Wc::open(&wc_b)
+        .unwrap()
+        .load_state()
+        .unwrap();
+    assert_eq!(state_b.head, c1["id"].as_str().unwrap(), "head unchanged");
+    assert!(verbs::status::report(&wc_b).unwrap().is_clean());
+    assert_eq!(objects_dir(&server), before, "restore never writes history");
+}
+
+/// Test — RESTORE DIRTY GATE (plan quote): conflicting uncommitted edits OR
+/// colliding untracked files refuse with `dirty_working_copy` (details
+/// enumerate both), everything is preserved, and `--force` discards exactly
+/// the colliders.
+#[test]
+fn restore_dirty_gate_refuses_both_lists_and_force_discards_exactly_colliders() {
+    let server = start_server();
+    create_repo(&server, "gate");
+    let base = b"base v1\n";
+    put_blob(&server, "gate", base);
+    let c1 = changeset(
+        &server,
+        "gate",
+        &[],
+        vec![change("add", "base.txt", base)],
+        "c1",
+    );
+    seed_main(&server, "gate", c1["id"].as_str().unwrap());
+
+    let wc = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/gate", server.base),
+            &[],
+            Some(wc.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    // Untracked file that rides into the snapshot (add-all semantics).
+    let a1 = b"alpha v1\n";
+    write_file(&wc, "a.txt", a1);
+    let snap = run_snapshot(&server, &wc, &[]);
+    let sid = snap["id"].as_str().unwrap().to_string();
+
+    // Conflicting edit (tracked, on a snapshot path) + the untracked
+    // collider (a.txt is still untracked — snapshot moves no metadata) +
+    // an unrelated untracked file that must survive.
+    let edit = b"my local edit\n";
+    write_file(&wc, "base.txt", edit);
+    write_file(&wc, "keep.txt", b"unrelated untracked\n");
+
+    let out = run_binary(&server, &wc, &["restore", &sid]);
+    assert_eq!(out.status.code(), Some(2), "gate refuses: {out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(stderr.contains("base.txt"), "edits listed: {stderr:?}");
+    assert!(stderr.contains("a.txt"), "colliders listed: {stderr:?}");
+    // Preserve everything.
+    assert_eq!(std::fs::read(wc.join("base.txt")).unwrap(), edit);
+    assert_eq!(std::fs::read(wc.join("a.txt")).unwrap(), a1);
+    assert_eq!(
+        std::fs::read(wc.join("keep.txt")).unwrap(),
+        b"unrelated untracked\n"
+    );
+
+    // --force discards exactly the colliders: base.txt and a.txt come back
+    // as snapshotted, keep.txt survives.
+    let out = run_binary(&server, &wc, &["restore", "--force", &sid]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(std::fs::read(wc.join("base.txt")).unwrap(), base);
+    assert_eq!(std::fs::read(wc.join("a.txt")).unwrap(), a1);
+    assert_eq!(
+        std::fs::read(wc.join("keep.txt")).unwrap(),
+        b"unrelated untracked\n",
+        "--force never touches unrelated files"
+    );
+    let report = verbs::status::report(&wc).unwrap();
+    assert_eq!(report.untracked, vec!["keep.txt".to_string()]);
+    assert!(report.modified.is_empty() && report.deleted.is_empty());
+    let state = naatre_cli::wc::Wc::open(&wc).unwrap().load_state().unwrap();
+    assert_eq!(state.head, c1["id"].as_str().unwrap(), "head unchanged");
+}
+
+/// Test — INTERRUPTED RESTORE: a materialization failure mid-restore (the
+/// target path turned into a directory) aborts the verb; every completed
+/// file is complete, nothing half-written or temp-staged survives, and the
+/// metadata (head, index) is untouched — saves happen only at the end.
+#[test]
+fn interrupted_restore_leaves_nothing_partial() {
+    let server = start_server();
+    create_repo(&server, "part");
+    let base = b"base\n";
+    put_blob(&server, "part", base);
+    let c1 = changeset(
+        &server,
+        "part",
+        &[],
+        vec![change("add", "base.txt", base)],
+        "c1",
+    );
+    seed_main(&server, "part", c1["id"].as_str().unwrap());
+
+    let wc = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/part", server.base),
+            &[],
+            Some(wc.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let a_txt = b"complete alpha\n";
+    let z_txt = b"will fail to materialize\n";
+    write_file(&wc, "a.txt", a_txt);
+    write_file(&wc, "z.txt", z_txt);
+    let snap = run_snapshot(&server, &wc, &[]);
+    let sid = snap["id"].as_str().unwrap().to_string();
+
+    // Sabotage: z.txt becomes a directory — the snapshot still contains it
+    // as a file, and the write fails mid-restore (after a.txt landed).
+    std::fs::remove_file(wc.join("z.txt")).unwrap();
+    std::fs::create_dir(wc.join("z.txt")).unwrap();
+    let index_before = naatre_cli::wc::Wc::open(&wc).unwrap().load_index().unwrap();
+
+    let out = run_binary(&server, &wc, &["restore", "--force", &sid]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the failed write is a generic error: {out:?}"
+    );
+
+    // Nothing partial: the earlier file is complete, the sabotaged path is
+    // untouched, no temp leftovers, and metadata moved nowhere.
+    assert_eq!(
+        std::fs::read(wc.join("a.txt")).unwrap(),
+        a_txt,
+        "completed file is whole"
+    );
+    assert!(
+        wc.join("z.txt").is_dir(),
+        "the failed target is exactly as it was"
+    );
+    fn has_temp_leftovers(dir: &Path) -> bool {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".naatre-tmp-") {
+                return true;
+            }
+            if entry.file_type().unwrap().is_dir()
+                && !name.starts_with('.')
+                && has_temp_leftovers(&entry.path())
+            {
+                return true;
+            }
+        }
+        false
+    }
+    assert!(
+        !has_temp_leftovers(&wc),
+        "the atomic-write error path cleaned its temp file"
+    );
+    let state = naatre_cli::wc::Wc::open(&wc).unwrap().load_state().unwrap();
+    assert_eq!(state.head, c1["id"].as_str().unwrap(), "head unchanged");
+    let index_after = naatre_cli::wc::Wc::open(&wc).unwrap().load_index().unwrap();
+    assert_eq!(
+        index_after.rows.keys().collect::<Vec<_>>(),
+        index_before.rows.keys().collect::<Vec<_>>(),
+        "index saved only at the end: untouched by the abort"
+    );
+}
+
+/// BINARY PARSE PIN: `snapshot --ttl` below the 60 s floor (and a
+/// non-duration) is a usage error (exit 3), enforced client-side before any
+/// server traffic.
+#[test]
+fn binary_snapshot_rejects_ttl_below_the_minute() {
+    let server = start_server();
+    let cwd = server._dir.path();
+    for bad in [
+        ["snapshot", "--ttl", "30s"],
+        ["snapshot", "--ttl", "0"],
+        ["snapshot", "--ttl", "nonsense"],
+    ] {
+        let out = run_binary(&server, cwd, &bad);
+        assert_eq!(out.status.code(), Some(3), "{bad:?}: {out:?}");
+        let stderr = stderr_of(&out);
+        assert!(stderr.contains("--ttl"), "{bad:?}: {stderr:?}");
+    }
+}

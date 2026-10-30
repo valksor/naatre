@@ -2,7 +2,8 @@
 //! (`init`, `serve`, `token --new-admin`, `import`) that run directly
 //! against the 0700 data dir, thin HTTP client verbs (`repo`, `token`
 //! subcommands), and the working-copy verbs (`clone`, `status`, `sparse`,
-//! `sync`, `commit`, `cat`, `ls`, `diff`, `doctor`, `login`).
+//! `sync`, `commit`, `cat`, `ls`, `diff`, `doctor`, `login`, `snapshot`,
+//! `restore`).
 //!
 //! Pinned exit codes across client verbs: 0 success, 1 generic error,
 //! 2 conflict-class (409 envelopes), 3 usage.
@@ -192,6 +193,26 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
+    /// Capture the working copy as an ephemeral server-side snapshot
+    /// (default TTL 7d). Prints {"id","expires_ns"}; head and index stay.
+    Snapshot {
+        /// Snapshot lifetime, e.g. 90s, 5m, 2h, 7d (min 60s; default 7d).
+        #[arg(long)]
+        ttl: Option<String>,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Restore a snapshot's files into this working copy (head unchanged).
+    Restore {
+        /// Snapshot id (64 hex, printed by `naatre snapshot`).
+        snap_id: String,
+        /// Discard local edits and colliding untracked files on the
+        /// snapshot's paths (symlinks on them are unlinked).
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
 }
 
 #[derive(Subcommand)]
@@ -370,6 +391,12 @@ fn main() {
             verbs::reads::diff(cwd, at_pair, json, &net.net())
         }
         Cmd::Doctor { rebuild, net } => verbs::doctor::run(cwd, rebuild, &net.net()),
+        Cmd::Snapshot { ttl, net } => verbs::snapshot::run(cwd, ttl.as_deref(), &net.net()),
+        Cmd::Restore {
+            snap_id,
+            force,
+            net,
+        } => verbs::restore::run(cwd, &snap_id, force, &net.net()),
     };
     std::process::exit(code);
 }

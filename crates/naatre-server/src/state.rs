@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use naatre_store::cas::Cas;
 use naatre_store::data_dir::DataDir;
+use naatre_store::ephemeral::Ephemeral;
 use naatre_store::error::StoreError;
 use naatre_store::store::Store;
 
@@ -141,6 +142,9 @@ pub struct ServerState {
     /// History CAS handle over the same data dir (`ServerState::open`
     /// creates it). Blocking CAS work goes through [`ServerState::blocking`].
     pub cas: Arc<Cas>,
+    /// Ephemeral snapshot store over the same data dir (`ephemeral/<snap>/`).
+    /// Blocking filesystem work goes through [`ServerState::blocking`].
+    pub ephemeral: Arc<Ephemeral>,
     /// Nanosecond clock used for token expiry, audit timestamps, and the
     /// auth-failure window. Tests replace this after [`ServerState::open`].
     pub clock: ClockFn,
@@ -168,6 +172,11 @@ pub struct ServerState {
     /// [`ServerState::drain_timeout`]; tests lower it to pin the expiry
     /// behaviour.
     pub join_deadline: Duration,
+    /// Snapshot GC switch: the POST-time opportunistic pass and the serve
+    /// background interval task both check it. Off-switch for tests that
+    /// drive [`crate::snapshots_gc::gc_snapshots`] directly and assert its
+    /// effects deterministically.
+    pub snapshot_gc_enabled: bool,
 }
 
 /// Shared handle to the server state.
@@ -191,6 +200,7 @@ impl ServerState {
         let data_dir_display = data.path().to_path_buf();
         let db_path = data.db_path();
         let cas = Arc::new(Cas::new(&data)?);
+        let ephemeral = Arc::new(Ephemeral::new(&data)?);
         // The write store opens first: migrations run there, and its
         // connection recovers the WAL before any read-only connection
         // opens (a read-only connection cannot run recovery).
@@ -200,12 +210,14 @@ impl ServerState {
             store,
             read_pool,
             cas,
+            ephemeral,
             clock: Arc::new(system_now_ns),
             auth_fail: Mutex::new(AuthFailInner::default()),
             land_joins: LandJoins::default(),
             data_dir_display,
             drain_timeout: Duration::from_secs(30),
             join_deadline: JOIN_DEADLINE,
+            snapshot_gc_enabled: true,
         })
     }
 

@@ -31,6 +31,7 @@ pub mod middleware;
 pub mod openapi;
 pub mod routes;
 pub mod serve;
+pub mod snapshots_gc;
 pub mod state;
 pub mod tree_derive;
 
@@ -77,6 +78,15 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/repos/{r}/diff", get(routes::history::diff))
         .route("/v1/repos/{r}/merge-base", get(routes::history::merge_base))
         .route("/v1/repos/{r}/file", get(routes::history::file))
+        .route("/v1/repos/{r}/snapshots", post(routes::snapshots::create))
+        .route(
+            "/v1/repos/{r}/snapshots/{id}",
+            get(routes::snapshots::get_metadata),
+        )
+        .route(
+            "/v1/repos/{r}/snapshots/{id}/objects/{oid}",
+            get(routes::snapshots::get_blob).put(routes::snapshots::put_blob),
+        )
         .route("/v1/repos/{r}/land", post(routes::land::land))
         .route("/v1/repos/{r}/land/{key}", get(routes::land::land_status))
         .route(

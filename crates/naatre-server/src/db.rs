@@ -814,6 +814,107 @@ pub fn main_cas_move(
     )
 }
 
+// ---- snapshots (M5a) -------------------------------------------------------
+
+/// One row of `snapshots`.
+pub struct SnapshotRow {
+    pub tree_id: Vec<u8>,
+    pub principal: String,
+    pub created_ns: i64,
+    pub expires_ns: i64,
+}
+
+/// The snapshot row for `(repo_id, id)`, or `None` (unknown id, or another
+/// repo's snapshot — ids are only meaningful within their repo).
+pub fn snapshot_get(
+    conn: &Connection,
+    repo_id: i64,
+    id: &Id,
+) -> rusqlite::Result<Option<SnapshotRow>> {
+    conn.query_row(
+        "SELECT tree_id, principal, created_ns, expires_ns FROM snapshots \
+         WHERE repo_id = ?1 AND id = ?2",
+        params![repo_id, id.0.as_slice()],
+        |row| {
+            Ok(SnapshotRow {
+                tree_id: row.get(0)?,
+                principal: row.get(1)?,
+                created_ns: row.get(2)?,
+                expires_ns: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// Inserts one snapshot row. Duplicate ids are rejected by the PRIMARY KEY;
+/// the route checks for an existing row first (idempotent re-POST).
+pub fn snapshot_insert(
+    conn: &Connection,
+    repo_id: i64,
+    id: &Id,
+    tree_id: &Id,
+    principal: &str,
+    created_ns: i64,
+    expires_ns: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO snapshots(id, repo_id, tree_id, principal, created_ns, expires_ns) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            id.0.as_slice(),
+            repo_id,
+            tree_id.0.as_slice(),
+            principal,
+            created_ns,
+            expires_ns
+        ],
+    )?;
+    Ok(())
+}
+
+/// Ids of expired snapshot rows (`expires_ns <= now_ns`), ascending.
+pub fn snapshots_expired(conn: &Connection, now_ns: i64) -> rusqlite::Result<Vec<Id>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT id FROM snapshots WHERE expires_ns <= ?1 ORDER BY id ASC")?;
+    let rows = stmt.query_map(params![now_ns], |row| {
+        row.get::<_, Vec<u8>>(0)
+            .map(|b| Id(b.try_into().expect("snapshot id is 32 bytes")))
+    })?;
+    rows.collect()
+}
+
+/// Deletes the given snapshot rows; returns how many existed. GC purges a
+/// row only after its ephemeral dir is gone, so a crash leaves an orphan
+/// row (never a dangling dir-less row that serves) that the next run purges.
+pub fn snapshots_purge(conn: &Connection, ids: &[Id]) -> rusqlite::Result<usize> {
+    let mut purged = 0;
+    for id in ids {
+        purged += conn.execute(
+            "DELETE FROM snapshots WHERE id = ?1",
+            params![id.0.as_slice()],
+        )?;
+    }
+    Ok(purged)
+}
+
+/// Which of `ids` have a snapshots row (the rowless-dir sweep's cross-check:
+/// a dir with a row is a live or expired snapshot, not garbage).
+pub fn snapshots_exist(conn: &Connection, ids: &[Id]) -> rusqlite::Result<Vec<bool>> {
+    ids.iter()
+        .map(|id| {
+            let hit: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM snapshots WHERE id = ?1",
+                    params![id.0.as_slice()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(hit.is_some())
+        })
+        .collect()
+}
+
 // ---- principals & tokens -------------------------------------------------
 
 /// Creates or re-roles a principal.

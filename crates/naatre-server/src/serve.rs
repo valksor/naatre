@@ -12,12 +12,19 @@
 use std::future::{Future, IntoFuture};
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::api_error::ApiError;
 use crate::state::AppState;
+
+/// How often the background snapshot GC pass runs (60 s). The pass itself is
+/// [`crate::snapshots_gc::gc_snapshots`]; the off-switch is
+/// [`crate::state::ServerState::snapshot_gc_enabled`] (tests that drive GC
+/// directly turn the background task off to keep effects deterministic).
+pub const SNAPSHOT_GC_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Everything [`serve`] needs: the bound listener and the shared state.
 pub struct ServeConfig {
@@ -74,6 +81,22 @@ pub async fn serve(
         shutdown.await;
         let _ = signal_tx.send(true);
     });
+
+    // Background snapshot GC: an opportunistic pass every 60 s. The task
+    // lives on the serving runtime (dropped with it on shutdown); a failed
+    // pass is logged and retried on the next tick.
+    if cfg.state.snapshot_gc_enabled {
+        let gc_state = Arc::clone(&cfg.state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SNAPSHOT_GC_INTERVAL);
+            loop {
+                interval.tick().await;
+                if let Err(e) = crate::snapshots_gc::gc_snapshots(&gc_state).await {
+                    tracing::warn!(error = %e, "background snapshot GC failed");
+                }
+            }
+        });
+    }
 
     let graceful_rx = signal_rx.clone();
     let graceful = async move {

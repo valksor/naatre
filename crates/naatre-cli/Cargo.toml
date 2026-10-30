@@ -18,6 +18,9 @@ naatre-core = { path = "../naatre-core" }
 naatre-server = { path = "../naatre-server" }
 naatre-store = { path = "../naatre-store" }
 clap = { version = "4", features = ["derive"] }
+# CSPRNG snapshot ids (`naatre snapshot` generates the 64-hex id client-side;
+# same crate the server pins — no new external dependency).
+getrandom = "0.3"
 # Plain-HTTP client for localhost ops (no TLS backend pulled in on purpose:
 # client verbs target the local server; TLS lives behind the operator's proxy).
 ureq = { version = "3", default-features = false, features = ["json"] }

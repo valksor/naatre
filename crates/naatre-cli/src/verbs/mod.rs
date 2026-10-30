@@ -1,6 +1,7 @@
 //! The working-copy verbs: clone, status, sparse, sync, commit, cat, ls,
-//! diff, doctor, login. Every verb prints its own output and returns the
-//! pinned exit code (0 success, 1 generic, 2 conflict-class, 3 usage).
+//! diff, doctor, login, snapshot, restore. Every verb prints its own output
+//! and returns the pinned exit code (0 success, 1 generic, 2 conflict-class,
+//! 3 usage).
 
 pub mod clone;
 pub mod commit;
@@ -8,6 +9,8 @@ pub mod doctor;
 pub mod land;
 pub mod login;
 pub mod reads;
+pub mod restore;
+pub mod snapshot;
 pub mod sparse;
 pub mod status;
 pub mod sync;

@@ -12,6 +12,7 @@ pub mod objects;
 pub mod openapi;
 pub mod refs;
 pub mod repos;
+pub mod snapshots;
 pub mod tokens;
 pub mod trees;
 pub mod version;
