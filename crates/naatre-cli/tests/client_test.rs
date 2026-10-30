@@ -1256,3 +1256,171 @@ fn report_json_shape_tracks_classification() {
         })
     );
 }
+
+/// Test 9 — TWO-CLIENT SYNC over the REAL land route: A clones, commits,
+/// lands (FF); B — a working copy cloned from the same base — syncs up to
+/// A's content cleanly, and B's local edit to a NON-colliding file survives
+/// the sync (--force path: only incoming-colliding files are discarded).
+/// A colliding edit refuses with `dirty_working_copy` (exit 2) naming the
+/// file; --force discards exactly that edit and completes.
+///
+/// Note on the shipped M3 sync gate (sync.rs refuses ANY dirty tracked
+/// file, not only incoming-colliding ones): a non-colliding dirty sync
+/// therefore refuses first and needs --force to proceed — the edit itself
+/// still survives untouched. This test pins that behavior as shipped.
+#[test]
+fn two_client_sync_after_a_real_land() {
+    let server = start_server();
+    create_repo(&server, "duo");
+    let a1 = b"a=1\n";
+    let b1 = b"b=1\n";
+    put_blob(&server, "duo", a1);
+    put_blob(&server, "duo", b1);
+    let c1 = changeset(
+        &server,
+        "duo",
+        &[],
+        vec![change("add", "a.txt", a1), change("add", "b.txt", b1)],
+        "c1",
+    );
+    seed_main(&server, "duo", c1["id"].as_str().unwrap());
+
+    // Two working copies off the same base.
+    let wc_a = server._dir.path().join("wc-a");
+    let wc_b = server._dir.path().join("wc-b");
+    for dir in [&wc_a, &wc_b] {
+        assert_eq!(
+            verbs::clone::run(
+                &format!("{}/duo", server.base),
+                &[],
+                Some(dir.to_str().unwrap()),
+                &net(&server)
+            ),
+            0
+        );
+    }
+
+    // A: edit, commit, LAND (real land route, deterministic key).
+    let a2 = b"a=2 (A's work)\n";
+    write_file(&wc_a, "a.txt", a2);
+    let out = run_binary(
+        &server,
+        &wc_a,
+        &["commit", "-m", "a edit", "--author", "a <a@naatre.local>"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let out = run_binary(&server, &wc_a, &["land", "--key", "duo-a1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let landed: Value = serde_json::from_str(
+        stdout_of(&out)
+            .lines()
+            .rev()
+            .find(|l| l.starts_with('{'))
+            .expect("land prints its JSON result"),
+    )
+    .expect("land result json");
+    let landed1 = landed["landed"].as_str().unwrap().to_string();
+    let (_, refs) = api(&server, "GET", "/v1/repos/duo/refs/main", None);
+    assert_eq!(refs["target"], landed1.as_str(), "land moved main");
+    assert_eq!(landed["rebased"], 0, "first land is a fast-forward");
+
+    // B (clean) syncs: advances to A's landed content, status clean.
+    let out = run_binary(&server, &wc_b, &["sync"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        std::fs::read(wc_b.join("a.txt")).unwrap(),
+        a2,
+        "B advanced to A's landed content"
+    );
+    assert!(
+        verbs::status::report(&wc_b).unwrap().is_clean(),
+        "clean sync leaves B clean"
+    );
+    let wc = naatre_cli::wc::Wc::open(&wc_b).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, landed1, "B's head advanced");
+
+    // B's local edit to a NON-colliding file, then A lands again.
+    let b2 = b"b=2 (B's local work)\n";
+    write_file(&wc_b, "b.txt", b2);
+    let a3 = b"a=3 (A's second work)\n";
+    write_file(&wc_a, "a.txt", a3);
+    let out = run_binary(
+        &server,
+        &wc_a,
+        &["commit", "-m", "a edit 2", "--author", "a <a@naatre.local>"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let out = run_binary(&server, &wc_a, &["land", "--key", "duo-a2"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+
+    // The dirty gate refuses (exit 2) and preserves everything — even the
+    // non-colliding edit (shipped gate: any dirty tracked file refuses).
+    let out = run_binary(&server, &wc_b, &["sync"]);
+    assert_eq!(out.status.code(), Some(2), "dirty sync refuses: {out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("b.txt"),
+        "the dirty list is named: {stderr:?}"
+    );
+    assert_eq!(std::fs::read(wc_b.join("b.txt")).unwrap(), b2);
+
+    // --force proceeds and the non-colliding edit SURVIVES the sync.
+    let out = run_binary(&server, &wc_b, &["sync", "--force"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(std::fs::read(wc_b.join("a.txt")).unwrap(), a3);
+    assert_eq!(
+        std::fs::read(wc_b.join("b.txt")).unwrap(),
+        b2,
+        "B's non-colliding edit survives"
+    );
+
+    // Scenario 2: B edits the SAME file A landed → refusal names it;
+    // --force discards exactly that edit and completes.
+    let a4 = b"a=4 (A's third work)\n";
+    write_file(&wc_a, "a.txt", a4);
+    let out = run_binary(
+        &server,
+        &wc_a,
+        &["commit", "-m", "a edit 3", "--author", "a <a@naatre.local>"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let out = run_binary(&server, &wc_a, &["land", "--key", "duo-a3"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+
+    let collide = b"a.txt collided by B\n";
+    write_file(&wc_b, "a.txt", collide);
+    let out = run_binary(&server, &wc_b, &["sync"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "colliding sync refuses: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("a.txt"),
+        "the collider is listed: {stderr:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_b.join("a.txt")).unwrap(),
+        collide,
+        "refusal preserves B's colliding edit"
+    );
+    assert_eq!(std::fs::read(wc_b.join("b.txt")).unwrap(), b2);
+
+    let out = run_binary(&server, &wc_b, &["sync", "--force"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        std::fs::read(wc_b.join("a.txt")).unwrap(),
+        a4,
+        "B's collider discarded for A's landed content"
+    );
+    assert_eq!(
+        std::fs::read(wc_b.join("b.txt")).unwrap(),
+        b2,
+        "--force keeps non-colliding edits"
+    );
+    let report = verbs::status::report(&wc_b).unwrap();
+    assert_eq!(report.modified, vec!["b.txt".to_string()], "{report:?}");
+}
