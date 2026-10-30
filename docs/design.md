@@ -189,3 +189,19 @@ commit is listed in the import report's `sanitized` array.
 `--skip-unsupported` skips a commit **and all its descendants** (the
 `cascaded` list reports the cascade) — one offending early commit skips
 everything after it.
+
+## Known deviations and costs (honest record)
+
+- **`--trust-proxy` not implemented (plan deviation, queued for M10).** The approved plan
+  pins auth-failure keying as "token bucket keyed by presented principal, else peer
+  address; `--trust-proxy` opt-in, keyed by the *last* `X-Forwarded-For* hop". The built
+  code keys on a hash of the presented credential only — no address keying, no flag
+  (the M1b2 brief compressed the clause away). Effect: a credential-less flood shares
+  one `anon` bucket; there is no per-origin attribution. Honest absence, documented here
+  and in the README; lands with M10's rate/quota work.
+- **GC sweep cost:** the zero-junction candidate probe is an anti-join over all `trees`
+  rows — O(total trees) inside the write slot on each pass (60s tick + each POST) once
+  any snapshot exists. Cheaper than history-closure marking; a candidate index or a
+  dirty flag is an M6+ optimization if it ever shows.
+- **Verification anchors:** `git stash create` anchors cover tracked content only;
+  untracked files are outside the guard's content compare.
