@@ -5,19 +5,34 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "naatre_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "naatre"
 path = "src/main.rs"
 
 [dependencies]
+naatre-core = { path = "../naatre-core" }
 naatre-server = { path = "../naatre-server" }
 naatre-store = { path = "../naatre-store" }
 clap = { version = "4", features = ["derive"] }
 # Plain-HTTP client for localhost ops (no TLS backend pulled in on purpose:
 # client verbs target the local server; TLS lives behind the operator's proxy).
 ureq = { version = "3", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# NFC normalization of disk paths before index comparison (same crate the
+# core grammar uses; already pinned in the workspace lockfile).
+unicode-normalization = "0.1"
+# Batch object fetches return base64 payloads (same version naatre-server
+# pins; already in the workspace lockfile).
+base64 = "0.22"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Direct-DB seeding of the `main` ref row (land, its only writer, is M4) —
+# the same technique the naatre-server M2a tests use.
+rusqlite = { version = "0.41", features = ["bundled"] }

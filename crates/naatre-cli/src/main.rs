@@ -1,14 +1,18 @@
 //! `naatre` — one binary, multi-call (plan "Client"): host-local admin verbs
-//! (`init`, `serve`, `token --new-admin`) that run directly against the
-//! 0700 data dir, and thin HTTP client verbs (`repo`, `token` subcommands)
-//! that talk to a running server via `NAATRE_URL` + `NAATRE_TOKEN`.
-
-mod client;
-mod host;
+//! (`init`, `serve`, `token --new-admin`, `import`) that run directly
+//! against the 0700 data dir, thin HTTP client verbs (`repo`, `token`
+//! subcommands), and the working-copy verbs (`clone`, `status`, `sparse`,
+//! `sync`, `commit`, `cat`, `ls`, `diff`, `doctor`, `login`).
+//!
+//! Pinned exit codes across client verbs: 0 success, 1 generic error,
+//! 2 conflict-class (409 envelopes), 3 usage.
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+use naatre_cli::verbs::{self, Net};
+use naatre_cli::{client, host};
 
 /// naatre: a self-hosted, single-binary Scion-style VCS.
 #[derive(Parser)]
@@ -16,7 +20,8 @@ use clap::{Parser, Subcommand};
     name = "naatre",
     version,
     about = "naatre: self-hosted single-binary VCS (server + thin client)",
-    after_help = "Client verbs read NAATRE_URL (default http://127.0.0.1:7400) and NAATRE_TOKEN."
+    after_help = "Client verbs read NAATRE_URL (default http://127.0.0.1:7400) and NAATRE_TOKEN; \
+                  inside a working copy, .naatre/config.toml is the fallback."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -79,6 +84,100 @@ enum Cmd {
         /// Path of the local git repository to import.
         git_path: String,
     },
+    /// Write this working copy's .naatre/config.toml (server_url + token).
+    Login {
+        /// Server origin, e.g. http://127.0.0.1:7400.
+        #[arg(long)]
+        server: String,
+        /// Bearer token (argv is visible in ps; prefer NAATRE_TOKEN).
+        #[arg(long)]
+        token: String,
+    },
+    /// Clone a repo into a new working copy.
+    Clone {
+        /// http://host[:port]/<repo> or just <repo> (uses NAATRE_URL).
+        url: String,
+        /// Materialize only the given path prefixes (repeatable).
+        #[arg(long)]
+        sparse: Vec<String>,
+        /// Destination directory (default: the repo name).
+        #[arg(long)]
+        into: Option<String>,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Sparse prefix list: add materializes a prefix, remove drops it.
+    Sparse {
+        #[command(subcommand)]
+        cmd: SparseCmd,
+    },
+    /// Working-copy status: disk vs the stat index. Zero server calls.
+    Status {
+        /// Emit {"status","modified","deleted","untracked"}.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Advance the working copy to the server's main (dirty → exit 2).
+    Sync {
+        /// Discard local changes to incoming-colliding files, then proceed.
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Commit all changes under the sparse prefixes (add-all semantics).
+    Commit {
+        /// Commit message.
+        #[arg(short, long)]
+        message: String,
+        /// Author string (default: NAATRE_AUTHOR, else user@host).
+        #[arg(long)]
+        author: Option<String>,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Print a file's raw bytes (default: at head).
+    Cat {
+        /// Repo-relative path.
+        path: String,
+        /// Changeset id or ref name (default: head).
+        #[arg(long)]
+        at: Option<String>,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// List a tree's entries (default: the root at head).
+    Ls {
+        /// Directory path (default: the root).
+        path: Option<String>,
+        /// Changeset id or ref name (default: head).
+        #[arg(long)]
+        at: Option<String>,
+        /// Emit the entries array as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Diff head vs disk by default; two changesets with --at A B.
+    Diff {
+        /// Two changeset ids or ref names: --at A B.
+        #[arg(long, num_args = 2, value_names = ["A", "B"])]
+        at: Option<Vec<String>>,
+        /// Emit {"changes":[…]}.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Check the stat index (and blobs server-side); --rebuild rebuilds it.
+    Doctor {
+        /// Rescan disk, rehash everything, rewrite the index.
+        #[arg(long)]
+        rebuild: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
 }
 
 #[derive(Subcommand)]
@@ -120,8 +219,45 @@ enum RepoCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum SparseCmd {
+    /// Fetch and materialize a path prefix at head.
+    Add {
+        /// Path prefix to materialize (must exist in the tree).
+        prefix: String,
+    },
+    /// Delete the indexed files under a prefix; drop it from the list.
+    Remove {
+        /// Path prefix currently in the sparse list.
+        prefix: String,
+    },
+    /// Print the sparse prefixes (empty = full checkout).
+    List,
+}
+
+/// `--server`/`--token` overrides (precedence: flags > env > config.toml).
+#[derive(Args)]
+struct NetOpts {
+    /// Server origin override.
+    #[arg(long)]
+    server: Option<String>,
+    /// Bearer token override.
+    #[arg(long)]
+    token: Option<String>,
+}
+
+impl NetOpts {
+    fn net(&self) -> Net {
+        Net {
+            server: self.server.clone(),
+            token: self.token.clone(),
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
+    let cwd = std::path::Path::new(".");
     let code = match cli.cmd {
         Cmd::Init { data } => host::init(&data),
         Cmd::Serve {
@@ -140,20 +276,74 @@ fn main() {
             (false, _, None) => {
                 usage("token requires --data <dir> --new-admin (host-local) or a subcommand (HTTP)")
             }
-            (false, _, Some(cmd)) => client::token(cmd),
+            (false, _, Some(TokenCmd::List)) => client::token_list(),
+            (
+                false,
+                _,
+                Some(TokenCmd::Create {
+                    principal,
+                    role,
+                    ttl_days,
+                    scope,
+                }),
+            ) => client::token_create(&principal, &role, ttl_days, scope.as_deref()),
+            (false, _, Some(TokenCmd::Revoke { id })) => client::token_revoke(id),
         },
-        Cmd::Repo { cmd } => client::repo(cmd),
+        Cmd::Repo { cmd } => match cmd {
+            RepoCmd::Create { name } => client::repo_create(&name),
+            RepoCmd::Stats { name } => client::repo_stats(&name),
+        },
         Cmd::Import {
             data,
             into,
             skip_unsupported,
             git_path,
         } => host::import(&data, into.as_deref(), skip_unsupported, &git_path),
+        Cmd::Login { server, token } => verbs::login::run(cwd, &server, &token),
+        Cmd::Clone {
+            url,
+            sparse,
+            into,
+            net,
+        } => verbs::clone::run(&url, &sparse, into.as_deref(), &net.net()),
+        Cmd::Sparse { cmd } => match cmd {
+            SparseCmd::Add { prefix } => {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Add(prefix), &Net::default())
+            }
+            SparseCmd::Remove { prefix } => {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &Net::default())
+            }
+            SparseCmd::List => {
+                verbs::sparse::run(cwd, verbs::sparse::Action::List, &Net::default())
+            }
+        },
+        Cmd::Status { json } => verbs::status::run(cwd, json),
+        Cmd::Sync { force, net } => verbs::sync::run(cwd, force, &net.net()),
+        Cmd::Commit {
+            message,
+            author,
+            net,
+        } => verbs::commit::run(cwd, &message, author.as_deref(), &net.net()),
+        Cmd::Cat { path, at, net } => verbs::reads::cat(cwd, &path, at.as_deref(), &net.net()),
+        Cmd::Ls {
+            path,
+            at,
+            json,
+            net,
+        } => verbs::reads::ls(cwd, path.as_deref(), at.as_deref(), json, &net.net()),
+        Cmd::Diff { at, json, net } => {
+            let at_pair = at.as_deref().and_then(|v| match v {
+                [a, b] => Some((a.as_str(), b.as_str())),
+                _ => None,
+            });
+            verbs::reads::diff(cwd, at_pair, json, &net.net())
+        }
+        Cmd::Doctor { rebuild, net } => verbs::doctor::run(cwd, rebuild, &net.net()),
     };
     std::process::exit(code);
 }
 
 fn usage(message: &str) -> i32 {
     eprintln!("error: {message}");
-    2
+    3
 }

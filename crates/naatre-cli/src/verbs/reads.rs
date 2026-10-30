@@ -1,0 +1,295 @@
+//! The read verbs: `cat`, `ls`, `diff`. Every one takes `--json` with a
+//! pinned shape (status's shape lives in [`crate::wc::scan::Report`]; ls
+//! mirrors the server's tree-entry shape; diff mirrors the server's
+//! diff-entry shape). `--at` accepts a changeset id or a ref name; the
+//! default for cat/ls/diff's server mode is head.
+
+use std::collections::BTreeMap;
+use std::io::Write as _;
+use std::os::unix::fs::MetadataExt as _;
+use std::path::Path;
+
+use naatre_core::ids::{Id, Kind, is_hex_id, object_id};
+use serde_json::{Value, json};
+
+use super::{Net, VerbError};
+use crate::client::{Client, uri_segment};
+use crate::wc::fetch::walk_tree;
+use crate::wc::{Wc, nfc, under_sparse};
+
+/// A working copy resolved for reading: client + repo + head changeset.
+struct Reader {
+    client: Client,
+    repo: String,
+    head: Id,
+}
+
+fn open_reader(root: &Path, net: &Net) -> Result<Reader, VerbError> {
+    let wc = Wc::open(root)?;
+    let state = wc.load_state()?;
+    let client = wc.client(net)?;
+    let head = Id::from_hex(&state.head)
+        .ok_or_else(|| VerbError::Local("state.json head is not a valid changeset id".into()))?;
+    Ok(Reader {
+        client,
+        repo: state.server_repo,
+        head,
+    })
+}
+
+/// `--at` resolution: a 64-hex id passes through; anything else is a ref
+/// name resolved via `GET /refs/{name}`.
+fn resolve_at(reader: &Reader, at: Option<&str>) -> Result<Id, VerbError> {
+    match at {
+        None => Ok(reader.head),
+        Some(a) if is_hex_id(a) => {
+            Id::from_hex(a).ok_or_else(|| VerbError::Usage(format!("bad changeset id {a:?}")))
+        }
+        Some(refname) => {
+            let v = reader.client.get_json(
+                &format!(
+                    "/v1/repos/{}/refs/{}",
+                    uri_segment(&reader.repo),
+                    uri_segment(refname)
+                ),
+                &[],
+            )?;
+            v["target"]
+                .as_str()
+                .and_then(Id::from_hex)
+                .ok_or_else(|| VerbError::Local(format!("ref {refname:?} is unborn")))
+        }
+    }
+}
+
+/// `naatre cat <path> [--at REF|CS]` — raw bytes to stdout, binary-safe.
+/// Every fetched blob is hash-verified client-side before a byte reaches
+/// stdout (corrupt data is a clean error, never garbage output).
+pub fn cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> i32 {
+    match try_cat(root, path, at, net) {
+        Ok(()) => 0,
+        Err(e) => e.report(),
+    }
+}
+
+fn try_cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> Result<(), VerbError> {
+    let reader = open_reader(root, net)?;
+    let cs = resolve_at(&reader, at)?;
+    let path = nfc(path);
+    let fv = reader.client.get_json(
+        &format!("/v1/repos/{}/file", uri_segment(&reader.repo)),
+        &[("at", cs.to_hex().as_str()), ("path", path.as_str())],
+    )?;
+    let blob = fv["blob_id"]
+        .as_str()
+        .and_then(Id::from_hex)
+        .ok_or_else(|| VerbError::Local("server returned a malformed blob id".into()))?;
+    let bytes = reader
+        .client
+        .get_bytes(&format!(
+            "/v1/repos/{}/objects/{}",
+            uri_segment(&reader.repo),
+            blob.to_hex()
+        ))
+        .map_err(VerbError::Http)?;
+    crate::wc::fetch::verify(&blob, &bytes).map_err(VerbError::from)?;
+    std::io::stdout()
+        .write_all(&bytes)
+        .map_err(|e| VerbError::Local(format!("writing to stdout: {e}")))?;
+    Ok(())
+}
+
+/// `naatre ls [path] [--at REF|CS]` — one tree node's entries.
+pub fn ls(root: &Path, path: Option<&str>, at: Option<&str>, json_out: bool, net: &Net) -> i32 {
+    match try_ls(root, path, at, json_out, net) {
+        Ok(()) => 0,
+        Err(e) => e.report(),
+    }
+}
+
+fn try_ls(
+    root: &Path,
+    path: Option<&str>,
+    at: Option<&str>,
+    json_out: bool,
+    net: &Net,
+) -> Result<(), VerbError> {
+    let reader = open_reader(root, net)?;
+    let cs = resolve_at(&reader, at)?;
+    let rootv = reader.client.get_json(
+        &format!(
+            "/v1/repos/{}/changesets/{}/root",
+            uri_segment(&reader.repo),
+            cs.to_hex()
+        ),
+        &[],
+    )?;
+    let mut tree = rootv["root_tree_id"]
+        .as_str()
+        .and_then(Id::from_hex)
+        .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
+    if let Some(p) = path {
+        let p = nfc(p);
+        for name in p.split('/').filter(|c| !c.is_empty()) {
+            let v = reader.client.get_json(
+                &format!(
+                    "/v1/repos/{}/trees/{}",
+                    uri_segment(&reader.repo),
+                    tree.to_hex()
+                ),
+                &[],
+            )?;
+            let entry = v["entries"]
+                .as_array()
+                .ok_or_else(|| VerbError::Local("server sent a malformed tree listing".into()))?
+                .iter()
+                .find(|e| e["name"].as_str() == Some(name))
+                .ok_or_else(|| VerbError::Local(format!("no such path {p:?}")))?;
+            if entry["kind"].as_str() != Some("dir") {
+                return Err(VerbError::Local(format!(
+                    "{p:?} is a file, not a directory"
+                )));
+            }
+            tree = entry["object_id"]
+                .as_str()
+                .and_then(Id::from_hex)
+                .ok_or_else(|| VerbError::Local("tree entry with a malformed object id".into()))?;
+        }
+    }
+    let v = reader.client.get_json(
+        &format!(
+            "/v1/repos/{}/trees/{}",
+            uri_segment(&reader.repo),
+            tree.to_hex()
+        ),
+        &[],
+    )?;
+    if json_out {
+        println!("{}", json!({ "entries": v["entries"] }));
+        return Ok(());
+    }
+    for e in v["entries"].as_array().map_or(&[][..], Vec::as_slice) {
+        let name = e["name"].as_str().unwrap_or("?");
+        if e["kind"].as_str() == Some("dir") {
+            println!("{name}/");
+        } else {
+            println!("{name}");
+        }
+    }
+    Ok(())
+}
+
+/// `naatre diff [--at A B]` — server-side two-changeset diff, or (default)
+/// head vs disk: local modifications as path-level add/mod/del against the
+/// head root tree, restricted to the sparse prefixes.
+pub fn diff(root: &Path, at: Option<(&str, &str)>, json_out: bool, net: &Net) -> i32 {
+    match try_diff(root, at, json_out, net) {
+        Ok(()) => 0,
+        Err(e) => e.report(),
+    }
+}
+
+fn try_diff(
+    root: &Path,
+    at: Option<(&str, &str)>,
+    json_out: bool,
+    net: &Net,
+) -> Result<(), VerbError> {
+    let reader = open_reader(root, net)?;
+    let changes = match at {
+        Some((a, b)) => {
+            let cs_a = resolve_at(&reader, Some(a))?;
+            let cs_b = resolve_at(&reader, Some(b))?;
+            let v = reader.client.get_json(
+                &format!("/v1/repos/{}/diff", uri_segment(&reader.repo)),
+                &[("a", cs_a.to_hex().as_str()), ("b", cs_b.to_hex().as_str())],
+            )?;
+            v["changes"]
+                .as_array()
+                .cloned()
+                .ok_or_else(|| VerbError::Local("server sent a malformed diff".into()))?
+        }
+        None => local_diff(root, &reader)?,
+    };
+    if json_out {
+        println!("{}", json!({ "changes": changes }));
+        return Ok(());
+    }
+    for c in &changes {
+        let kind = c["kind"].as_str().unwrap_or("?");
+        let path = c["path"].as_str().unwrap_or("?");
+        let c = match kind {
+            "add" => "A",
+            "del" => "D",
+            _ => "M",
+        };
+        println!("{c} {path}");
+    }
+    Ok(())
+}
+
+/// Head vs disk, computed client-side: head root tree (sparse-filtered)
+/// against rehashed disk content.
+fn local_diff(root: &Path, reader: &Reader) -> Result<Vec<Value>, VerbError> {
+    let wc = Wc::open(root)?;
+    let state = wc.load_state()?;
+    let rootv = reader.client.get_json(
+        &format!(
+            "/v1/repos/{}/changesets/{}/root",
+            uri_segment(&reader.repo),
+            reader.head.to_hex()
+        ),
+        &[],
+    )?;
+    let head_root = rootv["root_tree_id"]
+        .as_str()
+        .and_then(Id::from_hex)
+        .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
+    let files = walk_tree(&reader.client, &reader.repo, &head_root, &state.sparse)?;
+    let mut head_map: BTreeMap<String, (Id, bool)> = BTreeMap::new();
+    for f in files {
+        head_map.insert(f.path, (f.blob, f.exec));
+    }
+
+    let mut disk_map: BTreeMap<String, (Id, bool)> = BTreeMap::new();
+    let disk = crate::wc::scan::scan_disk(root)
+        .map_err(|e| VerbError::Local(format!("scanning {}: {e}", root.display())))?;
+    for f in disk {
+        if !under_sparse(&state.sparse, &f.norm) {
+            continue;
+        }
+        let bytes = std::fs::read(root.join(&f.raw))
+            .map_err(|e| VerbError::Local(format!("reading {}: {e}", f.raw)))?;
+        disk_map.insert(
+            f.norm,
+            (object_id(Kind::Blob, &bytes), f.meta.mode() & 0o111 != 0),
+        );
+    }
+
+    let mut changes = Vec::new();
+    for (path, (blob, exec)) in &head_map {
+        match disk_map.get(path) {
+            Some((disk_blob, disk_exec)) => {
+                if disk_blob != blob || disk_exec != exec {
+                    changes.push(json!({
+                        "path": path, "kind": "mod",
+                        "a_blob": blob.to_hex(), "b_blob": disk_blob.to_hex(),
+                    }));
+                }
+            }
+            None => changes.push(json!({
+                "path": path, "kind": "del",
+                "a_blob": blob.to_hex(), "b_blob": Value::Null,
+            })),
+        }
+    }
+    for (path, (blob, _)) in &disk_map {
+        if !head_map.contains_key(path) {
+            changes.push(json!({
+                "path": path, "kind": "add",
+                "a_blob": Value::Null, "b_blob": blob.to_hex(),
+            }));
+        }
+    }
+    Ok(changes)
+}

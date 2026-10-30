@@ -1,0 +1,144 @@
+//! `naatre clone <url-or-name> [--sparse PREFIX]… [--into DIR]`.
+//!
+//! Resolves `main`, fetches the head changeset's root tree, walks only the
+//! trees on the paths to the sparse prefixes (default: the whole tree),
+//! fetches and hash-verifies every blob, and materializes into a staging
+//! directory renamed atomically onto the destination. `.naatre/` (config,
+//! state, index) is written inside staging so an interrupted clone leaves
+//! no half-written working copy.
+
+use std::path::Path;
+
+use naatre_core::ids::Id;
+
+use super::{Net, VerbError};
+use crate::client::{Client, DEFAULT_URL, uri_segment};
+use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree};
+use crate::wc::index::Index;
+use crate::wc::{Config, StageDir, State};
+
+/// Splits `http://host[:port]/<repo>` into (origin, repo), or treats a bare
+/// name as the repo on `NAATRE_URL` / `--server` / the default URL.
+fn split_url(url: &str, net: &Net) -> Result<(String, String), VerbError> {
+    if let Some(rest) = url.strip_suffix('/')
+        && !rest.is_empty()
+    {
+        return split_url(rest, net);
+    }
+    if let Some(after) = url.split_once("://").map(|(_, after)| after) {
+        let (authority, repo) = match after.split_once('/') {
+            Some((a, r)) => (a, r),
+            None => (after, ""),
+        };
+        if repo.is_empty() {
+            return Err(VerbError::Usage(format!(
+                "URL {url:?} has no repo path (expected http://host[:port]/<repo>)"
+            )));
+        }
+        return Ok((format!("http://{authority}"), repo.to_string()));
+    }
+    if url.contains('/') {
+        return Err(VerbError::Usage(format!(
+            "{url:?} is neither http://host[:port]/<repo> nor a bare repo name"
+        )));
+    }
+    let base = net
+        .server
+        .clone()
+        .or_else(|| std::env::var("NAATRE_URL").ok().filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| DEFAULT_URL.to_string());
+    Ok((base.trim_end_matches('/').to_string(), url.to_string()))
+}
+
+/// Runs clone; prints the summary and returns the exit code.
+pub fn run(url: &str, sparse: &[String], into: Option<&str>, net: &Net) -> i32 {
+    match try_run(url, sparse, into, net) {
+        Ok(()) => 0,
+        Err(e) => e.report(),
+    }
+}
+
+fn try_run(url: &str, sparse: &[String], into: Option<&str>, net: &Net) -> Result<(), VerbError> {
+    let (base, repo) = split_url(url, net)?;
+    let dest = Path::new(into.unwrap_or(&repo));
+    // Token precedence: --token flag > NAATRE_TOKEN env (no config yet —
+    // clone writes it).
+    let token = net
+        .token
+        .clone()
+        .or_else(|| std::env::var("NAATRE_TOKEN").ok().filter(|v| !v.is_empty()));
+    let client = Client::new(&base, token.clone());
+
+    // main → head changeset → root tree id.
+    let refv = client.get_json(&format!("/v1/repos/{}/refs/main", uri_segment(&repo)), &[])?;
+    let head = refv["target"]
+        .as_str()
+        .and_then(Id::from_hex)
+        .ok_or_else(|| {
+            VerbError::Local("repo has no main ref (unborn); nothing to clone".into())
+        })?;
+    let rootv = client.get_json(
+        &format!(
+            "/v1/repos/{}/changesets/{}/root",
+            uri_segment(&repo),
+            head.to_hex()
+        ),
+        &[],
+    )?;
+    let root_tree = rootv["root_tree_id"]
+        .as_str()
+        .and_then(Id::from_hex)
+        .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
+
+    // Walk (sparse-filtered), then fetch and verify every blob.
+    let files = walk_tree(&client, &repo, &root_tree, sparse)?;
+    let blob_ids: Vec<Id> = files.iter().map(|f| f.blob).collect();
+    let blobs = fetch_blobs_verified(&client, &repo, &blob_ids)?;
+
+    // Materialize into staging; atomic rename onto the destination.
+    let stage = StageDir::beside(dest)
+        .map_err(|e| VerbError::Local(format!("cannot stage beside {}: {e}", dest.display())))?;
+    let mut index = Index::default();
+    for file in &files {
+        let bytes = &blobs[&file.blob];
+        let row = materialize(stage.path(), file, bytes)?;
+        index.rows.insert(file.path.clone(), row);
+    }
+    let mut listed: Vec<String> = Vec::new();
+    for p in sparse {
+        if !listed.contains(p) {
+            listed.push(p.clone());
+        }
+    }
+    let state = State {
+        head: head.to_hex(),
+        base: None,
+        sparse: listed,
+        server_repo: repo.clone(),
+    };
+    {
+        let wc = crate::wc::Wc::open(stage.path()).map_err(VerbError::Local)?;
+        wc.save_config(&Config {
+            server_url: client.base.clone(),
+            token,
+        })?;
+        wc.save_state(&state)?;
+        wc.save_index(&index)?;
+    }
+    stage
+        .commit(dest)
+        .map_err(|e| VerbError::Local(format!("cannot move the clone into place: {e}")))?;
+
+    let materialized = files.len();
+    let sparse_note = if sparse.is_empty() {
+        String::new()
+    } else {
+        format!(" (sparse: {})", sparse.join(", "))
+    };
+    println!(
+        "cloned {repo} at {} into {} ({materialized} file(s)){sparse_note}",
+        head.to_hex(),
+        dest.display(),
+    );
+    Ok(())
+}
