@@ -134,7 +134,7 @@ fn api(server: &TestServer, method: &str, path: &str, body: Option<Value>) -> (u
 /// derive queue at a 10 ms tick (default 5 s), so SETUP writes (repo create,
 /// blob puts, changeset seeds) collide with derive passes far more often
 /// than production ever will. Verbs UNDER TEST are never retried — their
-/// 503s are assertions. Bounded, backoff after the server's Retry-After.
+/// 503s are assertions. Bounded, fixed 20ms backoff.
 fn api_setup_retry(
     server: &TestServer,
     method: &str,
