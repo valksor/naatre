@@ -62,6 +62,23 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RepoCmd,
     },
+    /// Import a LOCAL git repository into a naatre repo (one-way, offline,
+    /// under the data dir flock; refuses URLs).
+    Import {
+        /// Existing data directory (uninitialized → run naatre init first).
+        #[arg(long)]
+        data: PathBuf,
+        /// Target repo name (defaults to the git dir's basename, sanitized
+        /// to ^[a-z0-9][a-z0-9-]{0,62}$).
+        #[arg(long)]
+        into: Option<String>,
+        /// Skip unsupported commits (and cascade to their descendants)
+        /// instead of aborting the whole import.
+        #[arg(long)]
+        skip_unsupported: bool,
+        /// Path of the local git repository to import.
+        git_path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -126,6 +143,12 @@ fn main() {
             (false, _, Some(cmd)) => client::token(cmd),
         },
         Cmd::Repo { cmd } => client::repo(cmd),
+        Cmd::Import {
+            data,
+            into,
+            skip_unsupported,
+            git_path,
+        } => host::import(&data, into.as_deref(), skip_unsupported, &git_path),
     };
     std::process::exit(code);
 }

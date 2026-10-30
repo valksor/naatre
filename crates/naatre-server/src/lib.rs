@@ -23,6 +23,7 @@ pub mod auth;
 pub mod authz;
 pub mod db;
 pub mod extract;
+pub mod import;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;

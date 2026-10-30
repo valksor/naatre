@@ -1,12 +1,13 @@
-//! Host-local verbs: `init`, `serve`, and `token --new-admin` run directly
-//! against the data dir, under its flock. The 0700 data dir is the trust
-//! boundary — anything that can read it can mint admin tokens.
+//! Host-local verbs: `init`, `serve`, `token --new-admin`, and `import` run
+//! directly against the data dir, under its flock. The 0700 data dir is the
+//! trust boundary — anything that can read it can mint admin tokens.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use naatre_server::auth::mint_token;
 use naatre_server::db;
+use naatre_server::import::{ImportOptions, Report};
 use naatre_server::serve::{ServeConfig, unix_shutdown_signal};
 use naatre_server::state::ServerState;
 use naatre_store::{DataDir, Store, StoreError};
@@ -159,4 +160,48 @@ pub fn new_admin_token(data: &Path) -> i32 {
     }
     println!("admin token: {token}");
     0
+}
+
+/// `naatre import --data <dir> [--into <name>] [--skip-unsupported]
+/// <git-path>`: one-way git import, offline, under the data dir flock.
+/// Prints plain progress lines and the final JSON report line; exits 0 on
+/// success and 1 on a hard error or an aborted import.
+pub fn import(data: &Path, into: Option<&str>, skip_unsupported: bool, git_path: &str) -> i32 {
+    let opts = ImportOptions {
+        git_path: git_path.into(),
+        into: into.map(str::to_string),
+        skip_unsupported,
+    };
+    println!("import: source {}", opts.git_path.display());
+    match naatre_server::import::run(data, &opts) {
+        Ok(report) => {
+            print_report(&report);
+            i32::from(report.status != "ok")
+        }
+        Err(e) => fail(e),
+    }
+}
+
+fn print_report(report: &Report) {
+    let created = if report.repo_created {
+        "created"
+    } else {
+        "existing"
+    };
+    println!("import: repo {} ({})", report.repo, created);
+    println!("imported: {} commit(s)", report.imported);
+    for s in &report.skipped {
+        println!("skipped: {} ({})", s.oid, s.reason);
+    }
+    for oid in &report.cascaded {
+        println!("cascaded: {oid}");
+    }
+    for oid in &report.sanitized {
+        println!("sanitized: {oid}");
+    }
+    match &report.reason {
+        Some(reason) => println!("main: {} — {reason}", report.main),
+        None => println!("main: {}", report.main),
+    }
+    println!("{}", report.to_json_line());
 }
