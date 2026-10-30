@@ -20,10 +20,12 @@ use tokio::sync::watch;
 use crate::api_error::ApiError;
 use crate::state::AppState;
 
-/// How often the background snapshot GC pass runs (60 s). The pass itself is
-/// [`crate::snapshots_gc::gc_snapshots`]; the off-switch is
-/// [`crate::state::ServerState::snapshot_gc_enabled`] (tests that drive GC
-/// directly turn the background task off to keep effects deterministic).
+/// The default background snapshot GC interval (60 s). The pass itself is
+/// [`crate::snapshots_gc::gc_snapshots`]; the off-switch and the per-state
+/// interval live on [`crate::state::ServerState`] (`snapshot_gc_enabled`,
+/// `snapshot_gc_interval` — tests inject a short interval to observe a
+/// background pass deterministically, and tests that drive GC directly turn
+/// the background task off to keep effects deterministic).
 pub const SNAPSHOT_GC_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Everything [`serve`] needs: the bound listener and the shared state.
@@ -82,13 +84,15 @@ pub async fn serve(
         let _ = signal_tx.send(true);
     });
 
-    // Background snapshot GC: an opportunistic pass every 60 s. The task
-    // lives on the serving runtime (dropped with it on shutdown); a failed
-    // pass is logged and retried on the next tick.
+    // Background snapshot GC: an opportunistic pass on the state's interval
+    // (default [`SNAPSHOT_GC_INTERVAL`]). The task lives on the serving
+    // runtime (dropped with it on shutdown); a failed pass is logged and
+    // retried on the next tick.
     if cfg.state.snapshot_gc_enabled {
         let gc_state = Arc::clone(&cfg.state);
+        let gc_interval = cfg.state.snapshot_gc_interval;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(SNAPSHOT_GC_INTERVAL);
+            let mut interval = tokio::time::interval(gc_interval);
             loop {
                 interval.tick().await;
                 if let Err(e) = crate::snapshots_gc::gc_snapshots(&gc_state).await {

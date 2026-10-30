@@ -12,6 +12,7 @@
 //! commits rows atomically. Snapshots are ephemeral working state — the
 //! client's head and index do not move.
 
+use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
@@ -143,9 +144,9 @@ fn try_run(root: &Path, ttl: Option<&str>, net: &Net) -> Result<(), VerbError> {
     // Blobs first: raw PUT into the snapshot namespace, hash-verified
     // server-side. Each unique blob uploads once (the fresh snap id means
     // nothing is ever already there; a retried PUT short-circuits).
-    let mut uploaded: Vec<Id> = Vec::new();
+    let mut uploaded: HashSet<Id> = HashSet::new();
     for f in &files {
-        if uploaded.contains(&f.blob) {
+        if !uploaded.insert(f.blob) {
             continue;
         }
         let bytes = std::fs::read(root.join(&f.raw))
@@ -159,7 +160,6 @@ fn try_run(root: &Path, ttl: Option<&str>, net: &Net) -> Result<(), VerbError> {
             ),
             &bytes,
         )?;
-        uploaded.push(f.blob);
     }
 
     let mut body = json!({

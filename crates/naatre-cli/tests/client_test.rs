@@ -3560,3 +3560,86 @@ fn binary_snapshot_rejects_ttl_below_the_minute() {
         assert!(stderr.contains("--ttl"), "{bad:?}: {stderr:?}");
     }
 }
+
+/// PIN (fix3b): CLIENT-side expired restore — with the snapshot past its
+/// TTL (the server clock advanced past `expires_ns`), the `restore` verb
+/// exits non-zero with the `snapshot_expired` message. The server-side gate
+/// itself (both fetch gates answering 410) is pinned in naatre-server's
+/// `m5a_test.rs` with the injected clock; this pins the client surfacing.
+/// Expiry is advanced by backdating `expires_ns` — the exact column the
+/// fetch-time gate compares against `now_ns` — instead of sleeping out a
+/// 60 s TTL floor.
+#[test]
+fn restore_expired_snapshot_exits_non_zero_with_snapshot_expired() {
+    let server = start_server();
+    create_repo(&server, "exp");
+    let base = b"base content\n";
+    put_blob(&server, "exp", base);
+    let c1 = changeset(
+        &server,
+        "exp",
+        &[],
+        vec![change("add", "base.txt", base)],
+        "c1",
+    );
+    seed_main(&server, "exp", c1["id"].as_str().unwrap());
+
+    let wc = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/exp", server.base),
+            &[],
+            Some(wc.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let snap = run_snapshot(&server, &wc, &[]);
+    let sid = snap["id"].as_str().unwrap().to_string();
+
+    let set_expiry = |secs_from_now: i64| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
+        let conn = rusqlite::Connection::open(&server.db_path).unwrap();
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            "UPDATE snapshots SET expires_ns = ?1 WHERE id = ?2",
+            rusqlite::params![
+                now + secs_from_now * 1_000_000_000,
+                (0..sid.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&sid[i..i + 2], 16).unwrap())
+                    .collect::<Vec<u8>>()
+            ],
+        )
+        .unwrap();
+    };
+
+    // Clock past the TTL: the verb refuses with the stable code, cleanly.
+    set_expiry(-3600);
+    let out = run_binary(&server, &wc, &["restore", &sid]);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "expired restore must exit non-zero: {}",
+        stdout_of(&out)
+    );
+    let stderr = stderr_of(&out);
+    assert!(
+        stderr.contains("snapshot_expired"),
+        "expired restore must name the code: {stderr:?}"
+    );
+
+    // Positive control: the same command succeeds once the snapshot is
+    // un-expired again — the failure was the expiry gate, nothing else.
+    set_expiry(3600);
+    let out = run_binary(&server, &wc, &["restore", &sid]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains("restored"),
+        "un-expired restore succeeds: {}",
+        stdout_of(&out)
+    );
+}

@@ -2,12 +2,18 @@
 //! metadata fetch, and per-blob fetch/put — all against the ephemeral
 //! namespace, never the history CAS.
 //!
-//! Create (writer-class, repo-level) commits atomically: the client-built
-//! tree rows, their blob-presence validation, and the snapshot row all land
-//! in one transaction, so a rejected POST leaves zero rows and lists every
-//! missing blob id in `details`. Expiry is enforced at EVERY fetch (metadata
-//! and bytes): an expired snapshot answers 410 `snapshot_expired` before
-//! anything else about it is served. GETs are owned by the creating
+//! Create (writer-class) commits atomically: the client-built tree rows,
+//! their blob-presence validation, and the snapshot row all land in one
+//! transaction, so a rejected POST leaves zero rows and lists every missing
+//! blob id in `details` (list capped, with a truncation flag). Path scopes
+//! gate the POST — every file path in the posted closure must sit inside
+//! the token's scope, segment-aligned (same rule as changeset create); the
+//! objects PUT below stays repo-level, because a blob has no path until a
+//! tree references it. Expiry is enforced at EVERY fetch (metadata, bytes,
+//! trees, and re-POSTs alike): an expired snapshot answers 410
+//! `snapshot_expired` before anything else about it is served, and an
+//! idempotent re-POST returns the RECORDED expiry — never a recomputed one
+//! (a differing `ttl_secs` is 422). GETs are owned by the creating
 //! principal — another principal's snapshot id is 404, indistinguishable
 //! from a nonexistent one.
 
@@ -47,6 +53,24 @@ const TREE_CANONICAL_CAP: usize = 16 * 1024 * 1024;
 /// O(f^d) nodes, so the cap bounds hostile bodies, not real snapshots.
 const MAX_SNAPSHOT_TREES: usize = 10_000;
 
+/// Max DISTINCT blob ids one snapshot POST may reference (422 beyond,
+/// `details.limit`). The presence check is one filesystem stat per
+/// referenced blob inside the write slot — without this cap a max-size body
+/// could stall every land behind an unbounded walk.
+const MAX_SNAPSHOT_BLOBS: usize = 8_192;
+
+/// Cap on the `missing_blobs` list in a rejected POST's details. The full
+/// missing set is known server-side; the response names the first 256
+/// sorted ids plus a `missing_blobs_truncated` flag.
+const MISSING_BLOBS_LIST_CAP: usize = 256;
+
+/// Max snapshot TTL: 366 days. The plan pins only the 1-minute floor; this
+/// ceiling is a deliberate server-side safety bound (supervisor judgment,
+/// fix3a review, documented in the route contract): it keeps
+/// `now_ns + ttl_secs * 1e9` far inside i64 and bounds how long ephemeral
+/// data can be held. 422 beyond.
+const SNAPSHOT_TTL_MAX_SECS: u64 = 366 * 24 * 60 * 60;
+
 /// Request body of snapshot create. `trees` carries the canonical bytes of
 /// the referenced tree and every subtree below it (standard base64): the
 /// client builds them bottom-up, and the server writes their rows inside the
@@ -57,13 +81,17 @@ pub struct CreateSnapshotRequest {
     pub snap_id: String,
     /// The root tree id, 64 lowercase hex; must be among `trees`.
     pub tree_id: String,
-    /// TTL in seconds (default 604800 = 7d; below 60 → 422).
+    /// TTL in seconds (default 604800 = 7d; below 60 or above 31622400 =
+    /// 366 days → 422. The ceiling is a server-side safety bound; the plan
+    /// pins only the 1-minute floor).
     pub ttl_secs: Option<u64>,
     /// Canonical tree bytes (root + full subtree closure), base64.
     pub trees: Vec<String>,
 }
 
-/// Created snapshot body (201 + `Location`; an identical re-POST → 200).
+/// Created snapshot body (201 + `Location`; an identical re-POST → 200
+/// carrying the RECORDED expiry from the snapshot row, never a recomputed
+/// one).
 #[derive(Serialize, ToSchema)]
 pub struct SnapshotCreated {
     pub id: String,
@@ -85,11 +113,14 @@ pub struct SnapshotBlobStored {
     pub id: String,
 }
 
-/// Creates a snapshot (writer and above, repo-level): validates the posted
-/// tree closure, writes the tree rows, checks EVERY referenced blob is
-/// present under `ephemeral/<snap-id>/`, and commits the snapshot row — all
-/// in one transaction. A missing blob rejects the whole POST with 422 and
-/// `details.missing_blobs`, zero rows written.
+/// Creates a snapshot (writer and above, path-scope enforced over the
+/// closure's file paths): validates the posted tree closure, writes the
+/// tree rows, checks every referenced blob is present under
+/// `ephemeral/<snap-id>/`, and commits the snapshot row — all in one
+/// transaction. A missing blob rejects the whole POST with 422 and a capped
+/// `details.missing_blobs` list, zero rows written. An identical re-POST
+/// answers 200 with the RECORDED expiry; a differing `ttl_secs` is 422 with
+/// that expiry in `details`; re-POSTing an expired id is 410.
 #[utoipa::path(
     post,
     path = "/v1/repos/{r}/snapshots",
@@ -97,13 +128,14 @@ pub struct SnapshotBlobStored {
     request_body = CreateSnapshotRequest,
     responses(
         (status = 201, description = "Snapshot created", body = SnapshotCreated),
-        (status = 200, description = "Identical re-POST (same snap id, tree, principal) — idempotent", body = SnapshotCreated),
+        (status = 200, description = "Identical re-POST (same snap id, tree, principal, effective ttl_secs) — idempotent; the RECORDED expiry is returned, never recomputed", body = SnapshotCreated),
         (status = 400, description = "An id is not 64 lowercase hex, or a tree payload is not valid base64"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 403, description = "Authenticated without the writer role"),
+        (status = 403, description = "Authenticated without the writer role, or a file path in the posted closure is outside the token's path scope (details.path names the first offender)"),
         (status = 404, description = "No such repo"),
+        (status = 410, description = "The snap id already exists here and is past its TTL (`snapshot_expired`) — a re-POST never resurrects it"),
         (status = 413, description = "A canonical tree exceeds the 16 MiB cap"),
-        (status = 422, description = "ttl_secs below 60; tree closure incomplete; referenced tree not derived in this repo; or referenced blobs missing from ephemeral/<snap-id>/ (details.missing_blobs)")
+        (status = 422, description = "ttl_secs below 60 or above the 366-day cap; tree closure incomplete; the closure references more than 8192 distinct blobs (details.limit); ttl_secs differs from an existing snapshot's recorded TTL (details.recorded_expires_ns); or referenced blobs missing from ephemeral/<snap-id>/ (details.missing_blobs, capped at 256 with details.missing_blobs_truncated)")
     )
 )]
 pub async fn create(
@@ -120,6 +152,12 @@ pub async fn create(
         return Err(ApiError::new(
             ApiCode::Validation,
             format!("ttl_secs must be at least {SNAPSHOT_MIN_TTL_SECS} seconds"),
+        ));
+    }
+    if ttl_secs > SNAPSHOT_TTL_MAX_SECS {
+        return Err(ApiError::new(
+            ApiCode::Validation,
+            format!("ttl_secs must be at most {SNAPSHOT_TTL_MAX_SECS} seconds (366 days)"),
         ));
     }
 
@@ -148,21 +186,84 @@ pub async fn create(
         }
     }
 
+    // One walk over the closure: the file paths for the scope check and the
+    // distinct blob ids for the presence check, both bounded BEFORE the
+    // write slot is touched (an in-slot walk would let a max-size body
+    // stall every land behind unbounded per-blob stats).
+    let (paths, blobs, over_blob_cap) = walk_closure(&trees, &tree_id)?;
+
+    // Path scope (the plan's writes row: "path-prefix scope gates these —
+    // segment-aligned"), mirroring changeset create: authorization is
+    // checked before any content-validation detail is produced.
+    if let Some(offender) = paths
+        .iter()
+        .find(|p| !crate::authz::scope_allows(auth.scope_path.as_deref(), p))
+    {
+        return Err(
+            ApiError::new(ApiCode::Forbidden, "path is outside this token's scope")
+                .with_details(serde_json::json!({ "path": offender })),
+        );
+    }
+    if over_blob_cap {
+        return Err(ApiError::new(
+            ApiCode::Validation,
+            format!("snapshots reference at most {MAX_SNAPSHOT_BLOBS} distinct blobs per POST"),
+        )
+        .with_details(serde_json::json!({ "limit": MAX_SNAPSHOT_BLOBS })));
+    }
+
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let principal = auth.principal.clone();
     let ephemeral = Arc::clone(&state.ephemeral);
     let now_ns = state.now_ns() as i64;
-    let expires_ns = now_ns + (ttl_secs as i64) * 1_000_000_000;
+    let ttl_ns = (ttl_secs as i64) * 1_000_000_000;
+    let expires_ns = now_ns + ttl_ns;
 
     enum Outcome {
         Created,
-        Existing,
+        Existing { recorded_expires_ns: i64 },
     }
 
     let outcome = state
         .write(move |store| {
             let conn = store.conn();
-            // One transaction: tree rows, the presence walk, and the
+            // Re-POST resolution first, reads only, no writes on any branch:
+            // the RECORDED row is authoritative, so an identical re-POST
+            // answers the recorded expiry (never a recomputed one), a
+            // differing ttl_secs is 422 with that expiry in details, and an
+            // expired snapshot is 410 — expiry is enforced at every fetch,
+            // re-POSTs included; nothing resurrects the row.
+            if let Some(row) =
+                db::snapshot_get(conn, repo_id, &snap_id).map_err(ApiError::log_internal)?
+            {
+                if row.principal != principal || row.tree_id != tree_id.0 {
+                    return Err(ApiError::new(
+                        ApiCode::Validation,
+                        "snapshot id is already used by a different snapshot",
+                    ));
+                }
+                if row.expires_ns <= now_ns {
+                    return Err(ApiError::new(
+                        ApiCode::SnapshotExpired,
+                        format!("snapshot {} is past its TTL", snap_id.to_hex()),
+                    ));
+                }
+                if row.expires_ns - row.created_ns != ttl_ns {
+                    return Err(ApiError::new(
+                        ApiCode::Validation,
+                        "ttl_secs differs from the snapshot's recorded TTL; re-POST the \
+                         original ttl_secs or let the row expire",
+                    )
+                    .with_details(serde_json::json!({
+                        "recorded_expires_ns": row.expires_ns as u64
+                    })));
+                }
+                return Ok(Outcome::Existing {
+                    recorded_expires_ns: row.expires_ns,
+                });
+            }
+
+            // One transaction: tree rows, the presence check, and the
             // snapshot row commit together or not at all (the plan's "no
             // row" for rejected POSTs covers the tree rows too).
             let tx = conn
@@ -194,10 +295,11 @@ pub async fn create(
             // snapshot routes below, never through the bare-id tree route.
             db::trees_write_snapshot(&tx, &writes).map_err(ApiError::log_internal)?;
 
-            // Presence walk over the rows just written: every blob the tree
-            // references must exist under ephemeral/<snap-id>/.
-            let blobs = collect_blob_ids(&tx, &tree_id)?;
-            let missing = {
+            // Presence check over the closure walked above: every distinct
+            // blob the tree references must exist under
+            // `ephemeral/<snap-id>/`. The referenced set is already capped
+            // pre-slot; the reported list is capped here.
+            let (missing, truncated) = {
                 let snap = snap_id.to_hex();
                 let has = ephemeral
                     .has(&snap, &blobs)
@@ -210,7 +312,9 @@ pub async fn create(
                     .collect();
                 missing.sort();
                 missing.dedup();
-                missing
+                let truncated = missing.len() > MISSING_BLOBS_LIST_CAP;
+                missing.truncate(MISSING_BLOBS_LIST_CAP);
+                (missing, truncated)
             };
             if !missing.is_empty() {
                 return Err(ApiError::new(
@@ -218,23 +322,12 @@ pub async fn create(
                     "referenced blobs are missing from the snapshot namespace; \
                      upload them first",
                 )
-                .with_details(serde_json::json!({ "missing_blobs": missing })));
+                .with_details(serde_json::json!({
+                    "missing_blobs": missing,
+                    "missing_blobs_truncated": truncated,
+                })));
             }
 
-            // Idempotent re-POST: same snap id, same tree, same principal →
-            // 200 with the recorded expiry. Anything else on a taken id is
-            // rejected.
-            if let Some(row) =
-                db::snapshot_get(&tx, repo_id, &snap_id).map_err(ApiError::log_internal)?
-            {
-                if row.principal == principal && row.tree_id == tree_id.0 {
-                    return Ok(Outcome::Existing);
-                }
-                return Err(ApiError::new(
-                    ApiCode::Validation,
-                    "snapshot id is already used by a different snapshot",
-                ));
-            }
             db::snapshot_insert(
                 &tx, repo_id, &snap_id, &tree_id, &principal, now_ns, expires_ns,
             )
@@ -254,9 +347,15 @@ pub async fn create(
         });
     }
 
+    let recorded = match outcome {
+        Outcome::Created => expires_ns,
+        Outcome::Existing {
+            recorded_expires_ns,
+        } => recorded_expires_ns,
+    };
     let body = SnapshotCreated {
         id: snap_id.to_hex(),
-        expires_ns: expires_ns as u64,
+        expires_ns: recorded as u64,
     };
     match outcome {
         Outcome::Created => Ok((
@@ -268,7 +367,7 @@ pub async fn create(
             Json(body),
         )
             .into_response()),
-        Outcome::Existing => Ok((StatusCode::OK, Json(body)).into_response()),
+        Outcome::Existing { .. } => Ok((StatusCode::OK, Json(body)).into_response()),
     }
 }
 
@@ -365,7 +464,10 @@ pub async fn get_blob(
 /// `repo_trees` membership (own-principal, TTL'd data), so the bare-id
 /// repo tree route 404s them; this owner-gated route is their only server
 /// surface — same gate as the blob fetch: the snapshot must exist for this
-/// principal in this repo and be unexpired (expiry re-checked FIRST).
+/// principal in this repo and be unexpired (expiry re-checked FIRST), and
+/// the requested tree must sit in the snapshot root's closure (404
+/// otherwise — the route serves the snapshot's own subtree, never an
+/// arbitrary tree id that merely exists on the server).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/snapshots/{id}/trees/{tid}",
@@ -378,7 +480,7 @@ pub async fn get_blob(
         (status = 200, description = "The tree's entries", body = crate::routes::trees::TreeResponse),
         (status = 400, description = "An id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 404, description = "No such repo; or the snapshot does not exist for this principal, or the tree is not part of it"),
+        (status = 404, description = "No such repo; or the snapshot does not exist for this principal, or the tree is not part of the snapshot's closure"),
         (status = 410, description = "The snapshot is past its TTL (`snapshot_expired`)")
     )
 )]
@@ -390,11 +492,32 @@ pub async fn get_snapshot_tree(
     let snap_id = parse_id(&id_hex)?;
     let tree_id = parse_id(&tid_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
-    load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
+    let row = load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
 
+    // Closure membership first (404 before any entries are served): only
+    // the snapshot root itself and the trees reachable from it over dir
+    // entries qualify.
+    let root = Id(row.tree_id.try_into().expect("tree id is 32 bytes"));
     let rows = state
-        .read(move |conn| db::tree_entries_load(conn, &tree_id).map_err(ApiError::log_internal))
+        .read(move |conn| {
+            if !db::tree_in_closure(conn, &root, &tree_id).map_err(ApiError::log_internal)? {
+                return Ok(None);
+            }
+            db::tree_entries_load(conn, &tree_id)
+                .map_err(ApiError::log_internal)
+                .map(Some)
+        })
         .await?;
+    let Some(rows) = rows else {
+        return Err(ApiError::new(
+            ApiCode::NotFound,
+            format!(
+                "tree {} is not part of snapshot {}",
+                tree_id.to_hex(),
+                snap_id.to_hex()
+            ),
+        ));
+    };
     Ok(Json(crate::routes::trees::TreeResponse {
         entries: rows
             .into_iter()
@@ -416,6 +539,11 @@ pub async fn get_snapshot_tree(
 /// hash-verified against the URL id like every PUT, capped at 64 MiB. No row
 /// is written — the blobs are rowless until the snapshot POST commits; a
 /// snapshot that never POSTs is swept by GC after the max TTL.
+///
+/// Repo-level by design (the plan's objects-PUT cell, shared with the
+/// history objects PUT): path scopes do NOT gate this route — a blob has no
+/// path until a tree references it. The scope is enforced by the snapshot
+/// POST over the closure's file paths.
 #[utoipa::path(
     put,
     path = "/v1/repos/{r}/snapshots/{id}/objects/{oid}",
@@ -528,26 +656,50 @@ fn decode_trees(
     Ok(out)
 }
 
-/// Collects every file blob id reachable from `root` over the `tree_entries`
-/// rows (the rows are in the caller's transaction, so the walk sees exactly
-/// what this POST is about to commit).
-fn collect_blob_ids(conn: &rusqlite::Connection, root: &Id) -> Result<Vec<Id>, ApiError> {
-    let mut blobs = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack = vec![*root];
-    while let Some(tree_id) = stack.pop() {
-        if !seen.insert(tree_id) {
+/// One depth-first walk over the decoded closure from `root`: collects every
+/// file entry's repo-relative path (for the scope check) and every distinct
+/// blob id (for the presence check). Blob collection stops storing at
+/// [`MAX_SNAPSHOT_BLOBS`] — the third return value reports whether the cap
+/// was passed — so a hostile body cannot balloon the write slot's work.
+/// Closure completeness has already been validated, so every dir entry
+/// resolves in `trees`; content-addressed trees cannot cycle (an entry's id
+/// covers the bytes that name it), and the seen-set keeps shared subtrees
+/// from being walked twice anyway.
+fn walk_closure(
+    trees: &std::collections::HashMap<Id, (Vec<u8>, Tree)>,
+    root: &Id,
+) -> Result<(Vec<String>, Vec<Id>, bool), ApiError> {
+    let mut paths = Vec::new();
+    let mut blobs: Vec<Id> = Vec::new();
+    let mut seen_blobs = HashSet::new();
+    let mut seen_trees = HashSet::new();
+    let mut over_cap = false;
+    let mut stack = vec![(*root, String::new())];
+    while let Some((tree_id, prefix)) = stack.pop() {
+        if !seen_trees.insert(tree_id) {
             continue;
         }
-        for e in db::tree_entries_load(conn, &tree_id).map_err(ApiError::log_internal)? {
-            let id = Id(e.object_id.try_into().expect("object id is 32 bytes"));
+        let Some((_, tree)) = trees.get(&tree_id) else {
+            continue; // unreachable: closure completeness was validated above
+        };
+        for e in &tree.entries {
+            let path = format!("{prefix}{}", e.name);
             match e.kind {
-                0 => blobs.push(id),
-                _ => stack.push(id),
+                tree::EntryKind::File => {
+                    paths.push(path);
+                    if seen_blobs.insert(e.object) {
+                        if blobs.len() == MAX_SNAPSHOT_BLOBS {
+                            over_cap = true;
+                        } else {
+                            blobs.push(e.object);
+                        }
+                    }
+                }
+                tree::EntryKind::Dir => stack.push((e.object, format!("{path}/"))),
             }
         }
     }
-    Ok(blobs)
+    Ok((paths, blobs, over_cap))
 }
 
 /// The shared GET gate: the row must exist in this repo, belong to the

@@ -420,7 +420,7 @@
             "type": "array"
           },
           "ttl_secs": {
-            "description": "TTL in seconds (default 604800 = 7d; below 60 → 422).",
+            "description": "TTL in seconds (default 604800 = 7d; below 60 or above 31622400 =\n366 days → 422. The ceiling is a server-side safety bound; the plan\npins only the 1-minute floor).",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -1019,7 +1019,7 @@
         "type": "object"
       },
       "SnapshotCreated": {
-        "description": "Created snapshot body (201 + `Location`; an identical re-POST → 200).",
+        "description": "Created snapshot body (201 + `Location`; an identical re-POST → 200\ncarrying the RECORDED expiry from the snapshot row, never a recomputed\none).",
         "properties": {
           "expires_ns": {
             "format": "int64",
@@ -2439,7 +2439,7 @@
                 }
               }
             },
-            "description": "Identical re-POST (same snap id, tree, principal) — idempotent"
+            "description": "Identical re-POST (same snap id, tree, principal, effective ttl_secs) — idempotent; the RECORDED expiry is returned, never recomputed"
           },
           "201": {
             "content": {
@@ -2458,19 +2458,22 @@
             "description": "Missing, unknown, revoked, or expired token"
           },
           "403": {
-            "description": "Authenticated without the writer role"
+            "description": "Authenticated without the writer role, or a file path in the posted closure is outside the token's path scope (details.path names the first offender)"
           },
           "404": {
             "description": "No such repo"
+          },
+          "410": {
+            "description": "The snap id already exists here and is past its TTL (`snapshot_expired`) — a re-POST never resurrects it"
           },
           "413": {
             "description": "A canonical tree exceeds the 16 MiB cap"
           },
           "422": {
-            "description": "ttl_secs below 60; tree closure incomplete; referenced tree not derived in this repo; or referenced blobs missing from ephemeral/<snap-id>/ (details.missing_blobs)"
+            "description": "ttl_secs below 60 or above the 366-day cap; tree closure incomplete; the closure references more than 8192 distinct blobs (details.limit); ttl_secs differs from an existing snapshot's recorded TTL (details.recorded_expires_ns); or referenced blobs missing from ephemeral/<snap-id>/ (details.missing_blobs, capped at 256 with details.missing_blobs_truncated)"
           }
         },
-        "summary": "Creates a snapshot (writer and above, repo-level): validates the posted\ntree closure, writes the tree rows, checks EVERY referenced blob is\npresent under `ephemeral/<snap-id>/`, and commits the snapshot row — all\nin one transaction. A missing blob rejects the whole POST with 422 and\n`details.missing_blobs`, zero rows written.",
+        "summary": "Creates a snapshot (writer and above, path-scope enforced over the\nclosure's file paths): validates the posted tree closure, writes the\ntree rows, checks every referenced blob is present under\n`ephemeral/<snap-id>/`, and commits the snapshot row — all in one\ntransaction. A missing blob rejects the whole POST with 422 and a capped\n`details.missing_blobs` list, zero rows written. An identical re-POST\nanswers 200 with the RECORDED expiry; a differing `ttl_secs` is 422 with\nthat expiry in `details`; re-POSTing an expired id is 410.",
         "tags": [
           "routes::snapshots"
         ]
@@ -2584,6 +2587,7 @@
         ]
       },
       "put": {
+        "description": "Repo-level by design (the plan's objects-PUT cell, shared with the\nhistory objects PUT): path scopes do NOT gate this route — a blob has no\npath until a tree references it. The scope is enforced by the snapshot\nPOST over the closure's file paths.",
         "operationId": "put_blob",
         "parameters": [
           {
@@ -2718,13 +2722,13 @@
             "description": "Missing, unknown, revoked, or expired token"
           },
           "404": {
-            "description": "No such repo; or the snapshot does not exist for this principal, or the tree is not part of it"
+            "description": "No such repo; or the snapshot does not exist for this principal, or the tree is not part of the snapshot's closure"
           },
           "410": {
             "description": "The snapshot is past its TTL (`snapshot_expired`)"
           }
         },
-        "summary": "Lists one of a snapshot's trees' entries. Snapshot trees carry NO\n`repo_trees` membership (own-principal, TTL'd data), so the bare-id\nrepo tree route 404s them; this owner-gated route is their only server\nsurface — same gate as the blob fetch: the snapshot must exist for this\nprincipal in this repo and be unexpired (expiry re-checked FIRST).",
+        "summary": "Lists one of a snapshot's trees' entries. Snapshot trees carry NO\n`repo_trees` membership (own-principal, TTL'd data), so the bare-id\nrepo tree route 404s them; this owner-gated route is their only server\nsurface — same gate as the blob fetch: the snapshot must exist for this\nprincipal in this repo and be unexpired (expiry re-checked FIRST), and\nthe requested tree must sit in the snapshot root's closure (404\notherwise — the route serves the snapshot's own subtree, never an\narbitrary tree id that merely exists on the server).",
         "tags": [
           "routes::snapshots"
         ]

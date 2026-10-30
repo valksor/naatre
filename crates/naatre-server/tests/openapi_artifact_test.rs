@@ -84,3 +84,47 @@ fn document_publishes_the_max_limit_and_success_shapes() {
     // Success shapes: creates return 201.
     assert!(doc.contains(r#""201""#), "creates must document 201");
 }
+
+#[test]
+fn every_router_route_appears_in_the_document() {
+    // Name-level router↔document parity: every path literal in the Router
+    // construction (`src/lib.rs`) must be a path in the published document —
+    // the contract cannot silently drop a served route. (The reverse
+    // direction — document paths that no longer exist — is covered by the
+    // regenerate-and-diff check above.)
+    let src = include_str!("../src/lib.rs");
+    let routes = router_route_literals(src);
+    assert!(
+        routes.len() >= 20,
+        "router extraction found only {} route literals — the extractor is broken",
+        routes.len()
+    );
+    let doc = ApiDoc::document_json();
+    let paths = doc["paths"]
+        .as_object()
+        .expect("the document has a paths object");
+    for route in routes {
+        assert!(
+            paths.contains_key(&route),
+            "router route {route:?} is missing from the OpenAPI document paths"
+        );
+    }
+}
+
+/// Every `"`-delimited literal starting with `/` in `lib.rs`: within that
+/// file, exactly the Router construction carries path literals (handler
+/// format strings live under `routes/`, not here).
+fn router_route_literals(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(start) = rest.find('"') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('"') else { break };
+        let lit = &rest[..end];
+        rest = &rest[end + 1..];
+        if lit.starts_with('/') {
+            out.push(lit.to_string());
+        }
+    }
+    out
+}

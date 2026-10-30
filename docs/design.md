@@ -45,11 +45,11 @@ Every deliberate limit, with the milestone that lifts it — or an explicit
 | Single-writer per database | One write transaction at a time per data dir; a contended write slot answers 503 `writer_busy` + `Retry-After` instead of queueing. The SQLite-level `busy_timeout` is pinned at **5000 ms** (`naatre-store/src/store.rs`, `BUSY_TIMEOUT_MS`) — a write that cannot take the DB inside it surfaces as an error, never an unbounded wait. Reads run on a separate read-only pool and never contend with the writer (WAL). | **M13** (DB-per-repo turns this into per-repo; global until then) |
 | Whole-directory tree rewrite | Derivation is path-copy: a change re-canonicalizes every directory node on the changed paths' ancestor chain, O(change × depth) rows per changeset. Structural to the derived-tree design (Mononoke/Bonsai precedent); per-changeset caps bound the cost. | **No milestone** — accepted, not a temporary limit |
 | Single-process working copy | One `naatre` process per working copy; concurrent processes in one tree are undetected until M8's coordination. | **M8** (mount clients get their own coordination) |
-| No per-client request rate limiting | The server rate-limits nothing by client: transport caps (below) shed overload, auth-failure auditing has its own caps, and ordinary requests are admitted unconditionally. Behind a proxy, load-shedding per client is the proxy's job. | **M10** (per-principal rate quotas) |
+| No per-client request rate limiting | The server rate-limits nothing by client: transport caps (below) shed overload, auth-failure auditing has its own caps, and ordinary requests are admitted unconditionally. Behind a proxy, load-shedding per client is the proxy's job. | **No milestone** — front naatre with a rate-limiting proxy; per-principal quotas are unscheduled |
 | Transport caps | Blob ≤ **64 MiB** pre-compression (413 over); request body ≤ **96 MiB**; canonical changeset object ≤ **16 MiB** with ≤ **100 000** entries and ≤ **2** parents; path ≤ 4096 bytes, components ≤ 255 bytes; request time budget **30 s**; concurrent requests ≤ **256**; pagination `limit` 1–**200** (default 50); batch PUT is effectively one-max-blob-per-request because the base64 payload of a max blob dominates the body cap — a raw `PUT /v1/repos/{r}/objects/{id}` exists for large blobs. | **No milestone** — these are the design's shape, not a pending relaxation |
 | Repo-name visibility | `GET /v1/repos` lists every repo name to every authenticated principal; names are visible, contents are not (per-repo reads still gate on auth and membership). | **M13** (repo read ACLs) |
 | Cursor-during-land duplicates | Keyset pagination is anchored on changeset ids; a concurrent land can make a page boundary re-serve a changeset the next window also contains. Duplicates are possible; **skips are not** — the pinned contract, tested in M4. | **No milestone** — inherent to pagination over an append-only log; documented, not fixed |
-| Proxy audit degradation | naatre logs no peer address anywhere (access logs are method/path/status/elapsed/request-id only) and keys auth-failure auditing by presented credential. Behind a TLS proxy, every request shares the proxy's address — but since nothing keys on addresses, the practical degradation is narrow: an anonymous flood presents no credential, keys to the single `anon` bucket, and is visible only through the global counters (see auth-failure caps below). Attribution is by principal, never by network origin. | **M10** (per-principal quotas reduce reliance on origin identity further) |
+| Proxy audit degradation | naatre logs no peer address anywhere (access logs are method/path/status/elapsed/request-id only) and keys auth-failure auditing by presented credential. Behind a TLS proxy, every request shares the proxy's address — but since nothing keys on addresses, the practical degradation is narrow: an anonymous flood presents no credential, keys to the single `anon` bucket, and is visible only through the global counters (see auth-failure caps below). Attribution is by principal, never by network origin. | **No milestone** — the design keys attribution on identity, not origin |
 
 ## Request-timeout shedding and in-flight writes
 
@@ -192,16 +192,28 @@ everything after it.
 
 ## Known deviations and costs (honest record)
 
-- **`--trust-proxy` not implemented (plan deviation, queued for M10).** The approved plan
+- **`--trust-proxy` not implemented (plan deviation, unscheduled).** The approved plan
   pins auth-failure keying as "token bucket keyed by presented principal, else peer
-  address; `--trust-proxy` opt-in, keyed by the *last* `X-Forwarded-For* hop". The built
+  address; `--trust-proxy` opt-in, keyed by the *last* `X-Forwarded-For` hop". The built
   code keys on a hash of the presented credential only — no address keying, no flag
   (the M1b2 brief compressed the clause away). Effect: a credential-less flood shares
   one `anon` bucket; there is no per-origin attribution. Honest absence, documented here
-  and in the README; lands with M10's rate/quota work.
+  and in the README; no plan milestone contains this work — scheduling it needs an
+  explicit plan decision.
 - **GC sweep cost:** the zero-junction candidate probe is an anti-join over all `trees`
   rows — O(total trees) inside the write slot on each pass (60s tick + each POST) once
   any snapshot exists. Cheaper than history-closure marking; a candidate index or a
   dirty flag is an M6+ optimization if it ever shows.
 - **Verification anchors:** `git stash create` anchors cover tracked content only;
   untracked files are outside the guard's content compare.
+
+## Snapshot limits (from the review pass)
+
+- `MAX_SNAPSHOT_TREES` 10,000 trees per POST and `MAX_SNAPSHOT_BLOBS` 8,192 distinct
+  blobs per POST (422 beyond, `details.limit`); missing-blob response list capped at
+  256 ids with a `missing_blobs_truncated` flag. A sparse cone with >10k directories
+  cannot snapshot whole — raise the constants when that bites; no config knob yet.
+- Snapshot TTL: 60-second floor (plan-pinned) and a 366-day ceiling (server-side
+  safety bound beyond the plan; supervisor judgment, flagged in the route contract).
+- `snapshot_gc` audit rows: written per collecting pass (never idle passes), actor
+  `system`, details `{expired, rowless, rows_purged, trees_purged}`.

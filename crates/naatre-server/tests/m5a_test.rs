@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -24,7 +25,11 @@ use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tower::ServiceExt;
+
+use naatre_server::serve::{ServeConfig, serve};
 
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::tree::{self, EntryKind, Tree, TreeEntry};
@@ -83,7 +88,7 @@ impl TestApp {
         conn
     }
 
-    fn seed_token(&self, principal: &str, role: &str) -> String {
+    fn seed_token(&self, principal: &str, role: &str, scope_path: Option<&str>) -> String {
         let (token, hash) = naatre_server::auth::mint_token();
         let conn = self.db();
         conn.execute(
@@ -93,9 +98,9 @@ impl TestApp {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO tokens(principal, blake3, expires_ns, revoked) \
-             VALUES (?1, ?2, NULL, 0)",
-            rusqlite::params![principal, hash],
+            "INSERT INTO tokens(principal, blake3, expires_ns, revoked, scope_path) \
+             VALUES (?1, ?2, NULL, 0, ?3)",
+            rusqlite::params![principal, hash, scope_path],
         )
         .unwrap();
         token
@@ -269,9 +274,9 @@ fn fixture() -> Fixture {
 /// window where `ServerState` is mutable — e.g. the snapshot-GC off-switch).
 fn fixture_with(tweak: impl FnOnce(&mut ServerState)) -> Fixture {
     let t = build_app_with(tweak);
-    let writer_a = t.seed_token("writer-a", "writer");
-    let writer_b = t.seed_token("writer-b", "writer");
-    let reader = t.seed_token("reader-p", "reader");
+    let writer_a = t.seed_token("writer-a", "writer", None);
+    let writer_b = t.seed_token("writer-b", "writer", None);
+    let reader = t.seed_token("reader-p", "reader", None);
     let repo_id = t.seed_repo(REPO);
     Fixture {
         t,
@@ -381,6 +386,11 @@ async fn post_presence_validation_lists_missing_and_writes_zero_rows() {
         .expect("missing_blobs details");
     assert_eq!(missing.len(), 1, "exactly the missing id is listed");
     assert_eq!(missing[0], json!(never_uploaded.to_hex()));
+    assert_eq!(
+        resp.body["error"]["details"]["missing_blobs_truncated"],
+        json!(false),
+        "one missing id: the list is not truncated"
+    );
 
     assert_eq!(f.t.count("SELECT COUNT(*) FROM snapshots"), 0);
     assert_eq!(f.t.count("SELECT COUNT(*) FROM trees"), 0);
@@ -568,9 +578,34 @@ async fn expiry_enforced_at_both_gates_and_gc_deletes_dir_and_row() {
         before,
         "history CAS byte-identical across GC"
     );
-    // A second pass converges (idempotent).
+
+    // The collecting pass wrote ONE `snapshot_gc` audit row — actor
+    // "system" (no principal drives a background pass), the report counts
+    // in details — atomic with the purge and the tree sweep.
+    let (actor, details_json): (String, String) =
+        f.t.db()
+            .query_row(
+                "SELECT principal, details_json FROM audit_log WHERE action = 'snapshot_gc'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("a snapshot_gc audit row");
+    assert_eq!(actor, "system");
+    let details: Value = serde_json::from_str(&details_json).unwrap();
+    assert_eq!(
+        details,
+        json!({ "expired": 1, "rowless": 0, "rows_purged": 1, "trees_purged": 1 })
+    );
+
+    // A second pass converges (idempotent) — and writes NO audit row: an
+    // idle pass must not spam the append-only log.
     let report = gc_snapshots(&f.t.state).await.unwrap();
     assert_eq!(report, Default::default());
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM audit_log WHERE action = 'snapshot_gc'"),
+        1,
+        "the idle second pass wrote no audit row"
+    );
 }
 
 /// Snapshot trees carry NO `repo_trees` membership (own-principal, TTL'd
@@ -980,26 +1015,29 @@ async fn gc_spares_history_trees_whose_junction_row_was_lost() {
     assert_eq!(report, Default::default());
 }
 
-/// Depth-two safety: a JUNCTION-LESS CHAIN (S1 → S2) under a retained
-/// parent survives in full. Depth-one protection alone would orphan S2
-/// (its parent S1 is not "retained"); protection recurses through
-/// candidate children.
+/// Depth-three safety: a JUNCTION-LESS CHAIN (S1 → S2 → S3) under a
+/// retained parent survives in full. Depth-one protection alone would
+/// orphan S2/S3 (their parents are not "retained"); protection recurses
+/// through candidate children.
 #[tokio::test]
 async fn gc_spares_a_deeper_junctionless_chain() {
     let f = fixture_with(|state| state.snapshot_gc_enabled = false);
 
-    // History: changeset adding deep/a/b.txt derives root → deep → deep/a.
-    let bs = b"deep leaf".to_vec();
-    let bb = object_id(Kind::Blob, &bs);
-    let (s2, s2_canon) = tree_with_id(vec![file_entry("b.txt", bb, 9, false)]);
-    let (s1, s1_canon) = tree_with_id(vec![dir_entry("a", &s2, 9)]);
-    let (root, _) = tree_with_id(vec![dir_entry("deep", &s1, 9)]);
+    // History: changeset adding deep/a/b/c.txt derives root → deep →
+    // deep/a → deep/a/b (three junction-less levels once the junctions are
+    // hand-deleted below).
+    let cs_bytes = b"c leaf".to_vec();
+    let cb = object_id(Kind::Blob, &cs_bytes);
+    let (s3, s3_canon) = tree_with_id(vec![file_entry("c.txt", cb, 6, false)]);
+    let (s2, s2_canon) = tree_with_id(vec![dir_entry("b", &s3, 6)]);
+    let (s1, s1_canon) = tree_with_id(vec![dir_entry("a", &s2, 6)]);
+    let (root, _) = tree_with_id(vec![dir_entry("deep", &s1, 6)]);
     let (status, _, _) = send_bytes(
         &f.t.app,
         "PUT",
-        &format!("/v1/repos/{REPO}/objects/{}", blob_hex(&bs)),
+        &format!("/v1/repos/{REPO}/objects/{}", blob_hex(&cs_bytes)),
         &f.writer_a,
-        Some(bs.clone()),
+        Some(cs_bytes.clone()),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1012,7 +1050,7 @@ async fn gc_spares_a_deeper_junctionless_chain() {
             "author": "A <a@naatre.dev>",
             "message": "history",
             "changes": [
-                { "path": "deep/a/b.txt", "op": "add", "blob": blob_hex(&bs), "size": 9, "exec": false }
+                { "path": "deep/a/b/c.txt", "op": "add", "blob": blob_hex(&cs_bytes), "size": 6, "exec": false }
             ],
         }),
     )
@@ -1024,9 +1062,9 @@ async fn gc_spares_a_deeper_junctionless_chain() {
         "the derived chain matches the hand-built one"
     );
 
-    // Hand-delete the junction rows for BOTH chain levels (simulating a
-    // write path that forgot a whole subtree). Root stays junctioned.
-    for tree in [&s1, &s2] {
+    // Hand-delete the junction rows for ALL THREE chain levels (simulating
+    // a write path that forgot a whole subtree). Root stays junctioned.
+    for tree in [&s1, &s2, &s3] {
         let id = Id::from_hex(tree).unwrap();
         let deleted =
             f.t.db()
@@ -1041,9 +1079,9 @@ async fn gc_spares_a_deeper_junctionless_chain() {
     let report = gc_snapshots(&f.t.state).await.unwrap();
     assert_eq!(
         report.trees_purged, 0,
-        "the retained root protects the whole junction-less chain"
+        "the retained root protects the whole 3-deep junction-less chain"
     );
-    for tree in [&root, &s1, &s2] {
+    for tree in [&root, &s1, &s2, &s3] {
         let id = Id::from_hex(tree).unwrap();
         assert_eq!(
             f.t.count(&format!(
@@ -1054,7 +1092,7 @@ async fn gc_spares_a_deeper_junctionless_chain() {
             "chain tree {tree} survives"
         );
     }
-    let _ = (s1_canon, s2_canon);
+    let _ = (s1_canon, s2_canon, s3_canon);
 }
 
 /// Inverse of the safety net: a junction-less chain whose ONLY reference
@@ -1261,4 +1299,558 @@ async fn reader_cannot_create_snapshots() {
     .await;
     assert_eq!(resp.status, StatusCode::FORBIDDEN);
     assert_eq!(code_of(&resp), "forbidden");
+}
+
+// ---- fix3a: re-POST idempotency (recorded expiry, not recomputed) ----------
+
+/// An identical re-POST answers 200 with the RECORDED row expiry — the
+/// injectable clock advances between the POSTs, so a recomputed expiry
+/// would differ. A re-POST with a different ttl_secs is 422 with the
+/// recorded expiry in details, and the row is untouched by both.
+#[tokio::test]
+async fn repost_returns_recorded_expiry_and_rejects_different_ttl() {
+    // The POST spawns an opportunistic GC pass that can hold the write slot
+    // while this test's rapid re-POSTs arrive; GC is not under test here.
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+    let alpha = b"repost alpha".to_vec();
+    let snap = snap_hex(21);
+    put_snap_blob(&f, &f.writer_a, &snap, &alpha).await;
+    let (tree_hex, trees) = flat_tree(&[("a.txt", object_id(Kind::Blob, &alpha), 12, false)]);
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees.clone(), 3600).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let recorded = resp.body["expires_ns"].as_u64().unwrap();
+    assert_eq!(recorded, BASE_NS + 3600 * 1_000_000_000);
+
+    // The clock moves between the POSTs: only the row value can come back.
+    f.t.clock.store(BASE_NS + 60_000_000_000, Ordering::Relaxed);
+
+    // Same ttl → 200 with the RECORDED expiry.
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees.clone(), 3600).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["expires_ns"], json!(recorded));
+
+    // Different ttl → 422, the recorded expiry in details.
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees.clone(), 7200).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+    assert_eq!(code_of(&resp), "validation");
+    assert_eq!(
+        resp.body["error"]["details"]["recorded_expires_ns"],
+        json!(recorded)
+    );
+
+    // The row still carries exactly the recorded expiry.
+    let row_expires: i64 =
+        f.t.db()
+            .query_row(
+                "SELECT expires_ns FROM snapshots WHERE repo_id = ?1 AND id = ?2",
+                rusqlite::params![f.repo_id, Id::from_hex(&snap).unwrap().0.as_slice()],
+                |r| r.get(0),
+            )
+            .unwrap();
+    assert_eq!(row_expires, recorded as i64);
+}
+
+/// Re-POSTing an EXPIRED snapshot's id is 410 `snapshot_expired` on every
+/// ttl — never a resurrect-200 with a fresh expiry — and the expired row
+/// stays (GC owns its removal, not the POST).
+#[tokio::test]
+async fn repost_of_expired_snapshot_is_410() {
+    // Same reason as the sibling test: the opportunistic pass must not
+    // contend with the rapid re-POSTs.
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+    let alpha = b"expiring repost".to_vec();
+    let snap = snap_hex(22);
+    put_snap_blob(&f, &f.writer_a, &snap, &alpha).await;
+    let (tree_hex, trees) = flat_tree(&[("a.txt", object_id(Kind::Blob, &alpha), 15, false)]);
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees.clone(), 60).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    f.t.clock.store(BASE_NS + 61_000_000_000, Ordering::Relaxed);
+
+    // Identical re-POST → 410, not 200.
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees.clone(), 60).await;
+    assert_eq!(resp.status, StatusCode::GONE, "{}", resp.body);
+    assert_eq!(code_of(&resp), "snapshot_expired");
+    // A different ttl on the expired id → 410 too (expiry outranks the ttl
+    // check — nothing about a dead snapshot is negotiable).
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees, 3600).await;
+    assert_eq!(resp.status, StatusCode::GONE, "{}", resp.body);
+    assert_eq!(code_of(&resp), "snapshot_expired");
+
+    // The row stays expired — unpurged (no GC ran) and un-resurrected.
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM snapshots"), 1);
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/snapshots/{snap}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::GONE);
+    assert_eq!(code_of(&resp), "snapshot_expired");
+}
+
+// ---- fix3a: snapshot tree route closure membership -------------------------
+
+/// The snapshot tree route serves only the snapshot's own subtree: a tree
+/// id that exists on the server but outside the snapshot's closure (here:
+/// a second repo's changeset root) is 404, as the route doc promises — and
+/// the expiry gate still outranks the closure check (expired + closure
+/// member → 410, not 404).
+#[tokio::test]
+async fn snapshot_tree_route_serves_only_closure_members() {
+    let f = fixture();
+
+    // A foreign history tree: a second repo's changeset puts a tree row in
+    // the global `trees` table, outside this snapshot's closure.
+    f.t.seed_repo("m5a-foreign");
+    let foreign_blob = b"foreign tree blob".to_vec();
+    let (status, _, _) = send_bytes(
+        &f.t.app,
+        "PUT",
+        &format!("/v1/repos/m5a-foreign/objects/{}", blob_hex(&foreign_blob)),
+        &f.writer_a,
+        Some(foreign_blob.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let cs = post_json(
+        &f.t.app,
+        "/v1/repos/m5a-foreign/changesets",
+        &f.writer_a,
+        &json!({
+            "parents": [],
+            "author": "A <a@naatre.dev>",
+            "message": "foreign history",
+            "changes": [
+                { "path": "f.txt", "op": "add", "blob": blob_hex(&foreign_blob), "size": 17, "exec": false }
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(cs.status, StatusCode::CREATED, "{}", cs.body);
+    let foreign_tree = cs.body["root_tree_id"].as_str().unwrap().to_string();
+
+    // Own snapshot: root → dir "d" → sub.
+    let sub_bytes = b"sub blob".to_vec();
+    let snap = snap_hex(23);
+    put_snap_blob(&f, &f.writer_a, &snap, &sub_bytes).await;
+    let (sub_hex, sub_canon) = tree_with_id(vec![file_entry(
+        "u.txt",
+        object_id(Kind::Blob, &sub_bytes),
+        8,
+        false,
+    )]);
+    let (root_hex, root_canon) = tree_with_id(vec![dir_entry("d", &sub_hex, 8)]);
+    let resp = post_snapshot(
+        &f,
+        &f.writer_a,
+        &snap,
+        &root_hex,
+        [root_canon, sub_canon].concat(),
+        60,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // Closure members serve: the root (a closure contains its root) and
+    // the nested subtree.
+    for tree in [&root_hex, &sub_hex] {
+        let resp = get(
+            &f.t.app,
+            &format!("/v1/repos/{REPO}/snapshots/{snap}/trees/{tree}"),
+            &f.writer_a,
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::OK,
+            "closure member {tree}: {body}",
+            body = resp.body
+        );
+    }
+
+    // The foreign tree id exists in `trees` but is not in the closure →
+    // 404; so is a well-formed id with no row at all.
+    for tree in [&foreign_tree, &snap_hex(99)] {
+        let resp = get(
+            &f.t.app,
+            &format!("/v1/repos/{REPO}/snapshots/{snap}/trees/{tree}"),
+            &f.writer_a,
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::NOT_FOUND,
+            "non-member {tree}: {body}",
+            body = resp.body
+        );
+        assert_eq!(code_of(&resp), "not_found");
+    }
+
+    // Expire: the closure-member tree GET is 410 (the expiry gate fires
+    // first), never a 404 and never a serve.
+    f.t.clock.store(BASE_NS + 61_000_000_000, Ordering::Relaxed);
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/snapshots/{snap}/trees/{sub_hex}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::GONE, "{}", resp.body);
+    assert_eq!(code_of(&resp), "snapshot_expired");
+}
+
+// ---- fix3a: path-scope enforcement on the POST ------------------------------
+
+/// The plan's writes row ("path-prefix scope gates these — segment-aligned")
+/// covers snapshots POST: a writer scoped to docs/ posting a closure that
+/// contains src/x is 403 with the first offending path in details; the same
+/// token posting a docs/-only closure succeeds. The blobs PUT stayed
+/// repo-level (scope does not gate it — a blob has no path yet).
+#[tokio::test]
+async fn snapshot_post_enforces_path_scope() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("docs"));
+
+    let srcb = b"src bytes".to_vec();
+    let docb = b"doc bytes".to_vec();
+    let snap = snap_hex(24);
+    put_snap_blob(&f, &scoped, &snap, &srcb).await;
+    put_snap_blob(&f, &scoped, &snap, &docb).await;
+    let (src_tree, src_canon) = tree_with_id(vec![file_entry(
+        "x",
+        object_id(Kind::Blob, &srcb),
+        9,
+        false,
+    )]);
+    let (docs_tree, docs_canon) = tree_with_id(vec![file_entry(
+        "a.txt",
+        object_id(Kind::Blob, &docb),
+        9,
+        false,
+    )]);
+    let (root, root_canon) = tree_with_id(vec![
+        dir_entry("docs", &docs_tree, 9),
+        dir_entry("src", &src_tree, 9),
+    ]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root,
+        [root_canon, src_canon, docs_canon.clone()].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(code_of(&resp), "forbidden");
+    assert_eq!(resp.body["error"]["details"]["path"], json!("src/x"));
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM snapshots"),
+        0,
+        "the rejected POST wrote no rows"
+    );
+
+    // Positive half: same scoped token, closure fully inside docs/.
+    let (docs_root, docs_root_canon) = tree_with_id(vec![dir_entry("docs", &docs_tree, 9)]);
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &docs_root,
+        [docs_root_canon, docs_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+}
+
+// ---- fix3a: TTL ceiling -----------------------------------------------------
+
+/// ttl_secs at the 366-day cap creates; one second past it (and a hostile
+/// 9.3e9 that would overflow `now + ttl*1e9`) is 422 — validation, not a
+/// panic.
+#[tokio::test]
+async fn ttl_above_maximum_is_422_not_a_panic() {
+    let f = fixture();
+    const MAX: u64 = 366 * 24 * 60 * 60; // 31_622_400
+
+    // Boundary: exactly the cap is a normal create.
+    let content = b"ttl ceiling".to_vec();
+    let snap = snap_hex(25);
+    put_snap_blob(&f, &f.writer_a, &snap, &content).await;
+    let (tree_hex, trees) = flat_tree(&[("c.txt", object_id(Kind::Blob, &content), 11, false)]);
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees.clone(), MAX).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    assert_eq!(
+        resp.body["expires_ns"],
+        json!(BASE_NS + MAX * 1_000_000_000)
+    );
+
+    // Beyond the cap → 422, before any store work (no uploads needed).
+    for ttl in [MAX + 1, 9_300_000_000] {
+        let body = json!({
+            "snap_id": snap_hex(26),
+            "tree_id": tree_hex,
+            "trees": trees.clone(),
+            "ttl_secs": ttl,
+        });
+        let resp = post_json(
+            &f.t.app,
+            &format!("/v1/repos/{REPO}/snapshots"),
+            &f.writer_a,
+            &body,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::UNPROCESSABLE_ENTITY, "ttl {ttl}");
+        assert_eq!(code_of(&resp), "validation");
+    }
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM snapshots"), 1);
+}
+
+// ---- fix3a: presence-validation caps ----------------------------------------
+
+/// A closure referencing more than 8192 distinct blobs is 422 with the
+/// limit in details — before any store work, so none of the blobs need to
+/// exist. The missing-blobs list of a rejected POST is capped at 256 with a
+/// `missing_blobs_truncated` flag; zero rows are written on every path.
+#[tokio::test]
+async fn blob_cap_is_422_and_missing_list_is_truncated() {
+    let f = fixture();
+
+    // 8193 distinct referenced blobs → 422 with the limit.
+    let entries: Vec<TreeEntry> = (0..8_193u32)
+        .map(|i| {
+            file_entry(
+                &format!("f{i:05}.bin"),
+                object_id(Kind::Blob, i.to_le_bytes().as_slice()),
+                1,
+                false,
+            )
+        })
+        .collect();
+    let (tree_hex, trees) = tree_with_id(entries);
+    let resp = post_snapshot(
+        &f,
+        &f.writer_a,
+        &snap_hex(27),
+        &tree_hex,
+        trees.clone(),
+        3600,
+    )
+    .await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+    assert_eq!(code_of(&resp), "validation");
+    assert_eq!(resp.body["error"]["details"]["limit"], json!(8192));
+
+    // 300 distinct never-uploaded blobs → the missing list truncates.
+    let entries: Vec<TreeEntry> = (0..300u32)
+        .map(|i| {
+            file_entry(
+                &format!("g{i:04}.bin"),
+                object_id(Kind::Blob, &format!("miss {i}").into_bytes()),
+                1,
+                false,
+            )
+        })
+        .collect();
+    let (tree_hex, trees) = tree_with_id(entries);
+    let resp = post_snapshot(&f, &f.writer_a, &snap_hex(28), &tree_hex, trees, 3600).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+    let missing = resp.body["error"]["details"]["missing_blobs"]
+        .as_array()
+        .expect("missing_blobs details");
+    assert_eq!(missing.len(), 256, "the list is capped at 256");
+    assert_eq!(
+        resp.body["error"]["details"]["missing_blobs_truncated"],
+        json!(true)
+    );
+
+    // Every rejected path above left zero rows.
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM snapshots"), 0);
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM trees"), 0);
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM tree_entries"), 0);
+}
+
+/// Presence-validation recursion: a MISSING blob deep in a nested tree
+/// (root → dir → subtree) is the id named in details, with no truncation.
+#[tokio::test]
+async fn presence_validation_reports_a_deep_missing_blob() {
+    let f = fixture();
+    let okb = b"deep ok".to_vec();
+    let never = object_id(Kind::Blob, b"deep missing");
+    let snap = snap_hex(29);
+    put_snap_blob(&f, &f.writer_a, &snap, &okb).await;
+    let (sub_hex, sub_canon) = tree_with_id(vec![
+        file_entry("bad.bin", never, 12, false),
+        file_entry("ok.bin", object_id(Kind::Blob, &okb), 7, false),
+    ]);
+    let (root_hex, root_canon) = tree_with_id(vec![dir_entry("deep", &sub_hex, 19)]);
+    let resp = post_snapshot(
+        &f,
+        &f.writer_a,
+        &snap,
+        &root_hex,
+        [root_canon, sub_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+    assert_eq!(
+        resp.body["error"]["details"]["missing_blobs"],
+        json!([never.to_hex()]),
+        "the deep missing id is listed"
+    );
+    assert_eq!(
+        resp.body["error"]["details"]["missing_blobs_truncated"],
+        json!(false)
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM snapshots"), 0);
+}
+
+// ---- fix3a: rowless-sweep age gate (the survive side) -----------------------
+
+/// A rowless dir YOUNGER than the max TTL survives a GC pass: with the
+/// injected clock at real now, `now − max TTL` sits before the fresh dir's
+/// mtime, so the age gate keeps it (the swept side is pinned by
+/// `rowless_dir_older_than_max_ttl_is_swept`).
+#[tokio::test]
+async fn rowless_dir_younger_than_max_ttl_survives_gc() {
+    let f = fixture();
+    let orphan = b"young rowless".to_vec();
+    let fake = snap_hex(30);
+    f.t.state
+        .ephemeral
+        .put_blob(&fake, &orphan)
+        .expect("direct ephemeral put");
+    assert!(f.t.data_dir.join("ephemeral").join(&fake).exists());
+
+    let real_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    f.t.clock.store(real_now, Ordering::Relaxed);
+
+    let report = gc_snapshots(&f.t.state).await.unwrap();
+    assert_eq!(
+        report,
+        Default::default(),
+        "a young rowless dir is not garbage"
+    );
+    assert!(
+        f.t.data_dir.join("ephemeral").join(&fake).exists(),
+        "the age gate kept the young dir"
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM snapshots"), 0);
+}
+
+// ---- fix3a: misc pins --------------------------------------------------------
+
+/// The snapshot objects PUT hash-verifies like every PUT: a payload that
+/// does not hash to the URL id is 400 `malformed`.
+#[tokio::test]
+async fn misaddressed_snapshot_blob_put_is_400() {
+    let f = fixture();
+    let payload = b"real bytes".to_vec();
+    let wrong = object_id(Kind::Blob, b"other bytes");
+    let (status, _, body_bytes) = send_bytes(
+        &f.t.app,
+        "PUT",
+        &format!(
+            "/v1/repos/{REPO}/snapshots/{}/objects/{}",
+            snap_hex(31),
+            wrong.to_hex()
+        ),
+        &f.writer_a,
+        Some(payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"]["code"], "malformed");
+}
+
+/// The background pass is observable: serve runs with a 10 ms injected GC
+/// interval (the off-switch stays ON), a 60 s-TTL snapshot expires, and a
+/// background pass collects it — metadata flips 410 → 404 and the dir is
+/// gone — with NO manual gc_snapshots call in this test (the POST-time
+/// opportunistic pass fired before the clock moved, so only the interval
+/// pass can have collected it). Bounded poll.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_gc_pass_collects_an_expired_snapshot() {
+    let f = fixture_with(|state| {
+        state.snapshot_gc_interval = Duration::from_millis(10);
+    });
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (send_shutdown, recv_shutdown) = oneshot::channel::<()>();
+    let serve_task = tokio::spawn(serve(
+        ServeConfig {
+            listener,
+            state: Arc::clone(&f.t.state),
+        },
+        async move {
+            let _ = recv_shutdown.await;
+        },
+    ));
+
+    let content = b"background gc victim".to_vec();
+    let snap = snap_hex(32);
+    put_snap_blob(&f, &f.writer_a, &snap, &content).await;
+    let (tree_hex, trees) = flat_tree(&[("b.txt", object_id(Kind::Blob, &content), 20, false)]);
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, trees, 60).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // Expire: the row survives, metadata answers 410.
+    f.t.clock.store(BASE_NS + 61_000_000_000, Ordering::Relaxed);
+    let uri = format!("/v1/repos/{REPO}/snapshots/{snap}");
+    let resp = get(&f.t.app, &uri, &f.writer_a).await;
+    assert_eq!(resp.status, StatusCode::GONE, "{}", resp.body);
+
+    // A background pass purges the row (410 → 404) and deletes the dir.
+    let mut collected = false;
+    for _ in 0..200 {
+        let resp = get(&f.t.app, &uri, &f.writer_a).await;
+        if resp.status == StatusCode::NOT_FOUND {
+            collected = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        collected,
+        "no background GC pass collected the expired snapshot"
+    );
+    assert!(
+        !f.t.data_dir.join("ephemeral").join(&snap).exists(),
+        "the background pass left the dir on disk"
+    );
+
+    send_shutdown.send(()).expect("serve task alive");
+    tokio::time::timeout(Duration::from_secs(5), serve_task)
+        .await
+        .expect("serve shut down within 5 s")
+        .expect("join")
+        .expect("serve ok");
 }

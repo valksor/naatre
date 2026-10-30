@@ -22,7 +22,7 @@
 //! `state.head` is UNCHANGED — snapshots are ephemeral working state, not
 //! history; restore moves the files, never the branch.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use naatre_core::ids::Id;
@@ -174,14 +174,12 @@ fn fetch_snapshot_blobs(
     sid: &str,
     ids: &[Id],
 ) -> Result<HashMap<Id, Vec<u8>>, VerbError> {
-    let mut unique: Vec<Id> = Vec::new();
-    for id in ids {
-        if !unique.contains(id) {
-            unique.push(*id);
-        }
-    }
+    let mut seen: HashSet<Id> = HashSet::new();
     let mut out = HashMap::new();
-    for id in &unique {
+    for id in ids {
+        if !seen.insert(*id) {
+            continue;
+        }
         let bytes = client.get_bytes(&format!(
             "/v1/repos/{}/snapshots/{}/objects/{}",
             crate::client::uri_segment(repo),

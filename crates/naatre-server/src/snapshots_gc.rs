@@ -15,19 +15,30 @@
 //! candidates with a RETAINED parent (junctioned tree or changeset root
 //! pointing at them as a child); then candidate children of protected
 //! candidates, recursively — a junction-less chain under a retained
-//! parent survives in full. The walk stays inside the candidate set, so
-//! the cost is one indexed probe per tree row plus indexed lookups per
-//! candidate. Mark and sweep run in ONE write-slot transaction with the
-//! expired-row purge, so a snapshot POST reusing a shared subtree cannot
-//! land between mark and delete; because the sweep is stated over
-//! reachability (not this pass's expired set), a crash between a row purge
-//! and the sweep also converges on the next pass.
+//! parent survives in full. The walk stays inside the candidate set, but
+//! the cost grows with TOTAL tree rows, not only with snapshots: one
+//! indexed probe per tree row finds the candidates, the live CTE
+//! recursively walks the full closures of unexpired snapshots, and each
+//! candidate costs indexed lookups (the accurate wording lives in
+//! `docs/design.md` and `db::unprotected_trees`). Mark and sweep run in
+//! ONE write-slot transaction with the expired-row purge, so a snapshot
+//! POST reusing a shared subtree cannot land between mark and delete;
+//! because the sweep is stated over reachability (not this pass's expired
+//! set), a crash between a row purge and the sweep also converges on the
+//! next pass.
 //!
 //! The pass never touches `objects/` (the history CAS is not TTL'd), and
 //! its ordering follows the orphan-direction rule: dirs are deleted first,
 //! rows purged after, so a crash mid-pass leaves an orphan ROW (expired —
 //! every fetch answers 410; the next pass purges it), never an unexpired
 //! row whose blobs are gone.
+//!
+//! A pass that collected something (expired dirs, rowless dirs, or swept
+//! tree rows) writes ONE `snapshot_gc` audit row — action and the report
+//! counts in `details`, actor `"system"` (no principal drives a background
+//! pass) — inside the same write-slot transaction as its DB effects. An
+//! idle pass writes nothing: a quiet server must not spam the append-only
+//! log.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -149,7 +160,11 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
         .filter(|id| deleted.contains(*id))
         .copied()
         .collect();
-    let needs_write = !purgable.is_empty() || {
+    let rowless_swept = rowless.iter().filter(|id| deleted.contains(*id)).count();
+    // A rowless-only sweep still owes its audit row, so it counts as
+    // needing the write slot even when no expired rows and no sweepable
+    // tree rows exist.
+    let needs_write = !purgable.is_empty() || rowless_swept > 0 || {
         state
             .read(|conn| db::any_junctionless_trees(conn).map_err(ApiError::log_internal))
             .await?
@@ -169,6 +184,26 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
                 let garbage = db::unprotected_trees(&tx, now_i).map_err(ApiError::log_internal)?;
                 let trees_purged =
                     db::delete_tree_rows(&tx, &garbage).map_err(ApiError::log_internal)?;
+                // One audit row per collecting pass, atomic with its DB
+                // effects. A pass that reached the slot but collected
+                // nothing (only protected junction-less rows alive) writes
+                // none — a quiet server must not spam the append-only log.
+                if !purgable.is_empty() || rowless_swept > 0 || trees_purged > 0 {
+                    db::audit_append(
+                        &tx,
+                        now_i,
+                        "system",
+                        "snapshot_gc",
+                        &serde_json::json!({
+                            "expired": purgable.len(),
+                            "rowless": rowless_swept,
+                            "rows_purged": rows_purged,
+                            "trees_purged": trees_purged,
+                        })
+                        .to_string(),
+                    )
+                    .map_err(ApiError::log_internal)?;
+                }
                 tx.commit().map_err(ApiError::log_internal)?;
                 Ok((rows_purged, trees_purged))
             })

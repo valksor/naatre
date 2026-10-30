@@ -6,6 +6,8 @@
 //! mutations (mint + audit, ref CAS + audit) run in a single
 //! `unchecked_transaction` here so a failure rolls the whole step back.
 
+use std::collections::HashSet;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use naatre_core::ids::Id;
@@ -582,9 +584,13 @@ pub fn any_junctionless_trees(conn: &Connection) -> rusqlite::Result<bool> {
 /// inserts junction rows and migration 3's backfill covered pre-migration
 /// rows — which is why no provenance marker column is needed (and why
 /// half-adding one later would be wrong: the invariant lives in junction
-/// completeness). The walk stays inside the candidate set, so cost scales
-/// with candidates (plus one indexed probe per tree row to find them),
-/// not with history. The caller runs this inside the same transaction as
+/// completeness). The walk stays inside the candidate set, but it grows
+/// with TOTAL tree rows, not only with snapshots: one indexed junction
+/// probe (`idx_repo_trees_tree`) per tree row finds the candidates, the
+/// `live` CTE recursively walks the full closures of unexpired snapshots,
+/// and each candidate costs indexed lookups (`idx_changesets_root`,
+/// `idx_tree_entries_object`) — matching `docs/design.md`'s "grows with
+/// total tree rows". The caller runs this inside the same transaction as
 /// the expired-row purge, so a snapshot POST reusing a shared subtree
 /// cannot land between mark and delete (both go through the
 /// single-writer slot).
@@ -654,6 +660,35 @@ pub fn repo_has_tree(conn: &Connection, repo_id: i64, tree_id: &Id) -> rusqlite:
         )
         .optional()?;
     Ok(hit.is_some())
+}
+
+/// Whether `target` sits in the subtree closure of `root` (dir entries,
+/// `kind = 1`): the snapshot tree route's membership check. `root` itself
+/// counts (a closure contains its root). Content-addressed trees cannot
+/// cycle (an entry's id covers the bytes that name it), and the seen-set
+/// keeps shared subtrees from being walked twice anyway.
+pub fn tree_in_closure(conn: &Connection, root: &Id, target: &Id) -> rusqlite::Result<bool> {
+    if root == target {
+        return Ok(true);
+    }
+    let mut seen = HashSet::new();
+    let mut stack = vec![*root];
+    while let Some(tree_id) = stack.pop() {
+        if !seen.insert(tree_id) {
+            continue;
+        }
+        for e in tree_entries_load(conn, &tree_id)? {
+            if e.kind != 1 {
+                continue;
+            }
+            let child = Id(e.object_id.try_into().expect("tree id is 32 bytes"));
+            if child == *target {
+                return Ok(true);
+            }
+            stack.push(child);
+        }
+    }
+    Ok(false)
 }
 
 /// Everything one successful changeset create commits, atomically: the

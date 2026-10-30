@@ -17,7 +17,9 @@ external services. License: GPL-3.0-only.
 
 ## Quickstart
 
-Everything runs from one binary — server and client verbs.
+Everything runs from one binary — server and client verbs. CI extracts the
+fenced blocks below and runs them end-to-end against a throwaway data dir,
+so the quickstart cannot silently drift from the tested path.
 
 ```sh
 # 1. Create a data dir; prints the admin token exactly once.
@@ -27,18 +29,23 @@ naatre init --data ./naatre-data
 #    `export NAATRE_TOKEN=naatre_…` lands in your shell history, and
 #    `--token` values are visible in `ps`. `read -s` prompts silently.
 read -s NAATRE_TOKEN && export NAATRE_TOKEN
-# …or, alternatively, write it into the working copy's 0600 config:
-#   naatre login --server http://127.0.0.1:7400 --token "$NAATRE_TOKEN"
-#    (the config file is 0600; the --token argv is momentarily visible in ps)
 
 export NAATRE_URL=http://127.0.0.1:7400
 
-# 3. Serve. Binds 127.0.0.1:7400 by default; Ctrl-C drains gracefully.
-naatre serve --data ./naatre-data
+# 3. Serve in the background (steps 5–6 stop it again via SERVE_PID).
+#    Binds 127.0.0.1:7400 by default.
+naatre serve --data ./naatre-data &
+SERVE_PID=$!
+until curl -fsS "$NAATRE_URL/healthz" >/dev/null 2>&1; do sleep 0.2; done
 
 # 4. Create a repo (admin).
 naatre repo create demo
 ```
+
+Prefer watching the server in the foreground? Run
+`naatre serve --data ./naatre-data` in its own terminal and stop it with
+Ctrl-C (it drains gracefully); skip the `&` and `SERVE_PID` lines above,
+and the `kill "$SERVE_PID"` lines below don't apply.
 
 A freshly created repo has an unborn `main` — the refs route refuses to
 create `main` (it moves only via land) and land moves but never creates it,
@@ -47,14 +54,27 @@ for the duration — import and serve hold the same data-dir flock):
 
 ```sh
 # 5. Seed the repo from a local git repo (one-way; see "Git interop").
-kill $SERVER_PID                       # release the flock
-naatre import --data ./naatre-data --into demo ./some-git-repo
-naatre serve --data ./naatre-data &    # back up
+#    ./my-git-repo stands for any local git checkout with a commit on its
+#    default branch.
+kill "$SERVE_PID" && wait "$SERVE_PID"   # release the flock
+naatre import --data ./naatre-data --into demo ./my-git-repo
+naatre serve --data ./naatre-data &      # back up
+SERVE_PID=$!
+until curl -fsS "$NAATRE_URL/healthz" >/dev/null 2>&1; do sleep 0.2; done
 
 # 6. Clone from a second directory, commit, land.
-cd /tmp && naatre clone "$NAATRE_URL/demo"
+mkdir ../quickstart-clone && cd ../quickstart-clone
+naatre clone "$NAATRE_URL/demo"
 cd demo && echo hi > README.md && naatre commit -m "hello" && naatre land
+
+# Done — stop the server (graceful drain).
+kill "$SERVE_PID" && wait "$SERVE_PID"
 ```
+
+Prefer the working copy's 0600 config over the env var? From inside a
+clone: `naatre login --server http://127.0.0.1:7400 --token "$NAATRE_TOKEN"`
+writes it there (the config is 0600; the `--token` argv is momentarily
+visible in `ps`); later verbs in that copy read the config and need no env.
 
 Exposing the server beyond loopback (`--listen 0.0.0.0:7400`) prints a
 warning: bearer tokens would cross the network in cleartext. Put a
@@ -96,10 +116,10 @@ loopback). Two proxy-relevant facts, both deliberate:
   headers to attribute failures and has no `--trust-proxy` flag; there is
   nothing to spoof. The known trade-off (an anonymous flood shares one
   `anon` bucket) is in the limits registry, `docs/design.md`.
-- **Rate limiting is your proxy's job** until M10 adds per-principal
-  quotas. Transport caps (30 s request budget, 256 concurrent requests,
-  size caps) shed overload with retryable 503s; per-client admission
-  control is not built in.
+- **Rate limiting is your proxy's job** — no milestone adds per-principal
+  quotas, so front naatre with a rate-limiting proxy today. Transport caps
+  (30 s request budget, 256 concurrent requests, size caps) shed overload
+  with retryable 503s; per-client admission control is not built in.
 
 ## Backup
 
@@ -167,7 +187,7 @@ a generic message + `request_id` only.
 | `idempotency_key_settled` | 409 | land key already settled with a different payload |
 | `dirty_working_copy` | 409 | sync/restore refused: local edits or colliding untracked files |
 | `git_history_diverged` | 409 | import graft refused: histories diverged |
-| `conflict_markers_present` | 409 | commit content contains conflict markers |
+| `conflict_markers_present` | 409 | commit content contains conflict markers (M12) |
 | `malformed` | 400 | structurally malformed payload |
 | `validation` | 422 | semantic validation failure |
 | `path_not_normalized` | 422 | path is not NFC |
@@ -179,7 +199,7 @@ a generic message + `request_id` only.
 | `duplicate_path` | 422 | same path twice in one changeset |
 | `too_large` | 413 | body or blob over the size cap |
 | `snapshot_expired` | 410 | snapshot past its TTL |
-| `object_collected` | 410 | object collected by GC after the grace window |
+| `object_collected` | 410 | object collected by GC after the grace window (M10) |
 | `object_redacted` | 410 | object redacted (M10 tombstones) |
 | `writer_busy` | 503 | single-writer slot busy; retry with backoff |
 | `derivation_pending` | 503 | derived data still computing (M6) |
@@ -224,6 +244,11 @@ explicitly:
 
 - **`changesets.author`** — the client-supplied `Name <email>` string, and
   the same names/emails as imported from git.
+- **`changesets.canonical`** — the immutable canonical bytes embed the same
+  author string, so out-of-band surgery that rewrites only the columns
+  above leaves the author in the blob; the surgery must rewrite `canonical`
+  alongside the `author` column (M10's tombstone + purge handles the
+  canonical bytes instead).
 - **Principal-attributed columns** — `changesets.principal`,
   `refs.last_principal`, `lands.principal` + `lands.result_json`,
   `snapshots.principal` (TTL-bounded by the snapshot TTL, but with no
@@ -242,10 +267,13 @@ erasure.
 
 ## Distribution note (conditional)
 
-naatre ships as non-commercial FOSS under GPL-3.0-only. If *you*
-distribute it commercially in the EU, Annex I obligations of the Cyber
-Resilience Act may attach to that distribution — assess for your own
-products.
+naatre ships as FOSS under GPL-3.0-only; this project's own distribution
+practice is non-commercial (the license itself permits commercial
+conveyance). If *you* distribute it commercially in the EU, the Cyber
+Resilience Act's Annex I manufacturer obligations may attach to that
+distribution — security-update support for the expected product lifetime,
+reporting actively exploited vulnerabilities, and conformity assessment —
+assess for your own products.
 
 ## License
 

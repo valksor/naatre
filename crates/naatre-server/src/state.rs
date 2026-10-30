@@ -177,6 +177,12 @@ pub struct ServerState {
     /// drive [`crate::snapshots_gc::gc_snapshots`] directly and assert its
     /// effects deterministically.
     pub snapshot_gc_enabled: bool,
+    /// Snapshot GC background-pass interval (`serve`'s task ticks on this).
+    /// Injectable so tests can observe a background pass deterministically —
+    /// e.g. a 10 ms interval plus a short-TTL snapshot, collected with no
+    /// manual [`crate::snapshots_gc::gc_snapshots`] call. Default:
+    /// [`crate::serve::SNAPSHOT_GC_INTERVAL`].
+    pub snapshot_gc_interval: Duration,
 }
 
 /// Shared handle to the server state.
@@ -218,6 +224,7 @@ impl ServerState {
             drain_timeout: Duration::from_secs(30),
             join_deadline: JOIN_DEADLINE,
             snapshot_gc_enabled: true,
+            snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
         })
     }
 
