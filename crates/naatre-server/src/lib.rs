@@ -28,6 +28,7 @@ pub mod openapi;
 pub mod routes;
 pub mod serve;
 pub mod state;
+pub mod tree_derive;
 
 /// Wire protocol version reported by `GET /version` and the startup banner.
 /// Bumped only on a breaking protocol change.
@@ -56,6 +57,20 @@ pub fn router(state: AppState) -> axum::Router {
             get(routes::repos::list).post(routes::repos::create),
         )
         .route("/v1/repos/{r}/stats", get(routes::repos::stats))
+        .route("/v1/repos/{r}/changesets", post(routes::changesets::create))
+        .route(
+            "/v1/repos/{r}/changesets/{id}",
+            get(routes::changesets::get_changeset),
+        )
+        .route(
+            "/v1/repos/{r}/changesets/{id}/root",
+            get(routes::changesets::get_root),
+        )
+        .route("/v1/repos/{r}/trees/{id}", get(routes::trees::get_tree))
+        .route("/v1/repos/{r}/log", get(routes::history::log))
+        .route("/v1/repos/{r}/diff", get(routes::history::diff))
+        .route("/v1/repos/{r}/merge-base", get(routes::history::merge_base))
+        .route("/v1/repos/{r}/file", get(routes::history::file))
         .route(
             "/v1/repos/{r}/refs/{name}",
             get(routes::refs::get_ref).post(routes::refs::cas_ref),

@@ -105,6 +105,30 @@ impl TestApp {
         conn.last_insert_rowid()
     }
 
+    /// Direct-DB seed: a minimal changeset row (M2a's ref fast-forward gate
+    /// resolves ref targets against this table), returning its hex id.
+    fn seed_changeset(&self, repo_id: i64, tag: u8, generation: i64, parents: &[u8]) -> String {
+        let mut id = [0u8; 32];
+        id[0] = tag;
+        let conn = self.db();
+        conn.execute(
+            "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
+             generation, principal, root_tree_id) VALUES (?1, ?2, ?3, 'a', 'm', 1, ?4, 'seed', NULL)",
+            rusqlite::params![repo_id, id, b"c", generation],
+        )
+        .unwrap();
+        for (ord, parent) in parents.iter().enumerate() {
+            let mut p = [0u8; 32];
+            p[0] = *parent;
+            conn.execute(
+                "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![repo_id, id, p, ord as i64],
+            )
+            .unwrap();
+        }
+        id.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
     fn admin(&self) -> &str {
         &self.admin_token
     }
@@ -823,8 +847,10 @@ async fn refs_cas_lifecycle() {
     };
     t.seed_repo("rf");
 
-    let t1 = object_id(Kind::Blob, b"target-one").to_hex();
-    let t2 = object_id(Kind::Blob, b"target-two").to_hex();
+    // M2a's fast-forward gate resolves ref targets as changesets: seed a
+    // two-node chain and move along it (child contains parent).
+    let t1 = t.seed_changeset(1, 0xA1, 0, &[]);
+    let t2 = t.seed_changeset(1, 0xA2, 1, &[0xA1]);
 
     // Create (expected null) → 200 version 1.
     let resp = post_json(

@@ -30,3 +30,6 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # Raw-socket HTTP client in the shutdown test.
 tokio = { version = "1", features = ["io-util"] }
+# Structured-mutation fuzzing of the canonical decoder (already pinned by
+# naatre-core's dev-deps — no new external crate).
+proptest = "1"

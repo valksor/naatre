@@ -92,7 +92,11 @@ pub async fn get_ref(
 /// `target` must be 64 lowercase hex (else 400); `expected: null` creates
 /// the ref (409 `ref_conflict` if it exists); `expected: {"version": v}`
 /// moves only while the current version is `v` (stale → 409
-/// `ref_conflict` with `current_version`/`current_target` details).
+/// `ref_conflict` with `current_version`/`current_target` details). A move
+/// must also be a fast-forward: the new target has to contain the current
+/// one (merge-base(current, new) == current), else 422 `not_fast_forward`
+/// — a target that is not a changeset of this repo cannot prove
+/// containment and is refused identically.
 #[utoipa::path(
     post,
     path = "/v1/repos/{r}/refs/{name}",
@@ -108,7 +112,7 @@ pub async fn get_ref(
         (status = 403, description = "Authenticated without the admin role"),
         (status = 404, description = "No such repo, or CAS expected a ref that does not exist"),
         (status = 409, description = "CAS lost (`ref_conflict`); details carry the current version and target"),
-        (status = 422, description = "`main` moves only via land")
+        (status = 422, description = "`main` moves only via land; or the move is not a fast-forward (`not_fast_forward`)")
     )
 )]
 pub async fn cas_ref(
@@ -133,14 +137,16 @@ pub async fn cas_ref(
     let expected = body.0.expected.as_ref().map(|e| e.version);
     let now_ns = state.now_ns() as i64;
     let principal = auth.principal.clone();
-    // One state.write for repo check + CAS: everything that needs the
-    // single-writer slot happens under one try_lock, so contention surfaces
-    // as 503 writer_busy instead of queueing behind the holder.
+    // One state.write for repo check + non-FF gate + CAS: everything that
+    // needs the single-writer slot happens under one try_lock, so
+    // contention surfaces as 503 writer_busy instead of queueing behind the
+    // holder, and no writer can interleave between the FF check and the move.
     let repo_name = repo.clone();
     let ref_name = name.clone();
     let outcome = state
         .write(move |store| {
-            let repo_id = db::repo_id_by_name(store.conn(), &repo_name)
+            let conn = store.conn();
+            let repo_id = db::repo_id_by_name(conn, &repo_name)
                 .map_err(ApiError::log_internal)?
                 .ok_or_else(|| {
                     ApiError::new(
@@ -148,8 +154,34 @@ pub async fn cas_ref(
                         format!("no repo named {repo_name:?} on this server"),
                     )
                 })?;
+
+            // Fast-forward gate (M2a): when this CAS would move an existing
+            // ref, the new target must CONTAIN the old one — merge-base(old,
+            // new) == old. A target that is not a changeset of this repo
+            // cannot prove containment and is refused the same way. The gate
+            // runs before ref_cas's own transaction but under the same
+            // exclusive lock, so no writer can slip between check and move.
+            if let Some(expected_version) = expected
+                && let Some(current) =
+                    db::ref_get(conn, repo_id, &ref_name).map_err(ApiError::log_internal)?
+                && current.version == expected_version
+                && let Some(old) = current.target
+            {
+                let old_id = Id(old.try_into().expect("ref target is a 32-byte id"));
+                if !ref_contains(conn, repo_id, &old_id, &target)? {
+                    return Err(ApiError::new(
+                        ApiCode::NotFastForward,
+                        "ref move is not a fast-forward: the new target does not \
+                         contain the current one",
+                    )
+                    .with_details(serde_json::json!({
+                        "current_target": old_id.to_hex(),
+                    })));
+                }
+            }
+
             db::ref_cas(
-                store.conn(),
+                conn,
                 db::RefMove {
                     repo_id,
                     repo_name: &repo_name,
@@ -199,4 +231,24 @@ pub async fn cas_ref(
             format!("no repo named {repo:?} on this server"),
         )),
     }
+}
+
+/// True when `new` contains `old` in this repo's changeset graph
+/// (`merge_base(old, new) == old`). Both endpoints must be known changesets
+/// here — the caller refuses otherwise.
+fn ref_contains(
+    conn: &rusqlite::Connection,
+    repo_id: i64,
+    old: &Id,
+    new: &Id,
+) -> Result<bool, ApiError> {
+    let fetch = |id: &Id| {
+        db::changeset_graph(conn, repo_id, id)
+            .map(|g| g.map(|g| (g.generation, g.parents)))
+            .map_err(ApiError::log_internal)
+    };
+    if fetch(old)?.is_none() || fetch(new)?.is_none() {
+        return Ok(false);
+    }
+    Ok(crate::routes::history::merge_base_walk(&fetch, old, new) == Some(*old))
 }

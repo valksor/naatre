@@ -866,6 +866,7 @@ dependencies = [
  "http-body-util",
  "naatre-core",
  "naatre-store",
+ "proptest",
  "rusqlite",
  "serde",
  "serde_json",

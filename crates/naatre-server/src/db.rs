@@ -280,6 +280,376 @@ pub fn repo_blob_check(conn: &Connection, repo_id: i64, object_id: &Id) -> rusql
     Ok(hit.is_some())
 }
 
+// ---- changesets & trees (M2a) ---------------------------------------------
+
+/// One row of `changesets`.
+pub struct ChangesetRow {
+    pub canonical: Vec<u8>,
+    pub author: String,
+    pub message: String,
+    pub timestamp_ns: i64,
+    pub generation: i64,
+    pub principal: String,
+    pub root_tree_id: Option<Vec<u8>>,
+}
+
+/// One row of `file_changes`, with `op` as the canonical op tag (Add=0,
+/// Mod=1, Del=2 — the same numbering as the byte format).
+pub struct FileChangeRow {
+    pub path: String,
+    pub op: i64,
+    pub blob_id: Option<Vec<u8>>,
+    pub size: Option<i64>,
+    pub exec: bool,
+}
+
+/// One row of `tree_entries`; `kind` 0 = file, 1 = dir.
+pub struct TreeEntryRow {
+    pub name: String,
+    pub kind: i64,
+    pub object_id: Vec<u8>,
+    pub size: i64,
+    pub exec: bool,
+}
+
+/// A changeset's graph position: generation, parent ids in `ord` order,
+/// and its derived root-tree pointer.
+pub struct CsGraph {
+    pub generation: i64,
+    pub parents: Vec<Id>,
+    pub root_tree_id: Option<Vec<u8>>,
+}
+
+/// Minimal projection for `/log` entries.
+pub struct LogRow {
+    pub id: Vec<u8>,
+    pub author: String,
+    pub message: String,
+    pub timestamp_ns: i64,
+    pub generation: i64,
+    pub principal: String,
+}
+
+/// One derived tree to persist: canonical bytes plus flat entries.
+pub struct TreeWrite {
+    pub id: Id,
+    pub canonical: Vec<u8>,
+    pub entries: Vec<TreeEntryRow>,
+}
+
+/// Canonical op tag for a [`naatre_core::changeset::Op`] (Add=0, Mod=1,
+/// Del=2, matching the byte format).
+pub fn op_tag(op: naatre_core::changeset::Op) -> i64 {
+    match op {
+        naatre_core::changeset::Op::Add => 0,
+        naatre_core::changeset::Op::Mod => 1,
+        naatre_core::changeset::Op::Del => 2,
+    }
+}
+
+/// One changeset row (metadata only), or `None` when the id is not a
+/// changeset of this repo.
+pub fn changeset_get(
+    conn: &Connection,
+    repo_id: i64,
+    id: &Id,
+) -> rusqlite::Result<Option<ChangesetRow>> {
+    conn.query_row(
+        "SELECT canonical, author, message, timestamp_ns, generation, principal, root_tree_id \
+         FROM changesets WHERE repo_id = ?1 AND id = ?2",
+        params![repo_id, id.0.as_slice()],
+        |row| {
+            Ok(ChangesetRow {
+                canonical: row.get(0)?,
+                author: row.get(1)?,
+                message: row.get(2)?,
+                timestamp_ns: row.get(3)?,
+                generation: row.get(4)?,
+                principal: row.get(5)?,
+                root_tree_id: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// A changeset's generation, parents (in `ord` order), and root tree, or
+/// `None`.
+pub fn changeset_graph(
+    conn: &Connection,
+    repo_id: i64,
+    id: &Id,
+) -> rusqlite::Result<Option<CsGraph>> {
+    let row: Option<(i64, Option<Vec<u8>>)> = conn
+        .query_row(
+            "SELECT generation, root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            params![repo_id, id.0.as_slice()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((generation, root_tree_id)) = row else {
+        return Ok(None);
+    };
+    let mut stmt = conn.prepare(
+        "SELECT parent FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2 ORDER BY ord ASC",
+    )?;
+    let parents = stmt
+        .query_map(params![repo_id, id.0.as_slice()], |r| {
+            r.get::<_, Vec<u8>>(0)
+                .map(|b| Id(b.try_into().expect("parent id is 32 bytes")))
+        })?
+        .collect::<rusqlite::Result<Vec<Id>>>()?;
+    Ok(Some(CsGraph {
+        generation,
+        parents,
+        root_tree_id,
+    }))
+}
+
+/// All file changes of one changeset, ascending by path (the PK order).
+pub fn file_changes_list(
+    conn: &Connection,
+    repo_id: i64,
+    cs: &Id,
+) -> rusqlite::Result<Vec<FileChangeRow>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT path, op, blob_id, size, exec FROM file_changes \
+         WHERE repo_id = ?1 AND cs = ?2 ORDER BY path ASC",
+    )?;
+    let rows = stmt.query_map(params![repo_id, cs.0.as_slice()], |row| {
+        Ok(FileChangeRow {
+            path: row.get(0)?,
+            op: row.get(1)?,
+            blob_id: row.get(2)?,
+            size: row.get(3)?,
+            exec: row.get::<_, i64>(4)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// The ids among `ids` that have no `objects` row (blob-presence check).
+pub fn objects_missing(conn: &Connection, ids: &[Id]) -> rusqlite::Result<Vec<Id>> {
+    let mut missing = Vec::new();
+    for id in ids {
+        let hit: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM objects WHERE object_id = ?1",
+                params![id.0.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if hit.is_none() {
+            missing.push(*id);
+        }
+    }
+    Ok(missing)
+}
+
+/// All entries of one tree node, ascending by name.
+pub fn tree_entries_load(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Vec<TreeEntryRow>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT name, kind, object_id, size, exec FROM tree_entries \
+         WHERE tree_id = ?1 ORDER BY name ASC",
+    )?;
+    let rows = stmt.query_map(params![tree_id.0.as_slice()], |row| {
+        Ok(TreeEntryRow {
+            name: row.get(0)?,
+            kind: row.get(1)?,
+            object_id: row.get(2)?,
+            size: row.get(3)?,
+            exec: row.get::<_, i64>(4)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
+/// The repo that owns a tree row, or `None` (unknown tree id).
+pub fn tree_repo(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT repo_id FROM trees WHERE id = ?1",
+        params![tree_id.0.as_slice()],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Persists derived trees: one `trees` row (canonical bytes) plus its flat
+/// `tree_entries` rows each. `INSERT OR REPLACE` keyed by id makes repeats
+/// idempotent (shared subtrees re-derived by a child changeset are no-ops).
+pub fn trees_write(conn: &Connection, repo_id: i64, trees: &[TreeWrite]) -> rusqlite::Result<()> {
+    for tree in trees {
+        conn.execute(
+            "INSERT OR REPLACE INTO trees(id, repo_id, canonical) VALUES (?1, ?2, ?3)",
+            params![tree.id.0.as_slice(), repo_id, tree.canonical],
+        )?;
+        for e in &tree.entries {
+            conn.execute(
+                "INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    tree.id.0.as_slice(),
+                    e.name,
+                    e.kind,
+                    e.object_id,
+                    e.size,
+                    e.exec as i64,
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Everything one successful changeset create commits, atomically: the
+/// changeset row, its parents, file changes, repo blob membership, derived
+/// trees, and the `changeset_create` audit row. Any failure rolls the whole
+/// step back — a rejected create leaves zero rows.
+pub struct ChangesetInsert<'a> {
+    pub repo_id: i64,
+    pub repo_name: &'a str,
+    pub id: &'a Id,
+    pub canonical: &'a [u8],
+    pub author: &'a str,
+    pub message: &'a str,
+    pub timestamp_ns: i64,
+    pub generation: i64,
+    pub principal: &'a str,
+    pub root_tree_id: &'a Id,
+    pub parents: &'a [Id],
+    pub changes: &'a [naatre_core::changeset::FileChange],
+    /// Add/Mod blob ids for `repo_blobs` membership (deduplicated).
+    pub blobs: &'a [Id],
+    pub trees: &'a [TreeWrite],
+    pub now_ns: i64,
+}
+
+pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
+         generation, principal, root_tree_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            rec.repo_id,
+            rec.id.0.as_slice(),
+            rec.canonical,
+            rec.author,
+            rec.message,
+            rec.timestamp_ns,
+            rec.generation,
+            rec.principal,
+            rec.root_tree_id.0.as_slice(),
+        ],
+    )?;
+    for (ord, parent) in rec.parents.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                rec.repo_id,
+                rec.id.0.as_slice(),
+                parent.0.as_slice(),
+                ord as i64
+            ],
+        )?;
+    }
+    for c in rec.changes {
+        let (blob, size): (Option<&[u8]>, Option<i64>) = match c.op {
+            naatre_core::changeset::Op::Del => (None, None),
+            // Request validation already guarantees Add/Mod carry both.
+            _ => match (&c.blob, c.size) {
+                (Some(b), Some(s)) => (Some(b.0.as_slice()), Some(s as i64)),
+                _ => (None, None),
+            },
+        };
+        let exec = i64::from(
+            matches!(
+                c.op,
+                naatre_core::changeset::Op::Add | naatre_core::changeset::Op::Mod
+            ) && c.exec == Some(true),
+        );
+        tx.execute(
+            "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                rec.repo_id,
+                rec.id.0.as_slice(),
+                c.path,
+                op_tag(c.op),
+                blob,
+                size,
+                exec,
+            ],
+        )?;
+    }
+    for blob in rec.blobs {
+        tx.execute(
+            "INSERT OR IGNORE INTO repo_blobs(repo_id, object_id) VALUES (?1, ?2)",
+            params![rec.repo_id, blob.0.as_slice()],
+        )?;
+    }
+    trees_write(&tx, rec.repo_id, rec.trees)?;
+    audit_append(
+        &tx,
+        rec.now_ns,
+        rec.principal,
+        "changeset_create",
+        &serde_json::json!({
+            "repo": rec.repo_name,
+            "changeset": rec.id.to_hex(),
+            "generation": rec.generation,
+        })
+        .to_string(),
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Walks the first-parent chain from `from`, newest first, up to `limit`
+/// rows. The chain itself is the deterministic order.
+pub fn log_chain(
+    conn: &Connection,
+    repo_id: i64,
+    from: &Id,
+    limit: i64,
+) -> rusqlite::Result<Vec<LogRow>> {
+    let mut rows = Vec::new();
+    let mut current = *from;
+    loop {
+        let Some(graph) = changeset_graph(conn, repo_id, &current)? else {
+            break;
+        };
+        let row = conn
+            .query_row(
+                "SELECT author, message, timestamp_ns, generation, principal FROM changesets \
+                 WHERE repo_id = ?1 AND id = ?2",
+                params![repo_id, current.0.as_slice()],
+                |r| {
+                    Ok(LogRow {
+                        id: current.0.to_vec(),
+                        author: r.get(0)?,
+                        message: r.get(1)?,
+                        timestamp_ns: r.get(2)?,
+                        generation: r.get(3)?,
+                        principal: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            break;
+        };
+        rows.push(row);
+        if rows.len() as i64 >= limit {
+            break;
+        }
+        match graph.parents.first() {
+            Some(next) => current = *next,
+            None => break,
+        }
+    }
+    Ok(rows)
+}
+
 // ---- principals & tokens -------------------------------------------------
 
 /// Creates or re-roles a principal.

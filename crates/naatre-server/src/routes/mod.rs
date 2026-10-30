@@ -4,12 +4,15 @@
 //! role gates map to 403 `forbidden`, auth to the 401 token codes.
 
 pub mod audit;
+pub mod changesets;
 pub mod health;
+pub mod history;
 pub mod objects;
 pub mod openapi;
 pub mod refs;
 pub mod repos;
 pub mod tokens;
+pub mod trees;
 pub mod version;
 pub mod whoami;
 

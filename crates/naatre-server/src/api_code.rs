@@ -45,6 +45,19 @@ pub enum ApiCode {
     PathNotNormalized,
     /// 422 — changeset create with an empty file map.
     EmptyChangeset,
+    /// 422 — ref move is not a fast-forward (new target does not contain the old).
+    NotFastForward,
+    /// 422 — changeset create references a parent that is not a changeset of
+    /// this repo (details list the missing ids).
+    UnknownParent,
+    /// 422 — path collides with a file/dir in the parent tree (file/dir
+    /// duality): add under a file, mod of a directory, del of an absent path.
+    Duality,
+    /// 422 — changeset paths are not strictly sorted; rejected, never
+    /// re-sorted server-side (the id is the client's responsibility).
+    UnsortedChanges,
+    /// 422 — the same path appears twice in one changeset request.
+    DuplicatePath,
     /// 413 — body or blob exceeds the size cap.
     TooLarge,
     /// 410 — snapshot is past its TTL.
@@ -82,6 +95,11 @@ impl ApiCode {
             Self::Validation => "validation",
             Self::PathNotNormalized => "path_not_normalized",
             Self::EmptyChangeset => "empty_changeset",
+            Self::NotFastForward => "not_fast_forward",
+            Self::UnknownParent => "unknown_parent",
+            Self::Duality => "duality",
+            Self::UnsortedChanges => "unsorted_changes",
+            Self::DuplicatePath => "duplicate_path",
             Self::TooLarge => "too_large",
             Self::SnapshotExpired => "snapshot_expired",
             Self::ObjectCollected => "object_collected",
@@ -107,9 +125,14 @@ impl ApiCode {
             | Self::GitHistoryDiverged
             | Self::ConflictMarkersPresent => StatusCode::CONFLICT,
             Self::Malformed => StatusCode::BAD_REQUEST,
-            Self::Validation | Self::PathNotNormalized | Self::EmptyChangeset => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            Self::Validation
+            | Self::PathNotNormalized
+            | Self::EmptyChangeset
+            | Self::NotFastForward
+            | Self::UnknownParent
+            | Self::Duality
+            | Self::UnsortedChanges
+            | Self::DuplicatePath => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::SnapshotExpired | Self::ObjectCollected | Self::ObjectRedacted => {
                 StatusCode::GONE
