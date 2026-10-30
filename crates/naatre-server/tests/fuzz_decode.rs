@@ -277,8 +277,14 @@ proptest! {
                 }
                 Err(CoreError::EncodeUnsorted) => {
                     // The only legal encode failure: the mutation broke
-                    // strictly-ascending path order.
-                    prop_assert_eq!(kind, "order_breaking");
+                    // strictly-ascending path order. Order can break two
+                    // ways: the dedicated swap mutation, or a flip that
+                    // lands in a path or its length prefix ("either" kind)
+                    // and rewrites one path past its neighbor.
+                    prop_assert!(
+                        kind == "order_breaking" || kind == "either",
+                        "encode-unsorted from kind {kind}"
+                    );
                 }
                 Err(other) => prop_assert!(false, "unexpected encode error: {other:?}"),
             },

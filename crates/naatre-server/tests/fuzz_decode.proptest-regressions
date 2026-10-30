@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e262db1b343991510ecbda35bdc132ebd96742772caaa13f243d0a0fa435eba6 # shrinks to cs = Changeset { repo_id: 7, parents: [], author: "A <a@b>", message: "fuzz", timestamp_ns: 1, changes: [FileChange { path: "a/b", op: Add, blob: Some(Id([176, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])), size: Some(4), exec: Some(false) }, FileChange { path: "a/c/d", op: Del, blob: None, size: None, exec: None }, FileChange { path: "m", op: Mod, blob: Some(Id([176, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])), size: Some(2), exec: Some(false) }, FileChange { path: "ÿx", op: Add, blob: Some(Id([176, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])), size: Some(4), exec: Some(false) }] }, mutation = Flip { frac: 31, mask: 2, header_bias: false }
