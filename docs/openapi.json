@@ -1645,7 +1645,7 @@
             "description": "No such repo/changeset, or the path is absent at `at`"
           },
           "503": {
-            "description": "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded the chain/blob caps (`blame_too_large`, not retryable)"
+            "description": "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded a read cap (chain length / blob bytes / line count / response bytes — `blame_too_large`, not retryable)"
           }
         },
         "summary": "Blames one file at one changeset (any authenticated principal) by\nwalking the first-parent chain over the derived blame diff-state:\nper node one `derive_state` lookup and one `blame_state` point query;\nat each node that touched the path, the line diff between its blob and\nthe parent's blob attributes the introduced lines. First touched node\nwith no parent blob = the add; the walk stops there.",

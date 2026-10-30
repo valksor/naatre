@@ -1932,26 +1932,38 @@ pub fn derive_poison_touching_path(
     Ok(rows)
 }
 
+/// One `(tree_id, name)` entry probe — the indexed point lookup under both
+/// path lookups. `tree_entries`' `PRIMARY KEY(tree_id, name)` makes this an
+/// O(1) B-tree descent per component, independent of the directory's entry
+/// count.
+fn tree_entry_lookup(
+    conn: &Connection,
+    tree: &Id,
+    name: &str,
+) -> rusqlite::Result<Option<(i64, Vec<u8>)>> {
+    conn.query_row(
+        "SELECT kind, object_id FROM tree_entries WHERE tree_id = ?1 AND name = ?2",
+        params![tree.0.as_slice(), name],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+    )
+    .optional()
+}
+
 /// Resolves one path in a tree to its blob id (`None` = absent, or the
 /// path crosses a file, or names a directory). The blame route's
-/// existence pre-check. DERIVERS must not use this variant: it loads every
-/// entry of each tree node per path component and never charges — see
-/// [`tree_lookup_path_charged`].
+/// existence pre-check. One [`tree_entry_lookup`] probe per path component
+/// — O(depth), independent of directory width. DERIVERS must not use this
+/// variant: it never charges — see [`tree_lookup_path_charged`].
 pub fn tree_lookup_path(conn: &Connection, root: &Id, path: &str) -> rusqlite::Result<Option<Id>> {
     let mut tree = *root;
     let components: Vec<&str> = path.split('/').collect();
     for (i, name) in components.iter().enumerate() {
-        let entries = tree_entries_load(conn, &tree)?;
-        let Some(entry) = entries.iter().find(|e| e.name.as_str() == *name) else {
+        let Some((kind, object_id)) = tree_entry_lookup(conn, &tree, name)? else {
             return Ok(None);
         };
-        let object = Id(entry
-            .object_id
-            .clone()
-            .try_into()
-            .expect("object id is 32 bytes"));
+        let object = Id(object_id.try_into().expect("object id is 32 bytes"));
         let last = i == components.len() - 1;
-        match (entry.kind, last) {
+        match (kind, last) {
             (0, true) => return Ok(Some(object)),
             (1, false) => tree = object,
             _ => return Ok(None),
@@ -1961,12 +1973,12 @@ pub fn tree_lookup_path(conn: &Connection, root: &Id, path: &str) -> rusqlite::R
 }
 
 /// [`tree_lookup_path`] priced through the deriver's walk budget: one
-/// charge per COMPONENT lookup (a [`tree_entries_load`]) and one per entry
-/// ROW that load materializes — the honest price of the work, which a
-/// path-shaped "one visit per walk" charge hides (a single wide directory
-/// load costs thousands of rows, so a crafted wide-and-deep changeset
-/// monopolized the write slot with the budget untripped). SQL failures are
-/// a [`DeriveFailure::Fail`] (a failed attempt); an exhausted budget is
+/// charge per COMPONENT (an indexed [`tree_entry_lookup`] point probe on
+/// `tree_entries`' PRIMARY KEY) — the walk's cost is O(depth) probes,
+/// independent of directory width, which is exactly what the charge
+/// prices. SQL failures are a [`DeriveFailure::Fail`] (a failed attempt);
+/// an exhausted budget or a missed
+/// [`crate::derive::DERIVE_WALK_DEADLINE_NS`] wall-clock deadline is
 /// [`DeriveFailure::WalkBudget`] (immediate quarantine). Derivers walking
 /// trees MUST use this variant.
 pub fn tree_lookup_path_charged(
@@ -1979,20 +1991,15 @@ pub fn tree_lookup_path_charged(
     let components: Vec<&str> = path.split('/').collect();
     for (i, name) in components.iter().enumerate() {
         ctx.charge(1)?;
-        let entries = tree_entries_load(conn, &tree).map_err(|e| {
+        let Some((kind, object_id)) = tree_entry_lookup(conn, &tree, name).map_err(|e| {
             crate::derive::DeriveFailure::Fail(crate::derive::PoisonReason::new(e.to_string()))
-        })?;
-        ctx.charge(entries.len() as u64)?;
-        let Some(entry) = entries.iter().find(|e| e.name.as_str() == *name) else {
+        })?
+        else {
             return Ok(None);
         };
-        let object = Id(entry
-            .object_id
-            .clone()
-            .try_into()
-            .expect("object id is 32 bytes"));
+        let object = Id(object_id.try_into().expect("object id is 32 bytes"));
         let last = i == components.len() - 1;
-        match (entry.kind, last) {
+        match (kind, last) {
             (0, true) => return Ok(Some(object)),
             (1, false) => tree = object,
             _ => return Ok(None),

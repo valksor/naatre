@@ -233,6 +233,12 @@ fn system_now_ns() -> u64 {
         .unwrap_or(0)
 }
 
+/// The production clock as a [`ClockFn`], for offline paths with no
+/// [`ServerState`] in scope (the import process).
+pub fn system_clock() -> ClockFn {
+    Arc::new(system_now_ns)
+}
+
 impl ServerState {
     /// Opens the store inside `data` (pragmas + migrations via
     /// [`Store::open`]) with the default configuration: system clock, the

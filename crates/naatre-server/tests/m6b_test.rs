@@ -1816,16 +1816,16 @@ async fn binary_and_empty_files_blame_structured() {
 // ---- 6b. the walk-budget pricing + read caps -----------------------------------
 
 /// A tree-walking deriver probe: per file-change row, resolves the path in
-/// the parent's tree through the ROW-PRICED budgeted lookup — the exact
-/// contract the blame deriver follows. Its tiny budget makes the crafted
-/// wide+deep changeset trip the budget in one pass.
-struct WideWalkProbe {
+/// the parent's tree through the budgeted lookup — the exact contract the
+/// blame deriver follows. Its tiny budget makes a DEEP path trip the
+/// budget in one pass (each component is one charge).
+struct DepthWalkProbe {
     budget: u64,
 }
 
-impl Deriver for WideWalkProbe {
+impl Deriver for DepthWalkProbe {
     fn kind(&self) -> &'static str {
-        "wide-walk-probe"
+        "deep-walk-probe"
     }
 
     fn walk_budget(&self) -> u64 {
@@ -1865,20 +1865,21 @@ impl Deriver for WideWalkProbe {
     }
 }
 
-/// The walk budget prices WORK, not paths (the writer-role DoS fix): a
-/// crafted WIDE root (60 entries) + DEEP path (5 components) makes every
-/// row's parent-tree walk cost ~65 row charges through the budgeted
-/// lookup, so a 5-row changeset trips even a generous budget mid-derive —
-/// quarantined in one pass (seconds), with the report rowed, while the
-/// create is untouched (the kind is deferred) and the REAL blame kind
-/// (row-priced budget sized for it) derives the same shape done.
+/// The walk budget prices COMPONENT probes (the writer-role DoS fix): a
+/// deep path (41 components) costs 42 charges through the budgeted lookup,
+/// so a 1-row changeset trips even a small budget mid-derive — quarantined
+/// in one pass, with the report rowed, while the create is untouched (the
+/// kind is deferred) and the REAL blame kind (budget sized to the
+/// component pricing) derives the same shape done. The root parent, whose
+/// derive walks no parent tree, derives done — the pin discriminates the
+/// charged walk, not the shape alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wide_deep_changeset_poisons_on_the_charged_walk_budget() {
+async fn deep_path_changeset_poisons_on_the_charged_walk_budget() {
     let dir = tempfile::tempdir().unwrap();
     let data_path = dir.path().join("data");
     let dd = DataDir::create(&data_path).unwrap();
     std::fs::write(dd.db_path(), b"").unwrap();
-    let probe = WideWalkProbe { budget: 300 };
+    let probe = DepthWalkProbe { budget: 30 };
     let ctx = Ctx {
         _dir: Some(dir),
         ..open_ctx_with(&data_path, true, |state| {
@@ -1886,25 +1887,22 @@ async fn wide_deep_changeset_poisons_on_the_charged_walk_budget() {
         })
     };
 
-    let mut wide = vec![add_ch("a/b/c/d/deep.txt", b"deep\n")];
-    for i in 0..60 {
-        wide.push(add_ch(
-            Box::leak(format!("f{i:02}.txt").into_boxed_str()),
-            b"x\n",
-        ));
-    }
-    let parent = ctx.commit(None, "Ann <ann@example.com>", wide).await;
+    let deep: &'static str = {
+        let mut p = String::new();
+        for _ in 0..40 {
+            p.push_str("a/");
+        }
+        p.push_str("deep.txt");
+        Box::leak(p.into_boxed_str())
+    };
+    let parent = ctx
+        .commit(None, "Ann <ann@example.com>", vec![add_ch(deep, b"deep\n")])
+        .await;
     let child = ctx
         .commit(
             Some(&parent),
             "Bob <bob@example.com>",
-            vec![
-                ch("a/b/c/d/deep.txt", b"deep2\n"),
-                ch("f00.txt", b"y\n"),
-                ch("f01.txt", b"y\n"),
-                ch("f02.txt", b"y\n"),
-                ch("f03.txt", b"y\n"),
-            ],
+            vec![ch(deep, b"deep2\n")],
         )
         .await;
     ctx.drain().await;
@@ -1914,31 +1912,31 @@ async fn wide_deep_changeset_poisons_on_the_charged_walk_budget() {
             .query_row(
                 "SELECT s.state FROM derive_state s \
                  JOIN derive_kinds k ON k.id = s.kind \
-                 WHERE k.name = 'wide-walk-probe' AND s.cs = ?1",
+                 WHERE k.name = 'deep-walk-probe' AND s.cs = ?1",
                 rusqlite::params![id_of(cs).0.as_slice()],
                 |r| r.get::<_, String>(0),
             )
             .unwrap()
     };
-    assert_eq!(probe_state(&parent), "done", "the narrow derive passes");
+    assert_eq!(probe_state(&parent), "done", "the root derive passes");
     assert_eq!(
         probe_state(&child),
         "poison",
-        "the wide+deep derive tripped the charged budget"
+        "the deep derive tripped the charged budget"
     );
     let (reports, reason): (i64, String) = ctx
         .db()
         .query_row(
             "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
              JOIN derive_kinds k ON k.id = r.kind \
-             WHERE k.name = 'wide-walk-probe'",
+             WHERE k.name = 'deep-walk-probe'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
     assert_eq!(reports, 1, "quarantined exactly once");
     assert!(reason.contains("walk budget"), "{reason:?}");
-    // The real blame kind, whose budget is sized to the row pricing,
+    // The real blame kind, whose budget is sized to the component pricing,
     // derives the SAME shape without tripping: the pin discriminates —
     // the probe's budget bound it, not the shape alone.
     let blame_state: String = ctx
@@ -1952,6 +1950,216 @@ async fn wide_deep_changeset_poisons_on_the_charged_walk_budget() {
         )
         .unwrap();
     assert_eq!(blame_state, "done");
+}
+
+/// The blame kind's OWN budget binds its honest pricing — the QA pin the
+/// probe kinds cannot see: a changeset whose priced walk (1 per row + 1
+/// per path component) exceeds blame's 1,000,000 budget quarantines with
+/// the walk-budget reason. 3,400 rows at depth 300 cost 3,400 × 301 >
+/// 1,000,000; the root parent (no parent-tree walk) derives done. If the
+/// deriver's charging or its budget reverts to anything that lets a
+/// million-probe walk run unpriced, this pin fails. (The depth is bounded
+/// by the create path's per-level tree recursion, not by the budget.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_kind_own_budget_quarantines_a_priced_deep_shape() {
+    let ctx = in_memory_ctx(true);
+    const DEPTH: usize = 300;
+    const ROWS: usize = 3_400;
+    let deep = |i: usize| -> &'static str {
+        let mut p = String::new();
+        for _ in 0..DEPTH - 1 {
+            p.push_str("a/");
+        }
+        p.push_str(&format!("f{i:04}.txt"));
+        Box::leak(p.into_boxed_str())
+    };
+    let parent = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            (0..ROWS).map(|i| add_ch(deep(i), b"x\n")).collect(),
+        )
+        .await;
+    ctx.drain().await;
+    let child = ctx
+        .commit(
+            Some(&parent),
+            "Bob <bob@example.com>",
+            (0..ROWS).map(|i| ch(deep(i), b"y\n")).collect(),
+        )
+        .await;
+    ctx.drain().await;
+
+    let blame_state = |cs: &str| {
+        ctx.db()
+            .query_row(
+                "SELECT s.state FROM derive_state s \
+                 JOIN derive_kinds k ON k.id = s.kind \
+                 WHERE k.name = 'blame' AND s.cs = ?1",
+                rusqlite::params![id_of(cs).0.as_slice()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(blame_state(&parent), "done", "the root derive passes");
+    assert_eq!(
+        blame_state(&child),
+        "poison",
+        "the priced walk exceeded blame's own budget"
+    );
+    let (_, reason): (i64, String) = ctx
+        .db()
+        .query_row(
+            "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
+             JOIN derive_kinds k ON k.id = r.kind \
+             WHERE k.name = 'blame'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(reason.contains("walk budget"), "{reason:?}");
+}
+
+/// The pricing is width-INDEPENDENT: a 12,000-entry directory (the crafted
+/// false-quarantine shape) touched by 100 rows costs 100 × 3 charges under
+/// the per-component point-probe pricing and derives done — under the
+/// removed per-entry-row pricing the same shape cost 1.2 million charges
+/// and would have quarantined, so the pin fails if the width charge
+/// returns. The blame read stays exact (not degraded).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wide_directory_touch_derives_done_under_component_pricing() {
+    let ctx = in_memory_ctx(true);
+    const WIDE: usize = 12_000;
+    const ROWS: usize = 100;
+    let wide = |i: usize| -> &'static str { Box::leak(format!("w/f{i:05}.txt").into_boxed_str()) };
+    let parent = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            (0..WIDE).map(|i| add_ch(wide(i), b"x\n")).collect(),
+        )
+        .await;
+    ctx.drain().await;
+    let child = ctx
+        .commit(
+            Some(&parent),
+            "Bob <bob@example.com>",
+            (0..ROWS).map(|i| ch(wide(i), b"y\n")).collect(),
+        )
+        .await;
+    ctx.drain().await;
+
+    let blame_state: String = ctx
+        .db()
+        .query_row(
+            "SELECT s.state FROM derive_state s \
+             JOIN derive_kinds k ON k.id = s.kind \
+             WHERE k.name = 'blame' AND s.cs = ?1",
+            rusqlite::params![id_of(&child).0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(blame_state, "done", "the wide directory touch derives done");
+
+    let resp = ctx.blame(&child, "w/f00000.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["degraded"], json!(false));
+    assert_eq!(resp.body["lines"].as_array().unwrap().len(), 1);
+}
+
+/// The line cap fires BEFORE the assembler's per-line allocation, both
+/// directions: `BLAME_MAX_LINES + 1` lines is a 503 `blame_too_large`;
+/// `BLAME_MAX_LINES` exactly is a full 200 with every line present (no
+/// silent truncation).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_line_cap_trips_at_the_boundary_not_below_it() {
+    let ctx = in_memory_ctx(true);
+    let cap = naatre_server::derived::BLAME_MAX_LINES;
+
+    let over_txt = "a\n".repeat(cap + 1);
+    let over = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("over.txt", over_txt.as_bytes())],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&over, "over.txt").await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], json!("blame_too_large"));
+
+    let under_txt = "a\n".repeat(cap);
+    let under = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("under.txt", under_txt.as_bytes())],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&under, "under.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["binary"], json!(false));
+    assert_eq!(
+        resp.body["lines"].as_array().unwrap().len(),
+        cap,
+        "the under-cap blame is complete, never truncated"
+    );
+}
+
+/// The serialized-response cap, both directions: a line-count-compliant
+/// shape whose ENCODED JSON exceeds `BLAME_MAX_RESPONSE_BYTES` is a 503
+/// `blame_too_large`; the same shape comfortably under it is a full 200.
+/// Both shapes stay under the line cap — this pin trips the response cap,
+/// not the line cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_response_cap_trips_on_encoded_size_not_below_it() {
+    let ctx = in_memory_ctx(true);
+
+    // 190,000 lines of 80 bytes: a ~15 MiB file (admissible under the
+    // 16 MiB blob cap), ~37 MB encoded (over the 32 MiB response cap).
+    let over_line = format!("{}\n", "x".repeat(79));
+    let over_txt = over_line.repeat(190_000);
+    let over = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("over.txt", over_txt.as_bytes())],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&over, "over.txt").await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], json!("blame_too_large"));
+
+    // 120,000 lines of 80 bytes: ~9.6 MiB file, ~23 MB encoded (under).
+    let under_txt = over_line.repeat(120_000);
+    let under = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("under.txt", under_txt.as_bytes())],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&under, "under.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(
+        resp.body["lines"].as_array().unwrap().len(),
+        120_000,
+        "the under-cap blame is complete, never truncated"
+    );
 }
 
 /// A first-parent chain past the read cap degrades with `blame_too_large`

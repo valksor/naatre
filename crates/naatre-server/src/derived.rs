@@ -78,12 +78,10 @@ fn blob_of(bytes: &[u8]) -> Id {
 /// The blame DIFF-STATE deriver: one `blame_state` row per touched path
 /// (this changeset's blob id, the first parent's blob id), resolved by
 /// walking the parent's tree once per touched path. Charges one visit per
-/// file-change row plus the ROW-PRICED cost of each parent-tree walk
-/// ([`crate::db::tree_lookup_path_charged`]: per component lookup and per
-/// entry row materialized — the raw
-/// [`crate::db::tree_lookup_path`] loads every entry of every node and
-/// would let a crafted wide-and-deep changeset stall the write slot with
-/// the budget untripped).
+/// file-change row plus one charge per path COMPONENT of each parent-tree
+/// walk ([`crate::db::tree_lookup_path_charged`]: an indexed
+/// (tree_id, name) point probe per component — O(depth), independent of
+/// directory width).
 pub struct BlameDeriver;
 
 impl Deriver for BlameDeriver {
@@ -91,17 +89,19 @@ impl Deriver for BlameDeriver {
         KIND_BLAME
     }
 
-    /// One visit per touched file-change row plus the tree rows each
-    /// row's parent-tree walk loads (see the pricing convention on
-    /// [`crate::derive::DEFAULT_WALK_BUDGET`]). The worst admitted node is
-    /// a MAX_ENTRIES changeset (100,000 rows) whose per-row walk loads
-    /// ≤ ~90 tree entries (e.g. depth 8 through dirs averaging ~11
-    /// entries) — 10 million covers it; anything wider trips the budget
-    /// and is quarantined immediately (seconds), which is the designed
-    /// outcome: unpriced, that same shape held the write slot for
-    /// minutes-to-hours.
+    /// One visit per touched file-change row plus one charge per path
+    /// component of the row's parent-tree walk (see the pricing convention
+    /// on [`crate::derive::DEFAULT_WALK_BUDGET`]). The worst fully-priced
+    /// legitimate node is a MAX_ENTRIES changeset (100,000 rows) at a
+    /// realistic source depth (~8 components): 100,000 × 9 = 900,000
+    /// charges, which 1 million covers with headroom; deeper bulk shapes
+    /// cost proportionally more and trip the budget — quarantined rather
+    /// than derived, because their honest price is minutes of probes. The
+    /// [`crate::derive::DERIVE_WALK_DEADLINE_NS`] wall-clock backstop
+    /// additionally bounds the write-slot hold at ~2 s even if this budget
+    /// is ever mis-sized against real probe cost.
     fn walk_budget(&self) -> u64 {
-        10_000_000
+        1_000_000
     }
 
     fn derive(
@@ -382,6 +382,19 @@ impl Deriver for CommitGraphDeriver {
 
 // ---- blame assembly ---------------------------------------------------------
 
+/// The blame read's per-file line cap. The assembly allocates one owner
+/// entry per line, so an unbounded line count is an unbounded allocation
+/// (a 64 MiB newline-heavy blob is ~67 million lines — gigabytes per
+/// request). Every layer the walk feeds the assembler is checked against
+/// this cap from its raw line count BEFORE the per-line allocation, and
+/// the route surfaces a trip as 503 `blame_too_large`.
+pub const BLAME_MAX_LINES: usize = 200_000;
+
+/// The assembler's structural cap error: a layer's raw line count past
+/// [`BLAME_MAX_LINES`]. The route maps it to 503 `blame_too_large`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineCapExceeded;
+
 /// One line of an assembled blame: the changeset whose edit introduced the
 /// line (first-parent semantics), its author, and the line text without
 /// its trailing newline.
@@ -408,7 +421,9 @@ pub struct BlameLayer<'a> {
 /// diffs never run on the async runtime. Feed the OLDEST layer to
 /// [`BlameAssembler::new`] and the newer layers, oldest first, to
 /// [`BlameAssembler::push_step`]; [`BlameAssembler::finish`] yields the
-/// lines.
+/// lines. Every constructor checks the fed layer's raw line count against
+/// [`BLAME_MAX_LINES`] and fails with [`LineCapExceeded`] BEFORE the
+/// per-line allocation.
 pub struct BlameAssembler {
     /// Raw (ending-kept) text of the newest layer fed so far; display
     /// strips the newline.
@@ -418,26 +433,38 @@ pub struct BlameAssembler {
 
 impl BlameAssembler {
     /// Seeds the assembly with the OLDEST layer (an add: every line of its
-    /// blob starts attributed to it — or, in a degraded read, the
-    /// quarantined boundary changeset: the oldest resolved point, flagged
-    /// by the caller). A non-UTF-8 layer is opaque: its content diffs as
-    /// empty, so the next-newer layer absorbs the attribution (containment
-    /// still holds — the layer's own blob is never claimed to contain
-    /// lines it cannot show).
-    pub fn new(base: BlameLayer<'_>) -> Self {
+    /// blob starts attributed to it — or, in a degraded read, the walk's
+    /// boundary changeset, flagged by the caller). A non-UTF-8 layer is
+    /// opaque: its content diffs as empty, so the next-newer layer absorbs
+    /// the attribution (containment still holds — the layer's own blob is
+    /// never claimed to contain lines it cannot show).
+    ///
+    /// `Err` ([`LineCapExceeded`]) when the layer's raw line count exceeds
+    /// [`BLAME_MAX_LINES`] — checked before any per-line allocation.
+    pub fn new(base: BlameLayer<'_>) -> Result<Self, LineCapExceeded> {
         let current_raw = raw_text(base.bytes);
-        let owners = vec![(base.cs, base.author.clone()); line_count(&current_raw)];
-        BlameAssembler {
+        let lines = line_count(&current_raw);
+        if lines > BLAME_MAX_LINES {
+            return Err(LineCapExceeded);
+        }
+        let owners = vec![(base.cs, base.author.clone()); lines];
+        Ok(BlameAssembler {
             current_raw,
             owners,
-        }
+        })
     }
 
     /// Folds one newer layer in: its diff against the previous layer keeps
     /// matching lines' attributions and attributes the rest to the step.
-    pub fn push_step(&mut self, step: BlameLayer<'_>) {
+    ///
+    /// `Err` ([`LineCapExceeded`]) when the layer's raw line count exceeds
+    /// [`BLAME_MAX_LINES`] — checked before any per-line allocation.
+    pub fn push_step(&mut self, step: BlameLayer<'_>) -> Result<(), LineCapExceeded> {
         let new_raw = raw_text(step.bytes);
         let new_lines = line_count(&new_raw);
+        if new_lines > BLAME_MAX_LINES {
+            return Err(LineCapExceeded);
+        }
         let diff = similar::TextDiff::from_lines(&self.current_raw, &new_raw);
         let mut new_owners: Vec<(Id, String)> = Vec::with_capacity(new_lines);
         for op in diff.ops() {
@@ -467,6 +494,7 @@ impl BlameAssembler {
         new_owners.truncate(new_lines);
         self.owners = new_owners;
         self.current_raw = new_raw;
+        Ok(())
     }
 
     /// The attributed lines of the FINAL content (the last step's bytes
@@ -495,22 +523,6 @@ impl BlameAssembler {
 /// Raw (ending-kept) view of a layer's bytes; invalid UTF-8 diffs as empty.
 fn raw_text(bytes: &[u8]) -> String {
     std::str::from_utf8(bytes).unwrap_or("").to_string()
-}
-
-/// Assembles line attributions from the walked layers. `base` is the
-/// OLDEST layer; `steps` are the NEWER layers, oldest first; the LAST
-/// step's bytes are the file at the read's changeset. The streaming
-/// equivalent is [`BlameAssembler`].
-pub fn assemble_blame(base: BlameLayer<'_>, steps: &[BlameLayer<'_>]) -> Vec<BlameLine> {
-    let mut asm = BlameAssembler::new(base);
-    for step in steps {
-        asm.push_step(BlameLayer {
-            cs: step.cs,
-            author: step.author.clone(),
-            bytes: step.bytes,
-        });
-    }
-    asm.finish()
 }
 
 /// `similar`-compatible line count: `split_inclusive('\n')` length.

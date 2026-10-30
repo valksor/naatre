@@ -92,7 +92,7 @@ use naatre_core::ids::Id;
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::db;
-use crate::state::AppState;
+use crate::state::{AppState, ClockFn};
 
 /// Failed attempts before a node is quarantined: three strikes — a deriver
 /// `Err` or a lease expiry each count one — then poison + a
@@ -111,16 +111,26 @@ pub const DERIVE_MAX_ATTEMPTS: i64 = 3;
 /// with heavier per-call shapes override with their own justified value.
 ///
 /// **Pricing convention.** A charge is one unit of ACTUAL work, so budget
-/// units admit no shortcut pricing: one per row visited, one per
-/// component lookup, and one per entry ROW a tree load materializes
-/// ([`crate::db::tree_lookup_path_charged`] is the priced tree-walk every
-/// tree-walking deriver must use — the unpriced
-/// [`crate::db::tree_lookup_path`] loads every entry of each tree node per
-/// component, so path-shaped pricing let a crafted wide-and-deep changeset
-/// monopolize the write slot with the budget untripped). A kind's budget
-/// value is justified against this per-row cost in its
-/// [`Deriver::walk_budget`] override.
+/// units admit no shortcut pricing: one per row visited, and one per
+/// (tree_id, name) component PROBE ([`crate::db::tree_lookup_path_charged`]
+/// is the priced tree-walk every tree-walking deriver must use — each
+/// component is an indexed point lookup on `tree_entries`' PRIMARY KEY, so
+/// one component costs one charge regardless of the directory's entry
+/// count; the read-side [`crate::db::tree_lookup_path`] shares the engine
+/// unpriced). A kind's budget value is justified against this per-component
+/// cost in its [`Deriver::walk_budget`] override.
 pub const DEFAULT_WALK_BUDGET: u64 = 200_000;
+
+/// The per-call wall-clock backstop behind the walk budget: a derive call
+/// still running this many ns past its [`DeriveCtx`]'s creation fails with
+/// [`DeriveFailure::WalkBudget`] on its next charge — the SAME structural
+/// quarantine — even with budget left. The budget bounds CHARGED work; the
+/// deadline bounds the wall clock those charges actually take, so a budget
+/// mis-sized against real probe cost (or a slow store) cannot hold the
+/// write slot indefinitely. Read through the state's injectable clock
+/// ([`crate::state::ServerState::clock`]), so expiry behavior stays
+/// deterministic under test.
+pub const DERIVE_WALK_DEADLINE_NS: u64 = 2_000_000_000;
 
 /// Size cap on the framework-carried output of one node, matching the
 /// 16 MiB canonical-encoding cap. An over-cap output is never recorded —
@@ -174,15 +184,25 @@ fn size_cap_reason(len: usize) -> String {
 /// visit through [`DeriveCtx::charge`] — a deriver issuing raw SQL past
 /// the ctx is not capped by it. An exhausted budget fails the call with
 /// [`DeriveFailure::WalkBudget`] — an immediate structural quarantine,
-/// since re-running the same node would walk the same graph.
+/// since re-running the same node would walk the same graph. So does the
+/// wall clock: a call still running [`DERIVE_WALK_DEADLINE_NS`] ns past
+/// its creation fails the same way on the next charge, whatever the
+/// budget has left.
 pub struct DeriveCtx {
     remaining: Cell<u64>,
+    /// Absolute deadline on the state's injectable clock; the next charge
+    /// once `(clock)() >= deadline_ns` fails the call.
+    deadline_ns: u64,
+    clock: ClockFn,
 }
 
 impl DeriveCtx {
-    fn new(walk_budget: u64) -> Self {
+    fn new(walk_budget: u64, clock: ClockFn) -> Self {
+        let deadline_ns = clock().saturating_add(DERIVE_WALK_DEADLINE_NS);
         DeriveCtx {
             remaining: Cell::new(walk_budget),
+            deadline_ns,
+            clock,
         }
     }
 
@@ -191,10 +211,17 @@ impl DeriveCtx {
         self.remaining.get()
     }
 
-    /// Charges `n` visits; `Err` once the budget is exhausted (the call is
-    /// then quarantined with the walk-budget reason). Charging zero is a
+    /// Charges `n` visits; `Err` once the budget is exhausted OR the call
+    /// has run past [`DERIVE_WALK_DEADLINE_NS`] (the call is then
+    /// quarantined with the walk-budget reason). Charging zero is a
     /// no-op that never fails.
     pub fn charge(&self, n: u64) -> Result<(), DeriveFailure> {
+        // The wall-clock backstop first: with the deadline missed, budget
+        // headroom no longer matters — the slot has been held long enough.
+        if (self.clock)() >= self.deadline_ns {
+            self.remaining.set(0);
+            return Err(DeriveFailure::WalkBudget);
+        }
         let left = self.remaining.get();
         if n >= left {
             self.remaining.set(0);
@@ -386,17 +413,18 @@ pub fn enqueue_changeset(
     cs: Id,
     parents: &[Id],
     now_ns: i64,
+    clock: ClockFn,
 ) -> rusqlite::Result<()> {
     for kind in &registry.kinds {
         if kind.deriver.eager() {
             // The caps gate the eager path exactly as they gate the queue:
-            // an exhausted walk budget or an over-cap output quarantines
-            // the node immediately instead of deriving (inside the
-            // create's transaction, so the quarantine is atomic with the
-            // write).
+            // an exhausted walk budget, a missed wall-clock deadline, or an
+            // over-cap output quarantines the node immediately instead of
+            // deriving (inside the create's transaction, so the quarantine
+            // is atomic with the write).
             let outs = db::derive_parent_outputs(conn, kind.id, repo_id, parents)?;
             let (tainted, poison_cs) = collapse_taint(&outs);
-            let ctx = DeriveCtx::new(kind.deriver.walk_budget());
+            let ctx = DeriveCtx::new(kind.deriver.walk_budget(), clock.clone());
             match kind.deriver.derive(&ctx, conn, repo_id, cs, &outs) {
                 Ok(out) if out.as_bytes().len() > DERIVE_MAX_OUTPUT_BYTES => {
                     db::derive_poison_now(
@@ -851,6 +879,7 @@ async fn drain(
         // the re-run idempotency contract.
         let kind_for_derive = Arc::clone(kind);
         let busy_abort = Arc::clone(&state.derive_test_busy_abort);
+        let clock_for_derive = Arc::clone(&state.clock);
         let derived = state
             .write(move |store| {
                 // Test-only one-shot writer_busy injection (see
@@ -889,7 +918,10 @@ async fn drain(
                     .unwrap_or_default();
                 let outs = db::derive_parent_outputs(conn, kind_for_derive.id, repo_id, &parents)
                     .map_err(ApiError::log_internal)?;
-                let ctx = crate::derive::DeriveCtx::new(kind_for_derive.deriver.walk_budget());
+                let ctx = crate::derive::DeriveCtx::new(
+                    kind_for_derive.deriver.walk_budget(),
+                    clock_for_derive,
+                );
                 // Inner result on purpose: a deriver failure is a FAILED
                 // NODE (handled below), not an API error — the outer error
                 // type stays the write-slot's.

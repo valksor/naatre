@@ -97,6 +97,9 @@ pub(crate) struct LandCommand {
     /// itself; a mismatch with head's parent becomes a response note).
     pub base_hint: Option<Id>,
     pub now_ns: i64,
+    /// The state's injectable wall clock, carried for the eager-derive
+    /// path's wall-clock deadline ([`crate::derive::DERIVE_WALK_DEADLINE_NS`]).
+    pub clock: crate::state::ClockFn,
 }
 
 /// A settled land.
@@ -480,8 +483,16 @@ fn land_in_txn(
         // Derived data (M6a): the rebased changeset is a brand-new node —
         // enqueue (or eagerly derive) it for every registered kind, inside
         // the land's single transaction like every other row here.
-        crate::derive::enqueue_changeset(conn, derive, repo_id, new_id, &cs.parents, cmd.now_ns)
-            .map_err(ApiError::log_internal)?;
+        crate::derive::enqueue_changeset(
+            conn,
+            derive,
+            repo_id,
+            new_id,
+            &cs.parents,
+            cmd.now_ns,
+            cmd.clock.clone(),
+        )
+        .map_err(ApiError::log_internal)?;
 
         tip_id = new_id;
         tip_tree = merged.node;

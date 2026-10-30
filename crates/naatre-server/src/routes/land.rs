@@ -168,6 +168,7 @@ pub async fn land(
         key: body.key.clone(),
         base_hint,
         now_ns: state.now_ns() as i64,
+        clock: Arc::clone(&state.clock),
     };
     let cas = Arc::clone(&state.cas);
     let derive = Arc::clone(&state.derive);

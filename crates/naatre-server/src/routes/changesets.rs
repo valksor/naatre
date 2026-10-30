@@ -372,6 +372,7 @@ async fn persist(
     let canonical = canonical.to_vec();
     let cas = Arc::clone(&state.cas);
     let derive = Arc::clone(&state.derive);
+    let clock = Arc::clone(&state.clock);
 
     state
         .write(move |store| {
@@ -446,6 +447,7 @@ async fn persist(
                 cs_id,
                 &cs.parents,
                 timestamp_ns as i64,
+                clock,
             )
             .map_err(ApiError::log_internal)?;
             Ok(root_tree_id)

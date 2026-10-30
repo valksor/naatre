@@ -8,6 +8,8 @@ use std::sync::Arc;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::http::header::CONTENT_TYPE;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -799,12 +801,19 @@ const BLAME_MAX_CHAIN_NODES: usize = 10_000;
 /// layer loads (see the streaming task in [`blame`]).
 const BLAME_MAX_BLOB_BYTES: usize = 256 * 1024 * 1024;
 
+/// The blame read's serialized-response cap. The JSON body is encoded in
+/// memory before it goes on the wire, so its encoded size is capped too:
+/// a line-cap-compliant shape can still encode past a sane response via
+/// long lines or long author strings. Checked on the encoded bytes — a
+/// body past this never reaches the response writer.
+const BLAME_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
 /// The structural-cap error: the same read trips it every time, so it is
 /// not retryable — 503 `blame_too_large`, no `Retry-After`.
 fn blame_too_large() -> ApiError {
     ApiError::new(
         ApiCode::BlameTooLarge,
-        "blame exceeds the read caps (chain length / blob bytes)",
+        "blame exceeds the read caps (chain length / blob bytes / line count / response bytes)",
     )
 }
 
@@ -815,6 +824,16 @@ pub struct BlameQuery {
     pub at: String,
     /// Repo-relative path (must be a file at `at`).
     pub path: String,
+}
+
+/// Encodes the blame response and enforces the serialized-size cap; the
+/// encoded bytes go out as-is — never re-encoded after the check.
+fn blame_json(response: BlameResponse) -> Result<Response, ApiError> {
+    let body = serde_json::to_vec(&response).map_err(ApiError::log_internal)?;
+    if body.len() > BLAME_MAX_RESPONSE_BYTES {
+        return Err(blame_too_large());
+    }
+    Ok(([(CONTENT_TYPE, "application/json")], body).into_response())
 }
 
 /// One attributed line.
@@ -911,7 +930,7 @@ struct BlameWalk {
         (status = 400, description = "`at` is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo/changeset, or the path is absent at `at`"),
-        (status = 503, description = "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded the chain/blob caps (`blame_too_large`, not retryable)")
+        (status = 503, description = "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded a read cap (chain length / blob bytes / line count / response bytes — `blame_too_large`, not retryable)")
     )
 )]
 pub async fn blame(
@@ -919,7 +938,7 @@ pub async fn blame(
     Extension(_auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     Query(q): Query<BlameQuery>,
-) -> Result<Json<BlameResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let at = parse_id(&q.at)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let path = q.path.clone();
@@ -1137,7 +1156,9 @@ pub async fn blame(
     // The assembly (CAS blob loads + Myers diffs) runs off the async
     // runtime, and each layer's bytes are loaded, diffed, and dropped
     // before the next is read — never all versions materialized at once.
-    // Every load counts toward the read's blob-bytes cap.
+    // Every load counts toward the read's blob-bytes cap, and every
+    // layer's raw line count toward the line cap (checked in the
+    // assembler before its per-line allocation).
     let cas = Arc::clone(&state.cas);
     let final_blob = walk.final_blob;
     let assembled = state
@@ -1161,14 +1182,16 @@ pub async fn blame(
                 cs: base_meta.0,
                 author: base_meta.1.clone(),
                 bytes: &base_bytes,
-            });
+            })
+            .map_err(|_| blame_too_large())?;
             for (cs, author, blob) in &step_meta {
                 let bytes = load(blob)?;
                 asm.push_step(BlameLayer {
                     cs: *cs,
                     author: author.clone(),
                     bytes: &bytes,
-                });
+                })
+                .map_err(|_| blame_too_large())?;
             }
             Ok(Some(
                 asm.finish()
@@ -1185,7 +1208,7 @@ pub async fn blame(
     let lines = match assembled {
         Some(lines) => lines,
         None => {
-            return Ok(Json(BlameResponse {
+            return blame_json(BlameResponse {
                 at: at.to_hex(),
                 path: q.path,
                 binary: true,
@@ -1193,10 +1216,10 @@ pub async fn blame(
                 degraded,
                 poisoned_cs,
                 lines: Vec::new(),
-            }));
+            });
         }
     };
-    Ok(Json(BlameResponse {
+    blame_json(BlameResponse {
         at: at.to_hex(),
         path: q.path,
         binary: false,
@@ -1204,7 +1227,7 @@ pub async fn blame(
         degraded,
         poisoned_cs,
         lines,
-    }))
+    })
 }
 
 // ---- file -----------------------------------------------------------------

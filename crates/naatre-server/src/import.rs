@@ -1248,7 +1248,15 @@ fn import_commit(
     )?;
     // Derived data (M6a): the imported commit enqueues (or eagerly
     // derives) for every registered kind, in the commit's own transaction.
-    crate::derive::enqueue_changeset(&tx, derive, repo_id, p.cs_id, &p.cs.parents, now_ns())?;
+    crate::derive::enqueue_changeset(
+        &tx,
+        derive,
+        repo_id,
+        p.cs_id,
+        &p.cs.parents,
+        now_ns(),
+        crate::state::system_clock(),
+    )?;
     tx.commit()?;
     Ok(())
 }

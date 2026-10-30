@@ -40,8 +40,8 @@ use tower::ServiceExt;
 
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_server::derive::{
-    BusyAbort, DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DeriveCtx, DeriveFailure,
-    DeriveStatus, DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
+    BusyAbort, DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DERIVE_WALK_DEADLINE_NS, DeriveCtx,
+    DeriveFailure, DeriveStatus, DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
 };
 use naatre_server::serve::{ServeConfig, serve};
 use naatre_server::state::{AppState, ServerState};
@@ -674,6 +674,174 @@ async fn walk_budget_exhaustion_poisons_immediately() {
     assert_eq!(
         st_kind(&f, hog_kind, &child).await,
         Some(DeriveStatus::Done(DerivedOut(vec![1])))
+    );
+}
+
+/// A deriver with an effectively unbounded budget that, once armed, jumps
+/// the ctx's clock past the call's creation deadline and keeps charging —
+/// only the wall-clock backstop can stop this call.
+struct DeadlineHog {
+    armed_for: Arc<Mutex<Option<Id>>>,
+    now_ns: Arc<AtomicU64>,
+}
+
+impl Deriver for DeadlineHog {
+    fn kind(&self) -> &'static str {
+        "deadline-hog"
+    }
+
+    fn walk_budget(&self) -> u64 {
+        u64::MAX
+    }
+
+    fn derive(
+        &self,
+        ctx: &DeriveCtx,
+        _conn: &rusqlite::Connection,
+        _repo_id: i64,
+        cs: Id,
+        _parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
+        if *self.armed_for.lock().unwrap() == Some(cs) {
+            self.now_ns
+                .fetch_add(DERIVE_WALK_DEADLINE_NS + 60_000_000_000, Ordering::Relaxed);
+        }
+        ctx.charge(1)?;
+        Ok(DerivedOut::empty())
+    }
+}
+
+/// The wall-clock backstop, injected-clock half: a deriver whose budget is
+/// far from exhausted still loses the call once the state's clock passes
+/// [`DERIVE_WALK_DEADLINE_NS`] past the ctx's creation — the SAME
+/// WalkBudget structural quarantine, no attempt burned — so a mis-sized
+/// budget cannot hold the write slot past the deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wall_clock_deadline_trips_the_walk_budget_past_the_injected_deadline() {
+    let armed_for = Arc::new(Mutex::new(None::<Id>));
+    let now_ns = Arc::new(AtomicU64::new(BASE_NS));
+    let f = fixture_with(|state| {
+        let n = Arc::clone(&now_ns);
+        state.clock = Arc::new(move || n.load(Ordering::Relaxed));
+        state.derive_queue_interval = Duration::from_millis(10);
+        state
+            .register_deriver(Arc::new(DeadlineHog {
+                armed_for: Arc::clone(&armed_for),
+                now_ns: Arc::clone(&now_ns),
+            }))
+            .unwrap();
+    });
+    let hog_kind = "deadline-hog";
+
+    let target = create_cs(&f, None, "deadline", 1).await;
+    *armed_for.lock().unwrap() = Some(id_of_hex(&target));
+
+    let report = derive_pass(&f.t.state).await.expect("pass");
+    assert_eq!(report.poisoned, 1, "the deadline stopped the call");
+    assert_eq!(
+        st_kind(&f, hog_kind, &target).await,
+        Some(DeriveStatus::Poison)
+    );
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT s.attempts FROM derive_state s JOIN derive_kinds k ON k.id = s.kind \
+             WHERE k.name = '{hog_kind}' AND s.cs = x'{}'",
+            target
+        )),
+        0,
+        "immediate poison burns no attempt"
+    );
+    let (reason, count): (String, i64) =
+        f.t.db()
+            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+    assert_eq!(count, 1, "one quarantine report");
+    assert!(
+        reason.contains("walk budget"),
+        "report names the cap: {reason}"
+    );
+}
+
+/// A deriver that spins charging (with an effectively unbounded budget)
+/// until the ctx stops it, with a spin bound far past the deadline: the
+/// real production clock advances while it charges, so the ~2 s deadline
+/// fires. If the deadline check regresses away, the spin runs to its
+/// bound, the node derives done, and the pin fails.
+struct RunawayHog {
+    armed_for: Arc<Mutex<Option<Id>>>,
+}
+
+impl Deriver for RunawayHog {
+    fn kind(&self) -> &'static str {
+        "runaway-hog"
+    }
+
+    fn walk_budget(&self) -> u64 {
+        u64::MAX
+    }
+
+    fn derive(
+        &self,
+        ctx: &DeriveCtx,
+        _conn: &rusqlite::Connection,
+        _repo_id: i64,
+        cs: Id,
+        _parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
+        if *self.armed_for.lock().unwrap() == Some(cs) {
+            // Far more charges than the deadline window can span; every
+            // charge re-reads the state clock.
+            for _ in 0..1_000_000_000u64 {
+                ctx.charge(1)?;
+            }
+        }
+        Ok(DerivedOut::empty())
+    }
+}
+
+/// The wall-clock backstop, real-clock half: a runaway walk with budget
+/// left is stopped by the ~2 s deadline on the production clock — the
+/// quarantine lands while the call is still spinning. (The fixture's
+/// default clock is frozen, so the production clock is installed
+/// explicitly.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wall_clock_deadline_stops_a_real_runaway_walk() {
+    let armed_for = Arc::new(Mutex::new(None::<Id>));
+    let f = fixture_with(|state| {
+        state.clock = naatre_server::state::system_clock();
+        state.derive_queue_interval = Duration::from_millis(10);
+        state
+            .register_deriver(Arc::new(RunawayHog {
+                armed_for: Arc::clone(&armed_for),
+            }))
+            .unwrap();
+    });
+    let hog_kind = "runaway-hog";
+
+    let target = create_cs(&f, None, "runaway", 1).await;
+    *armed_for.lock().unwrap() = Some(id_of_hex(&target));
+
+    let report = derive_pass(&f.t.state).await.expect("pass");
+    assert_eq!(
+        report.poisoned, 1,
+        "the deadline stopped the runaway walk on the real clock"
+    );
+    assert_eq!(
+        st_kind(&f, hog_kind, &target).await,
+        Some(DeriveStatus::Poison)
+    );
+    let (reason, count): (String, i64) =
+        f.t.db()
+            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+    assert_eq!(count, 1, "one quarantine report");
+    assert!(
+        reason.contains("walk budget"),
+        "report names the cap: {reason}"
     );
 }
 
