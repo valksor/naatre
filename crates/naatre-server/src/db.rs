@@ -240,19 +240,18 @@ fn ref_cas_inner(
     };
 
     if matches!(outcome, RefCas::Created | RefCas::Updated { .. }) {
-        audit_append(
-            &tx,
-            now_ns,
-            principal,
-            "ref_move",
-            &serde_json::json!({
-                "repo": repo_name,
-                "ref": name,
-                "target": target.to_hex(),
-                "via": via,
-            })
-            .to_string(),
-        )?;
+        // Same convention as changeset_create: the `via` key is present
+        // only when the producer named itself — a bare API move leaves no
+        // `via: null` behind.
+        let mut details = serde_json::json!({
+            "repo": repo_name,
+            "ref": name,
+            "target": target.to_hex(),
+        });
+        if let Some(via) = via {
+            details["via"] = serde_json::json!(via);
+        }
+        audit_append(&tx, now_ns, principal, "ref_move", &details.to_string())?;
     }
     tx.commit()?;
     Ok(outcome)

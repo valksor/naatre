@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::client::{Client, uri_segment};
-use crate::wc::fetch::walk_tree;
+use crate::wc::fetch::walk_tree_allowing_missing_prefixes;
 use crate::wc::{Wc, nfc, under_sparse};
 
 /// A working copy resolved for reading: client + repo + head changeset.
@@ -245,7 +245,16 @@ fn local_diff(root: &Path, reader: &Reader) -> Result<Vec<Value>, VerbError> {
         .as_str()
         .and_then(Id::from_hex)
         .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
-    let files = walk_tree(&reader.client, &reader.repo, &head_root, &state.sparse)?;
+    // The uniform client rule for reads over an existing checkout's cone:
+    // a prefix the head tree no longer contains (the server deleted its
+    // whole directory — normal history) is an EMPTY subtree, exactly as in
+    // sync's target walk. The strict form would wedge diff forever.
+    let files = walk_tree_allowing_missing_prefixes(
+        &reader.client,
+        &reader.repo,
+        &head_root,
+        &state.sparse,
+    )?;
     let mut head_map: BTreeMap<String, (Id, bool)> = BTreeMap::new();
     for f in files {
         head_map.insert(f.path, (f.blob, f.exec));

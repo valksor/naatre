@@ -3,18 +3,21 @@
 //!
 //! Dirty check FIRST (the preserve-everything rule): the sync refuses with
 //! exit 2 and `dirty_working_copy` only when materialization would clobber
-//! local work — a locally modified or deleted tracked file whose path the
-//! incoming set touches (add/mod or del: a locally modified file that an
-//! incoming del removes would be lost too), or an untracked/
-//! normalization-folded disk file colliding with ANY incoming path (upsert
-//! or del: an incoming del must not silently eat an untracked file at the
-//! path either) — listing BOTH lists. Unrelated local edits survive the sync
-//! untouched (materialization only touches incoming paths; the head
-//! advances; status afterwards still lists them). `--force` discards exactly
-//! the incoming-colliding files (deletes untracked colliders, overwrites
-//! colliding tracked edits) and proceeds. Belt and braces: the del loop
-//! removes only paths still present in the index (tracked), so a
-//! tracked-absent path can never be deleted from disk as if it were ours.
+//! local work — a locally modified or deleted tracked file whose path a
+//! cone-included incoming change touches (add/mod or del: a locally
+//! modified file that an incoming del removes would be lost too), or an
+//! untracked/normalization-folded disk file colliding with a cone-included
+//! incoming path (upsert or del: an incoming del must not silently eat an
+//! untracked file at the path either) — listing BOTH lists. Out-of-cone
+//! incoming paths are never applied here, so they never block. Unrelated
+//! local edits survive the sync untouched (materialization only touches
+//! cone-included incoming paths; the head advances; status afterwards still
+//! lists them). `--force` discards exactly the colliding files (deletes
+//! untracked colliders, overwrites colliding tracked edits) and proceeds —
+//! but only after every blob is fetched and hash-verified, so a failed
+//! fetch discards nothing. Belt and braces: the del loop removes only
+//! paths still present in the index (tracked), so a tracked-absent path
+//! can never be deleted from disk as if it were ours.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -22,7 +25,7 @@ use std::path::Path;
 use naatre_core::ids::Id;
 
 use super::{Net, VerbError};
-use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree};
+use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree_allowing_missing_prefixes};
 use crate::wc::{State, Wc, remove_and_prune, under_sparse};
 
 /// Runs sync; prints the outcome and returns the exit code.
@@ -77,19 +80,29 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
         })
         .collect::<Vec<_>>();
 
-    // The dirty gate (plan wording): only local work whose path the
-    // incoming set touches can be clobbered by materialization — a dirty
-    // tracked file on an incoming path (add/mod or del: a locally modified
-    // file that an incoming del removes would be lost too), or an
-    // untracked / normalization-folded disk file on ANY incoming path
-    // (upsert or del: an incoming del removes an untracked file at the path
-    // just as silently). Unrelated local edits survive the sync untouched.
+    // The dirty gate (plan wording): only local work whose path a
+    // cone-included incoming change touches can be clobbered by
+    // materialization — a dirty tracked file on such a path (add/mod or
+    // del: a locally modified file that an incoming del removes would be
+    // lost too), or an untracked / normalization-folded disk file on a
+    // cone-included incoming path (upsert or del: an incoming del removes
+    // an untracked file at the path just as silently). Unrelated local
+    // edits survive the sync untouched.
     let report = crate::wc::scan::classify(root, &index)
         .map_err(|e| VerbError::Local(format!("scanning {}: {e}", root.display())))?;
     let mut dirty: BTreeSet<String> = BTreeSet::new();
     dirty.extend(report.modified.iter().cloned());
     dirty.extend(report.deleted.iter().cloned());
-    let incoming_paths: BTreeSet<&str> = incoming.iter().map(|(p, _)| p.as_str()).collect();
+    // Colliders and the --force discard set only consider incoming paths
+    // INSIDE the sparse cone: the sync never materializes (or deletes)
+    // outside it, so an untracked file at an out-of-cone incoming path is
+    // not something this sync would touch — deleting it under --force would
+    // discard a file the sync has no business with.
+    let incoming_paths: BTreeSet<&str> = incoming
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .filter(|p| under_sparse(&state.sparse, p))
+        .collect();
     let blocked: Vec<String> = dirty
         .iter()
         .filter(|path| incoming_paths.contains(path.as_str()))
@@ -123,10 +136,6 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
             details: None,
         }));
     }
-    for raw in &colliding {
-        remove_and_prune(root, raw)
-            .map_err(|e| VerbError::Local(format!("removing colliding untracked {raw:?}: {e}")))?;
-    }
 
     // Target tree metadata for the incoming add/mod paths (sparse-filtered;
     // paths outside the sparse prefixes stay unmaterialized by design).
@@ -142,7 +151,12 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
         .as_str()
         .and_then(Id::from_hex)
         .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
-    let target_files = walk_tree(&client, &repo, &target_root, &state.sparse)?;
+    // A cone prefix the target tree no longer contains (the server deleted
+    // its whole directory) is an EMPTY subtree: the incoming dels below
+    // remove the indexed files under it and the sync completes, instead of
+    // failing forever on normal history.
+    let target_files =
+        walk_tree_allowing_missing_prefixes(&client, &repo, &target_root, &state.sparse)?;
     let by_path: BTreeMap<&str, &_> = target_files.iter().map(|f| (f.path.as_str(), f)).collect();
 
     let mut to_fetch: Vec<Id> = Vec::new();
@@ -160,6 +174,14 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
         adds.push((path.clone(), file.blob));
     }
     let blobs = fetch_blobs_verified(&client, &repo, &to_fetch)?;
+
+    // Every incoming blob is fetched and hash-verified, so --force can now
+    // discard exactly the colliders the gate named — a failed fetch above
+    // left the working copy completely untouched.
+    for raw in &colliding {
+        remove_and_prune(root, raw)
+            .map_err(|e| VerbError::Local(format!("removing colliding untracked {raw:?}: {e}")))?;
+    }
 
     // Apply, then update the index and state together at the end.
     for (path, blob) in &adds {
@@ -189,7 +211,13 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
     wc.save_index(&index)?;
 
     println!("synced: {}", target.to_hex());
-    for (path, kind) in &incoming {
+    // Output honesty: only paths this sync actually applied (cone-included)
+    // print as A/D/M — an out-of-cone incoming path was NOT applied here
+    // and must not pose as one.
+    for (path, kind) in incoming
+        .iter()
+        .filter(|(p, _)| under_sparse(&new_state.sparse, p))
+    {
         let c = match kind.as_str() {
             "add" => "A",
             "del" => "D",

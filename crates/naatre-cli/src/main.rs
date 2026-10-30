@@ -238,6 +238,10 @@ enum SparseCmd {
     Add {
         /// Path prefix to materialize (must exist in the tree).
         prefix: String,
+        /// Discard local edits and colliding untracked files on the
+        /// widened paths (symlinks on them are unlinked).
+        #[arg(long)]
+        force: bool,
         #[command(flatten)]
         net: NetOpts,
     },
@@ -332,9 +336,11 @@ fn main() {
             net,
         } => verbs::clone::run(&url, &sparse, into.as_deref(), &net.net()),
         Cmd::Sparse { cmd, net } => match cmd {
-            SparseCmd::Add { prefix, net: n } => {
-                verbs::sparse::run(cwd, verbs::sparse::Action::Add(prefix), &n.net())
-            }
+            SparseCmd::Add {
+                prefix,
+                force,
+                net: n,
+            } => verbs::sparse::run(cwd, verbs::sparse::Action::Add { prefix, force }, &n.net()),
             SparseCmd::Remove { prefix, net: n } => {
                 verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &n.net())
             }

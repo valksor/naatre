@@ -125,7 +125,10 @@ pub fn router(state: AppState) -> axum::Router {
             request_permits,
             middleware::request_cap,
         ))
-        .layer(axum::middleware::from_fn(middleware::request_timeout))
+        .layer(axum::middleware::from_fn_with_state(
+            middleware::TimeoutBudget(middleware::REQUEST_TIMEOUT),
+            middleware::request_timeout,
+        ))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)
 }

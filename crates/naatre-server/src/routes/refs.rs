@@ -180,7 +180,7 @@ pub async fn cas_ref(
                 }
             }
 
-            db::ref_cas(
+            db::ref_cas_via(
                 conn,
                 db::RefMove {
                     repo_id,
@@ -191,6 +191,7 @@ pub async fn cas_ref(
                     principal: &principal,
                     now_ns,
                 },
+                "api",
             )
             .map_err(ApiError::log_internal)
         })

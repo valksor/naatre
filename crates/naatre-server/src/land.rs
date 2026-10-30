@@ -537,6 +537,7 @@ fn settle(
             "head": cmd.head.to_hex(),
             "landed": landed.to_hex(),
             "rebased": rebased,
+            "via": "land",
         })
         .to_string(),
     )

@@ -867,7 +867,10 @@ fn sparse_add_and_remove() {
     assert_eq!(
         verbs::sparse::run(
             &wc_dir,
-            verbs::sparse::Action::Add("docs".into()),
+            verbs::sparse::Action::Add {
+                prefix: "docs".into(),
+                force: false,
+            },
             &net(&server)
         ),
         0
@@ -913,7 +916,10 @@ fn sparse_add_and_remove() {
     assert_eq!(
         verbs::sparse::run(
             &full,
-            verbs::sparse::Action::Add("docs".into()),
+            verbs::sparse::Action::Add {
+                prefix: "docs".into(),
+                force: false,
+            },
             &net(&server)
         ),
         1,
@@ -1516,6 +1522,565 @@ fn sync_refuses_untracked_file_at_an_incoming_deletion() {
     assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
 }
 
+/// NFD TWIN ON A DEL PATH: a disk file written under the NFD spelling folds
+/// onto an incoming DELETION path's NFC form. The sync refuses (exit 2,
+/// `dirty_working_copy`) and LISTS THE TWIN (its raw NFD path); the file is
+/// preserved. `--force` removes exactly the twin — no phantom delete of
+/// anything else — and completes clean.
+#[test]
+fn sync_refuses_nfd_twin_at_an_incoming_deletion() {
+    let server = start_server();
+    create_repo(&server, "nfddel");
+    let v1 = b"cafe content\n";
+    let k = b"k\n";
+    put_blob(&server, "nfddel", v1);
+    put_blob(&server, "nfddel", k);
+    let c1 = changeset(
+        &server,
+        "nfddel",
+        &[],
+        vec![
+            change("add", "gone/caf\u{e9}.txt", v1),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "nfddel", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/nfddel", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+
+    // Incoming del of the NFC path; main moves by seed.
+    let c2 = changeset(
+        &server,
+        "nfddel",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("del", "gone/caf\u{e9}.txt", b"")],
+        "c2 dels the café path",
+    );
+    seed_main(&server, "nfddel", c2["id"].as_str().unwrap());
+
+    // The user's own file at the path, under the NFD spelling (e + U+0301):
+    // the tracked row is lost the documented way (doctor --rebuild indexes
+    // exactly what exists on disk), then the twin is written fresh.
+    std::fs::remove_file(wc_dir.join("gone/caf\u{e9}.txt")).unwrap();
+    assert_eq!(verbs::doctor::run(&wc_dir, true, &net(&server)), 0);
+    let nfd = "gone/cafe\u{301}.txt".to_string();
+    let mine = b"twin was here\n";
+    write_file(&wc_dir, &nfd, mine);
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(
+        report.untracked,
+        vec!["gone/caf\u{e9}.txt".to_string()],
+        "test setup: the twin classifies at its NFC norm, not as a phantom \
+         delete plus an untracked twin: {report:?}"
+    );
+
+    // The refusal lists the TWIN (the raw NFD path) and preserves it.
+    let out = run_binary(&server, &wc_dir, &["sync"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "NFD twin at an incoming del path refuses: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(stderr.contains(&nfd), "the twin is listed: {stderr:?}");
+    assert_eq!(
+        std::fs::read(wc_dir.join(&nfd)).unwrap(),
+        mine,
+        "the twin survives the refusal"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("keep/k.txt")).unwrap(),
+        k,
+        "the refusal preserves everything"
+    );
+
+    // --force removes exactly the twin and completes the sync; no phantom
+    // delete of anything else.
+    assert_eq!(verbs::sync::run(&wc_dir, true, &net(&server)), 0);
+    assert!(!wc_dir.join(&nfd).exists(), "--force removes the twin");
+    assert!(
+        !wc_dir.join("gone/caf\u{e9}.txt").exists(),
+        "the NFC del path is gone too"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("keep/k.txt")).unwrap(),
+        k,
+        "no phantom delete: the unrelated file survives"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+}
+
+/// The widen's own gate: `sparse add` refuses when local work sits on a path
+/// it would materialize — here an untracked collider at a path the HEAD tree
+/// still has (the widen walks the head, so main-only paths never enter its
+/// set) — listing it and touching nothing. `sparse add --force` discards
+/// exactly the collider, materializes head content, and the following sync
+/// completes clean.
+#[test]
+fn sparse_add_refuses_untracked_colliders_and_forces() {
+    let server = start_server();
+    create_repo(&server, "widen");
+    let k = b"k\n";
+    let p = b"p content\n";
+    let r = b"r from server\n";
+    put_blob(&server, "widen", k);
+    put_blob(&server, "widen", p);
+    put_blob(&server, "widen", r);
+    let c1 = changeset(
+        &server,
+        "widen",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "widen", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/widen", server.base),
+            &["gone".to_string(), "keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // Server-side c2 ADDS gone/r.txt at main; the client head is still c1.
+    let c2 = changeset(
+        &server,
+        "widen",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("add", "gone/r.txt", r)],
+        "c2 adds r",
+    );
+    seed_main(&server, "widen", c2["id"].as_str().unwrap());
+
+    // Shed the cone; the user's own untracked file sits at gone/p.txt, a
+    // path the widen would materialize (p is in the head tree).
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Remove("gone".into()),
+            &net(&server)
+        ),
+        0
+    );
+    let mine = b"my own p\n";
+    write_file(&wc_dir, "gone/p.txt", mine);
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(
+        report.untracked,
+        vec!["gone/p.txt".to_string()],
+        "test setup: {report:?}"
+    );
+
+    // The widen refuses (exit 2), lists the collider, materializes nothing.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(out.status.code(), Some(2), "widen must refuse: {out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/p.txt"),
+        "the collider is listed: {stderr:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        mine,
+        "refusal preserves the file"
+    );
+    assert!(
+        !wc_dir.join("gone/r.txt").exists(),
+        "refusal materializes nothing"
+    );
+
+    // --force discards exactly the collider and materializes head content.
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Add {
+                prefix: "gone".into(),
+                force: true,
+            },
+            &net(&server)
+        ),
+        0
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "head's p materialized over the discarded collider"
+    );
+    assert!(
+        !wc_dir.join("gone/r.txt").exists(),
+        "the widen walks the head: main-only r is not materialized"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+
+    // The following sync completes cleanly (it brings main's r).
+    assert_eq!(verbs::sync::run(&wc_dir, false, &net(&server)), 0);
+    assert_eq!(std::fs::read(wc_dir.join("gone/r.txt")).unwrap(), r);
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+}
+
+/// LITERAL SPARSE-ROUTE REPRO (head-consistent): clone the full cone →
+/// `sparse remove gone` sheds it → a server-side changeset deletes
+/// gone/p.txt (API changeset + seeded main) while the user places an
+/// UNTRACKED file at gone/p.txt → `sparse add gone` REFUSES (exit 2,
+/// `dirty_working_copy`, the collider listed, the file preserved): the
+/// widen walks the HEAD, which still contains p, so p is a path it would
+/// materialize → `sparse add gone --force` discards exactly that untracked
+/// file and materializes head gone content (incl. p) → `sync` then applies
+/// the server del of p cleanly (exit 0, p gone, q intact, status clean).
+#[test]
+fn sparse_route_untracked_file_at_incoming_del_refuses() {
+    let server = start_server();
+    create_repo(&server, "sroute");
+    let k = b"k\n";
+    let p = b"server content\n";
+    let q = b"q\n";
+    put_blob(&server, "sroute", k);
+    put_blob(&server, "sroute", p);
+    put_blob(&server, "sroute", q);
+    let c1 = changeset(
+        &server,
+        "sroute",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "gone/q.txt", q),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "sroute", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/sroute", server.base),
+            &["gone".to_string(), "keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // Shed the cone around p first.
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Remove("gone".into()),
+            &net(&server)
+        ),
+        0
+    );
+    assert!(!wc_dir.join("gone").exists());
+
+    // Server-side c2 deletes p; main moves by seed. The user's own file
+    // lands at gone/p.txt while it is out of the cone.
+    let c2 = changeset(
+        &server,
+        "sroute",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("del", "gone/p.txt", b"")],
+        "c2 deletes p",
+    );
+    seed_main(&server, "sroute", c2["id"].as_str().unwrap());
+    let mine = b"my own untracked work\n";
+    write_file(&wc_dir, "gone/p.txt", mine);
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(
+        report.untracked,
+        vec!["gone/p.txt".to_string()],
+        "test setup: the file is untracked: {report:?}"
+    );
+
+    // Re-widen refuses: the head tree still contains p, so the widen would
+    // materialize over the user's file.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "widen must refuse the collider: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/p.txt"),
+        "the collider is listed: {stderr:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        mine,
+        "the file survives the refusal"
+    );
+    assert!(
+        !wc_dir.join("gone/q.txt").exists(),
+        "the refusal materializes nothing"
+    );
+
+    // `sparse add --force` discards exactly that untracked file and
+    // materializes head gone content (incl. p at the head's content).
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Add {
+                prefix: "gone".into(),
+                force: true,
+            },
+            &net(&server)
+        ),
+        0
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "head's p materialized over the discarded collider"
+    );
+    assert_eq!(std::fs::read(wc_dir.join("gone/q.txt")).unwrap(), q);
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+
+    // The sync then applies the server del of p cleanly.
+    assert_eq!(verbs::sync::run(&wc_dir, false, &net(&server)), 0);
+    assert!(
+        !wc_dir.join("gone/p.txt").exists(),
+        "the server del applies"
+    );
+    assert_eq!(std::fs::read(wc_dir.join("gone/q.txt")).unwrap(), q);
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+}
+
+/// OUT-OF-CONE COLLIDER (the cone-filter pin): gone/ is never in the cone,
+/// so the sync must not touch an untracked file at a server-deleted path
+/// there — plain sync advances (exit 0) and `sync --force` advances (exit
+/// 0), and the file survives both with its bytes intact. Without the
+/// cone filter in the sync gate, the collider set would include the
+/// out-of-cone path: plain sync would refuse and --force would DELETE the
+/// user's file.
+#[test]
+fn sync_and_force_leave_out_of_cone_untracked_files_alone() {
+    let server = start_server();
+    create_repo(&server, "ocone");
+    let k = b"k\n";
+    let p = b"p out there\n";
+    let n = b"new in keep\n";
+    put_blob(&server, "ocone", k);
+    put_blob(&server, "ocone", p);
+    put_blob(&server, "ocone", n);
+    let c1 = changeset(
+        &server,
+        "ocone",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "ocone", c1["id"].as_str().unwrap());
+
+    // The cone is keep ONLY: gone/ is never materialized in this checkout.
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/ocone", server.base),
+            &["keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+    assert!(!wc_dir.join("gone").exists());
+
+    // Server-side c2 deletes gone/p.txt; the user's own untracked file
+    // sits there, out of cone.
+    let c2 = changeset(
+        &server,
+        "ocone",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("del", "gone/p.txt", b"")],
+        "c2 deletes p",
+    );
+    seed_main(&server, "ocone", c2["id"].as_str().unwrap());
+    let mine = b"my out-of-cone file\n";
+    write_file(&wc_dir, "gone/p.txt", mine);
+
+    // Plain sync advances; the out-of-cone file is untouched.
+    let out = run_binary(&server, &wc_dir, &["sync"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "plain sync must not refuse an out-of-cone collider: {out:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        mine,
+        "plain sync leaves the out-of-cone file alone"
+    );
+    assert_eq!(std::fs::read(wc_dir.join("keep/k.txt")).unwrap(), k);
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+
+    // A second advance with --force: still exit 0, file still intact.
+    let c3 = changeset(
+        &server,
+        "ocone",
+        &[c2["id"].as_str().unwrap().to_string()],
+        vec![change("add", "keep/new.txt", n)],
+        "c3 adds new.txt",
+    );
+    seed_main(&server, "ocone", c3["id"].as_str().unwrap());
+    let out = run_binary(&server, &wc_dir, &["sync", "--force"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "--force must not eat the out-of-cone collider: {out:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        mine,
+        "--force leaves the out-of-cone file alone"
+    );
+    assert_eq!(std::fs::read(wc_dir.join("keep/new.txt")).unwrap(), n);
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(
+        report.untracked,
+        vec!["gone/p.txt".to_string()],
+        "the file is still untracked, not deleted: {report:?}"
+    );
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c3["id"].as_str().unwrap());
+}
+
+/// DELETED CONE PREFIX: the server deletes the LAST file under a cone
+/// prefix, so the prefix's whole directory vanishes from the target tree.
+/// A deleted directory is normal history: the sync treats the absent
+/// prefix as an EMPTY subtree — the incoming del removes the indexed file
+/// from disk and index, the emptied dir is pruned, the sync completes
+/// (exit 0), status is clean, and later syncs keep working. (Pre-fix this
+/// failed forever with `error: sparse prefix "gone" does not exist in the
+/// tree`.)
+#[test]
+fn sync_applies_a_fully_deleted_cone_prefix() {
+    let server = start_server();
+    create_repo(&server, "goneprefix");
+    let k = b"k\n";
+    let p = b"p\n";
+    let n = b"n\n";
+    put_blob(&server, "goneprefix", k);
+    put_blob(&server, "goneprefix", p);
+    put_blob(&server, "goneprefix", n);
+    let c1 = changeset(
+        &server,
+        "goneprefix",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "goneprefix", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/goneprefix", server.base),
+            &["gone".to_string(), "keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // Server-side c2 deletes the only file under gone/ — the whole prefix
+    // directory vanishes from the target tree.
+    let c2 = changeset(
+        &server,
+        "goneprefix",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("del", "gone/p.txt", b"")],
+        "c2 deletes p",
+    );
+    seed_main(&server, "goneprefix", c2["id"].as_str().unwrap());
+
+    // The sync completes: exit 0, disk+index cleaned, gone/ pruned.
+    let out = run_binary(&server, &wc_dir, &["sync"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a fully deleted cone prefix must not fail the sync: {out:?}"
+    );
+    assert!(
+        !wc_dir.join("gone").exists(),
+        "the emptied prefix dir is pruned"
+    );
+    let index = naatre_cli::wc::Wc::open(&wc_dir)
+        .unwrap()
+        .load_index()
+        .unwrap();
+    assert_eq!(index.rows.len(), 1, "only keep/k.txt stays indexed");
+    assert!(index.rows.contains_key("keep/k.txt"));
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+
+    // The uniform client rule extends to reads: `naatre diff` (local mode)
+    // walks the same vanished prefix at head — it must complete (exit 0)
+    // with an empty diff, and status stays clean. (Pre-fix this wedged
+    // with the strict walk's `does not exist in the tree` error forever.)
+    let out = run_binary(&server, &wc_dir, &["diff"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "local diff must not wedge on a vanished cone prefix: {out:?}"
+    );
+    assert!(
+        !stdout_of(&out).contains("D "),
+        "head and disk agree: no phantom dels: {:?}",
+        stdout_of(&out)
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+
+    // Later syncs keep working (the vanished prefix stays an empty subtree).
+    let c3 = changeset(
+        &server,
+        "goneprefix",
+        &[c2["id"].as_str().unwrap().to_string()],
+        vec![change("add", "keep/new.txt", n)],
+        "c3 adds new.txt",
+    );
+    seed_main(&server, "goneprefix", c3["id"].as_str().unwrap());
+    assert_eq!(verbs::sync::run(&wc_dir, false, &net(&server)), 0);
+    assert_eq!(std::fs::read(wc_dir.join("keep/new.txt")).unwrap(), n);
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let out = run_binary(&server, &wc_dir, &["sync"]);
+    assert_eq!(out.status.code(), Some(0), "up-to-date sync fine: {out:?}");
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c3["id"].as_str().unwrap());
+}
+
 /// Binary clone usage: a URL whose scheme is not http (https included) is a
 /// usage error (exit 3) naming the scheme and stating the client speaks
 /// plain HTTP only — never silently downgraded.
@@ -1902,6 +2467,412 @@ fn sync_gate_refuses_deletion_collisions_and_force_applies_them() {
             && !wc_dir.join("l.txt").exists(),
         "incoming deletions applied"
     );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+}
+
+// ---- fix2: strict-direction pins, symlink gate, sparse dirty-tracked arm ----
+
+/// STRICT DIRECTION (clone): `clone --sparse <typo>` fails with the strict
+/// walk's error and exit 1 — the lenient absent-prefix-is-empty rule
+/// (sync/local-diff only) never leaks into a widening operation, and a
+/// failed clone leaves no working copy behind.
+#[test]
+fn clone_sparse_refuses_a_missing_prefix() {
+    let server = start_server();
+    create_repo(&server, "strictclone");
+    let k = b"k\n";
+    put_blob(&server, "strictclone", k);
+    let c1 = changeset(
+        &server,
+        "strictclone",
+        &[],
+        vec![change("add", "keep/k.txt", k)],
+        "c1",
+    );
+    seed_main(&server, "strictclone", c1["id"].as_str().unwrap());
+
+    let wc_dir = server._dir.path().join("wc");
+    let out = run_binary(
+        &server,
+        server._dir.path(),
+        &[
+            "clone",
+            "--sparse",
+            "nope",
+            &format!("{}/strictclone", server.base),
+            "--into",
+            "wc",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "strict walk errors: {out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("nope"), "the prefix is named: {stderr:?}");
+    assert!(
+        stderr.contains("does not exist in the tree"),
+        "the strict walk's error: {stderr:?}"
+    );
+    assert!(
+        !wc_dir.exists(),
+        "a failed clone leaves no working copy behind"
+    );
+}
+
+/// STRICT DIRECTION (sparse add): `sparse add <missing-prefix>` fails with
+/// the strict walk's error and exit 1 — never the lenient form (which would
+/// "succeed" with zero files), and the prefix list is unchanged.
+#[test]
+fn sparse_add_refuses_a_missing_prefix() {
+    let server = start_server();
+    create_repo(&server, "strictadd");
+    let k = b"k\n";
+    put_blob(&server, "strictadd", k);
+    let c1 = changeset(
+        &server,
+        "strictadd",
+        &[],
+        vec![change("add", "keep/k.txt", k)],
+        "c1",
+    );
+    seed_main(&server, "strictadd", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/strictadd", server.base),
+            &["keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "nope"]);
+    assert_eq!(out.status.code(), Some(1), "strict walk errors: {out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("nope"), "the prefix is named: {stderr:?}");
+    assert!(
+        stderr.contains("does not exist in the tree"),
+        "the strict walk's error: {stderr:?}"
+    );
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    assert_eq!(
+        wc.load_state().unwrap().sparse,
+        vec!["keep".to_string()],
+        "the failed add changed nothing"
+    );
+    assert_eq!(std::fs::read(wc_dir.join("keep/k.txt")).unwrap(), k);
+}
+
+/// SYMLINK GATE (file form): a symlink at a widening path is invisible to
+/// the scanner (it skips symlinks) but would be clobbered by the widen —
+/// the gate refuses with `dirty_working_copy` naming it as a symlink,
+/// preserving link and target; `--force` unlinks exactly the link and
+/// materializes head content over it.
+#[test]
+fn sparse_add_refuses_a_file_symlink_at_a_widening_path() {
+    let server = start_server();
+    create_repo(&server, "symfile");
+    let k = b"k\n";
+    let p = b"p from head\n";
+    put_blob(&server, "symfile", k);
+    put_blob(&server, "symfile", p);
+    let c1 = changeset(
+        &server,
+        "symfile",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "symfile", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/symfile", server.base),
+            &["keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // The user's own symlink at the widening path, pointing at a tracked
+    // file inside the checkout. The scanner cannot see it (symlinks are
+    // skipped) — status is clean, which is exactly why the gate must
+    // classify it itself.
+    std::fs::create_dir_all(wc_dir.join("gone")).unwrap();
+    std::os::unix::fs::symlink("keep/k.txt", wc_dir.join("gone/p.txt")).unwrap();
+    assert!(
+        verbs::status::report(&wc_dir).unwrap().is_clean(),
+        "test setup: the scanner is symlink-blind: {:?}",
+        verbs::status::report(&wc_dir).unwrap()
+    );
+
+    // The widen refuses (exit 2), names the path as a symlink, touches
+    // nothing.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the symlink must refuse: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/p.txt") && stderr.contains("symlink"),
+        "the collider is named as a symlink: {stderr:?}"
+    );
+    assert!(
+        wc_dir
+            .join("gone/p.txt")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the refusal preserves the link"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("keep/k.txt")).unwrap(),
+        k,
+        "the refusal preserves the link's target"
+    );
+
+    // --force unlinks exactly the link and materializes head content; the
+    // target file is untouched.
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Add {
+                prefix: "gone".into(),
+                force: true,
+            },
+            &net(&server),
+        ),
+        0
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "head's p materialized where the link was"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("keep/k.txt")).unwrap(),
+        k,
+        "--force removes the link, never its target"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+}
+
+/// SYMLINK GATE (dir form): a directory symlink at a component of a
+/// widened path cannot redirect the widen's writes outside the checkout —
+/// the gate refuses naming the link; `--force` removes the LINK itself and
+/// the materialization lands inside the checkout (the redirect target
+/// receives nothing).
+#[test]
+fn sparse_add_refuses_a_dir_symlink_under_a_widened_prefix() {
+    let server = start_server();
+    create_repo(&server, "symdir");
+    let k = b"k\n";
+    let x = b"x from head\n";
+    put_blob(&server, "symdir", k);
+    put_blob(&server, "symdir", x);
+    let c1 = changeset(
+        &server,
+        "symdir",
+        &[],
+        vec![
+            change("add", "gone/sub/x.txt", x),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "symdir", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/symdir", server.base),
+            &["keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // gone/sub is a symlink out of the checkout; head materializes
+    // gone/sub/x.txt, which would land in the target directory.
+    let outsider = server._dir.path().join("outsider");
+    std::fs::create_dir_all(&outsider).unwrap();
+    std::fs::create_dir_all(wc_dir.join("gone")).unwrap();
+    std::os::unix::fs::symlink("../../outsider", wc_dir.join("gone/sub")).unwrap();
+
+    // The widen refuses: gone/sub is named as a symlink.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the dir symlink must refuse: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/sub") && stderr.contains("symlink"),
+        "the component link is named: {stderr:?}"
+    );
+    assert!(
+        wc_dir
+            .join("gone/sub")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the refusal preserves the link"
+    );
+    assert!(
+        std::fs::read_dir(&outsider).unwrap().next().is_none(),
+        "the refusal writes nothing through the link"
+    );
+
+    // --force removes the LINK and materializes INSIDE the checkout; the
+    // redirect target stays empty.
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Add {
+                prefix: "gone".into(),
+                force: true,
+            },
+            &net(&server),
+        ),
+        0
+    );
+    assert!(
+        !wc_dir
+            .join("gone/sub")
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false),
+        "--force removed the link"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/sub/x.txt")).unwrap(),
+        x,
+        "head content materialized inside the checkout"
+    );
+    assert!(
+        std::fs::read_dir(&outsider).unwrap().next().is_none(),
+        "--force never writes through the old link"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+}
+
+/// SPARSE GATE'S DIRTY-TRACKED ARM (qa-C2), both directions: an
+/// ancestor/overlapping widen (the cone holds `gone/sub`; the widen is
+/// `gone`) with a dirty tracked file under the widened prefix refuses
+/// (exit 2, the path listed, everything preserved); `--force` materializes
+/// over it (edit discarded) and the next sync completes clean.
+#[test]
+fn sparse_add_refuses_dirty_tracked_under_an_overlapping_widen_and_forces() {
+    let server = start_server();
+    create_repo(&server, "overlap");
+    let k = b"k\n";
+    let p = b"p from head\n";
+    let x = b"x from head\n";
+    let n = b"n\n";
+    put_blob(&server, "overlap", k);
+    put_blob(&server, "overlap", p);
+    put_blob(&server, "overlap", x);
+    put_blob(&server, "overlap", n);
+    let c1 = changeset(
+        &server,
+        "overlap",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "gone/sub/x.txt", x),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "overlap", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/overlap", server.base),
+            &["gone/sub".to_string(), "keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // The user edits the tracked file under the to-be-widened ancestor.
+    let mine = b"my local x work\n";
+    write_file(&wc_dir, "gone/sub/x.txt", mine);
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(report.modified, vec!["gone/sub/x.txt".to_string()]);
+
+    // The overlapping widen refuses (exit 2) and lists the dirty file.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the dirty tracked arm must refuse: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/sub/x.txt"),
+        "the dirty tracked file is listed: {stderr:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/sub/x.txt")).unwrap(),
+        mine,
+        "the refusal preserves the edit"
+    );
+    assert!(
+        !wc_dir.join("gone/p.txt").exists(),
+        "the refusal materializes nothing"
+    );
+
+    // --force materializes over the edit: head content everywhere under the
+    // widened ancestor, index consistent, status clean.
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Add {
+                prefix: "gone".into(),
+                force: true,
+            },
+            &net(&server),
+        ),
+        0
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/sub/x.txt")).unwrap(),
+        x,
+        "--force discards the edit (materialized over)"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "the widen materialized the rest of the ancestor"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+
+    // The next sync completes clean on top of the widened cone.
+    let c2 = changeset(
+        &server,
+        "overlap",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("add", "keep/new.txt", n)],
+        "c2 adds new.txt",
+    );
+    seed_main(&server, "overlap", c2["id"].as_str().unwrap());
+    assert_eq!(verbs::sync::run(&wc_dir, false, &net(&server)), 0);
+    assert_eq!(std::fs::read(wc_dir.join("keep/new.txt")).unwrap(), n);
     assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
     let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
     assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());

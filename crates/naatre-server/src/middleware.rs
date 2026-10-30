@@ -15,7 +15,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderName, HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, TryAcquireError};
 
 use crate::api_code::ApiCode;
 use crate::api_error::{ApiError, REQUEST_ID};
@@ -26,6 +26,12 @@ const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 /// `request_timeout` (its inner future is dropped, so in-flight lands fail
 /// fast for their joiners via the join guard's Drop fallback).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The per-request budget as middleware state, so tests drive the REAL
+/// [`request_timeout`] with a tiny budget; the binary installs
+/// `TimeoutBudget(REQUEST_TIMEOUT)` (the 30 s default).
+#[derive(Clone, Copy, Debug)]
+pub struct TimeoutBudget(pub Duration);
 
 /// Concurrent-request cap: axum's `serve` has no connection limit of its
 /// own, so this semaphore is the process's admission control. A request
@@ -84,14 +90,21 @@ fn shed(code: ApiCode, message: &'static str) -> Response {
     response
 }
 
-/// Wraps every request in [`REQUEST_TIMEOUT`]: a request that outlives the
-/// budget is answered 503 `request_timeout` and its inner future dropped.
-pub async fn request_timeout(req: Request, next: Next) -> Response {
-    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(req)).await {
+/// Wraps every request in the state's [`TimeoutBudget`]: a request that
+/// outlives the budget is answered 503 `request_timeout` and its inner
+/// future dropped. Install with `from_fn_with_state(TimeoutBudget(
+/// REQUEST_TIMEOUT), request_timeout)` — the 30 s default; tests install a
+/// tiny budget through the same function.
+pub async fn request_timeout(
+    State(TimeoutBudget(budget)): State<TimeoutBudget>,
+    req: Request,
+    next: Next,
+) -> Response {
+    match tokio::time::timeout(budget, next.run(req)).await {
         Ok(response) => response,
         Err(_) => {
             tracing::warn!(
-                timeout_secs = REQUEST_TIMEOUT.as_secs(),
+                timeout_secs = budget.as_secs(),
                 "request shed: per-request timeout"
             );
             shed(
@@ -112,12 +125,23 @@ pub async fn request_cap(
 ) -> Response {
     // try_acquire, never wait: the cap sheds rather than queues (a queued
     // request would pile up behind the very load the cap exists to bound).
-    let Ok(permit) = permits.clone().try_acquire_owned() else {
-        tracing::warn!("request shed: concurrency cap reached");
-        return shed(ApiCode::ServerBusy, "server is at its request limit");
-    };
-    let _permit = permit;
-    next.run(req).await
+    // The two failure modes are distinct facts for ops (the closed
+    // semaphore means shutdown, not load); the shed response is the same
+    // either way.
+    match permits.clone().try_acquire_owned() {
+        Ok(permit) => {
+            let _permit = permit;
+            next.run(req).await
+        }
+        Err(TryAcquireError::NoPermits) => {
+            tracing::warn!("request shed: concurrency cap reached");
+            shed(ApiCode::ServerBusy, "server is at its request limit")
+        }
+        Err(TryAcquireError::Closed) => {
+            tracing::warn!("request shed: request semaphore is closed");
+            shed(ApiCode::ServerBusy, "server is at its request limit")
+        }
+    }
 }
 
 /// Installs the process-wide tracing subscriber: `fmt` output filtered by

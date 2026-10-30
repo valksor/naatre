@@ -54,12 +54,38 @@ pub struct TreeFile {
 /// clone is allowed at this size). Blob ids arrive via each parent's entry
 /// listing: a chain of custody from the changeset's declared root id.
 ///
-/// Errors when a prefix does not exist in the tree (as a dir or file).
+/// Errors when a prefix does not exist in the tree (as a dir or file) —
+/// the strict form clone and `sparse add` widen through.
 pub fn walk_tree(
     client: &Client,
     repo: &str,
     root: &Id,
     prefixes: &[String],
+) -> Result<Vec<TreeFile>, FetchError> {
+    walk_tree_inner(client, repo, root, prefixes, true)
+}
+
+/// The uniform rule for walks over an EXISTING checkout's cone (sync's
+/// target walk, local diff's head walk): a prefix the tree no longer
+/// contains (the server deleted its whole directory — a deleted directory
+/// is normal history) is an EMPTY subtree, so the verb completes on normal
+/// history instead of failing forever. Widening operations (clone, sparse
+/// add) keep the strict [`walk_tree`].
+pub fn walk_tree_allowing_missing_prefixes(
+    client: &Client,
+    repo: &str,
+    root: &Id,
+    prefixes: &[String],
+) -> Result<Vec<TreeFile>, FetchError> {
+    walk_tree_inner(client, repo, root, prefixes, false)
+}
+
+fn walk_tree_inner(
+    client: &Client,
+    repo: &str,
+    root: &Id,
+    prefixes: &[String],
+    require_prefixes: bool,
 ) -> Result<Vec<TreeFile>, FetchError> {
     for p in prefixes {
         path::validate(p).map_err(|e| FetchError::Local(format!("sparse prefix {p:?}: {e}")))?;
@@ -120,12 +146,14 @@ pub fn walk_tree(
             }
         }
     }
-    for p in prefixes {
-        let found = descended.contains(p) || files.iter().any(|f| f.path == *p);
-        if !found {
-            return Err(FetchError::Local(format!(
-                "sparse prefix {p:?} does not exist in the tree"
-            )));
+    if require_prefixes {
+        for p in prefixes {
+            let found = descended.contains(p) || files.iter().any(|f| f.path == *p);
+            if !found {
+                return Err(FetchError::Local(format!(
+                    "sparse prefix {p:?} does not exist in the tree"
+                )));
+            }
         }
     }
     Ok(files)
@@ -197,10 +225,32 @@ pub fn verify(id: &Id, bytes: &[u8]) -> Result<(), FetchError> {
 
 /// Materializes one fetched file into the checkout (grammar-checked again
 /// here, so every caller is covered) and returns its stat row.
+///
+/// Defense in depth against symlink redirection: every on-disk path
+/// component under the checkout root is checked with `symlink_metadata`
+/// (a scan-independent stat, no dereference) and any symlink — file or
+/// directory — refuses the write with an error, never a clobber and never
+/// a write-through. This covers clone, sync, restore, and `sparse add`
+/// regardless of what their higher-level gates caught.
 pub fn materialize(root: &Path, file: &TreeFile, bytes: &[u8]) -> Result<Row, FetchError> {
     path::validate(&file.path)
         .map_err(|e| FetchError::Local(format!("server path {:?}: {}", file.path, e)))?;
     verify(&file.blob, bytes)?;
+    let mut component = root.to_path_buf();
+    for name in file.path.split('/') {
+        component.push(name);
+        let is_symlink = component
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false); // absent: nothing to refuse
+        if is_symlink {
+            return Err(FetchError::Local(format!(
+                "refusing to write {:?}: path component {:?} is a symlink",
+                file.path,
+                component.strip_prefix(root).unwrap_or(&component).display()
+            )));
+        }
+    }
     crate::wc::write_checkout_file(root, &file.path, bytes, file.blob.0, file.exec)
         .map_err(|e| FetchError::Local(format!("writing {}: {e}", file.path)))
 }

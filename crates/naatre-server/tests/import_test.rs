@@ -8,8 +8,9 @@
 //! main set), re-import no-op, unsupported-content abort in default mode,
 //! `--skip-unsupported` with the cascade, graft A (fast-forward), graft B
 //! (native lands → refused, dangling heads), graft C (rewritten source →
-//! `git_history_diverged`), import-while-serving (flock), and Cc+Cf
-//! sanitization (U+202E message, non-UTF-8 author).
+//! `git_history_diverged`), import-while-serving (flock), Cc+Cf
+//! sanitization (U+202E message, non-UTF-8 author), and audit provenance
+//! (ref_move + changeset_create rows carry via:"import").
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -867,4 +868,61 @@ fn sanitize_replaces_cc_cf_with_replacement_char() {
         !author_row.author.as_bytes().contains(&0xFF),
         "raw byte replaced"
     );
+}
+
+// ---- 10. audit provenance ---------------------------------------------------
+
+/// The audit details JSON of every row for one action, in id order.
+fn audit_details(env: &Env, action: &str) -> Vec<serde_json::Value> {
+    let conn = env.conn();
+    let mut stmt = conn
+        .prepare("SELECT details_json FROM audit_log WHERE action = ?1 ORDER BY id")
+        .unwrap();
+    stmt.query_map([action], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|r| serde_json::from_str(&r.unwrap()).expect("details_json parses"))
+        .collect()
+}
+
+/// Whether an import moves main (set) or fast-forwards it, its ref_move
+/// audit row and every changeset_create audit row it writes carry
+/// via:"import" — the closure round's ref_cas dedup silently dropped that
+/// provenance once; pinned so it never regresses.
+#[test]
+fn import_audit_rows_carry_via_import() {
+    if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
+        return;
+    }
+    let mut f = Fixture::clean("via");
+    let env = Env::new();
+
+    // Clean import: main is SET.
+    let report = env.import(&f, "imp", false);
+    assert_eq!(report.status, "ok");
+    assert_eq!(report.main, "set");
+    let details = audit_details(&env, "changeset_create");
+    assert_eq!(details.len(), 7, "one row per imported commit");
+    let moves = audit_details(&env, "ref_move");
+    assert_eq!(moves.len(), 1, "the main move");
+    for v in details.iter().chain(moves.iter()) {
+        assert_eq!(v["via"], "import", "provenance lost: {v}");
+    }
+
+    // Graft import: main is FAST-FORWARDED; the second move carries the
+    // provenance too.
+    f.write("next.txt", b"one\n");
+    f.commit("graft one");
+    f.write("next.txt", b"two\n");
+    f.commit("graft two");
+    let report = env.import(&f, "imp", false);
+    assert_eq!(report.imported, 2);
+    assert_eq!(report.main, "fast-forwarded");
+    let details = audit_details(&env, "changeset_create");
+    assert_eq!(details.len(), 9);
+    let moves = audit_details(&env, "ref_move");
+    assert_eq!(moves.len(), 2);
+    for v in details.iter().chain(moves.iter()) {
+        assert_eq!(v["via"], "import", "provenance lost: {v}");
+    }
 }
