@@ -122,7 +122,8 @@ enum Cmd {
     /// Advance the working copy to the server's main (refuses only when
     /// incoming paths collide with local edits/untracked files).
     Sync {
-        /// Discard local changes to incoming-colliding files, then proceed.
+        /// Discard local changes to incoming-colliding files, then proceed;
+        /// symlinks are never removed.
         #[arg(long)]
         force: bool,
         #[command(flatten)]

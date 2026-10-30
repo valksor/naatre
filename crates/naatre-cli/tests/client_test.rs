@@ -1933,6 +1933,13 @@ fn sync_and_force_leave_out_of_cone_untracked_files_alone() {
         Some(0),
         "plain sync must not refuse an out-of-cone collider: {out:?}"
     );
+    // The summary's cone filter: the out-of-cone deletion was NOT applied
+    // here, so no `D gone/p.txt` line may pose as one on stdout.
+    let summary = stdout_of(&out);
+    assert!(
+        !summary.contains("D gone/p.txt"),
+        "an out-of-cone del must not print as applied: {summary:?}"
+    );
     assert_eq!(
         std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
         mine,
@@ -2118,6 +2125,11 @@ fn binary_clap_usage_errors_exit_3() {
     assert!(
         stdout_of(&out).contains("collide"),
         "help names the relaxed gate: {:?}",
+        stdout_of(&out)
+    );
+    assert!(
+        stdout_of(&out).contains("symlinks are never removed"),
+        "help states the scope asymmetry with sparse add --force: {:?}",
         stdout_of(&out)
     );
 }
@@ -2876,4 +2888,348 @@ fn sparse_add_refuses_dirty_tracked_under_an_overlapping_widen_and_forces() {
     assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
     let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
     assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+}
+
+/// Index snapshot for the unchanged pins: (path, blob, size, exec) rows.
+fn index_rows(wc: &naatre_cli::wc::Wc) -> Vec<(String, [u8; 32], u64, bool)> {
+    let mut v: Vec<_> = wc
+        .load_index()
+        .unwrap()
+        .rows
+        .iter()
+        .map(|(p, r)| (p.clone(), r.blob, r.size, r.exec))
+        .collect();
+    v.sort();
+    v
+}
+
+/// State snapshot for the unchanged pins: every state.json field.
+fn state_sig(wc: &naatre_cli::wc::Wc) -> (String, Option<String>, Vec<String>, String) {
+    let s = wc.load_state().unwrap();
+    (
+        s.head.clone(),
+        s.base.clone(),
+        s.sparse.clone(),
+        s.server_repo.clone(),
+    )
+}
+
+/// FAILED FETCH DISCARDS NOTHING, EVEN WITH --force (qa-C1): both force
+/// verbs are driven into a failed `fetch_blobs_verified` (a corrupted
+/// server blob file, the corrupt_server_blob_is_a_clean_error technique)
+/// while a collider sits on the discard list: each verb exits non-zero,
+/// the colliding untracked file survives byte-identical, nothing is
+/// materialized, and index/state are unchanged. Restoring the blob bytes
+/// then lets the SAME command succeed, pinning the fetch-before-discard
+/// ordering — the fetch failure, not the gate, stopped the discard.
+#[test]
+fn failed_fetch_discards_nothing_even_with_force() {
+    let server = start_server();
+
+    // -- sync --force: untracked collider at an incoming add path. --
+    create_repo(&server, "fchsync");
+    let a1 = b"a1\n";
+    let n2 = b"server new.txt\n";
+    put_blob(&server, "fchsync", a1);
+    put_blob(&server, "fchsync", n2);
+    let c1 = changeset(
+        &server,
+        "fchsync",
+        &[],
+        vec![change("add", "a.txt", a1)],
+        "c1",
+    );
+    seed_main(&server, "fchsync", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/fchsync", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let c2 = changeset(
+        &server,
+        "fchsync",
+        &[c1["id"].as_str().unwrap().to_string()],
+        vec![change("add", "new.txt", n2)],
+        "c2",
+    );
+    seed_main(&server, "fchsync", c2["id"].as_str().unwrap());
+    let mine = b"my untracked collider\n";
+    write_file(&wc_dir, "new.txt", mine);
+
+    // Corrupt the incoming blob's CAS file so the client hash gate fails.
+    let hex = blob_id(n2);
+    let shard = server
+        ._dir
+        .path()
+        .join("objects")
+        .join(&hex[0..2])
+        .join(&hex[2..4])
+        .join(&hex[4..]);
+    let saved = std::fs::read(&shard).unwrap();
+    std::fs::write(&shard, b"corrupted bytes that fail the hash gate").unwrap();
+
+    let wc = naatre_cli::wc::Wc::open(&wc_dir).unwrap();
+    let state_before = state_sig(&wc);
+    let rows_before = index_rows(&wc);
+
+    let out = run_binary(&server, &wc_dir, &["sync", "--force"]);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "the failed fetch must fail the sync: {out:?}"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("new.txt")).unwrap(),
+        mine,
+        "--force must not discard the collider when the fetch failed"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("a.txt")).unwrap(),
+        a1,
+        "nothing materialized over tracked content either"
+    );
+    assert_eq!(state_sig(&wc), state_before, "state.json unchanged");
+    assert_eq!(index_rows(&wc), rows_before, "index unchanged");
+
+    // Positive control: restored blob bytes let the SAME command succeed
+    // and discard exactly the named collider.
+    std::fs::write(&shard, &saved).unwrap();
+    let out = run_binary(&server, &wc_dir, &["sync", "--force"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(std::fs::read(wc_dir.join("new.txt")).unwrap(), n2);
+    assert_eq!(wc.load_state().unwrap().head, c2["id"].as_str().unwrap());
+
+    // -- sparse add --force: untracked collider on the widened path. --
+    create_repo(&server, "fchsparse");
+    let k = b"k\n";
+    let p = b"p from head\n";
+    put_blob(&server, "fchsparse", k);
+    put_blob(&server, "fchsparse", p);
+    let sc1 = changeset(
+        &server,
+        "fchsparse",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "fchsparse", sc1["id"].as_str().unwrap());
+    let sp_dir = server._dir.path().join("sp");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/fchsparse", server.base),
+            &["keep".to_string()],
+            Some(sp_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+    let mine_p = b"my out-of-cone file\n";
+    write_file(&sp_dir, "gone/p.txt", mine_p);
+
+    let hex_p = blob_id(p);
+    let shard_p = server
+        ._dir
+        .path()
+        .join("objects")
+        .join(&hex_p[0..2])
+        .join(&hex_p[2..4])
+        .join(&hex_p[4..]);
+    let saved_p = std::fs::read(&shard_p).unwrap();
+    std::fs::write(&shard_p, b"corrupted bytes that fail the hash gate").unwrap();
+
+    let sp_wc = naatre_cli::wc::Wc::open(&sp_dir).unwrap();
+    let sp_state_before = state_sig(&sp_wc);
+    let sp_rows_before = index_rows(&sp_wc);
+
+    let out = run_binary(&server, &sp_dir, &["sparse", "add", "gone", "--force"]);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "the failed fetch must fail the widen: {out:?}"
+    );
+    assert_eq!(
+        std::fs::read(sp_dir.join("gone/p.txt")).unwrap(),
+        mine_p,
+        "the collider survives the failed fetch byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(sp_dir.join("keep/k.txt")).unwrap(),
+        k,
+        "nothing else materialized either"
+    );
+    assert_eq!(state_sig(&sp_wc), sp_state_before, "state.json unchanged");
+    assert_eq!(index_rows(&sp_wc), sp_rows_before, "index unchanged");
+
+    std::fs::write(&shard_p, &saved_p).unwrap();
+    let out = run_binary(&server, &sp_dir, &["sparse", "add", "gone", "--force"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        std::fs::read(sp_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "the restored fetch lets the widen discard the collider and materialize"
+    );
+    assert_eq!(
+        state_sig(&sp_wc),
+        (
+            sc1["id"].as_str().unwrap().to_string(),
+            None,
+            vec!["keep".to_string(), "gone".to_string()],
+            "fchsparse".to_string()
+        )
+    );
+}
+
+/// SPARSE GATE'S DELETED-TRACKED ARM (qa-A2), the missing half of qa-C2's
+/// modified arm: a locally DELETED tracked file under an overlapping widen
+/// (the cone holds `gone/sub`; the widen is `gone`) refuses — exit 2,
+/// `dirty_working_copy`, the path listed, nothing materialized — and
+/// `--force` proceeds, materializing head content over the deletion.
+#[test]
+fn sparse_add_refuses_a_locally_deleted_tracked_file_under_a_widen_and_forces() {
+    let server = start_server();
+    create_repo(&server, "overdel");
+    let k = b"k\n";
+    let p = b"p from head\n";
+    let x = b"x from head\n";
+    put_blob(&server, "overdel", k);
+    put_blob(&server, "overdel", p);
+    put_blob(&server, "overdel", x);
+    let c1 = changeset(
+        &server,
+        "overdel",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "gone/sub/x.txt", x),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "overdel", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/overdel", server.base),
+            &["gone/sub".to_string(), "keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+
+    // The user DELETES the tracked file under the to-be-widened ancestor.
+    std::fs::remove_file(wc_dir.join("gone/sub/x.txt")).unwrap();
+    let report = verbs::status::report(&wc_dir).unwrap();
+    assert_eq!(report.deleted, vec!["gone/sub/x.txt".to_string()]);
+
+    // The overlapping widen refuses (exit 2) and lists the deleted file.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the deleted tracked arm must refuse: {out:?}"
+    );
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("dirty_working_copy"), "{stderr:?}");
+    assert!(
+        stderr.contains("gone/sub/x.txt"),
+        "the deleted tracked file is listed: {stderr:?}"
+    );
+    assert!(
+        !wc_dir.join("gone/p.txt").exists(),
+        "the refusal materializes nothing"
+    );
+    assert!(
+        !wc_dir.join("gone/sub/x.txt").exists(),
+        "the refusal does not resurrect the deletion either"
+    );
+
+    // --force proceeds: head content everywhere under the widened ancestor,
+    // index consistent, status clean.
+    assert_eq!(
+        verbs::sparse::run(
+            &wc_dir,
+            verbs::sparse::Action::Add {
+                prefix: "gone".into(),
+                force: true,
+            },
+            &net(&server),
+        ),
+        0
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/sub/x.txt")).unwrap(),
+        x,
+        "--force materializes over the deletion"
+    );
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "the widen materialized the rest of the ancestor"
+    );
+    assert!(verbs::status::report(&wc_dir).unwrap().is_clean());
+}
+
+/// BINARY PARSE PIN (qa-A3): the real binary accepts `sparse add <prefix>
+/// --force` — sync's binary --force is already pinned in
+/// binary_sync_family; sparse add's was not. Without the flag the collider
+/// refuses (exit 2); with it the same invocation proceeds and discards
+/// exactly the collider.
+#[test]
+fn binary_sparse_add_force_parses_and_proceeds() {
+    let server = start_server();
+    create_repo(&server, "binforce");
+    let k = b"k\n";
+    let p = b"p from head\n";
+    put_blob(&server, "binforce", k);
+    put_blob(&server, "binforce", p);
+    let c1 = changeset(
+        &server,
+        "binforce",
+        &[],
+        vec![
+            change("add", "gone/p.txt", p),
+            change("add", "keep/k.txt", k),
+        ],
+        "c1",
+    );
+    seed_main(&server, "binforce", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/binforce", server.base),
+            &["keep".to_string()],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server),
+        ),
+        0
+    );
+    let mine = b"my untracked collider\n";
+    write_file(&wc_dir, "gone/p.txt", mine);
+
+    // Plain add refuses the collider...
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone"]);
+    assert_eq!(out.status.code(), Some(2), "collider refuses: {out:?}");
+    assert_eq!(std::fs::read(wc_dir.join("gone/p.txt")).unwrap(), mine);
+
+    // ...`--force` parses through the real binary and proceeds.
+    let out = run_binary(&server, &wc_dir, &["sparse", "add", "gone", "--force"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        std::fs::read(wc_dir.join("gone/p.txt")).unwrap(),
+        p,
+        "the collider was discarded and head content materialized"
+    );
+    assert_eq!(std::fs::read(wc_dir.join("keep/k.txt")).unwrap(), k);
+    let out = run_binary(&server, &wc_dir, &["sparse", "list"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("gone"), "{}", stdout_of(&out));
 }

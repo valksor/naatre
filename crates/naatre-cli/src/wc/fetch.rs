@@ -231,7 +231,10 @@ pub fn verify(id: &Id, bytes: &[u8]) -> Result<(), FetchError> {
 /// (a scan-independent stat, no dereference) and any symlink — file or
 /// directory — refuses the write with an error, never a clobber and never
 /// a write-through. This covers clone, sync, restore, and `sparse add`
-/// regardless of what their higher-level gates caught.
+/// regardless of what their higher-level gates caught. The walk is
+/// accepted defense-in-depth, not airtight: a symlink planted between the
+/// last stat and the write still wins that residual stat-then-write
+/// TOCTOU race (an openat/O_NOFOLLOW walk would close it airtight).
 pub fn materialize(root: &Path, file: &TreeFile, bytes: &[u8]) -> Result<Row, FetchError> {
     path::validate(&file.path)
         .map_err(|e| FetchError::Local(format!("server path {:?}: {}", file.path, e)))?;
@@ -242,7 +245,7 @@ pub fn materialize(root: &Path, file: &TreeFile, bytes: &[u8]) -> Result<Row, Fe
         let is_symlink = component
             .symlink_metadata()
             .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false); // absent: nothing to refuse
+            .unwrap_or(false); // absent: nothing to refuse. NOTE: a stat error fails OPEN here (reads as "not a symlink"); the safety net is the subsequent write, which fails loudly on the same error — an EACCES is never mistaken for a planted link
         if is_symlink {
             return Err(FetchError::Local(format!(
                 "refusing to write {:?}: path component {:?} is a symlink",

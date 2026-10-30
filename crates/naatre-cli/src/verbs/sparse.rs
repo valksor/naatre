@@ -147,7 +147,7 @@ fn add(
                 .join(&rel)
                 .symlink_metadata()
                 .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false); // absent: nothing to refuse
+                .unwrap_or(false); // absent: nothing to refuse. NOTE: a stat error fails OPEN here (reads as "not a symlink"); the safety net is the subsequent write, which fails loudly on the same error — an EACCES is never mistaken for a planted link
             if is_symlink {
                 symlinks.push(rel.clone());
             }

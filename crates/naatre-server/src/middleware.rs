@@ -104,7 +104,7 @@ pub async fn request_timeout(
         Ok(response) => response,
         Err(_) => {
             tracing::warn!(
-                timeout_secs = budget.as_secs(),
+                timeout_secs = budget.as_secs_f64(),
                 "request shed: per-request timeout"
             );
             shed(

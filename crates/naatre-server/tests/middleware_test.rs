@@ -81,6 +81,35 @@ async fn concurrency_cap_sheds_never_queues() {
 }
 
 #[tokio::test]
+async fn closed_semaphore_sheds_server_busy_deterministically() {
+    // The Closed arm (shutdown, not load): a closed semaphore answers
+    // try_acquire with Closed regardless of free permits, so closing it is
+    // a deterministic trigger — no leader, no held permit, no timing.
+    let permits = Arc::new(Semaphore::new(8));
+    permits.close();
+
+    let app = Router::new()
+        .route("/stall", get(|| async { "done" }))
+        .layer(axum::middleware::from_fn_with_state(permits, request_cap));
+
+    let resp = tower::ServiceExt::oneshot(app, build_req("/stall"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        resp.headers()
+            .get(header::RETRY_AFTER)
+            .map(|v| v.to_str().unwrap()),
+        Some("1"),
+        "the shed carries Retry-After: 1"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"]["code"], "server_busy");
+    assert_eq!(v["error"]["retryable"], true);
+}
+
+#[tokio::test]
 async fn request_timeout_sheds_a_stalled_handler() {
     let app = Router::new()
         .route(
