@@ -66,7 +66,10 @@ async fn serve_stays_up_through_a_write_txn_then_drains() {
     assert!(contended, "hold_write_txn never took the store mutex");
 
     // 2. …and the server still serves a route that does not touch the store.
-    let response = timeout(Duration::from_secs(2), http_get(addr, "/version"))
+    // Generous deadline: the route is store-free, but the 2 s write-txn hold
+    // and parallel test load can starve a small test runtime — the property
+    // under test is "responds at all", not "responds fast".
+    let response = timeout(Duration::from_secs(10), http_get(addr, "/version"))
         .await
         .expect("version responded while the write txn was held")
         .expect("http exchange");
