@@ -206,6 +206,7 @@ a generic message + `request_id` only.
 | `object_redacted` | 410 | object redacted (M10 tombstones) |
 | `writer_busy` | 503 | single-writer slot busy; retry with backoff |
 | `derivation_pending` | 503 | derived data still computing (M6) |
+| `blame_too_large` | 503 | blame exceeded a structural read cap; not retryable |
 | `request_timeout` | 503 | request shed at the 30 s budget; retry |
 | `server_busy` | 503 | at the concurrent-request cap; retry |
 | `internal` | 500 | internal error; specifics stay in server logs |

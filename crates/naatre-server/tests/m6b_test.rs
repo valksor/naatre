@@ -35,7 +35,10 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_server::derive::{BusyAbort, DeriveStatus, DerivedOut, derive_pass, status};
+use naatre_server::derive::{
+    BusyAbort, DeriveCtx, DeriveFailure, DeriveStatus, DerivedOut, Deriver, ParentOut,
+    PoisonReason, derive_pass, status,
+};
 use naatre_server::serve::{ServeConfig, serve};
 use naatre_server::state::{AppState, ServerState};
 use naatre_store::DataDir;
@@ -1568,6 +1571,12 @@ async fn poison_degrades_blame_reads() {
     let resp = ctx.blame(&c5, "f.txt").await;
     assert_eq!(resp.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(resp.body["error"]["code"], "derivation_pending");
+    // The steady-state pending leg for ?path= too: the backfill marker is
+    // SET (drained above), but a pending/deriving row exists — the read
+    // 503s, never answers from the index with a hole.
+    let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
+    assert_eq!(resp.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.body["error"]["code"], "derivation_pending");
 }
 
 /// Poison in the path_history kind: ?path= degrades (200 + flag +
@@ -1802,6 +1811,288 @@ async fn binary_and_empty_files_blame_structured() {
     // A nonexistent path is the plain 404, not an empty blame.
     let resp = ctx.blame(&bin, "nope.txt").await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
+}
+
+// ---- 6b. the walk-budget pricing + read caps -----------------------------------
+
+/// A tree-walking deriver probe: per file-change row, resolves the path in
+/// the parent's tree through the ROW-PRICED budgeted lookup — the exact
+/// contract the blame deriver follows. Its tiny budget makes the crafted
+/// wide+deep changeset trip the budget in one pass.
+struct WideWalkProbe {
+    budget: u64,
+}
+
+impl Deriver for WideWalkProbe {
+    fn kind(&self) -> &'static str {
+        "wide-walk-probe"
+    }
+
+    fn walk_budget(&self) -> u64 {
+        self.budget
+    }
+
+    fn derive(
+        &self,
+        ctx: &DeriveCtx,
+        conn: &Connection,
+        repo_id: i64,
+        cs: Id,
+        _parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
+        let sql_fail = |e: rusqlite::Error| DeriveFailure::Fail(PoisonReason::new(e.to_string()));
+        let parent_root = match naatre_server::db::changeset_graph(conn, repo_id, &cs)
+            .map_err(sql_fail)?
+        {
+            Some(graph) => match graph.parents.first() {
+                Some(p1) => naatre_server::db::changeset_graph(conn, repo_id, p1)
+                    .map_err(sql_fail)?
+                    .ok_or_else(|| DeriveFailure::Fail(PoisonReason::new("parent row vanished")))?
+                    .root_tree_id
+                    .map(|b| Id(b.try_into().expect("tree id is 32 bytes"))),
+                None => None,
+            },
+            None => return Err(DeriveFailure::Fail(PoisonReason::new("cs row vanished"))),
+        };
+        let changes = naatre_server::db::file_changes_list(conn, repo_id, &cs).map_err(sql_fail)?;
+        for c in &changes {
+            ctx.charge(1)?;
+            if let Some(root) = &parent_root {
+                naatre_server::db::tree_lookup_path_charged(conn, ctx, root, &c.path)?;
+            }
+        }
+        Ok(DerivedOut::empty())
+    }
+}
+
+/// The walk budget prices WORK, not paths (the writer-role DoS fix): a
+/// crafted WIDE root (60 entries) + DEEP path (5 components) makes every
+/// row's parent-tree walk cost ~65 row charges through the budgeted
+/// lookup, so a 5-row changeset trips even a generous budget mid-derive —
+/// quarantined in one pass (seconds), with the report rowed, while the
+/// create is untouched (the kind is deferred) and the REAL blame kind
+/// (row-priced budget sized for it) derives the same shape done.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wide_deep_changeset_poisons_on_the_charged_walk_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_path = dir.path().join("data");
+    let dd = DataDir::create(&data_path).unwrap();
+    std::fs::write(dd.db_path(), b"").unwrap();
+    let probe = WideWalkProbe { budget: 300 };
+    let ctx = Ctx {
+        _dir: Some(dir),
+        ..open_ctx_with(&data_path, true, |state| {
+            state.register_deriver(Arc::new(probe)).unwrap();
+        })
+    };
+
+    let mut wide = vec![add_ch("a/b/c/d/deep.txt", b"deep\n")];
+    for i in 0..60 {
+        wide.push(add_ch(
+            Box::leak(format!("f{i:02}.txt").into_boxed_str()),
+            b"x\n",
+        ));
+    }
+    let parent = ctx.commit(None, "Ann <ann@example.com>", wide).await;
+    let child = ctx
+        .commit(
+            Some(&parent),
+            "Bob <bob@example.com>",
+            vec![
+                ch("a/b/c/d/deep.txt", b"deep2\n"),
+                ch("f00.txt", b"y\n"),
+                ch("f01.txt", b"y\n"),
+                ch("f02.txt", b"y\n"),
+                ch("f03.txt", b"y\n"),
+            ],
+        )
+        .await;
+    ctx.drain().await;
+
+    let probe_state = |cs: &str| {
+        ctx.db()
+            .query_row(
+                "SELECT s.state FROM derive_state s \
+                 JOIN derive_kinds k ON k.id = s.kind \
+                 WHERE k.name = 'wide-walk-probe' AND s.cs = ?1",
+                rusqlite::params![id_of(cs).0.as_slice()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(probe_state(&parent), "done", "the narrow derive passes");
+    assert_eq!(
+        probe_state(&child),
+        "poison",
+        "the wide+deep derive tripped the charged budget"
+    );
+    let (reports, reason): (i64, String) = ctx
+        .db()
+        .query_row(
+            "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
+             JOIN derive_kinds k ON k.id = r.kind \
+             WHERE k.name = 'wide-walk-probe'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(reports, 1, "quarantined exactly once");
+    assert!(reason.contains("walk budget"), "{reason:?}");
+    // The real blame kind, whose budget is sized to the row pricing,
+    // derives the SAME shape without tripping: the pin discriminates —
+    // the probe's budget bound it, not the shape alone.
+    let blame_state: String = ctx
+        .db()
+        .query_row(
+            "SELECT s.state FROM derive_state s \
+             JOIN derive_kinds k ON k.id = s.kind \
+             WHERE k.name = 'blame' AND s.cs = ?1",
+            rusqlite::params![id_of(&child).0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(blame_state, "done");
+}
+
+/// A first-parent chain past the read cap degrades with `blame_too_large`
+/// (retryable false, no Retry-After) — never a hang, never a silent
+/// truncation. The chain is crafted in SQL: one real root commit carries
+/// the tree; 10,002 synthetic single-parent descendants share its root
+/// tree, each with a done blame row (no touches), so the walk does honest
+/// point-query work per node until the cap fires.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_chain_past_the_cap_degrades_not_hangs() {
+    let ctx = in_memory_ctx(true);
+    let c0 = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("f.txt", b"one\n")],
+        )
+        .await;
+    let repo_id: i64 = ctx.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
+    let root_tree: Vec<u8> = ctx
+        .db()
+        .query_row(
+            "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            rusqlite::params![repo_id, id_of(&c0).0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let blame_kind: i64 = ctx
+        .db()
+        .query_row(
+            "SELECT id FROM derive_kinds WHERE name = 'blame'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    const OVER_CAP: i64 = 10_002;
+    let conn = ctx.db();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut prev = id_of(&c0).0;
+    let mut tip = prev;
+    for i in 1..=OVER_CAP {
+        let mut id = [0u8; 32];
+        id[..8].copy_from_slice(&(0xC5u64 << 32 | i as u64).to_be_bytes());
+        conn.execute(
+            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+             timestamp_ns, generation, principal, root_tree_id) \
+             VALUES (?1, ?2, ?3, 'Ann', 'bulk', 0, ?4, 'm6b-test', ?5)",
+            rusqlite::params![repo_id, id, b"bulk", i, root_tree],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
+            rusqlite::params![repo_id, id, prev],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state, attempts, output) \
+             VALUES (?1, ?2, ?3, 'done', 0, ?4)",
+            rusqlite::params![blame_kind, repo_id, id, b""],
+        )
+        .unwrap();
+        prev = id;
+        tip = id;
+    }
+    conn.execute_batch("COMMIT").unwrap();
+    let tip_hex: String = tip.iter().map(|b| format!("{b:02x}")).collect();
+
+    let resp = ctx.blame(&tip_hex, "f.txt").await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], "blame_too_large");
+    assert_eq!(resp.body["error"]["retryable"], json!(false));
+    assert!(
+        resp.headers.get("retry-after").is_none(),
+        "not retryable, so no Retry-After"
+    );
+}
+
+/// A corrupt-but-untainted SELF-REFERENTIAL skip row cannot hang the
+/// merge-base (the unbounded-climb fix): the non-descending jump is
+/// refused, the climb falls back to the plain first-parent step, and the
+/// answer is still the true base.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn merge_base_survives_a_self_referential_skip_row() {
+    let ctx = in_memory_ctx(true);
+    let c0 = ctx
+        .commit(None, "Ann <ann@example.com>", vec![add_ch("f.txt", b"0\n")])
+        .await;
+    let mut prev = c0.clone();
+    let mut chain = vec![c0.clone()];
+    for i in 1..=6u32 {
+        prev = ctx
+            .commit(
+                Some(&prev),
+                "Ann <ann@example.com>",
+                vec![ch("f.txt", format!("{i}\n").as_bytes())],
+            )
+            .await;
+        chain.push(prev.clone());
+    }
+    let tip = chain[6].clone();
+    ctx.drain().await;
+
+    // Overwrite the TIP's commit-graph output with one clean-looking
+    // self-referential entry (target = itself, max hop so the climb picks
+    // it first). Pre-fix this spun the climb forever.
+    let bogus = naatre_server::derived::encode_skip_entries(&[naatre_server::derived::SkipEntry {
+        target: id_of(&tip),
+        hop: 15,
+        generation: 6,
+        pure: true,
+    }]);
+    ctx.db()
+        .execute(
+            "UPDATE derive_state SET output = ?1 \
+             WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?2) AND cs = ?3",
+            rusqlite::params![
+                bogus,
+                naatre_server::derived::KIND_COMMIT_GRAPH,
+                id_of(&tip).0.as_slice()
+            ],
+        )
+        .unwrap();
+
+    let resp = ctx
+        .get(&format!(
+            "/v1/repos/{REPO}/merge-base?a={tip}&b={}",
+            chain[0]
+        ))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(
+        resp.body["merge_base"],
+        json!(chain[0]),
+        "the refused jump fell back to first-parent steps; the base is exact"
+    );
 }
 
 // ---- 7. the backfill pins ------------------------------------------------------

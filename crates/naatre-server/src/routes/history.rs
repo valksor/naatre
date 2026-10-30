@@ -643,11 +643,23 @@ pub(crate) struct SkipEdge {
 /// exactly that against brute-force ancestor sets.
 ///
 /// Any mid-climb fetch miss just stops the climb early: the seeds cover a
-/// smaller pre-climbed region and the seeded walk stays exact.
+/// smaller pre-climbed region and the seeded walk stays exact. The climb is
+/// BOUNDED against corrupt-but-untainted skip rows (a cycle among clean
+/// rows is undetectable by design — see the tainted-skip pin in
+/// `m6b_test.rs`): every step must strictly descend in generation
+/// (ancestors always do), a jump that refuses falls back to the plain
+/// first-parent step, and a hard iteration cap ends the climb outright —
+/// the seeded walk below is exact from any stopping point and is itself
+/// cycle-safe (seen-set).
 pub(crate) fn merge_base_skip<F>(fetch: &F, a: &Id, b: &Id) -> Option<Id>
 where
     F: Fn(&Id) -> Result<Option<SkipNode>, ApiError>,
 {
+    /// The phase-1 climb's iteration cap (defense in depth; every accepted
+    /// step already strictly descends, so honest climbs end at
+    /// gen(lo) long before it).
+    const CLIMB_MAX_STEPS: usize = 100_000;
+
     let na = fetch(a).ok().flatten()?;
     let nb = fetch(b).ok().flatten()?;
     let (lo_id, lo, mut hi_id, mut hi) = if na.generation >= nb.generation {
@@ -658,26 +670,55 @@ where
 
     // Phase 1: climb hi's first-parent chain above lo's generation.
     let mut frontier: Vec<Id> = Vec::new();
+    let mut steps = 0usize;
     while hi.generation > lo.generation {
+        steps += 1;
+        if steps > CLIMB_MAX_STEPS {
+            break;
+        }
         frontier.extend(hi.parents.iter().skip(1).copied());
         let jump = hi
             .skips
             .iter()
             .filter(|e| e.pure && e.generation >= lo.generation)
             .max_by_key(|e| e.hop);
-        let next = match jump {
+        let mut jumped = true;
+        let mut next = match jump {
             Some(e) => e.target,
-            None => match hi.parents.first() {
-                Some(p) => *p,
-                None => break,
-            },
+            None => {
+                jumped = false;
+                match hi.parents.first() {
+                    Some(p) => *p,
+                    None => break,
+                }
+            }
         };
-        match fetch(&next) {
-            Ok(Some(node)) => {
-                hi_id = next;
+        // One accepted step: `next` fetched AND strictly descending. A
+        // refused JUMP falls back to the plain first-parent step (the
+        // corrupt row steers no climb); a refused first-parent step —
+        // corrupt too — ends the climb.
+        let stepped = loop {
+            match fetch(&next) {
+                Ok(Some(node)) if node.generation < hi.generation => {
+                    break Some((next, node));
+                }
+                Ok(Some(_)) if jumped => match hi.parents.first() {
+                    Some(p) if *p != next => {
+                        jumped = false;
+                        next = *p;
+                        continue;
+                    }
+                    _ => break None,
+                },
+                _ => break None,
+            }
+        };
+        match stepped {
+            Some((id, node)) => {
+                hi_id = id;
                 hi = node;
             }
-            _ => break,
+            None => break,
         }
     }
 
@@ -750,6 +791,23 @@ where
 
 // ---- blame -----------------------------------------------------------------
 
+/// The blame read's walked-chain cap: past this many chain nodes the read
+/// degrades instead of walking unbounded history on the read pool.
+const BLAME_MAX_CHAIN_NODES: usize = 10_000;
+
+/// The blame read's streamed-blob-bytes cap, enforced across the assembly's
+/// layer loads (see the streaming task in [`blame`]).
+const BLAME_MAX_BLOB_BYTES: usize = 256 * 1024 * 1024;
+
+/// The structural-cap error: the same read trips it every time, so it is
+/// not retryable — 503 `blame_too_large`, no `Retry-After`.
+fn blame_too_large() -> ApiError {
+    ApiError::new(
+        ApiCode::BlameTooLarge,
+        "blame exceeds the read caps (chain length / blob bytes)",
+    )
+}
+
 /// Query params of `/blame`.
 #[derive(Deserialize, IntoParams)]
 pub struct BlameQuery {
@@ -785,9 +843,9 @@ pub struct BlameResponse {
     /// `blame_binary` when `binary`; else null.
     pub binary_code: Option<String>,
     /// Part of the walked chain was quarantined: lines below the boundary
-    /// are attributed to the oldest RESOLVED changeset (listed in
-    /// `poisoned_cs`) — attribution bounded below by the quarantine, never
-    /// silently presented as exact.
+    /// are attributed to the boundary changeset itself — the quarantined
+    /// node (listed in `poisoned_cs`) — attribution bounded below by the
+    /// quarantine, never silently presented as exact.
     pub degraded: bool,
     /// The quarantined changesets on the walked chain (64-hex ids).
     pub poisoned_cs: Vec<String>,
@@ -809,6 +867,10 @@ struct BlameBoundary {
     author: String,
     blob: Id,
 }
+
+/// One walked layer's routing metadata: (changeset, author, blob id) —
+/// the bytes stream separately, in the blocking assembly task.
+type BlameLayerMeta = (Id, String, Id);
 
 /// The walk's harvest, all resolved inside one read-pool connection.
 struct BlameWalk {
@@ -849,7 +911,7 @@ struct BlameWalk {
         (status = 400, description = "`at` is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo/changeset, or the path is absent at `at`"),
-        (status = 503, description = "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`)")
+        (status = 503, description = "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded the chain/blob caps (`blame_too_large`, not retryable)")
     )
 )]
 pub async fn blame(
@@ -897,7 +959,16 @@ pub async fn blame(
             // degraded flag needs no walk past it.
             let mut tainted_poison_cs: Vec<Id> = Vec::new();
             let mut current = at;
+            // The chain cap: the walk is one point query per node, but the
+            // chain itself is unbounded — past the cap the read degrades
+            // (`blame_too_large`, retryable false — the same chain trips it
+            // every time) instead of monopolizing the read pool.
+            let mut chain_nodes = 0usize;
             loop {
+                chain_nodes += 1;
+                if chain_nodes > BLAME_MAX_CHAIN_NODES {
+                    return Err(blame_too_large());
+                }
                 let Some(row) = db::derive_get(conn, kind_id, repo_id, &current)
                     .map_err(ApiError::log_internal)?
                 else {
@@ -1009,7 +1080,7 @@ pub async fn blame(
     }
     let poisoned_cs: Vec<String> = poisoned_ids.iter().map(Id::to_hex).collect();
 
-    // Membership-gate and fetch every blob the assembly needs.
+    // Membership-gate every blob the assembly will stream.
     let mut blob_ids: Vec<Id> = vec![walk.final_blob];
     blob_ids.extend(walk.nodes.iter().map(|n| n.blob_new));
     if let Some(b) = &walk.boundary {
@@ -1036,76 +1107,95 @@ pub async fn blame(
             format!("blob {} is not in this repo", id.to_hex()),
         ));
     }
-    let cas = Arc::clone(&state.cas);
-    let bytes_by_id: std::collections::HashMap<Id, Vec<u8>> = state
-        .blocking(move || {
-            let mut map = std::collections::HashMap::new();
-            for id in blob_ids {
-                let raw = cas.get(&id).map_err(ApiError::log_internal)?;
-                map.insert(id, raw);
-            }
-            Ok(map)
-        })
-        .await?;
-    let blob_bytes = |id: &Id| -> Vec<u8> { bytes_by_id.get(id).cloned().unwrap_or_default() };
 
-    // Binary at `at` is a structured empty result, never an error.
-    let final_bytes = blob_bytes(&walk.final_blob);
-    if std::str::from_utf8(&final_bytes).is_err() {
-        return Ok(Json(BlameResponse {
-            at: at.to_hex(),
-            path: q.path,
-            binary: true,
-            binary_code: Some("blame_binary".into()),
-            degraded,
-            poisoned_cs: poisoned_cs.clone(),
-            lines: Vec::new(),
-        }));
-    }
-
-    // Layers oldest-first: the boundary (or the oldest touched node) is
-    // the base; the touched nodes walk newer from there.
-    let (base_meta, step_nodes): ((Id, String, Id), &[BlameWalkNode]) = match &walk.boundary {
-        Some(b) => ((b.cs, b.author.clone(), b.blob), &walk.nodes),
+    // Layer metadata oldest-first: the boundary (or the oldest touched
+    // node) is the base; the touched nodes walk newer from there. The
+    // bytes themselves are NOT collected here — the assembly below
+    // streams them one layer at a time.
+    let (base_meta, mut step_meta): (BlameLayerMeta, Vec<BlameLayerMeta>) = match &walk.boundary {
+        Some(b) => (
+            (b.cs, b.author.clone(), b.blob),
+            walk.nodes
+                .iter()
+                .map(|n| (n.cs, n.author.clone(), n.blob_new))
+                .collect(),
+        ),
         None => {
             let (base_node, rest) = walk.nodes.split_last().ok_or_else(|| {
                 ApiError::log_internal("blame walk with neither add nor boundary")
             })?;
             (
                 (base_node.cs, base_node.author.clone(), base_node.blob_new),
-                rest,
+                rest.iter()
+                    .map(|n| (n.cs, n.author.clone(), n.blob_new))
+                    .collect(),
             )
         }
     };
-    let base_bytes = blob_bytes(&base_meta.2);
-    let step_bytes: Vec<Vec<u8>> = step_nodes
-        .iter()
-        .rev()
-        .map(|n| blob_bytes(&n.blob_new))
-        .collect();
-    let base = BlameLayer {
-        cs: base_meta.0,
-        author: base_meta.1,
-        bytes: &base_bytes,
+    step_meta.reverse();
+
+    // The assembly (CAS blob loads + Myers diffs) runs off the async
+    // runtime, and each layer's bytes are loaded, diffed, and dropped
+    // before the next is read — never all versions materialized at once.
+    // Every load counts toward the read's blob-bytes cap.
+    let cas = Arc::clone(&state.cas);
+    let final_blob = walk.final_blob;
+    let assembled = state
+        .blocking(move || {
+            let mut total_blob_bytes = 0usize;
+            let mut load = |id: &Id| -> Result<Vec<u8>, ApiError> {
+                let raw = cas.get(id).map_err(ApiError::log_internal)?;
+                total_blob_bytes += raw.len();
+                if total_blob_bytes > BLAME_MAX_BLOB_BYTES {
+                    return Err(blame_too_large());
+                }
+                Ok(raw)
+            };
+            let final_bytes = load(&final_blob)?;
+            // Binary at `at` is a structured empty result, never an error.
+            if std::str::from_utf8(&final_bytes).is_err() {
+                return Ok(None);
+            }
+            let base_bytes = load(&base_meta.2)?;
+            let mut asm = crate::derived::BlameAssembler::new(BlameLayer {
+                cs: base_meta.0,
+                author: base_meta.1.clone(),
+                bytes: &base_bytes,
+            });
+            for (cs, author, blob) in &step_meta {
+                let bytes = load(blob)?;
+                asm.push_step(BlameLayer {
+                    cs: *cs,
+                    author: author.clone(),
+                    bytes: &bytes,
+                });
+            }
+            Ok(Some(
+                asm.finish()
+                    .into_iter()
+                    .map(|l| BlameLine {
+                        cs: l.cs.to_hex(),
+                        author: l.author,
+                        text: l.text,
+                    })
+                    .collect::<Vec<BlameLine>>(),
+            ))
+        })
+        .await?;
+    let lines = match assembled {
+        Some(lines) => lines,
+        None => {
+            return Ok(Json(BlameResponse {
+                at: at.to_hex(),
+                path: q.path,
+                binary: true,
+                binary_code: Some("blame_binary".into()),
+                degraded,
+                poisoned_cs,
+                lines: Vec::new(),
+            }));
+        }
     };
-    let steps: Vec<BlameLayer<'_>> = step_nodes
-        .iter()
-        .rev()
-        .zip(&step_bytes)
-        .map(|(n, b)| BlameLayer {
-            cs: n.cs,
-            author: n.author.clone(),
-            bytes: b,
-        })
-        .collect();
-    let lines = crate::derived::assemble_blame(base, &steps)
-        .into_iter()
-        .map(|l| BlameLine {
-            cs: l.cs.to_hex(),
-            author: l.author,
-            text: l.text,
-        })
-        .collect();
     Ok(Json(BlameResponse {
         at: at.to_hex(),
         path: q.path,
@@ -1486,5 +1576,63 @@ mod tests {
             (9u8, 2, vec![4u8, 5u8]),
         ];
         check_all_pairs(edges);
+    }
+
+    /// A corrupt-but-clean SELF-REFERENTIAL skip entry (target = itself,
+    /// so the jump never descends) cannot hang or missteer the climb: the
+    /// jump is refused, the plain first-parent step takes over, and the
+    /// answer matches the honest graph.
+    #[test]
+    fn climb_refuses_a_self_referential_skip() {
+        let edges = linear_chain(6);
+        let skip_fetch = skip_graph(edges);
+        let corrupt = |id: &Id| -> Result<Option<SkipNode>, ApiError> {
+            let mut node = skip_fetch(id)?.expect("graph has the node");
+            if *id == cid(6) {
+                node.skips = vec![SkipEdge {
+                    target: cid(6),
+                    hop: 15,
+                    generation: 6,
+                    pure: true,
+                }];
+            }
+            Ok(Some(node))
+        };
+        assert_eq!(merge_base_skip(&corrupt, &cid(6), &cid(0)), Some(cid(0)));
+        assert_eq!(merge_base_skip(&corrupt, &cid(0), &cid(6)), Some(cid(0)));
+    }
+
+    /// A corrupt CYCLIC first-parent edge (a node its own parent, equal
+    /// generation) ends the climb — the seeded walk below is seen-set
+    /// safe and answers what the graph honestly holds (no common
+    /// ancestor).
+    #[test]
+    fn climb_breaks_on_a_cyclic_first_parent() {
+        let edges = vec![
+            (1u8, 5i64, vec![1u8]), // corrupt: parent = itself
+            (2u8, 0i64, vec![]),
+        ];
+        let fetch = graph(edges);
+        assert_eq!(merge_base_walk(&fetch, &cid(1), &cid(2)), None);
+        // The corrupt edge is only reachable through the graph() shape
+        // (no skips): drive merge_base_skip over the same closure by
+        // wrapping it with empty skips.
+        let as_skip = |id: &Id| -> Result<Option<SkipNode>, ApiError> {
+            Ok(fetch(id)?.map(|(generation, parents)| SkipNode {
+                generation,
+                parents,
+                skips: Vec::new(),
+            }))
+        };
+        assert_eq!(merge_base_skip(&as_skip, &cid(1), &cid(2)), None);
+    }
+
+    /// A linear chain `0 → 1 → … → n`, generation = tag.
+    fn linear_chain(n: u8) -> Vec<(u8, i64, Vec<u8>)> {
+        let mut edges = vec![(0u8, 0i64, vec![])];
+        for i in 1..=n {
+            edges.push((i, i as i64, vec![i - 1]));
+        }
+        edges
     }
 }

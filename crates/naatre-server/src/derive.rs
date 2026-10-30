@@ -100,16 +100,26 @@ use crate::state::AppState;
 pub const DERIVE_MAX_ATTEMPTS: i64 = 3;
 
 /// The bootstrap per-call walk budget for kinds that do not override
-/// [`Deriver::walk_budget`]: the rows, tree nodes, and outputs one derive
-/// call may visit through its [`DeriveCtx`]. The budget is COOPERATIVE —
-/// it binds derivers that charge their visits through `ctx.charge`; a
-/// deriver issuing raw SQL past the ctx is not capped by it. It bounds a
-/// deriver's per-call work, NOT history depth: long history derives
-/// batch-by-batch through the queue (each node one call), so a linear repo
-/// of any length derives fully. The default covers a worst legitimate
-/// node — one visit per entry of a 100,000-entry (MAX_ENTRIES) changeset —
-/// with 2× headroom; kinds with heavier per-call shapes override with
-/// their own justified value.
+/// [`Deriver::walk_budget`]: the CHARGES one derive call may spend through
+/// its [`DeriveCtx`]. The budget is COOPERATIVE — it binds derivers that
+/// charge their visits through `ctx.charge`; a deriver issuing raw SQL
+/// past the ctx is not capped by it. It bounds a deriver's per-call work,
+/// NOT history depth: long history derives batch-by-batch through the
+/// queue (each node one call), so a linear repo of any length derives
+/// fully. The default covers a worst legitimate node — one visit per entry
+/// of a 100,000-entry (MAX_ENTRIES) changeset — with 2× headroom; kinds
+/// with heavier per-call shapes override with their own justified value.
+///
+/// **Pricing convention.** A charge is one unit of ACTUAL work, so budget
+/// units admit no shortcut pricing: one per row visited, one per
+/// component lookup, and one per entry ROW a tree load materializes
+/// ([`crate::db::tree_lookup_path_charged`] is the priced tree-walk every
+/// tree-walking deriver must use — the unpriced
+/// [`crate::db::tree_lookup_path`] loads every entry of each tree node per
+/// component, so path-shaped pricing let a crafted wide-and-deep changeset
+/// monopolize the write slot with the budget untripped). A kind's budget
+/// value is justified against this per-row cost in its
+/// [`Deriver::walk_budget`] override.
 pub const DEFAULT_WALK_BUDGET: u64 = 200_000;
 
 /// Size cap on the framework-carried output of one node, matching the

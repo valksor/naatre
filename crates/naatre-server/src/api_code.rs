@@ -70,6 +70,9 @@ pub enum ApiCode {
     WriterBusy,
     /// 503 — derived data is still being computed for this read.
     DerivationPending,
+    /// 503 — the blame read exceeded a structural cap (walked chain nodes,
+    /// streamed blob bytes); deterministic, so retrying cannot help.
+    BlameTooLarge,
     /// 503 — the request outlived the server's per-request time budget and
     /// was shed; safe to retry with backoff (writes are idempotent by key).
     RequestTimeout,
@@ -85,7 +88,7 @@ impl ApiCode {
     /// cross-checks this list against the exhaustive variant list and the
     /// wire-string table, so the published enum cannot silently drift from
     /// the registry.
-    pub const ALL: [ApiCode; 31] = [
+    pub const ALL: [ApiCode; 32] = [
         ApiCode::TokenInvalid,
         ApiCode::TokenExpired,
         ApiCode::TokenRevoked,
@@ -114,6 +117,7 @@ impl ApiCode {
         ApiCode::ObjectRedacted,
         ApiCode::WriterBusy,
         ApiCode::DerivationPending,
+        ApiCode::BlameTooLarge,
         ApiCode::RequestTimeout,
         ApiCode::ServerBusy,
         ApiCode::Internal,
@@ -150,6 +154,7 @@ impl ApiCode {
             Self::ObjectRedacted => "object_redacted",
             Self::WriterBusy => "writer_busy",
             Self::DerivationPending => "derivation_pending",
+            Self::BlameTooLarge => "blame_too_large",
             Self::RequestTimeout => "request_timeout",
             Self::ServerBusy => "server_busy",
             Self::Internal => "internal",
@@ -185,6 +190,7 @@ impl ApiCode {
             }
             Self::WriterBusy
             | Self::DerivationPending
+            | Self::BlameTooLarge
             | Self::RequestTimeout
             | Self::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,

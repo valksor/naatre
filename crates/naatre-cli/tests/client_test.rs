@@ -3822,4 +3822,20 @@ fn blame_cli_prints_the_pinned_formats() {
         stderr.contains("blame_binary"),
         "the stable binary code is noted: {stderr:?}"
     );
+
+    // The same binary file under --json prints the published EMPTY shape —
+    // `{"lines":[]}`, the same an empty file blames as — never nothing.
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["blame", "blob.bin", "--at", "main", "--json"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let v: Value = serde_json::from_str(stdout_of(&out).trim()).expect("json line");
+    assert_eq!(v["lines"].as_array().expect("lines array").len(), 0);
+    assert_eq!(v.as_object().unwrap().len(), 1, "exactly the lines key");
+    assert!(
+        stderr_of(&out).contains("blame_binary"),
+        "the stable binary code is still noted on stderr"
+    );
 }

@@ -105,13 +105,14 @@ fn try_cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> Result<(), V
 /// `<8-hex cs> <author> | <line>` (the first 8 hex of the changeset id).
 /// `--json` prints exactly `{"lines":[{cs,author,text}]}` with the full
 /// 64-hex ids. A binary file is the server's structured empty result:
-/// exit 0, nothing on stdout, the stable code noted on stderr. A degraded
-/// (quarantined chain) blame prints a stderr warning and exits 0.
+/// exit 0, `{"lines":[]}` on stdout under `--json` (nothing in the human
+/// format), the stable code noted on stderr. A degraded (quarantined
+/// chain) blame prints a stderr warning and exits 0.
 /// The stderr warning for a degraded blame (pinned: names every quarantined
 /// changeset; the verb still exits 0 — degraded results are results, not errors).
 pub(crate) fn degraded_blame_warning(poisoned: &[&str]) -> String {
     format!(
-        "warning: blame degraded by quarantined changeset(s): {} — lines below the boundary are attributed to the oldest resolved changeset",
+        "warning: blame degraded by quarantined changeset(s): {} — lines below the boundary are attributed to the boundary changeset",
         poisoned.join(", ")
     )
 }
@@ -140,6 +141,12 @@ fn try_blame(
     let lines = v["lines"].as_array().cloned().unwrap_or_default();
     if v["binary"].as_bool() == Some(true) {
         eprintln!("blame: {path}: binary content (blame_binary)");
+        if json_out {
+            // The published shape: a binary blame is a structured EMPTY
+            // result, not an error — the same `{"lines":[]}` an empty file
+            // blames as.
+            println!("{}", json!({ "lines": [] }));
+        }
         return Ok(());
     }
     if v["degraded"].as_bool() == Some(true) {

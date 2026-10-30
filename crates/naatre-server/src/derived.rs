@@ -78,8 +78,12 @@ fn blob_of(bytes: &[u8]) -> Id {
 /// The blame DIFF-STATE deriver: one `blame_state` row per touched path
 /// (this changeset's blob id, the first parent's blob id), resolved by
 /// walking the parent's tree once per touched path. Charges one visit per
-/// file-change row plus one per parent-tree walk (each walk is bounded by
-/// the path grammar's 4,096-byte / per-component limits).
+/// file-change row plus the ROW-PRICED cost of each parent-tree walk
+/// ([`crate::db::tree_lookup_path_charged`]: per component lookup and per
+/// entry row materialized — the raw
+/// [`crate::db::tree_lookup_path`] loads every entry of every node and
+/// would let a crafted wide-and-deep changeset stall the write slot with
+/// the budget untripped).
 pub struct BlameDeriver;
 
 impl Deriver for BlameDeriver {
@@ -87,12 +91,17 @@ impl Deriver for BlameDeriver {
         KIND_BLAME
     }
 
-    /// One visit per touched file-change row plus one parent-tree walk per
-    /// touched path. The worst legitimate node is a MAX_ENTRIES changeset
-    /// (100,000 rows, each with a bounded tree walk) — ten times the
-    /// bootstrap default covers it with headroom for wide trees.
+    /// One visit per touched file-change row plus the tree rows each
+    /// row's parent-tree walk loads (see the pricing convention on
+    /// [`crate::derive::DEFAULT_WALK_BUDGET`]). The worst admitted node is
+    /// a MAX_ENTRIES changeset (100,000 rows) whose per-row walk loads
+    /// ≤ ~90 tree entries (e.g. depth 8 through dirs averaging ~11
+    /// entries) — 10 million covers it; anything wider trips the budget
+    /// and is quarantined immediately (seconds), which is the designed
+    /// outcome: unpriced, that same shape held the write slot for
+    /// minutes-to-hours.
     fn walk_budget(&self) -> u64 {
-        1_000_000
+        10_000_000
     }
 
     fn derive(
@@ -134,10 +143,7 @@ impl Deriver for BlameDeriver {
         for c in &changes {
             ctx.charge(1)?;
             let parent_blob_id = match &parent_root {
-                Some(root) => {
-                    ctx.charge(1)?;
-                    db::tree_lookup_path(conn, root, &c.path).map_err(sql_fail)?
-                }
+                Some(root) => db::tree_lookup_path_charged(conn, ctx, root, &c.path)?,
                 None => None,
             };
             entries.push(db::BlameStateEntry {
@@ -395,33 +401,50 @@ pub struct BlameLayer<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Assembles line attributions from the walked layers. `base` is the
-/// OLDEST layer (an add: every line of its blob starts attributed to it —
-/// or, in a degraded read, the quarantined boundary changeset: the oldest
-/// resolved point, flagged by the caller). `steps` are the NEWER layers,
-/// oldest first; each step's diff against the previous layer keeps matching
-/// lines' attributions and attributes the rest to the step. The LAST
-/// step's bytes are the file at the read's changeset. A non-UTF-8 layer is
-/// opaque: its content diffs as empty, so the next-newer layer absorbs the
-/// attribution (containment still holds — the layer's own blob is never
-/// claimed to contain lines it cannot show).
-pub fn assemble_blame(base: BlameLayer<'_>, steps: &[BlameLayer<'_>]) -> Vec<BlameLine> {
-    // Raw (ending-kept) views drive the diff; display strips the newline.
-    let raw = |bytes: &[u8]| std::str::from_utf8(bytes).unwrap_or("").to_string();
-    let mut current_raw = raw(base.bytes);
-    let mut owners: Vec<(Id, String)> =
-        vec![(base.cs, base.author.clone()); line_count(&current_raw)];
+/// Assembles line attributions from the walked layers, one layer at a
+/// time. The route streams blob loads through this (each layer's bytes are
+/// fetched, diffed, and dropped before the next is read — never all
+/// versions materialized at once) inside a blocking task, so the Myers
+/// diffs never run on the async runtime. Feed the OLDEST layer to
+/// [`BlameAssembler::new`] and the newer layers, oldest first, to
+/// [`BlameAssembler::push_step`]; [`BlameAssembler::finish`] yields the
+/// lines.
+pub struct BlameAssembler {
+    /// Raw (ending-kept) text of the newest layer fed so far; display
+    /// strips the newline.
+    current_raw: String,
+    owners: Vec<(Id, String)>,
+}
 
-    for step in steps {
-        let new_raw = raw(step.bytes);
+impl BlameAssembler {
+    /// Seeds the assembly with the OLDEST layer (an add: every line of its
+    /// blob starts attributed to it — or, in a degraded read, the
+    /// quarantined boundary changeset: the oldest resolved point, flagged
+    /// by the caller). A non-UTF-8 layer is opaque: its content diffs as
+    /// empty, so the next-newer layer absorbs the attribution (containment
+    /// still holds — the layer's own blob is never claimed to contain
+    /// lines it cannot show).
+    pub fn new(base: BlameLayer<'_>) -> Self {
+        let current_raw = raw_text(base.bytes);
+        let owners = vec![(base.cs, base.author.clone()); line_count(&current_raw)];
+        BlameAssembler {
+            current_raw,
+            owners,
+        }
+    }
+
+    /// Folds one newer layer in: its diff against the previous layer keeps
+    /// matching lines' attributions and attributes the rest to the step.
+    pub fn push_step(&mut self, step: BlameLayer<'_>) {
+        let new_raw = raw_text(step.bytes);
         let new_lines = line_count(&new_raw);
-        let diff = similar::TextDiff::from_lines(&current_raw, &new_raw);
+        let diff = similar::TextDiff::from_lines(&self.current_raw, &new_raw);
         let mut new_owners: Vec<(Id, String)> = Vec::with_capacity(new_lines);
         for op in diff.ops() {
             match op {
                 similar::DiffOp::Equal { old_index, len, .. } => {
                     for j in 0..*len {
-                        new_owners.push(owners[old_index + j].clone());
+                        new_owners.push(self.owners[old_index + j].clone());
                     }
                 }
                 // Insert / Replace: the new-side lines are this step's
@@ -442,29 +465,52 @@ pub fn assemble_blame(base: BlameLayer<'_>, steps: &[BlameLayer<'_>]) -> Vec<Bla
             new_owners.push((step.cs, step.author.clone()));
         }
         new_owners.truncate(new_lines);
-        owners = new_owners;
-        current_raw = new_raw;
+        self.owners = new_owners;
+        self.current_raw = new_raw;
     }
 
-    // The display split runs over the FINAL content (the last step's
-    // bytes when steps exist, the base's otherwise).
-    let display: Vec<&str> = if current_raw.is_empty() {
-        Vec::new()
-    } else {
-        current_raw
-            .split_inclusive('\n')
-            .map(|l| l.strip_suffix('\n').unwrap_or(l))
+    /// The attributed lines of the FINAL content (the last step's bytes
+    /// when steps exist, the base's otherwise).
+    pub fn finish(self) -> Vec<BlameLine> {
+        let display: Vec<&str> = if self.current_raw.is_empty() {
+            Vec::new()
+        } else {
+            self.current_raw
+                .split_inclusive('\n')
+                .map(|l| l.strip_suffix('\n').unwrap_or(l))
+                .collect()
+        };
+        display
+            .into_iter()
+            .zip(self.owners)
+            .map(|(text, (cs, author))| BlameLine {
+                cs,
+                author,
+                text: text.to_string(),
+            })
             .collect()
-    };
-    display
-        .into_iter()
-        .zip(owners)
-        .map(|(text, (cs, author))| BlameLine {
-            cs,
-            author,
-            text: text.to_string(),
-        })
-        .collect()
+    }
+}
+
+/// Raw (ending-kept) view of a layer's bytes; invalid UTF-8 diffs as empty.
+fn raw_text(bytes: &[u8]) -> String {
+    std::str::from_utf8(bytes).unwrap_or("").to_string()
+}
+
+/// Assembles line attributions from the walked layers. `base` is the
+/// OLDEST layer; `steps` are the NEWER layers, oldest first; the LAST
+/// step's bytes are the file at the read's changeset. The streaming
+/// equivalent is [`BlameAssembler`].
+pub fn assemble_blame(base: BlameLayer<'_>, steps: &[BlameLayer<'_>]) -> Vec<BlameLine> {
+    let mut asm = BlameAssembler::new(base);
+    for step in steps {
+        asm.push_step(BlameLayer {
+            cs: step.cs,
+            author: step.author.clone(),
+            bytes: step.bytes,
+        });
+    }
+    asm.finish()
 }
 
 /// `similar`-compatible line count: `split_inclusive('\n')` length.

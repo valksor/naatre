@@ -1516,8 +1516,11 @@ pub fn derive_record_done(
 /// Records one failed attempt (a deriver `Err`, or the lease sweep's
 /// expiry): attempts+1; at the cap the node is QUARANTINED to 'poison' with
 /// a `derive_reports` row, otherwise it goes back to 'pending'. Returns
-/// `true` when the node was poisoned. Plain statements — see the module
-/// note on transactions.
+/// `true` when the node was poisoned. UPSERT: the EAGER path calls this
+/// before any row exists (a first-attempt `Fail` inside the create's
+/// transaction — the row lands 'pending' at attempts=1 and the queue takes
+/// it from there); an existing pending/deriving row is updated in place.
+/// Plain statements — see the module note on transactions.
 pub fn derive_fail_attempt(
     conn: &Connection,
     kind_id: i64,
@@ -1526,16 +1529,20 @@ pub fn derive_fail_attempt(
     reason: &str,
     now_ns: i64,
 ) -> rusqlite::Result<bool> {
-    let attempts: i64 = conn.query_row(
-        "SELECT attempts FROM derive_state WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
-        params![kind_id, repo_id, cs.0.as_slice()],
-        |r| r.get(0),
-    )?;
-    let attempts = attempts + 1;
+    let attempts: Option<i64> = conn
+        .query_row(
+            "SELECT attempts FROM derive_state WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+            params![kind_id, repo_id, cs.0.as_slice()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let attempts = attempts.unwrap_or(0) + 1;
     if attempts >= crate::derive::DERIVE_MAX_ATTEMPTS {
         conn.execute(
-            "UPDATE derive_state SET state = 'poison', lease_expires_ns = NULL, attempts = ?4 \
-             WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+            "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
+             VALUES (?1, ?2, ?3, 'poison', ?4) \
+             ON CONFLICT(kind, repo_id, cs) DO UPDATE SET \
+               state = 'poison', lease_expires_ns = NULL, attempts = ?4",
             params![kind_id, repo_id, cs.0.as_slice(), attempts],
         )?;
         conn.execute(
@@ -1545,8 +1552,10 @@ pub fn derive_fail_attempt(
         Ok(true)
     } else {
         conn.execute(
-            "UPDATE derive_state SET state = 'pending', lease_expires_ns = NULL, attempts = ?4 \
-             WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
+            "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
+             VALUES (?1, ?2, ?3, 'pending', ?4) \
+             ON CONFLICT(kind, repo_id, cs) DO UPDATE SET \
+               state = 'pending', lease_expires_ns = NULL, attempts = ?4",
             params![kind_id, repo_id, cs.0.as_slice(), attempts],
         )?;
         Ok(false)
@@ -1924,13 +1933,56 @@ pub fn derive_poison_touching_path(
 }
 
 /// Resolves one path in a tree to its blob id (`None` = absent, or the
-/// path crosses a file, or names a directory). The blame deriver's
-/// parent-blob resolution and the blame route's existence pre-check.
+/// path crosses a file, or names a directory). The blame route's
+/// existence pre-check. DERIVERS must not use this variant: it loads every
+/// entry of each tree node per path component and never charges — see
+/// [`tree_lookup_path_charged`].
 pub fn tree_lookup_path(conn: &Connection, root: &Id, path: &str) -> rusqlite::Result<Option<Id>> {
     let mut tree = *root;
     let components: Vec<&str> = path.split('/').collect();
     for (i, name) in components.iter().enumerate() {
         let entries = tree_entries_load(conn, &tree)?;
+        let Some(entry) = entries.iter().find(|e| e.name.as_str() == *name) else {
+            return Ok(None);
+        };
+        let object = Id(entry
+            .object_id
+            .clone()
+            .try_into()
+            .expect("object id is 32 bytes"));
+        let last = i == components.len() - 1;
+        match (entry.kind, last) {
+            (0, true) => return Ok(Some(object)),
+            (1, false) => tree = object,
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// [`tree_lookup_path`] priced through the deriver's walk budget: one
+/// charge per COMPONENT lookup (a [`tree_entries_load`]) and one per entry
+/// ROW that load materializes — the honest price of the work, which a
+/// path-shaped "one visit per walk" charge hides (a single wide directory
+/// load costs thousands of rows, so a crafted wide-and-deep changeset
+/// monopolized the write slot with the budget untripped). SQL failures are
+/// a [`DeriveFailure::Fail`] (a failed attempt); an exhausted budget is
+/// [`DeriveFailure::WalkBudget`] (immediate quarantine). Derivers walking
+/// trees MUST use this variant.
+pub fn tree_lookup_path_charged(
+    conn: &Connection,
+    ctx: &crate::derive::DeriveCtx,
+    root: &Id,
+    path: &str,
+) -> Result<Option<Id>, crate::derive::DeriveFailure> {
+    let mut tree = *root;
+    let components: Vec<&str> = path.split('/').collect();
+    for (i, name) in components.iter().enumerate() {
+        ctx.charge(1)?;
+        let entries = tree_entries_load(conn, &tree).map_err(|e| {
+            crate::derive::DeriveFailure::Fail(crate::derive::PoisonReason::new(e.to_string()))
+        })?;
+        ctx.charge(entries.len() as u64)?;
         let Some(entry) = entries.iter().find(|e| e.name.as_str() == *name) else {
             return Ok(None);
         };

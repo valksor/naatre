@@ -163,6 +163,38 @@ fn sql_poison(e: rusqlite::Error) -> PoisonReason {
     PoisonReason::new(e.to_string())
 }
 
+/// A deriver that fails while `armed` is set — the eager create-time Fail
+/// shape, armable BEFORE the create (the eager derive runs inside the
+/// create's own transaction, so the node's id is not knowable beforehand).
+struct ArmedFailer {
+    name: &'static str,
+    armed: Arc<Mutex<bool>>,
+}
+
+impl Deriver for ArmedFailer {
+    fn kind(&self) -> &'static str {
+        self.name
+    }
+
+    fn eager(&self) -> bool {
+        true
+    }
+
+    fn derive(
+        &self,
+        _ctx: &DeriveCtx,
+        _conn: &rusqlite::Connection,
+        _repo_id: i64,
+        _cs: Id,
+        _parents_done: &[ParentOut],
+    ) -> Result<DerivedOut, DeriveFailure> {
+        if *self.armed.lock().unwrap() {
+            return Err(PoisonReason::new("boom: armed").into());
+        }
+        Ok(DerivedOut::empty())
+    }
+}
+
 /// A stored output as its ancestor count (the empty marker reads as 0).
 fn out_count(out: &DerivedOut) -> u64 {
     let b = out.as_bytes();
@@ -1273,6 +1305,54 @@ async fn eager_derives_synchronously_deferred_via_queue() {
         "no queue re-run of eager"
     );
     assert_eq!(f.t.count("SELECT COUNT(*) FROM derive_state"), 2);
+}
+
+/// An eager kind's first `Fail` is a failed ATTEMPT, never a create
+/// failure (the never-blocks rule): the create still returns 201, the row
+/// lands 'pending' at attempts=1 (rowless UPSERT — no pending row existed
+/// before the eager derive ran), and the queue completes the node once the
+/// failure clears.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn eager_fail_is_a_failed_attempt_not_a_create_failure() {
+    let armed = Arc::new(Mutex::new(true));
+    let deriver = ArmedFailer {
+        name: "eager-fail",
+        armed: Arc::clone(&armed),
+    };
+    let f = fixture_with(|state| {
+        state.derive_queue_interval = Duration::from_millis(10);
+        state.register_deriver(Arc::new(deriver)).unwrap();
+    });
+
+    // The eager derive runs INSIDE this create's transaction and fails;
+    // the create must still succeed. (Pre-fix the Fail hit a rowless
+    // derive_fail_attempt and 500'd the whole create.)
+    let r1 = create_cs(&f, None, "root", 1).await;
+
+    let row = || -> String {
+        f.t.db()
+            .query_row(
+                "SELECT state || '/' || attempts FROM derive_kinds k \
+                 JOIN derive_state s ON s.kind = k.id WHERE k.name = 'eager-fail'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        row(),
+        "pending/1",
+        "the failed first attempt, back to pending"
+    );
+
+    // The failure clears; the queue takes the pending row and completes it.
+    *armed.lock().unwrap() = false;
+    let report = derive_pass(&f.t.state).await.expect("pass");
+    assert_eq!(report.derived, 1);
+    let done = status(&f.t.state, "eager-fail", REPO, id_of_hex(&r1))
+        .await
+        .expect("status");
+    assert_eq!(done, Some(DeriveStatus::Done(DerivedOut::empty())));
 }
 
 // ---- f. enqueue never blocks the create ----------------------------------------
