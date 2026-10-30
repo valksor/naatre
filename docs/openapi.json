@@ -2666,7 +2666,7 @@
             "description": "Payload over the 64 MiB blob cap"
           }
         },
-        "summary": "PUTs one blob into `ephemeral/<snap-id>/` (writer and above, repo-level):\nhash-verified against the URL id like every PUT, capped at 64 MiB. No row\nis written — the blobs are rowless until the snapshot POST commits; a\nsnapshot that never POSTs is swept by GC after the max TTL.",
+        "summary": "PUTs one blob into `ephemeral/<snap-id>/` (writer and above, repo-level):\nhash-verified against the URL id like every PUT, capped at 64 MiB. No row\nis written — the blobs are rowless until the snapshot POST commits; a\nsnapshot that never POSTs is swept by GC after the default TTL (7 days).",
         "tags": [
           "routes::snapshots"
         ]

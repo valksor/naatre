@@ -1394,6 +1394,72 @@ async fn repost_of_expired_snapshot_is_410() {
     assert_eq!(code_of(&resp), "snapshot_expired");
 }
 
+/// An id collision is 422 naming the conflict — never a resurrect, a
+/// hijack, or a second row. Both dimensions pin independently: the same
+/// principal re-POSTing the id over a DIFFERENT tree, and a different
+/// principal re-POSTing the id over the SAME tree, both answer 422
+/// "already used by a different snapshot".
+#[tokio::test]
+async fn snapshot_id_collision_is_422_for_tree_and_principal() {
+    // Rapid POSTs; the opportunistic GC pass is not under test here.
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
+    let alpha = b"collision alpha".to_vec();
+    let beta = b"collision beta".to_vec();
+    let snap = snap_hex(33);
+    put_snap_blob(&f, &f.writer_a, &snap, &alpha).await;
+    put_snap_blob(&f, &f.writer_b, &snap, &beta).await;
+    let (tree_a, trees_a) = flat_tree(&[("a.txt", object_id(Kind::Blob, &alpha), 15, false)]);
+    let (tree_b, trees_b) = flat_tree(&[("b.txt", object_id(Kind::Blob, &beta), 15, false)]);
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_a, trees_a.clone(), 3600).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+
+    // Same principal, same id, different tree → 422 with the collision
+    // message (never a silent tree swap).
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_b, trees_b.clone(), 3600).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+    assert!(
+        resp.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already used by a different snapshot"),
+        "{}",
+        resp.body
+    );
+
+    // Different principal, same id, same tree → 422 with the collision
+    // message (never a hijack through the identical-tree shortcut).
+    let resp = post_snapshot(&f, &f.writer_b, &snap, &tree_a, trees_a.clone(), 3600).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+    assert!(
+        resp.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already used by a different snapshot"),
+        "{}",
+        resp.body
+    );
+
+    // The original row stands untouched, owned by its creator.
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/snapshots/{snap}"),
+        &f.writer_a,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["tree_id"], json!(tree_a));
+}
+
 // ---- fix3a: snapshot tree route closure membership -------------------------
 
 /// The snapshot tree route serves only the snapshot's own subtree: a tree
@@ -1403,7 +1469,11 @@ async fn repost_of_expired_snapshot_is_410() {
 /// member → 410, not 404).
 #[tokio::test]
 async fn snapshot_tree_route_serves_only_closure_members() {
-    let f = fixture();
+    // The POST spawns an opportunistic GC pass that, once the clock passes
+    // expiry below, could purge the row to a 404 before the final 410
+    // assert; GC is not under test here (same off-switch as the re-POST
+    // tests).
+    let f = fixture_with(|state| state.snapshot_gc_enabled = false);
 
     // A foreign history tree: a second repo's changeset puts a tree row in
     // the global `trees` table, outside this snapshot's closure.
@@ -1569,6 +1639,395 @@ async fn snapshot_post_enforces_path_scope() {
     )
     .await;
     assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+}
+
+// ---- fix4: the scope walk vs shared subtrees --------------------------------
+
+/// The shared-subtree bypass, closed: one subtree id mounted at app/ AND
+/// docs/ contributes its files at BOTH mounts — a docs/-scoped token gets
+/// 403 naming the app/... path, not a 201 that silently swallowed the
+/// second mount's paths.
+#[tokio::test]
+async fn shared_subtree_out_of_scope_is_403() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("docs"));
+
+    let shared = b"shared subtree blob".to_vec();
+    let snap = snap_hex(34);
+    put_snap_blob(&f, &scoped, &snap, &shared).await;
+    let (sub_hex, sub_canon) = tree_with_id(vec![file_entry(
+        "t.txt",
+        object_id(Kind::Blob, &shared),
+        18,
+        false,
+    )]);
+    // Same tree id under two names — the shape the tree-id seen-set used
+    // to dedupe away.
+    let (root_hex, root_canon) = tree_with_id(vec![
+        dir_entry("app", &sub_hex, 18),
+        dir_entry("docs", &sub_hex, 18),
+    ]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, sub_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(code_of(&resp), "forbidden");
+    assert_eq!(resp.body["error"]["details"]["path"], json!("app/t.txt"));
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM snapshots"),
+        0,
+        "the rejected POST wrote no rows"
+    );
+}
+
+/// The in-scope mirror of the bypass shape: the same double mount under an
+/// unscoped token is a normal 201 — sharing subtrees stays legal.
+#[tokio::test]
+async fn shared_subtree_in_scope_is_created() {
+    let f = fixture();
+    let shared = b"shared subtree blob".to_vec();
+    let snap = snap_hex(35);
+    put_snap_blob(&f, &f.writer_a, &snap, &shared).await;
+    let (sub_hex, sub_canon) = tree_with_id(vec![file_entry(
+        "t.txt",
+        object_id(Kind::Blob, &shared),
+        18,
+        false,
+    )]);
+    let (root_hex, root_canon) = tree_with_id(vec![
+        dir_entry("app", &sub_hex, 18),
+        dir_entry("docs", &sub_hex, 18),
+    ]);
+
+    let resp = post_snapshot(
+        &f,
+        &f.writer_a,
+        &snap,
+        &root_hex,
+        [root_canon, sub_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+}
+
+/// A straddling subtree — mounted above the scope, holding one file under
+/// the scope and one outside — is 403 naming the outside file (the
+/// per-file checks, not a blanket dir refusal).
+#[tokio::test]
+async fn straddling_subtree_names_outside_file() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("docs/sub"));
+
+    let inside = b"inside the scope".to_vec();
+    let outside = b"outside the scope".to_vec();
+    let snap = snap_hex(36);
+    put_snap_blob(&f, &scoped, &snap, &inside).await;
+    put_snap_blob(&f, &scoped, &snap, &outside).await;
+    let (sub_hex, sub_canon) = tree_with_id(vec![file_entry(
+        "in.txt",
+        object_id(Kind::Blob, &inside),
+        16,
+        false,
+    )]);
+    // T straddles at docs/: docs/sub/in.txt is inside, docs/out.txt is not.
+    let (mid_hex, mid_canon) = tree_with_id(vec![
+        file_entry("out.txt", object_id(Kind::Blob, &outside), 17, false),
+        dir_entry("sub", &sub_hex, 16),
+    ]);
+    let (root_hex, root_canon) = tree_with_id(vec![dir_entry("docs", &mid_hex, 17)]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, mid_canon, sub_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(resp.body["error"]["details"]["path"], json!("docs/out.txt"));
+}
+
+/// The exponential shape: `depth` diamond levels (each tree points two
+/// names, a and b, at the next) over one leaf file f.txt — 2^depth file
+/// paths across depth+1 distinct trees. Returns (root id hex, canonical
+/// b64 list).
+fn diamond_chain(depth: usize) -> (String, Vec<String>) {
+    let leaf = b"deep chain leaf".to_vec();
+    let (mut tree_hex, mut canons) = tree_with_id(vec![file_entry(
+        "f.txt",
+        object_id(Kind::Blob, &leaf),
+        15,
+        false,
+    )]);
+    for _ in 0..depth {
+        let (next_hex, next_canon) = tree_with_id(vec![
+            dir_entry("a", &tree_hex, 15),
+            dir_entry("b", &tree_hex, 15),
+        ]);
+        canons = [canons, next_canon].concat();
+        tree_hex = next_hex;
+    }
+    (tree_hex, canons)
+}
+
+/// The exponential shape, functionally pinned: ~20 trees each pointing two
+/// names at the next span 2^20 file paths, and the POST completes — the
+/// scope walk classifies instead of enumerating, so the bound is linear in
+/// distinct trees, not occurrences.
+#[tokio::test]
+async fn deep_shared_subtree_chain_stays_linear() {
+    let f = fixture();
+    let leaf = b"deep chain leaf".to_vec();
+    let snap = snap_hex(37);
+    put_snap_blob(&f, &f.writer_a, &snap, &leaf).await;
+    let (tree_hex, canons) = diamond_chain(20);
+
+    let resp = post_snapshot(&f, &f.writer_a, &snap, &tree_hex, canons, 3600).await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+}
+
+/// The same 2^20 chain under a scope: the a/ chain is covered (skipped),
+/// the b/ branch is disjoint — the walk still completes in linear time
+/// (one memoized scan over the 21 trees) and names the first file on the
+/// b/ branch: b/ followed by the a-chain down to the leaf.
+#[tokio::test]
+async fn deep_shared_subtree_chain_under_scope_is_403() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("a"));
+    let leaf = b"deep chain leaf".to_vec();
+    let snap = snap_hex(44);
+    put_snap_blob(&f, &scoped, &snap, &leaf).await;
+    let (tree_hex, canons) = diamond_chain(20);
+
+    let resp = post_snapshot(&f, &scoped, &snap, &tree_hex, canons, 3600).await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(
+        resp.body["error"]["details"]["path"],
+        json!(format!("b/{}f.txt", "a/".repeat(19)))
+    );
+}
+
+/// The advisor's cross-occurrence shape, multi-segment scope: scope a/b;
+/// U = {dir b -> V}, V = {file f}; U mounted at a/ (straddling — its b
+/// child lands on a/b/, covered and skipped) and x/ (disjoint — every
+/// file below is outside). The 403 names the DISJOINT mount's path.
+#[tokio::test]
+async fn multisegment_dual_mount_disjoint_occurrence_is_403() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("a/b"));
+    let fblob = b"dual mount f".to_vec();
+    let snap = snap_hex(38);
+    put_snap_blob(&f, &scoped, &snap, &fblob).await;
+    let (v_hex, v_canon) = tree_with_id(vec![file_entry(
+        "f",
+        object_id(Kind::Blob, &fblob),
+        12,
+        false,
+    )]);
+    let (u_hex, u_canon) = tree_with_id(vec![dir_entry("b", &v_hex, 12)]);
+    let (root_hex, root_canon) =
+        tree_with_id(vec![dir_entry("a", &u_hex, 12), dir_entry("x", &u_hex, 12)]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, u_canon, v_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(code_of(&resp), "forbidden");
+    assert_eq!(resp.body["error"]["details"]["path"], json!("x/b/f"));
+}
+
+/// The memo-hit direction, both ways: the same dual mount with the scope
+/// mirrored to x/b, so the a/ mount is now the disjoint one and the
+/// verdict must name a/b/f. Between the two dual-mount tests the memo is
+/// populated from the second-sorted entry (scope a/b names x/b/f) and
+/// from the first-sorted entry here — order must not matter. (The
+/// literal [x -> U, a -> U] byte order is not expressible: `tree::encode`
+/// refuses unsorted entries (`EncodeUnsorted`), and pinning behavior over
+/// hand-rolled non-canonical bytes would pin nothing the contract
+/// admits.)
+#[tokio::test]
+async fn dual_mount_verdict_is_order_independent() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("x/b"));
+    let fblob = b"dual mount f".to_vec();
+    let snap = snap_hex(39);
+    put_snap_blob(&f, &scoped, &snap, &fblob).await;
+    let (v_hex, v_canon) = tree_with_id(vec![file_entry(
+        "f",
+        object_id(Kind::Blob, &fblob),
+        12,
+        false,
+    )]);
+    let (u_hex, u_canon) = tree_with_id(vec![dir_entry("b", &v_hex, 12)]);
+    let (root_hex, root_canon) =
+        tree_with_id(vec![dir_entry("a", &u_hex, 12), dir_entry("x", &u_hex, 12)]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, u_canon, v_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(resp.body["error"]["details"]["path"], json!("a/b/f"));
+}
+
+/// The closure_first_file regression pin: the disjoint subtree's only
+/// file sits TWO dirs deep (src/x/f), so the scan must descend AND fold
+/// the child's verdict back into the parked parent frame — a consuming
+/// resume would memoize a wrong None and 201 an out-of-scope tree.
+#[tokio::test]
+async fn nested_file_in_disjoint_subtree_is_403() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("docs"));
+    let fblob = b"nested f".to_vec();
+    let snap = snap_hex(40);
+    put_snap_blob(&f, &scoped, &snap, &fblob).await;
+    let (x_hex, x_canon) = tree_with_id(vec![file_entry(
+        "f",
+        object_id(Kind::Blob, &fblob),
+        8,
+        false,
+    )]);
+    let (s_hex, s_canon) = tree_with_id(vec![dir_entry("x", &x_hex, 8)]);
+    let (root_hex, root_canon) = tree_with_id(vec![dir_entry("src", &s_hex, 8)]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, s_canon, x_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(resp.body["error"]["details"]["path"], json!("src/x/f"));
+}
+
+/// Memo poisoning: the SAME tree (nested file only, S = {dir x -> X})
+/// mounted under two disjoint names. Whichever occurrence is scanned
+/// first computes the verdict and the second must reuse it — a poisoned
+/// wrong None on the first mount would silently clear the second. Both
+/// mounts are outside docs/; the first (alt/, sorted before src/) is
+/// named.
+#[tokio::test]
+async fn dual_disjoint_mounts_share_one_unpoisoned_verdict() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("docs"));
+    let fblob = b"poison f".to_vec();
+    let snap = snap_hex(41);
+    put_snap_blob(&f, &scoped, &snap, &fblob).await;
+    let (x_hex, x_canon) = tree_with_id(vec![file_entry(
+        "f",
+        object_id(Kind::Blob, &fblob),
+        8,
+        false,
+    )]);
+    let (s_hex, s_canon) = tree_with_id(vec![dir_entry("x", &x_hex, 8)]);
+    let (root_hex, root_canon) = tree_with_id(vec![
+        dir_entry("alt", &s_hex, 8),
+        dir_entry("src", &s_hex, 8),
+    ]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, s_canon, x_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(resp.body["error"]["details"]["path"], json!("alt/x/f"));
+}
+
+/// Mixed tree under a disjoint mount, dir FIRST and a direct file later:
+/// the verdict must fold the dir child's nested file (DFS pre-order:
+/// src/a_dir/g), not fall through to the later direct file (src/z_file).
+#[tokio::test]
+async fn disjoint_scan_prefers_dfs_order_over_later_file() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("docs"));
+    let g = b"nested under dir".to_vec();
+    let h = b"direct later file".to_vec();
+    let snap = snap_hex(42);
+    put_snap_blob(&f, &scoped, &snap, &g).await;
+    put_snap_blob(&f, &scoped, &snap, &h).await;
+    let (x_hex, x_canon) =
+        tree_with_id(vec![file_entry("g", object_id(Kind::Blob, &g), 16, false)]);
+    // tree_with_id sorts: "a_dir" < "z_file" stores the dir first.
+    let (s_hex, s_canon) = tree_with_id(vec![
+        dir_entry("a_dir", &x_hex, 16),
+        file_entry("z_file", object_id(Kind::Blob, &h), 17, false),
+    ]);
+    let (root_hex, root_canon) = tree_with_id(vec![dir_entry("src", &s_hex, 17)]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, s_canon, x_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(resp.body["error"]["details"]["path"], json!("src/a_dir/g"));
+}
+
+/// A diamond under a scoped token: root [a -> D, b -> D], D = {dir deep
+/// -> L}, L = {file f}, scope a. The a/ mount is covered and skipped,
+/// the b/ mount is disjoint — 403 naming b/deep/f, never the in-scope
+/// a/... path.
+#[tokio::test]
+async fn diamond_under_scope_names_disjoint_branch() {
+    let f = fixture();
+    let scoped = f.t.seed_token("scoped-w", "writer", Some("a"));
+    let fblob = b"diamond f".to_vec();
+    let snap = snap_hex(43);
+    put_snap_blob(&f, &scoped, &snap, &fblob).await;
+    let (l_hex, l_canon) = tree_with_id(vec![file_entry(
+        "f",
+        object_id(Kind::Blob, &fblob),
+        9,
+        false,
+    )]);
+    let (d_hex, d_canon) = tree_with_id(vec![dir_entry("deep", &l_hex, 9)]);
+    let (root_hex, root_canon) =
+        tree_with_id(vec![dir_entry("a", &d_hex, 9), dir_entry("b", &d_hex, 9)]);
+
+    let resp = post_snapshot(
+        &f,
+        &scoped,
+        &snap,
+        &root_hex,
+        [root_canon, d_canon, l_canon].concat(),
+        3600,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::FORBIDDEN, "{}", resp.body);
+    assert_eq!(resp.body["error"]["details"]["path"], json!("b/deep/f"));
 }
 
 // ---- fix3a: TTL ceiling -----------------------------------------------------

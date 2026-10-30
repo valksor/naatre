@@ -1,7 +1,8 @@
 //! Snapshot GC (M5a): one pass deletes expired snapshot rows together with
 //! their whole `ephemeral/<snap>/` dirs, and sweeps rowless dirs older than
-//! the max TTL (the convergence rule for an upload that crashed between the
-//! blob PUTs and the snapshot POST — no row will ever come for it).
+//! the default TTL, 7 days (the convergence rule for an upload that crashed
+//! between the blob PUTs and the snapshot POST — no row will ever come for
+//! it).
 //!
 //! The pass also sweeps snapshot-created tree rows: the `trees`/
 //! `tree_entries` rows a snapshot POST wrote carry no `repo_trees`
@@ -56,9 +57,10 @@ pub const SNAPSHOT_DEFAULT_TTL_SECS: u64 = 604_800;
 /// client-side and again at the POST route (422 below it).
 pub const SNAPSHOT_MIN_TTL_SECS: u64 = 60;
 
-/// Max TTL in nanoseconds — the rowless-dir sweep threshold. A dir under
-/// `ephemeral/` with no snapshot row and an mtime older than
-/// `now - SNAPSHOT_MAX_TTL_NS` is garbage from an interrupted upload.
+/// The rowless-dir sweep threshold: the DEFAULT TTL (7 days) in nanoseconds,
+/// not the 366-day TTL ceiling (`SNAPSHOT_TTL_MAX_SECS`, enforced at the POST
+/// route). A dir under `ephemeral/` with no snapshot row and an mtime older
+/// than `now - SNAPSHOT_MAX_TTL_NS` is garbage from an interrupted upload.
 pub const SNAPSHOT_MAX_TTL_NS: u64 = SNAPSHOT_DEFAULT_TTL_SECS * 1_000_000_000;
 
 /// What one GC pass deleted (for logs and tests).

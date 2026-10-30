@@ -96,7 +96,10 @@ TLS-terminating reverse proxy in front (see below).
 - **Snapshots are ephemeral working state** (default TTL 7d,
   `--ttl`): server-side captures of a working copy for handoff between
   agents or machines. They are not history and never become changesets;
-  GC deletes them wholesale past their TTL.
+  GC deletes them wholesale past their TTL. A restore re-walks the
+  snapshot's closure on every tree fetch — O(n²) server-side row loads for
+  an n-tree snapshot, fine at the current caps (limits registry,
+  `docs/design.md`).
 - **`main` moves only via land** (monotonic, server-side rebase); other
   refs move via admin compare-and-swap; force-moves validate
   fast-forward-only.
@@ -251,8 +254,8 @@ explicitly:
   canonical bytes instead).
 - **Principal-attributed columns** — `changesets.principal`,
   `refs.last_principal`, `lands.principal` + `lands.result_json`,
-  `snapshots.principal` (TTL-bounded by the snapshot TTL, but with no
-  enforced maximum TTL).
+  `snapshots.principal` (TTL-bounded by the snapshot TTL, capped at
+  366 days).
 - **The `principals` table** and **revoked-but-retained `tokens` rows**.
 - **`audit_log`** — `principal` plus the actor fields in `details_json`.
   The log is append-only and retained **indefinitely on a

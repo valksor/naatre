@@ -26,10 +26,12 @@ every connection sits behind `spawn_blocking` with `busy_timeout`.
    deletes expired snapshots' whole `ephemeral/<snap-id>/` directories and
    their rows (dirs first, rows after: a crash mid-pass leaves an expired
    row whose fetch answers 410, never a live row whose blobs are gone), and
-   sweeps rowless dirs older than the max TTL — the convergence rule for an
-   upload that crashed between blob PUTs and the snapshot POST. Restore
-   re-checks expiry at fetch time, so expiry is enforced at every read, not
-   only at GC time.
+   sweeps rowless dirs older than the default TTL (7 days) — the convergence
+   rule for an upload that crashed between blob PUTs and the snapshot POST:
+   an upload older than the default TTL can no longer be POSTed (presence
+   answers 422) even though a snapshot row, once created, may live up to the
+   366-day ceiling. Restore re-checks expiry at fetch time, so expiry is
+   enforced at every read, not only at GC time.
 
 **Schema migration authority**: `serve` auto-applies migrations on boot; a
 binary older than the database's schema version refuses to start with a
@@ -50,6 +52,10 @@ Every deliberate limit, with the milestone that lifts it — or an explicit
 | Repo-name visibility | `GET /v1/repos` lists every repo name to every authenticated principal; names are visible, contents are not (per-repo reads still gate on auth and membership). | **M13** (repo read ACLs) |
 | Cursor-during-land duplicates | Keyset pagination is anchored on changeset ids; a concurrent land can make a page boundary re-serve a changeset the next window also contains. Duplicates are possible; **skips are not** — the pinned contract, tested in M4. | **No milestone** — inherent to pagination over an append-only log; documented, not fixed |
 | Proxy audit degradation | naatre logs no peer address anywhere (access logs are method/path/status/elapsed/request-id only) and keys auth-failure auditing by presented credential. Behind a TLS proxy, every request shares the proxy's address — but since nothing keys on addresses, the practical degradation is narrow: an anonymous flood presents no credential, keys to the single `anon` bucket, and is visible only through the global counters (see auth-failure caps below). Attribution is by principal, never by network origin. | **No milestone** — the design keys attribution on identity, not origin |
+| Snapshot POST closure caps | `MAX_SNAPSHOT_TREES` **10 000** trees per POST and `MAX_SNAPSHOT_BLOBS` **8 192** distinct blobs per POST (422 beyond, `details.limit`); the missing-blob response list is capped at 256 ids with a `missing_blobs_truncated` flag. A sparse cone with >10k directories cannot snapshot whole — raise the constants when that bites; no config knob yet. | **No milestone** — raise the constants in code when sparse cones bite |
+| Snapshot TTL bounds | 60-second floor (plan-pinned) and a 366-day ceiling (server-side safety bound beyond the plan; supervisor judgment, flagged in the route contract). | **No milestone** — the ceiling is deliberate, not a pending relaxation |
+| Snapshot restore closure walks | The closure-membership check on `GET .../snapshots/{id}/trees/{tid}` re-walks the root closure per request (`db::tree_in_closure`, one entries-load per visited tree): an n-tree restore costs O(n²) server-side row loads — near the 10k-tree cap, minutes. Acceptable at today's snapshot sizes. | **No milestone** — a POST-time membership structure (tree → mounted paths) is the mitigation when large snapshots become real |
+| `snapshot_gc` audit rows | Written per collecting pass (never idle passes), actor `system`, details `{expired, rowless, rows_purged, trees_purged}`. | **No milestone** — recorded behavior, not a limit |
 
 ## Request-timeout shedding and in-flight writes
 
@@ -206,14 +212,3 @@ everything after it.
   dirty flag is an M6+ optimization if it ever shows.
 - **Verification anchors:** `git stash create` anchors cover tracked content only;
   untracked files are outside the guard's content compare.
-
-## Snapshot limits (from the review pass)
-
-- `MAX_SNAPSHOT_TREES` 10,000 trees per POST and `MAX_SNAPSHOT_BLOBS` 8,192 distinct
-  blobs per POST (422 beyond, `details.limit`); missing-blob response list capped at
-  256 ids with a `missing_blobs_truncated` flag. A sparse cone with >10k directories
-  cannot snapshot whole — raise the constants when that bites; no config knob yet.
-- Snapshot TTL: 60-second floor (plan-pinned) and a 366-day ceiling (server-side
-  safety bound beyond the plan; supervisor judgment, flagged in the route contract).
-- `snapshot_gc` audit rows: written per collecting pass (never idle passes), actor
-  `system`, details `{expired, rowless, rows_purged, trees_purged}`.

@@ -186,19 +186,17 @@ pub async fn create(
         }
     }
 
-    // One walk over the closure: the file paths for the scope check and the
-    // distinct blob ids for the presence check, both bounded BEFORE the
-    // write slot is touched (an in-slot walk would let a max-size body
-    // stall every land behind unbounded per-blob stats).
-    let (paths, blobs, over_blob_cap) = walk_closure(&trees, &tree_id)?;
+    // Two bounded walks over the closure, both run BEFORE the write slot
+    // is touched (an in-slot walk would let a max-size body stall every
+    // land behind unbounded per-blob stats): the distinct blob ids for the
+    // presence check, and the scope verdict — the first file path outside
+    // the token's scope.
+    let (blobs, over_blob_cap) = walk_closure(&trees, &tree_id);
 
     // Path scope (the plan's writes row: "path-prefix scope gates these —
     // segment-aligned"), mirroring changeset create: authorization is
     // checked before any content-validation detail is produced.
-    if let Some(offender) = paths
-        .iter()
-        .find(|p| !crate::authz::scope_allows(auth.scope_path.as_deref(), p))
-    {
+    if let Some(offender) = violation_in_closure(&trees, &tree_id, auth.scope_path.as_deref()) {
         return Err(
             ApiError::new(ApiCode::Forbidden, "path is outside this token's scope")
                 .with_details(serde_json::json!({ "path": offender })),
@@ -258,6 +256,10 @@ pub async fn create(
                         "recorded_expires_ns": row.expires_ns as u64
                     })));
                 }
+                // The 200 re-POST re-checks no blob presence, safe by the
+                // GC rules: an unexpired row's dir is never rowless-swept,
+                // and a purge requires expires_ns <= now — a GC-rule change
+                // here must re-validate presence.
                 return Ok(Outcome::Existing {
                     recorded_expires_ns: row.expires_ns,
                 });
@@ -538,7 +540,7 @@ pub async fn get_snapshot_tree(
 /// PUTs one blob into `ephemeral/<snap-id>/` (writer and above, repo-level):
 /// hash-verified against the URL id like every PUT, capped at 64 MiB. No row
 /// is written — the blobs are rowless until the snapshot POST commits; a
-/// snapshot that never POSTs is swept by GC after the max TTL.
+/// snapshot that never POSTs is swept by GC after the default TTL (7 days).
 ///
 /// Repo-level by design (the plan's objects-PUT cell, shared with the
 /// history objects PUT): path scopes do NOT gate this route — a blob has no
@@ -656,26 +658,30 @@ fn decode_trees(
     Ok(out)
 }
 
-/// One depth-first walk over the decoded closure from `root`: collects every
-/// file entry's repo-relative path (for the scope check) and every distinct
-/// blob id (for the presence check). Blob collection stops storing at
-/// [`MAX_SNAPSHOT_BLOBS`] — the third return value reports whether the cap
-/// was passed — so a hostile body cannot balloon the write slot's work.
+/// One depth-first walk over the decoded closure from `root`: collects
+/// every distinct blob id for the presence check. Collection stops storing
+/// at [`MAX_SNAPSHOT_BLOBS`] — the second return value reports whether the
+/// cap was passed — so a hostile body cannot balloon the write slot's work.
+/// The seen-set bounds the walk to distinct trees: a tree visited once has
+/// already contributed every blob id it references, so shared subtrees
+/// need no second visit. Path scope is NOT collected here —
+/// [`violation_in_closure`] owns it, because enumerating every occurrence
+/// of a shared subtree is exponential in the closure's sharing depth.
 /// Closure completeness has already been validated, so every dir entry
-/// resolves in `trees`; content-addressed trees cannot cycle (an entry's id
-/// covers the bytes that name it), and the seen-set keeps shared subtrees
-/// from being walked twice anyway.
+/// resolves in `trees`, and content-addressed trees cannot cycle (an
+/// entry's id covers the bytes that name it). Running synchronously on the
+/// handler thread is acceptable under the current caps (96 MiB body / 10k
+/// trees); move it to `spawn_blocking` if the caps grow.
 fn walk_closure(
     trees: &std::collections::HashMap<Id, (Vec<u8>, Tree)>,
     root: &Id,
-) -> Result<(Vec<String>, Vec<Id>, bool), ApiError> {
-    let mut paths = Vec::new();
+) -> (Vec<Id>, bool) {
     let mut blobs: Vec<Id> = Vec::new();
     let mut seen_blobs = HashSet::new();
     let mut seen_trees = HashSet::new();
     let mut over_cap = false;
-    let mut stack = vec![(*root, String::new())];
-    while let Some((tree_id, prefix)) = stack.pop() {
+    let mut stack = vec![*root];
+    while let Some(tree_id) = stack.pop() {
         if !seen_trees.insert(tree_id) {
             continue;
         }
@@ -683,10 +689,8 @@ fn walk_closure(
             continue; // unreachable: closure completeness was validated above
         };
         for e in &tree.entries {
-            let path = format!("{prefix}{}", e.name);
             match e.kind {
                 tree::EntryKind::File => {
-                    paths.push(path);
                     if seen_blobs.insert(e.object) {
                         if blobs.len() == MAX_SNAPSHOT_BLOBS {
                             over_cap = true;
@@ -695,11 +699,194 @@ fn walk_closure(
                         }
                     }
                 }
-                tree::EntryKind::Dir => stack.push((e.object, format!("{path}/"))),
+                tree::EntryKind::Dir => stack.push(e.object),
             }
         }
     }
-    Ok((paths, blobs, over_cap))
+    (blobs, over_cap)
+}
+
+/// The POST scope gate: the first file path in the closure rooted at
+/// `root` that escapes `scope` (403 `details.path`), or `None` when every
+/// path sits inside. This deliberately does NOT enumerate occurrences: a
+/// content-addressed subtree may be mounted at many prefixes (root
+/// `[app -> T, docs -> T]`), and a tree pointing two names at the next
+/// compounds those per level — a ~40-tree diamond spans 2^40 paths, so
+/// visiting every `(tree, prefix)` occurrence would hang the handler
+/// thread on a ~1 KB body. Instead each occurrence is classified by its
+/// dir prefix against the scope, and each class is solved once:
+///
+/// - covered ([`crate::authz::scope_allows`] admits the dir prefix
+///   itself): every path below is in scope by construction — the subtree
+///   is never visited;
+/// - straddling (the scope path extends the prefix): the only in-scope
+///   descent follows the scope's own segment chain, so direct files are
+///   checked with `scope_allows`, a dir child on that chain is pushed
+///   (at most one child name can extend a prefix to a given scope), and
+///   any other dir child is disjoint;
+/// - disjoint (prefix and scope diverge): every file below is outside by
+///   construction, so the verdict reduces to "does the subtree contain a
+///   file at all" — contents-only, memoized per tree id via
+///   [`closure_first_file`].
+///
+/// The memo key is the tree id within ONE class, not a two-state
+/// `(tree, inside)` flag: the same tree can occur both straddling and
+/// disjoint, and the two contexts can disagree (a file exactly at the
+/// scope path is allowed from a straddling occurrence, while any file of
+/// a disjoint occurrence is a violation), so a two-state memo would let
+/// whichever context evaluates first decide the other — reopening the
+/// shared-subtree bypass this walk closes. Straddling contexts need no
+/// memo: they follow the scope's own segment chain, which cannot branch
+/// and cannot cycle (ids are content-addressed), so each tree occurs in
+/// them at most once.
+///
+/// Cost: O(distinct trees + entries) — one memoized scan per tree plus a
+/// linear chain walk; no new caps.
+fn violation_in_closure(
+    trees: &std::collections::HashMap<Id, (Vec<u8>, Tree)>,
+    root: &Id,
+    scope: Option<&str>,
+) -> Option<String> {
+    // None admits every path.
+    let scope = scope?;
+
+    // Class of a dir prefix (trailing `/` included; the root is `""`).
+    // The root is never covered under Some(scope): only the degenerate
+    // `Some("")` scope equality-matches it, and that scope admits no file
+    // path at all, so its closure must reach the per-file checks below.
+    fn covered(scope: &str, prefix: &str) -> bool {
+        !prefix.is_empty() && crate::authz::scope_allows(Some(scope), prefix)
+    }
+    // The scope path extends the prefix; the trailing `/` keeps this
+    // segment-aligned (`Some("ab")` does not straddle `a/`).
+    fn straddles(scope: &str, prefix: &str) -> bool {
+        scope.starts_with(prefix)
+    }
+
+    let mut memo: std::collections::HashMap<Id, Option<String>> = std::collections::HashMap::new();
+    let mut stack: Vec<(Id, String)> = vec![(*root, String::new())];
+    while let Some((tree_id, prefix)) = stack.pop() {
+        let Some((_, tree)) = trees.get(&tree_id) else {
+            continue; // unreachable: closure completeness was validated above
+        };
+        if covered(scope, &prefix) {
+            continue; // every path below this occurrence is inside the scope
+        }
+        if !straddles(scope, &prefix) {
+            // Disjoint: any file below is outside the scope, so the whole
+            // question is whether the subtree holds a file at all.
+            if let Some(rel) = closure_first_file(trees, &mut memo, &tree_id) {
+                return Some(format!("{prefix}{rel}"));
+            }
+            continue;
+        }
+        for e in &tree.entries {
+            let path = format!("{prefix}{}", e.name);
+            match e.kind {
+                tree::EntryKind::File => {
+                    if !crate::authz::scope_allows(Some(scope), &path) {
+                        return Some(path);
+                    }
+                }
+                tree::EntryKind::Dir => {
+                    let child = format!("{path}/");
+                    if covered(scope, &child) {
+                        continue; // the child's whole subtree sits inside
+                    }
+                    if straddles(scope, &child) {
+                        stack.push((e.object, child));
+                    } else if let Some(rel) = closure_first_file(trees, &mut memo, &e.object) {
+                        return Some(format!("{child}{rel}"));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The relative path of the first file in the subtree rooted at `root`
+/// (entries in stored order, dirs descended depth-first), or `None` when
+/// the subtree holds no file at all. Purely contents-derived, so `memo`
+/// caches the verdict per tree id and each tree's entries are scanned at
+/// most once across all calls.
+fn closure_first_file(
+    trees: &std::collections::HashMap<Id, (Vec<u8>, Tree)>,
+    memo: &mut std::collections::HashMap<Id, Option<String>>,
+    root: &Id,
+) -> Option<String> {
+    enum Frame<'a> {
+        /// Resolve `id`'s verdict (memo hit pops for free).
+        Enter(Id),
+        /// Scan `tree`'s entries from `idx`. Every entry before `idx` is
+        /// settled. A dir child whose verdict is still pending is NOT
+        /// skipped: the frame parks at its index (`idx` unchanged) and
+        /// re-reads that entry once [`Enter`] memoizes the child — a
+        /// consuming iterator here would drop the entry's contribution
+        /// and memoize a wrong `None` for the whole subtree.
+        Scan {
+            tree: Id,
+            entries: &'a [naatre_core::tree::TreeEntry],
+            idx: usize,
+        },
+    }
+    let mut stack = vec![Frame::Enter(*root)];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Enter(id) => {
+                if memo.contains_key(&id) {
+                    continue; // the resuming Scan frame reads the memo itself
+                }
+                let Some((_, tree)) = trees.get(&id) else {
+                    memo.insert(id, None); // unreachable: validated closure
+                    continue;
+                };
+                memo.insert(id, None); // provisional; Scan below finalizes
+                stack.push(Frame::Scan {
+                    tree: id,
+                    entries: &tree.entries,
+                    idx: 0,
+                });
+            }
+            Frame::Scan {
+                tree,
+                entries,
+                mut idx,
+            } => {
+                let mut verdict: Option<String> = None;
+                let mut descend: Option<Id> = None;
+                while let Some(e) = entries.get(idx) {
+                    match e.kind {
+                        tree::EntryKind::File => {
+                            verdict = Some(e.name.clone());
+                            break;
+                        }
+                        tree::EntryKind::Dir => match memo.get(&e.object) {
+                            Some(Some(rel)) => {
+                                verdict = Some(format!("{}/{}", e.name, rel));
+                                break;
+                            }
+                            Some(None) => idx += 1, // that subtree holds no file
+                            None => {
+                                descend = Some(e.object);
+                                break; // idx parked on this entry
+                            }
+                        },
+                    }
+                }
+                match descend {
+                    Some(child) => {
+                        stack.push(Frame::Scan { tree, entries, idx });
+                        stack.push(Frame::Enter(child));
+                    }
+                    None => {
+                        memo.insert(tree, verdict);
+                    }
+                }
+            }
+        }
+    }
+    memo.get(root).cloned().flatten()
 }
 
 /// The shared GET gate: the row must exist in this repo, belong to the
