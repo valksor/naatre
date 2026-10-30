@@ -24,6 +24,8 @@ pub mod authz;
 pub mod db;
 pub mod extract;
 pub mod import;
+pub mod land;
+pub mod merge;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;
@@ -72,6 +74,8 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/v1/repos/{r}/diff", get(routes::history::diff))
         .route("/v1/repos/{r}/merge-base", get(routes::history::merge_base))
         .route("/v1/repos/{r}/file", get(routes::history::file))
+        .route("/v1/repos/{r}/land", post(routes::land::land))
+        .route("/v1/repos/{r}/land/{key}", get(routes::land::land_status))
         .route(
             "/v1/repos/{r}/refs/{name}",
             get(routes::refs::get_ref).post(routes::refs::cas_ref),

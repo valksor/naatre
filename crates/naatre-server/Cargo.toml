@@ -22,6 +22,9 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # Git import reads local repositories only: no network features, no worktree
 # machinery — the minimal facade over object/ref access (sha1 object ids).
 gix = { version = "0.90", default-features = false, features = ["sha1"] }
+# Line-level 3-way merge (plan "Merge": UTF-8 text only; binary both-modified
+# is a structured conflict, never a garbage merge).
+similar = "2"
 blake3 = "1"
 getrandom = "0.3"
 base64 = "0.22"

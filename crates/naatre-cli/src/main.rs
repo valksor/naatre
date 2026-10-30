@@ -136,6 +136,16 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
+    /// Land the working copy's head onto the server's main (server-side
+    /// rebase). The random default key is printed; pass it back with --key
+    /// to retry or to re-land after a conflict.
+    Land {
+        /// Idempotency key (default: a random 8-hex suffix, printed).
+        #[arg(long)]
+        key: Option<String>,
+        #[command(flatten)]
+        net: NetOpts,
+    },
     /// Print a file's raw bytes (default: at head).
     Cat {
         /// Repo-relative path.
@@ -324,6 +334,7 @@ fn main() {
             author,
             net,
         } => verbs::commit::run(cwd, &message, author.as_deref(), &net.net()),
+        Cmd::Land { key, net } => verbs::land::run(cwd, key.as_deref(), &net.net()),
         Cmd::Cat { path, at, net } => verbs::reads::cat(cwd, &path, at.as_deref(), &net.net()),
         Cmd::Ls {
             path,

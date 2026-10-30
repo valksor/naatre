@@ -526,7 +526,16 @@ pub struct ChangesetInsert<'a> {
 
 pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
-    tx.execute(
+    changeset_insert_rows(&tx, rec)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// The row writes of [`changeset_insert`] without a transaction of their
+/// own: land runs inside one enclosing transaction and calls this directly
+/// (nesting a second transaction would fail).
+pub fn changeset_insert_rows(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite::Result<()> {
+    conn.execute(
         "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
          generation, principal, root_tree_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
@@ -542,7 +551,7 @@ pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite
         ],
     )?;
     for (ord, parent) in rec.parents.iter().enumerate() {
-        tx.execute(
+        conn.execute(
             "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, ?4)",
             params![
                 rec.repo_id,
@@ -567,7 +576,7 @@ pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite
                 naatre_core::changeset::Op::Add | naatre_core::changeset::Op::Mod
             ) && c.exec == Some(true),
         );
-        tx.execute(
+        conn.execute(
             "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -582,14 +591,14 @@ pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite
         )?;
     }
     for blob in rec.blobs {
-        tx.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO repo_blobs(repo_id, object_id) VALUES (?1, ?2)",
             params![rec.repo_id, blob.0.as_slice()],
         )?;
     }
-    trees_write(&tx, rec.repo_id, rec.trees)?;
+    trees_write(conn, rec.repo_id, rec.trees)?;
     audit_append(
-        &tx,
+        conn,
         rec.now_ns,
         rec.principal,
         "changeset_create",
@@ -600,7 +609,6 @@ pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite
         })
         .to_string(),
     )?;
-    tx.commit()?;
     Ok(())
 }
 
@@ -648,6 +656,111 @@ pub fn log_chain(
         }
     }
     Ok(rows)
+}
+
+// ---- land (M4a) ------------------------------------------------------------
+
+/// One row of `lands`.
+pub struct LandRow {
+    pub state: String,
+    pub head: Option<Vec<u8>>,
+    pub base: Option<Vec<u8>>,
+    pub result_json: Option<String>,
+}
+
+/// The land row for `(repo, principal, key)`, or `None`.
+pub fn land_get(
+    conn: &Connection,
+    repo_id: i64,
+    principal: &str,
+    key: &str,
+) -> rusqlite::Result<Option<LandRow>> {
+    conn.query_row(
+        "SELECT state, head, base, result_json FROM lands \
+         WHERE repo_id = ?1 AND principal = ?2 AND key = ?3",
+        params![repo_id, principal, key],
+        |row| {
+            Ok(LandRow {
+                state: row.get(0)?,
+                head: row.get(1)?,
+                base: row.get(2)?,
+                result_json: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// The in-flight marker (state='pending'). It commits only together with
+/// the finished land (one transaction), so every failure path — including
+/// the crash points before COMMIT — leaves the key unsettled.
+pub fn land_insert_pending(
+    conn: &Connection,
+    repo_id: i64,
+    principal: &str,
+    key: &str,
+    head: &Id,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO lands(repo_id, principal, key, state, head) VALUES (?1, ?2, ?3, 'pending', ?4)",
+        params![repo_id, principal, key, head.0.as_slice()],
+    )?;
+    Ok(())
+}
+
+/// Settles the land row to state='done': `head` is the requested head (the
+/// idempotency payload), `base` the main target the land rebased onto, and
+/// `result_json` the recorded `{landed, rebased, note}`. Upsert form, so
+/// the pending row inside the same transaction is overwritten.
+#[allow(clippy::too_many_arguments)]
+pub fn land_settle(
+    conn: &Connection,
+    repo_id: i64,
+    principal: &str,
+    key: &str,
+    head: &Id,
+    base: &Id,
+    result_json: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO lands(repo_id, principal, key, state, head, base, result_json) \
+         VALUES (?1, ?2, ?3, 'done', ?4, ?5, ?6) \
+         ON CONFLICT(repo_id, principal, key) DO UPDATE SET \
+           state = 'done', head = excluded.head, base = excluded.base, \
+           result_json = excluded.result_json",
+        params![
+            repo_id,
+            principal,
+            key,
+            head.0.as_slice(),
+            base.0.as_slice(),
+            result_json
+        ],
+    )?;
+    Ok(())
+}
+
+/// The land-side CAS of `main`: moves it only from `expected_target` (the
+/// target the rebase was computed against) with a version bump. Returns the
+/// updated-row count — 0 means the target moved underneath (unreachable
+/// under the single-writer slot; the caller reports a ref conflict).
+pub fn main_cas_move(
+    conn: &Connection,
+    repo_id: i64,
+    expected_target: &Id,
+    new_target: &Id,
+    principal: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE refs SET target = ?3, version = version + 1, last_principal = ?4 \
+         WHERE repo_id = ?1 AND name = 'main' AND target = ?2",
+        params![
+            repo_id,
+            expected_target.0.as_slice(),
+            new_target.0.as_slice(),
+            principal
+        ],
+    )
 }
 
 // ---- principals & tokens -------------------------------------------------

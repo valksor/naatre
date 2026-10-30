@@ -27,6 +27,9 @@ pub enum HttpError {
         status: u16,
         code: String,
         message: String,
+        /// The envelope's `details` object, when it carried one (e.g. a
+        /// land 409 carries the conflict list + resolution recipe).
+        details: Option<Value>,
     },
     /// The request never completed (connection refused, timeout, …).
     Transport(String),
@@ -204,8 +207,9 @@ impl Client {
     }
 }
 
-/// Extracts the envelope `error.code` / `error.message`, with a fallback for
-/// responses that are not the standard envelope.
+/// Extracts the envelope `error.code` / `error.message` (and `details`,
+/// when present), with a fallback for responses that are not the standard
+/// envelope.
 fn envelope_from(value: &Value, status: u16) -> HttpError {
     let code = value["error"]["code"].as_str().unwrap_or("internal");
     let message = value["error"]["message"].as_str().unwrap_or_else(|| {
@@ -215,10 +219,14 @@ fn envelope_from(value: &Value, status: u16) -> HttpError {
             "server returned an unexpected body"
         }
     });
+    let details = value["error"]["details"]
+        .as_object()
+        .map(|_| value["error"]["details"].clone());
     HttpError::Envelope {
         status,
         code: code.to_string(),
         message: message.to_string(),
+        details,
     }
 }
 

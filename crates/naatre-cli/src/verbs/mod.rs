@@ -5,6 +5,7 @@
 pub mod clone;
 pub mod commit;
 pub mod doctor;
+pub mod land;
 pub mod login;
 pub mod reads;
 pub mod sparse;

@@ -104,6 +104,7 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
                 "refusing to sync (nothing changed): local changes: [{dirty_list}]; \
                  colliding untracked: [{collide_list}]; use --force to discard them"
             ),
+            details: None,
         }));
     }
     for raw in &colliding {
