@@ -43,6 +43,8 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
     (ApiCode::ObjectRedacted, "object_redacted", 410),
     (ApiCode::WriterBusy, "writer_busy", 503),
     (ApiCode::DerivationPending, "derivation_pending", 503),
+    (ApiCode::RequestTimeout, "request_timeout", 503),
+    (ApiCode::ServerBusy, "server_busy", 503),
     (ApiCode::Internal, "internal", 500),
 ];
 
@@ -80,6 +82,8 @@ fn all_variants() -> Vec<ApiCode> {
         ObjectRedacted,
         WriterBusy,
         DerivationPending,
+        RequestTimeout,
+        ServerBusy,
         Internal,
     ];
     for code in &all {

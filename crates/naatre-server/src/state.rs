@@ -8,10 +8,19 @@
 //!
 //! The write side is the single-writer slot: [`ServerState::write`] takes
 //! the mutex with `try_lock` and reports contention as 503 `writer_busy`
-//! with `retryable: true` instead of queueing.
+//! with `retryable: true` instead of queueing. Concurrent lands on the
+//! same (repo, principal, key) never reach this slot — they join in
+//! flight above it (see [`crate::land_join`]).
+//!
+//! The read side is decoupled from that slot: [`ServerState::read`] runs on
+//! a small pool of read-only connections ([`ReadPool`]). SQLite WAL lets
+//! readers run beside the single writer, so auth lookups and GET handlers
+//! never contend with lands for the write slot — writer-busy 503s mean
+//! another WRITE, nothing else.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
@@ -22,19 +31,24 @@ use naatre_store::store::Store;
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
+use crate::land_join::LandJoins;
 
 /// Injectable wall clock: nanoseconds since the Unix epoch. Production uses
 /// [`system_now_ns`]; tests inject a fixed-step clock so expiry behaviour is
 /// deterministic.
 pub type ClockFn = Arc<dyn Fn() -> u64 + Send + Sync>;
 
-/// Rate-limit accounting for auth failures: per-key sliding windows plus the
-/// global counters. Keys are stable derivations of the *presented*
-/// credential (never the peer address; see `auth::failure_key`).
+/// Rate-limit accounting for auth failures: per-key sliding windows, the
+/// global row window, and the global counters. Keys are stable derivations
+/// of the *presented* credential (never the peer address; see
+/// `auth::failure_key`).
 #[derive(Default)]
 pub(crate) struct AuthFailInner {
     /// Key → failure timestamps inside the current 60 s window.
     buckets: HashMap<String, VecDeque<u64>>,
+    /// Timestamps of audit rows WRITTEN, inside the global 60 s window —
+    /// the global row budget (a flood spread over fresh keys drains it).
+    row_window: VecDeque<u64>,
     /// Every observed auth failure, rowed or not — the flood-signal counter.
     global_count: u64,
     /// Auth-failure rows actually written to `audit_log`.
@@ -44,21 +58,80 @@ pub(crate) struct AuthFailInner {
 /// Sliding window and per-key row cap for auth-failure auditing.
 pub(crate) const AUTH_FAIL_WINDOW_NS: u64 = 60 * 1_000_000_000;
 pub(crate) const AUTH_FAIL_PER_KEY_LIMIT: usize = 10;
+/// Global per-window cap on auth-failure ROWS: beyond it, failures are
+/// counted, not rowed, under any keying (plan "Auth & route matrix").
+pub(crate) const AUTH_FAIL_GLOBAL_ROW_CAP: usize = 200;
 
 /// Registers one auth failure under `key` at time `now_ns`; returns `true`
-/// when the caller must write an `audit_log` row (within the per-key limit)
-/// and `false` when the failure is only counted (beyond the limit).
+/// when the caller must write an `audit_log` row (within the per-key limit
+/// AND the global row cap) and `false` when the failure is only counted
+/// (beyond either limit).
 pub(crate) fn tick_auth_failure(inner: &mut AuthFailInner, key: &str, now_ns: u64) -> bool {
     let bucket = inner.buckets.entry(key.to_string()).or_default();
     bucket.retain(|ts| now_ns.saturating_sub(*ts) < AUTH_FAIL_WINDOW_NS);
+    inner
+        .row_window
+        .retain(|ts| now_ns.saturating_sub(*ts) < AUTH_FAIL_WINDOW_NS);
     inner.global_count += 1;
-    if bucket.len() >= AUTH_FAIL_PER_KEY_LIMIT {
+    if bucket.len() >= AUTH_FAIL_PER_KEY_LIMIT || inner.row_window.len() >= AUTH_FAIL_GLOBAL_ROW_CAP
+    {
         return false;
     }
     bucket.push_back(now_ns);
+    inner.row_window.push_back(now_ns);
     inner.rows_written += 1;
     true
 }
+
+/// Pool of read-only SQLite connections over the same DB file. WAL keeps
+/// readers lock-free beside the single writer, so GET handlers and auth
+/// lookups run without touching the write slot. Each connection sits behind
+/// its own std [`Mutex`]; [`ReadPool::checkout`] hands them out round-robin
+/// and the guard is locked/released entirely inside the `spawn_blocking`
+/// closure (never across an `.await`).
+struct ReadPool {
+    conns: Vec<Arc<Mutex<rusqlite::Connection>>>,
+    next: AtomicUsize,
+}
+
+/// Pool size: four readers. A read is a bounded query; four concurrent
+/// readers per connection slot keep every GET path queue-free in practice.
+const READ_POOL_SIZE: usize = 4;
+
+impl ReadPool {
+    /// Opens `size` read-only connections to the migrated database. Callers
+    /// run this AFTER [`Store::open`]: the schema must exist and the WAL
+    /// must be recovered by the read-write connection before a read-only
+    /// connection can open.
+    fn open(db_path: &Path, size: usize) -> rusqlite::Result<ReadPool> {
+        let conns = (0..size)
+            .map(|_| {
+                let conn = rusqlite::Connection::open_with_flags(
+                    db_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )?;
+                conn.busy_timeout(Duration::from_millis(naatre_store::store::BUSY_TIMEOUT_MS))?;
+                Ok(Arc::new(Mutex::new(conn)))
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ReadPool {
+            conns,
+            next: AtomicUsize::new(0),
+        })
+    }
+
+    /// The next connection, round-robin.
+    fn checkout(&self) -> Arc<Mutex<rusqlite::Connection>> {
+        let i = self.next.fetch_add(1, Ordering::Relaxed) % self.conns.len();
+        Arc::clone(&self.conns[i])
+    }
+}
+
+/// How long a same-key land join waits for the leader's outcome before
+/// answering retryable 503 (the retry lands on the settled-row replay).
+/// Independent of [`ServerState::drain_timeout`]: a request shed at the
+/// join deadline must not be coupled to shutdown drain budgeting.
+pub const JOIN_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Shared server state: the store plus server configuration.
 pub struct ServerState {
@@ -74,6 +147,14 @@ pub struct ServerState {
     /// Rate-limit buckets for auth-failure auditing; guarded like the store
     /// (locked and released inside synchronous fns, never across `.await`).
     auth_fail: Mutex<AuthFailInner>,
+    /// The in-flight land join registry: concurrent same-key lands share
+    /// one outcome instead of contending for the write slot. In-memory
+    /// only, no store access; the guard mutex is never held across an
+    /// `.await` (see [`crate::land_join`]).
+    pub(crate) land_joins: LandJoins,
+    /// Read-only connection pool backing [`ServerState::read`]; WAL lets
+    /// these run beside the single writer without touching the write slot.
+    read_pool: ReadPool,
     /// Data dir path for the startup banner. Banner and log facts are paths
     /// and versions only — naatre has no credentials yet, and the standing
     /// rule is that none (DSNs, tokens, keys) may ever reach the banner,
@@ -82,6 +163,11 @@ pub struct ServerState {
     /// How long graceful shutdown waits for in-flight requests before
     /// forcing return. Default 30 s.
     pub drain_timeout: Duration,
+    /// How long a same-key land join waits for its leader before answering
+    /// retryable 503 (see [`JOIN_DEADLINE`]). Independent of
+    /// [`ServerState::drain_timeout`]; tests lower it to pin the expiry
+    /// behaviour.
+    pub join_deadline: Duration,
 }
 
 /// Shared handle to the server state.
@@ -99,18 +185,27 @@ fn system_now_ns() -> u64 {
 impl ServerState {
     /// Opens the store inside `data` (pragmas + migrations via
     /// [`Store::open`]) with the default configuration: system clock, the
-    /// data dir's history CAS, and an empty auth-failure tracker.
+    /// data dir's history CAS, a read-only connection pool, and an empty
+    /// auth-failure tracker.
     pub fn open(data: DataDir) -> Result<Self, StoreError> {
         let data_dir_display = data.path().to_path_buf();
+        let db_path = data.db_path();
         let cas = Arc::new(Cas::new(&data)?);
+        // The write store opens first: migrations run there, and its
+        // connection recovers the WAL before any read-only connection
+        // opens (a read-only connection cannot run recovery).
         let store = Arc::new(Mutex::new(Store::open(data)?));
+        let read_pool = ReadPool::open(&db_path, READ_POOL_SIZE)?;
         Ok(Self {
             store,
+            read_pool,
             cas,
             clock: Arc::new(system_now_ns),
             auth_fail: Mutex::new(AuthFailInner::default()),
+            land_joins: LandJoins::default(),
             data_dir_display,
             drain_timeout: Duration::from_secs(30),
+            join_deadline: JOIN_DEADLINE,
         })
     }
 
@@ -141,18 +236,23 @@ impl ServerState {
         (inner.global_count, inner.rows_written)
     }
 
-    /// Runs a read-only closure against the store off the async runtime.
+    /// Runs a read-only closure against the store off the async runtime, on
+    /// a pooled read-only connection ([`ReadPool`]): reads never take the
+    /// single-writer slot.
     ///
-    /// The blocking mutex lock is bounded the same way every SQLite waiter
-    /// is: by the store's `busy_timeout` (5 s) and OS lock wait.
+    /// The blocking wait is pool-wait only: the checkout lands on one of
+    /// `READ_POOL_SIZE` connections round-robin, and the std [`Mutex`] on
+    /// that connection is held for the length of one read. It is NOT
+    /// bounded by the store's `busy_timeout` — that governs SQLite-level
+    /// WRITE contention, which this pool never enters.
     pub async fn read<T, F>(&self, f: F) -> Result<T, ApiError>
     where
-        F: FnOnce(&Store) -> Result<T, ApiError> + Send + 'static,
+        F: FnOnce(&rusqlite::Connection) -> Result<T, ApiError> + Send + 'static,
         T: Send + 'static,
     {
-        let store = Arc::clone(&self.store);
+        let conn = self.read_pool.checkout();
         tokio::task::spawn_blocking(move || {
-            let guard = lock_store(&store);
+            let guard = conn.lock().unwrap_or_else(PoisonError::into_inner);
             f(&guard)
         })
         .await

@@ -317,12 +317,10 @@ pub async fn get_batch(
     // Membership first: this is the cross-repo isolation gate.
     let ids_for_membership = ids.clone();
     let member = state
-        .read(move |store| {
+        .read(move |conn| {
             ids_for_membership
                 .iter()
-                .map(|id| {
-                    db::repo_blob_check(store.conn(), repo_id, id).map_err(ApiError::log_internal)
-                })
+                .map(|id| db::repo_blob_check(conn, repo_id, id).map_err(ApiError::log_internal))
                 .collect::<Result<Vec<bool>, ApiError>>()
         })
         .await?;
@@ -399,9 +397,7 @@ pub async fn get_raw(
     let repo_id = repo_id_or_404(&state, &repo).await?;
 
     let is_member = state
-        .read(move |store| {
-            db::repo_blob_check(store.conn(), repo_id, &id).map_err(ApiError::log_internal)
-        })
+        .read(move |conn| db::repo_blob_check(conn, repo_id, &id).map_err(ApiError::log_internal))
         .await?;
     if !is_member {
         return Err(ApiError::new(

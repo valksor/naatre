@@ -172,7 +172,7 @@ pub async fn list(
 ) -> Result<Json<TokenListResponse>, ApiError> {
     require_role(&auth, Role::Admin)?;
     let rows = state
-        .read(|store| db::tokens_list(store.conn()).map_err(ApiError::log_internal))
+        .read(|conn| db::tokens_list(conn).map_err(ApiError::log_internal))
         .await?;
     Ok(Json(TokenListResponse {
         tokens: rows

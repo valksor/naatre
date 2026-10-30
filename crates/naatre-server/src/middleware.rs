@@ -1,13 +1,37 @@
-//! Transport middleware: request ids and the ops logging setup.
+//! Transport middleware: request ids, the per-request time budget, the
+//! concurrent-request cap, and the ops logging setup.
+//!
+//! The two shedding guards are deliberately dependency-free (no
+//! `tower-http`): [`request_timeout`] wraps the inner service in
+//! [`tokio::time::timeout`], and [`request_cap`] admits requests through a
+//! shared [`tokio::sync::Semaphore`]. Both answer with the standard error
+//! envelope — 503, retryable, `Retry-After: 1` — so agents apply the same
+//! backoff as for `writer_busy`.
 
-use axum::extract::Request;
-use axum::http::{HeaderName, HeaderValue};
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::{Request, State};
+use axum::http::{HeaderName, HeaderValue, header};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
+use tokio::sync::Semaphore;
 
-use crate::api_error::REQUEST_ID;
+use crate::api_code::ApiCode;
+use crate::api_error::{ApiError, REQUEST_ID};
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+
+/// Per-request time budget: a request that outlives it is shed with 503
+/// `request_timeout` (its inner future is dropped, so in-flight lands fail
+/// fast for their joiners via the join guard's Drop fallback).
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Concurrent-request cap: axum's `serve` has no connection limit of its
+/// own, so this semaphore is the process's admission control. A request
+/// that would exceed it is shed before any work starts with 503
+/// `server_busy`.
+pub const MAX_IN_FLIGHT_REQUESTS: usize = 256;
 
 /// Per-request id carrier, inserted into request extensions for handlers
 /// that need to echo it (envelope bodies read the task-local instead).
@@ -48,6 +72,50 @@ pub async fn request_id(req: Request, next: Next) -> Response {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
     response
+}
+
+/// The shedding envelope for the transport guards: 503 with a registry
+/// code, `retryable: true`, and `Retry-After: 1`.
+fn shed(code: ApiCode, message: &'static str) -> Response {
+    let mut response = ApiError::new(code, message).retryable(true).into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
+}
+
+/// Wraps every request in [`REQUEST_TIMEOUT`]: a request that outlives the
+/// budget is answered 503 `request_timeout` and its inner future dropped.
+pub async fn request_timeout(req: Request, next: Next) -> Response {
+    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(req)).await {
+        Ok(response) => response,
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = REQUEST_TIMEOUT.as_secs(),
+                "request shed: per-request timeout"
+            );
+            shed(
+                ApiCode::RequestTimeout,
+                "request exceeded the server time budget",
+            )
+        }
+    }
+}
+
+/// Admits every request through the shared [`MAX_IN_FLIGHT_REQUESTS`]
+/// semaphore; beyond the cap, requests are answered 503 `server_busy`
+/// without starting any work. The permit releases when this future drops.
+pub async fn request_cap(
+    State(permits): State<Arc<Semaphore>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let Ok(permit) = permits.clone().acquire_owned().await else {
+        tracing::warn!("request shed: concurrency cap (semaphore closed)");
+        return shed(ApiCode::ServerBusy, "server is at its request limit");
+    };
+    let _permit = permit;
+    next.run(req).await
 }
 
 /// Installs the process-wide tracing subscriber: `fmt` output filtered by

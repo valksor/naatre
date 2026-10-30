@@ -136,9 +136,10 @@ fn failure_key(auth_header: Option<&str>) -> String {
 }
 
 /// Records one failed auth attempt (rate-limited: within the per-key limit
-/// an `audit_log` row is written, beyond it the failure is only counted)
-/// and returns the 401 error. Best effort — the row write is skipped if the
-/// single-writer slot is busy; the failure remains counted.
+/// AND the global per-window row cap an `audit_log` row is written, beyond
+/// either the failure is only counted) and returns the 401 error. Best
+/// effort — the row write is skipped if the single-writer slot is busy; the
+/// failure remains counted.
 async fn fail_auth(state: &AppState, key: &str, code: ApiCode, message: &'static str) -> ApiError {
     if state.tick_auth_failure(key) {
         let key = key.to_string();
@@ -191,7 +192,7 @@ pub async fn authenticate(State(state): State<AppState>, mut req: Request, next:
     let lookup = {
         let hash = hash_token(token);
         state
-            .read(move |store| db::auth_lookup(store.conn(), &hash).map_err(ApiError::log_internal))
+            .read(move |conn| db::auth_lookup(conn, &hash).map_err(ApiError::log_internal))
             .await
     };
     let row = match lookup {

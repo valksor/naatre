@@ -97,9 +97,7 @@ pub async fn list(
         }
     };
     let rows = state
-        .read(move |store| {
-            db::repos_list(store.conn(), after, limit + 1).map_err(ApiError::log_internal)
-        })
+        .read(move |conn| db::repos_list(conn, after, limit + 1).map_err(ApiError::log_internal))
         .await?;
     let has_more = rows.len() as i64 > limit;
     let mut rows = rows;
@@ -228,7 +226,7 @@ pub async fn stats(
     require_role(&auth, Role::Admin)?;
     let repo_id = repo_id_or_404(&state, &name).await?;
     let (changesets, objects, bytes, cbytes) = state
-        .read(move |store| db::repo_stats(store.conn(), repo_id).map_err(ApiError::log_internal))
+        .read(move |conn| db::repo_stats(conn, repo_id).map_err(ApiError::log_internal))
         .await?;
     Ok(Json(RepoStats {
         changesets: changesets as u64,

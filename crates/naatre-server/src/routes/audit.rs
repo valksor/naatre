@@ -75,9 +75,7 @@ pub async fn list(
         }
     };
     let rows = state
-        .read(move |store| {
-            db::audit_list(store.conn(), before, limit + 1).map_err(ApiError::log_internal)
-        })
+        .read(move |conn| db::audit_list(conn, before, limit + 1).map_err(ApiError::log_internal))
         .await?;
     let has_more = rows.len() as i64 > limit;
     let mut rows = rows;

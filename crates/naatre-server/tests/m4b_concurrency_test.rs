@@ -17,7 +17,7 @@ mod m4b_common;
 
 use m4b_common::{DEADLINE, Fixture, REPO, add, cs_body, fixture, get_on, log_chain_paged};
 
-/// One land attempt under a hard timeout.
+/// One land attempt under a hard timeout (full router, auth included).
 async fn land_once(f: &Fixture, head: &str, key: &str) -> m4b_common::Resp {
     tokio::time::timeout(DEADLINE, f.land(head, key))
         .await
@@ -186,9 +186,16 @@ async fn concurrent_identical_key_and_head_settle_identically() {
         .await;
     let f = Arc::new(f);
 
+    // FULL router, auth included: reads (auth lookups included) run on the
+    // server's read pool and never contend for the write slot, so the
+    // loser either JOINS the in-flight land or — arriving after
+    // deregistration — replays the settled row through its own transaction;
+    // both observe the identical 200 with a single settlement and no 503.
+    // Single attempts on purpose: a 503 would fail the status assert, so
+    // land_with_retry's folding is deliberately not used.
     let (r1, r2) = tokio::join!(
-        land_with_retry(&f, &head, "k-twin"),
-        land_with_retry(&f, &head, "k-twin"),
+        land_once(&f, &head, "k-twin"),
+        land_once(&f, &head, "k-twin"),
     );
     assert_eq!(r1.status, StatusCode::OK, "body: {}", r1.body);
     assert_eq!(r2.status, StatusCode::OK, "body: {}", r2.body);

@@ -1103,11 +1103,15 @@ fn read_blob(git: &gix::Repository, oid: ObjectId) -> Result<Vec<u8>, ImportErro
     Ok(blob.data.clone())
 }
 
-/// `DeriveError` splits into the import error's existing Sql/Core variants.
+/// `DeriveError` splits into the import error's existing Sql/Core variants;
+/// a claimed-but-missing tree row is store corruption, not client input.
 fn map_derive(e: tree_derive::DeriveError) -> ImportError {
     match e {
         tree_derive::DeriveError::Sql(err) => ImportError::Sql(err),
         tree_derive::DeriveError::Core(err) => ImportError::Core(err),
+        tree_derive::DeriveError::MissingTreeRow(hex) => ImportError::Internal(format!(
+            "corrupt tree store: no trees row for claimed id {hex}"
+        )),
     }
 }
 
@@ -1171,8 +1175,10 @@ fn replace_with_replacement_char(s: &mut String, index: usize) {
 // ---- naatre side: import one commit ----------------------------------------
 
 /// Imports one prepared commit: puts every referenced blob (diff and full
-/// tree), then commits changeset row + parents + file changes + blob
-/// membership + git_map + derived trees + audit in one transaction.
+/// tree), then commits the changeset (via [`db::changeset_insert_rows`] —
+/// the single changeset-row writer — with the import extras: the git_map
+/// row and the `via: "import"` audit field), derived trees, and audit in
+/// one transaction.
 fn import_commit(
     git: &gix::Repository,
     cas: &Cas,
@@ -1205,78 +1211,30 @@ fn import_commit(
     let (root_tree_id, _, trees) = node.collect().map_err(map_derive)?;
 
     let canonical = changeset::encode(&p.cs)?;
-    let now = now_ns();
     let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
-         generation, principal, root_tree_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        rusqlite::params![
-            repo_id,
-            p.cs_id.0.as_slice(),
-            canonical,
-            p.cs.author,
-            p.cs.message,
-            p.cs.timestamp_ns as i64,
-            p.generation,
-            PRINCIPAL,
-            root_tree_id.0.as_slice(),
-        ],
-    )?;
-    for (ord, parent) in p.cs.parents.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
-                repo_id,
-                p.cs_id.0.as_slice(),
-                parent.0.as_slice(),
-                ord as i64
-            ],
-        )?;
-    }
-    for c in &p.cs.changes {
-        let (blob, size): (Option<&[u8]>, Option<i64>) = match (&c.blob, c.size) {
-            (Some(b), Some(s)) => (Some(b.0.as_slice()), Some(s as i64)),
-            _ => (None, None),
-        };
-        tx.execute(
-            "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                repo_id,
-                p.cs_id.0.as_slice(),
-                c.path,
-                db::op_tag(c.op),
-                blob,
-                size,
-                i64::from(c.exec == Some(true))
-            ],
-        )?;
-    }
-    for blob in &blobs {
-        tx.execute(
-            "INSERT OR IGNORE INTO repo_blobs(repo_id, object_id) VALUES (?1, ?2)",
-            rusqlite::params![repo_id, blob.0.as_slice()],
-        )?;
-    }
-    // The one import-specific row: git oid → changeset id, same transaction
-    // as the changeset it maps to.
-    tx.execute(
-        "INSERT INTO git_map(repo_id, git_oid, cs_id) VALUES (?1, ?2, ?3)",
-        rusqlite::params![repo_id, p.git_oid.as_bytes(), p.cs_id.0.as_slice()],
-    )?;
-    db::trees_write(&tx, repo_id, &trees)?;
-    db::audit_append(
+    db::changeset_insert_rows(
         &tx,
-        now,
-        PRINCIPAL,
-        "changeset_create",
-        &serde_json::json!({
-            "repo": repo_name,
-            "changeset": p.cs_id.to_hex(),
-            "generation": p.generation,
-            "via": "import",
-        })
-        .to_string(),
+        db::ChangesetInsert {
+            repo_id,
+            repo_name,
+            id: &p.cs_id,
+            canonical: &canonical,
+            author: &p.cs.author,
+            message: &p.cs.message,
+            timestamp_ns: p.cs.timestamp_ns as i64,
+            generation: p.generation,
+            principal: PRINCIPAL,
+            root_tree_id: &root_tree_id,
+            parents: &p.cs.parents,
+            changes: &p.cs.changes,
+            blobs: &blobs,
+            trees: &trees,
+            now_ns: now_ns(),
+        },
+        db::ChangesetExtras {
+            audit_via: Some("import"),
+            git_map_oid: Some(p.git_oid.as_bytes()),
+        },
     )?;
     tx.commit()?;
     Ok(())
@@ -1344,7 +1302,7 @@ fn graft_main(
     let Some(ref_row) = main_row else {
         // Absent → set to the head of the longest importable chain.
         let target = longest_chain_head(importable, head_oid);
-        ref_move_txn(conn, repo_id, repo_name, "main", None, &target)?;
+        ref_move(conn, repo_id, repo_name, None, &target)?;
         report.main = "set";
         return Ok(());
     };
@@ -1374,7 +1332,7 @@ fn graft_main(
     )?;
     match chain_descending_from(conn, repo_id, importable, previous_tip, head_oid)? {
         Some(target) => {
-            ref_move_txn(conn, repo_id, repo_name, "main", Some(version), &target)?;
+            ref_move(conn, repo_id, repo_name, Some(version), &target)?;
             report.main = "fast-forwarded";
         }
         None => {
@@ -1452,54 +1410,44 @@ fn descends_from(
     Ok(false)
 }
 
-/// Ref creates or fast-forwards `name` to `target`, atomically with its
-/// `ref_move` audit row (details carry `via: "import"`).
-fn ref_move_txn(
+/// Moves `main` through [`db::ref_cas`] — the single ref-move
+/// implementation (CAS or create, atomic with its `ref_move` audit row).
+/// Under the import flock the CAS cannot lose: import checked it is the
+/// sole writer, so any non-success outcome is a broken invariant.
+fn ref_move(
     conn: &Connection,
     repo_id: i64,
     repo_name: &str,
-    name: &str,
     expected_version: Option<i64>,
     target: &Id,
 ) -> Result<(), ImportError> {
-    let now = now_ns();
-    let tx = conn.unchecked_transaction()?;
-    match expected_version {
-        None => {
-            tx.execute(
-                "INSERT INTO refs(repo_id, name, target, version, last_principal) \
-                 VALUES (?1, ?2, ?3, 1, ?4)",
-                rusqlite::params![repo_id, name, target.0.as_slice(), PRINCIPAL],
-            )?;
-        }
-        Some(expected) => {
-            let moved = tx.execute(
-                "UPDATE refs SET target = ?1, version = version + 1, last_principal = ?2 \
-                 WHERE repo_id = ?3 AND name = ?4 AND version = ?5",
-                rusqlite::params![target.0.as_slice(), PRINCIPAL, repo_id, name, expected],
-            )?;
-            if moved != 1 {
-                return Err(ImportError::Internal(format!(
-                    "ref {name} changed under the import lock (expected version {expected})"
-                )));
-            }
-        }
-    }
-    db::audit_append(
-        &tx,
-        now,
-        PRINCIPAL,
-        "ref_move",
-        &serde_json::json!({
-            "repo": repo_name,
-            "ref": name,
-            "target": target.to_hex(),
-            "via": "import",
-        })
-        .to_string(),
+    let outcome = db::ref_cas(
+        conn,
+        db::RefMove {
+            repo_id,
+            repo_name,
+            name: "main",
+            target,
+            expected: expected_version,
+            principal: PRINCIPAL,
+            now_ns: now_ns(),
+        },
     )?;
-    tx.commit()?;
-    Ok(())
+    match outcome {
+        db::RefCas::Created | db::RefCas::Updated { .. } => Ok(()),
+        db::RefCas::Conflict {
+            current_version, ..
+        } => Err(ImportError::Internal(format!(
+            "ref main changed under the import lock \
+             (expected version {expected_version:?}, found {current_version})"
+        ))),
+        db::RefCas::RepoMissing => Err(ImportError::Internal(
+            "repo vanished under the import lock".into(),
+        )),
+        db::RefCas::RefMissing => Err(ImportError::Internal(
+            "ref main vanished under the import lock".into(),
+        )),
+    }
 }
 
 // ---- helpers ---------------------------------------------------------------

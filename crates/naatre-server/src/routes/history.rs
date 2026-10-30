@@ -113,8 +113,7 @@ pub async fn log(
 
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let rows = state
-        .read(move |store| {
-            let conn = store.conn();
+        .read(move |conn| {
             let from = match start {
                 Start::Id(id) => {
                     // An unknown `from` is the same 404 as an unknown
@@ -241,8 +240,7 @@ pub async fn diff(
     let b = parse_id(&q.b)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let entries = state
-        .read(move |store| {
-            let conn = store.conn();
+        .read(move |conn| {
             let root = |cs: &Id| -> Result<Id, ApiError> {
                 let row = db::changeset_get(conn, repo_id, cs)
                     .map_err(ApiError::log_internal)?
@@ -368,8 +366,7 @@ pub async fn merge_base(
     let b = parse_id(&q.b)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let base = state
-        .read(move |store| {
-            let conn = store.conn();
+        .read(move |conn| {
             // Both endpoints must exist before the walk (404 contract).
             for id in [&a, &b] {
                 if db::changeset_graph(conn, repo_id, id)
@@ -490,8 +487,7 @@ pub async fn file(
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let path = q.path.clone();
     let found = state
-        .read(move |store| {
-            let conn = store.conn();
+        .read(move |conn| {
             let path = q.path;
             let Some(row) =
                 db::changeset_get(conn, repo_id, &at).map_err(ApiError::log_internal)?

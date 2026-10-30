@@ -33,7 +33,7 @@ pub(crate) fn current_request_id() -> String {
 /// 5xx policy: internal failures never reach the client — construct
 /// [`ApiError::internal`], whose message is generic and whose details are
 /// empty; the specifics stay in server logs keyed by `request_id`.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("api error: {code:?}: {message}")]
 pub struct ApiError {
     code: ApiCode,
@@ -83,6 +83,12 @@ impl ApiError {
     /// The registry code, for callers that branch on it (tests, mapping).
     pub fn code(&self) -> ApiCode {
         self.code
+    }
+
+    /// The structured recovery details, for callers that parse them (the
+    /// land-join fallback reads `settled_head` out of a leader's 409).
+    pub fn details(&self) -> &serde_json::Value {
+        &self.details
     }
 
     /// The wire envelope for this error, tagged with `request_id`.

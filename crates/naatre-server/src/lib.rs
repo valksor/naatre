@@ -25,6 +25,7 @@ pub mod db;
 pub mod extract;
 pub mod import;
 pub mod land;
+pub mod land_join;
 pub mod merge;
 pub mod middleware;
 pub mod openapi;
@@ -40,6 +41,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Request body cap: 96 MiB, headroom over the 64 MiB blob cap so envelope
 /// and framing errors fit inside the limit.
 pub const BODY_LIMIT_BYTES: usize = 96 * 1024 * 1024;
+
+use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
@@ -106,12 +109,23 @@ pub fn router(state: AppState) -> axum::Router {
             auth::authenticate,
         ));
 
+    // Transport guards, outermost last: request ids (so shed responses
+    // still carry one), the 30 s per-request timeout, the 256-permit
+    // concurrency cap, then the body limit (see `middleware`).
+    let request_permits = Arc::new(tokio::sync::Semaphore::new(
+        middleware::MAX_IN_FLIGHT_REQUESTS,
+    ));
     axum::Router::new()
         .route("/healthz", get(routes::health::healthz))
         .route("/version", get(routes::version::version))
         .merge(v1)
         .fallback(fallback)
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
+        .layer(axum::middleware::from_fn_with_state(
+            request_permits,
+            middleware::request_cap,
+        ))
+        .layer(axum::middleware::from_fn(middleware::request_timeout))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)
 }

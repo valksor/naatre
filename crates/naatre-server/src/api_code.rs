@@ -70,6 +70,12 @@ pub enum ApiCode {
     WriterBusy,
     /// 503 — derived data is still being computed for this read.
     DerivationPending,
+    /// 503 — the request outlived the server's per-request time budget and
+    /// was shed; safe to retry with backoff (writes are idempotent by key).
+    RequestTimeout,
+    /// 503 — the server is at its concurrent-request limit; shed before any
+    /// work started; safe to retry with backoff.
+    ServerBusy,
     /// 500 — internal error; details never reach the client.
     Internal,
 }
@@ -106,6 +112,8 @@ impl ApiCode {
             Self::ObjectRedacted => "object_redacted",
             Self::WriterBusy => "writer_busy",
             Self::DerivationPending => "derivation_pending",
+            Self::RequestTimeout => "request_timeout",
+            Self::ServerBusy => "server_busy",
             Self::Internal => "internal",
         }
     }
@@ -137,7 +145,10 @@ impl ApiCode {
             Self::SnapshotExpired | Self::ObjectCollected | Self::ObjectRedacted => {
                 StatusCode::GONE
             }
-            Self::WriterBusy | Self::DerivationPending => StatusCode::SERVICE_UNAVAILABLE,
+            Self::WriterBusy
+            | Self::DerivationPending
+            | Self::RequestTimeout
+            | Self::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

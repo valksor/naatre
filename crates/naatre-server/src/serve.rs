@@ -1,5 +1,13 @@
 //! Process lifecycle: startup banner, serve loop, graceful shutdown with a
 //! bounded drain.
+//!
+//! Transport guards (router-wide, dependency-free middleware in
+//! [`crate::middleware`], installed by [`crate::router`]): every request
+//! runs under a 30 s time budget (`REQUEST_TIMEOUT`, shed as 503
+//! `request_timeout`) and through a 256-permit concurrent-request
+//! semaphore (`MAX_IN_FLIGHT_REQUESTS`, shed as 503 `server_busy`). axum's
+//! `serve` has no connection cap of its own, so the semaphore is the
+//! process's admission control.
 
 use std::future::{Future, IntoFuture};
 use std::io;
@@ -31,7 +39,7 @@ pub async fn serve(
     let addr = cfg.listener.local_addr()?;
     let schema_version = cfg
         .state
-        .read(|store| Ok::<i64, ApiError>(store.schema_version()))
+        .read(|conn| Ok::<i64, ApiError>(naatre_store::store::schema_version(conn)))
         .await
         .map_err(|e| io::Error::other(e.to_string()))?;
 

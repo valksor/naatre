@@ -61,12 +61,12 @@ pub async fn get_tree(
     })?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let rows = state
-        .read(move |store| {
-            let owner = db::tree_repo(store.conn(), &id).map_err(ApiError::log_internal)?;
+        .read(move |conn| {
+            let owner = db::tree_repo(conn, &id).map_err(ApiError::log_internal)?;
             if owner != Some(repo_id) {
                 return Ok(None);
             }
-            db::tree_entries_load(store.conn(), &id)
+            db::tree_entries_load(conn, &id)
                 .map_err(ApiError::log_internal)
                 .map(Some)
         })

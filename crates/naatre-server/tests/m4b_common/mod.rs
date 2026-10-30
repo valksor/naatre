@@ -51,10 +51,19 @@ pub fn build_app() -> TestApp {
 /// Builds the app over a caller-owned temp dir (the crash suite pre-creates
 /// the data dir so a spawned child can open the same path).
 pub fn build_app_in(dir: tempfile::TempDir) -> TestApp {
+    build_app_in_with(dir, |_| {})
+}
+
+/// [`build_app_in`] with a pre-`Arc` mutation hook on the state (the same
+/// way the shutdown suite sets `drain_timeout`) — e.g. a low join deadline.
+pub fn build_app_in_with(
+    dir: tempfile::TempDir,
+    configure: impl FnOnce(&mut ServerState),
+) -> TestApp {
     let data = DataDir::create(dir.path()).unwrap();
     std::fs::write(data.db_path(), b"").unwrap();
     let db_path = dir.path().join("naatre.db");
-    let app = attach_app(dir.path());
+    let app = attach_app_with(dir.path(), configure);
     TestApp {
         _dir: dir,
         db_path,
@@ -73,6 +82,11 @@ pub struct AttachedApp {
 }
 
 pub fn attach_app(dir: &Path) -> AttachedApp {
+    attach_app_with(dir, |_| {})
+}
+
+/// [`attach_app`] with a pre-`Arc` mutation hook on the state.
+pub fn attach_app_with(dir: &Path, configure: impl FnOnce(&mut ServerState)) -> AttachedApp {
     static LOG: std::sync::Once = std::sync::Once::new();
     LOG.call_once(|| naatre_server::middleware::logging_setup("error"));
     let data = DataDir::open(dir).unwrap();
@@ -80,6 +94,7 @@ pub fn attach_app(dir: &Path) -> AttachedApp {
     let clock = Arc::new(AtomicU64::new(BASE_NS));
     let clock_for_closure = Arc::clone(&clock);
     state.clock = Arc::new(move || clock_for_closure.load(Ordering::Relaxed));
+    configure(&mut state);
     let db_path = dir.join("naatre.db");
     let state = Arc::new(state);
     let app = naatre_server::router(Arc::clone(&state));
@@ -401,7 +416,12 @@ pub struct Fixture {
 }
 
 pub fn fixture() -> Fixture {
-    let t = build_app();
+    fixture_with(|_| {})
+}
+
+/// [`fixture`] with a pre-`Arc` mutation hook on the state.
+pub fn fixture_with(configure: impl FnOnce(&mut ServerState)) -> Fixture {
+    let t = build_app_in_with(tempfile::tempdir().unwrap(), configure);
     let writer = seed_token_at(&t.db_path, "writer-p", "writer", None);
     let reader = seed_token_at(&t.db_path, "reader-p", "reader", None);
     let repo_id = seed_repo_at(&t.db_path, REPO);

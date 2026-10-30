@@ -66,8 +66,8 @@ pub async fn get_ref(
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let name_for_lookup = name.clone();
     let row = state
-        .read(move |store| {
-            db::ref_get(store.conn(), repo_id, &name_for_lookup).map_err(ApiError::log_internal)
+        .read(move |conn| {
+            db::ref_get(conn, repo_id, &name_for_lookup).map_err(ApiError::log_internal)
         })
         .await?;
     let row = row.ok_or_else(|| {

@@ -67,8 +67,8 @@ pub(crate) async fn repo_id_or_404(state: &AppState, name: &str) -> Result<i64, 
     let name = name.to_string();
     let name_for_lookup = name.clone();
     let found = state
-        .read(move |store| {
-            db::repo_id_by_name(store.conn(), &name_for_lookup).map_err(ApiError::log_internal)
+        .read(move |conn| {
+            db::repo_id_by_name(conn, &name_for_lookup).map_err(ApiError::log_internal)
         })
         .await?;
     found.ok_or_else(|| {

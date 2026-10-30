@@ -289,6 +289,7 @@ fn json_of(report: &Report) -> serde_json::Value {
 #[test]
 fn clean_import_full_parity() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let f = Fixture::clean("clean");
@@ -452,6 +453,7 @@ fn compare_trees(env: &Env, f: &Fixture, root_tree: &[u8]) -> BTreeMap<String, (
 #[test]
 fn reimport_is_a_noop() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let f = Fixture::clean("noop");
@@ -480,6 +482,7 @@ fn reimport_is_a_noop() {
 #[test]
 fn unsupported_aborts_with_report() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let f = Fixture::full("full");
@@ -523,6 +526,7 @@ fn unsupported_aborts_with_report() {
 #[test]
 fn skip_mode_cascades_and_sets_main() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let f = Fixture::full("full");
@@ -589,6 +593,7 @@ fn skip_mode_cascades_and_sets_main() {
 #[test]
 fn graft_a_fast_forwards_main() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let mut f = Fixture::clean("grafta");
@@ -618,6 +623,7 @@ fn graft_a_fast_forwards_main() {
 #[test]
 fn graft_b_native_lands_refuse_main_move() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let mut f = Fixture::clean("graftb");
@@ -736,6 +742,7 @@ fn graft_b_native_lands_refuse_main_move() {
 #[test]
 fn graft_c_diverged_history_aborts() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let mut f = Fixture::clean("graftc");
@@ -771,6 +778,7 @@ fn graft_c_diverged_history_aborts() {
 #[test]
 fn import_while_serving_is_refused_by_the_flock() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let f = Fixture::clean("locking");
@@ -804,6 +812,7 @@ fn import_while_serving_is_refused_by_the_flock() {
 #[test]
 fn sanitize_replaces_cc_cf_with_replacement_char() {
     if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
         return;
     }
     let mut f = Fixture::new("sanitize");

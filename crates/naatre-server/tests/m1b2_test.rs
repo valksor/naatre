@@ -614,6 +614,50 @@ async fn auth_failure_auditing_is_rate_limited() {
         serde_json::from_str::<Value>(&anon_details).unwrap()["key"],
         "anon"
     );
+
+    // Global per-window row cap: 15 DISTINCT garbage tokens are 15 fresh
+    // keys at 1 hit each — all 15 rowed (well under both caps).
+    let t = build_app();
+    for i in 0..15 {
+        let tok = format!("garbage-{i}");
+        let resp = get(&t.app, "/v1/whoami", Some(&tok)).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(t.state.auth_fail_stats(), (15, 15));
+
+    // Keep going with fresh keys until the GLOBAL row window is full
+    // (200 rows), then past it: rows stop growing at the cap while the
+    // global count keeps climbing — beyond-limit failures are counted,
+    // not rowed, under any keying.
+    for i in 15..230 {
+        let tok = format!("garbage-{i}");
+        let resp = get(&t.app, "/v1/whoami", Some(&tok)).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(t.state.auth_fail_stats(), (230, 200));
+    assert_eq!(
+        count_rows(
+            &t,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'auth_failure'"
+        ),
+        200,
+        "the audit table holds exactly the global row cap"
+    );
+    for i in 230..240 {
+        let tok = format!("garbage-{i}");
+        let resp = get(&t.app, "/v1/whoami", Some(&tok)).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+    let (count, rows) = t.state.auth_fail_stats();
+    assert_eq!(count, 240, "failures keep counting beyond the cap");
+    assert_eq!(rows, 200, "rows stop growing at the global cap");
+    assert_eq!(
+        count_rows(
+            &t,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'auth_failure'"
+        ),
+        200
+    );
 }
 
 // ---- 4. objects ------------------------------------------------------------

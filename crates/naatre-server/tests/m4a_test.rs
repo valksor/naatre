@@ -1128,10 +1128,11 @@ async fn writer_busy_then_retry_replays() {
     assert_eq!(resp.status, StatusCode::OK);
     assert_eq!(resp.body, first);
 
-    // Concurrent identical (key, head): one wins the slot; the other either
-    // joins as an identical 200 or gets the 503 and — on retry — the
-    // idempotent 200. (The in-flight join is an approximation: single
-    // writer means a second land cannot enter the txn; see land.rs.)
+    // Concurrent identical (key, head): the second request JOINS the
+    // in-flight land (identical 200) or, arriving after deregistration,
+    // replays the settled row — an idempotent 200 either way. The 503
+    // tolerance below is defense in depth (a join wait that outlives the
+    // drain timeout), not the expected path; see land_join.rs.
     let (r1, r2) = tokio::join!(land(&f, &c2, "k-race"), land(&f, &c2, "k-race"));
     let (winner, loser) = if r1.status == StatusCode::OK {
         (r1, r2)

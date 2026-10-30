@@ -194,11 +194,10 @@ async fn create_inner(
     let parent_metas: Vec<(i64, Option<Vec<u8>>)> = {
         let ids = parents.clone();
         let graphs: Vec<Option<db::CsGraph>> = state
-            .read(move |store| {
+            .read(move |conn| {
                 ids.iter()
                     .map(|id| {
-                        db::changeset_graph(store.conn(), repo_id, id)
-                            .map_err(ApiError::log_internal)
+                        db::changeset_graph(conn, repo_id, id).map_err(ApiError::log_internal)
                     })
                     .collect()
             })
@@ -519,8 +518,7 @@ pub async fn get_changeset(
     let id = parse_id(&id_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let fetched = state
-        .read(move |store| {
-            let conn = store.conn();
+        .read(move |conn| {
             let Some(row) =
                 db::changeset_get(conn, repo_id, &id).map_err(ApiError::log_internal)?
             else {
@@ -591,8 +589,8 @@ pub async fn get_root(
     let id = parse_id(&id_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let root = state
-        .read(move |store| {
-            db::changeset_get(store.conn(), repo_id, &id)
+        .read(move |conn| {
+            db::changeset_get(conn, repo_id, &id)
                 .map_err(ApiError::log_internal)
                 .map(|row| row.and_then(|r| r.root_tree_id))
         })

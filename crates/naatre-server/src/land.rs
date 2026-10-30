@@ -16,16 +16,16 @@
 //! parent's tree to the merged tree, keeps the original author, message,
 //! and author timestamp, takes the landing principal, and bumps generation.
 //!
-//! In-flight same-key approximation (plan "Land algorithm"): with the
-//! single-writer slot ([`crate::state::ServerState::write`] `try_lock`), a
-//! second land request cannot even enter the transaction while another is
-//! in flight — it is answered 503 `writer_busy` before this module runs.
-//! A committed `pending` row is therefore unobservable: the only writer
-//! that could create one crashes out with a full rollback. Concurrent
-//! identical (key, head) requests thus resolve to "one executes, the rest
-//! see 503, retry sees the settled done row"; in-flight same-key
-//! different-head can never be observed. The `pending` lookup below is kept
-//! as a defense-in-depth retryable 503, not a reachable state.
+//! In-flight same-key handling (plan "Land algorithm") lives at the route
+//! layer ([`crate::land_join`]): a concurrent request on the same
+//! (repo, principal, key) JOINS the in-flight land and shares its outcome
+//! instead of contending for the write slot. Any land that does reach this
+//! module still runs alone — with the single-writer slot
+//! ([`crate::state::ServerState::write`] `try_lock`) a second transaction
+//! cannot start while one is in flight. A committed `pending` row is
+//! therefore unobservable: the only writer that could create one crashes
+//! out with a full rollback. The `pending` lookup below is kept as a
+//! defense-in-depth retryable 503, not a reachable state.
 //!
 //! Deterministic crash points (`NAATRE_CRASH_POINT`, debug builds only, a
 //! closed enum): `after_pending_row`, `after_blob_write`, `after_rebase`,
@@ -100,6 +100,7 @@ pub(crate) struct LandCommand {
 }
 
 /// A settled land.
+#[derive(Clone)]
 pub(crate) struct LandDone {
     pub landed: Id,
     pub main: Id,
@@ -252,16 +253,23 @@ fn land_in_txn(
     };
 
     // Everything reachable from main (inclusive) — the containment oracle
-    // and the rebase chain's stop condition.
+    // and the rebase chain's stop condition. A SQL failure propagates like
+    // every sibling call; a referenced-but-missing changeset is broken
+    // state (main points into a hole) — an internal error, never a silent
+    // truncation of the containment set.
     let mut in_main = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::from([old_main]);
     while let Some(id) = queue.pop_front() {
         if !in_main.insert(id) {
             continue;
         }
-        if let Ok(Some((_, parents))) = fetch_graph(&id) {
-            queue.extend(parents);
-        }
+        let Some((_, parents)) = fetch_graph(&id)? else {
+            return Err(ApiError::log_internal(format!(
+                "main's ancestry is broken: changeset {} is referenced but missing",
+                id.to_hex()
+            )));
+        };
+        queue.extend(parents);
     }
 
     // 3. head == main → idempotent success.
@@ -464,6 +472,7 @@ fn land_in_txn(
                 trees: &trees,
                 now_ns: cmd.now_ns,
             },
+            db::ChangesetExtras::NONE,
         )
         .map_err(ApiError::log_internal)?;
 
@@ -540,8 +549,9 @@ fn settle(
     })
 }
 
-/// Idempotent replay of a settled land's recorded result.
-fn replay(result_json: Option<String>) -> Result<LandDone, ApiError> {
+/// Idempotent replay of a settled land's recorded result. Also the join
+/// fallback's replay (`routes::land::settled_replay`).
+pub(crate) fn replay(result_json: Option<String>) -> Result<LandDone, ApiError> {
     let Some(json) = result_json else {
         return Err(ApiError::internal());
     };

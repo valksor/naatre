@@ -526,15 +526,42 @@ pub struct ChangesetInsert<'a> {
 
 pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
-    changeset_insert_rows(&tx, rec)?;
+    changeset_insert_rows(&tx, rec, ChangesetExtras::NONE)?;
     tx.commit()?;
     Ok(())
 }
 
+/// Optional extras for [`changeset_insert_rows`]: the rows and audit
+/// wording only the importer writes. Plain creates and lands pass
+/// [`ChangesetExtras::NONE`].
+#[derive(Clone, Copy)]
+pub struct ChangesetExtras<'a> {
+    /// Added to the `changeset_create` audit details as `"via"` (import:
+    /// `"import"`).
+    pub audit_via: Option<&'a str>,
+    /// When present, a `git_map(repo_id, git_oid, cs_id)` row (cs_id =
+    /// `rec.id`) is written in the same transaction — the importer's oid
+    /// map, atomic with the changeset it maps to.
+    pub git_map_oid: Option<&'a [u8]>,
+}
+
+impl ChangesetExtras<'_> {
+    /// No extras: the plain create/land shape.
+    pub const NONE: Self = Self {
+        audit_via: None,
+        git_map_oid: None,
+    };
+}
+
 /// The row writes of [`changeset_insert`] without a transaction of their
 /// own: land runs inside one enclosing transaction and calls this directly
-/// (nesting a second transaction would fail).
-pub fn changeset_insert_rows(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite::Result<()> {
+/// (nesting a second transaction would fail), and the importer calls it
+/// with [`ChangesetExtras`].
+pub fn changeset_insert_rows(
+    conn: &Connection,
+    rec: ChangesetInsert<'_>,
+    extras: ChangesetExtras<'_>,
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
          generation, principal, root_tree_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -596,18 +623,27 @@ pub fn changeset_insert_rows(conn: &Connection, rec: ChangesetInsert<'_>) -> rus
             params![rec.repo_id, blob.0.as_slice()],
         )?;
     }
+    if let Some(git_oid) = extras.git_map_oid {
+        conn.execute(
+            "INSERT INTO git_map(repo_id, git_oid, cs_id) VALUES (?1, ?2, ?3)",
+            params![rec.repo_id, git_oid, rec.id.0.as_slice()],
+        )?;
+    }
     trees_write(conn, rec.repo_id, rec.trees)?;
+    let mut details = serde_json::json!({
+        "repo": rec.repo_name,
+        "changeset": rec.id.to_hex(),
+        "generation": rec.generation,
+    });
+    if let Some(via) = extras.audit_via {
+        details["via"] = serde_json::json!(via);
+    }
     audit_append(
         conn,
         rec.now_ns,
         rec.principal,
         "changeset_create",
-        &serde_json::json!({
-            "repo": rec.repo_name,
-            "changeset": rec.id.to_hex(),
-            "generation": rec.generation,
-        })
-        .to_string(),
+        &details.to_string(),
     )?;
     Ok(())
 }

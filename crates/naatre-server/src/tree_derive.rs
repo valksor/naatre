@@ -30,6 +30,12 @@ pub enum DeriveError {
     /// Canonical encoding failed — in practice only the 16 MiB cap.
     #[error(transparent)]
     Core(#[from] CoreError),
+    /// A tree id is CLAIMED (a changeset's root, or another tree's entry)
+    /// but its `trees` row is missing — store corruption, never a
+    /// legitimate empty tree. Surfaces as an internal error at the routes;
+    /// it is never silently loaded as empty.
+    #[error("corrupt tree store: no trees row for claimed id {0}")]
+    MissingTreeRow(String),
 }
 
 /// An in-memory directory node.
@@ -72,7 +78,9 @@ impl MemNode {
         MemNode::default()
     }
 
-    /// Recursively loads a stored tree into memory (`None` root → empty).
+    /// Recursively loads a stored tree into memory. `None` root = the
+    /// legitimate empty tree (a parentless changeset); a CLAIMED id whose
+    /// rows are missing is corruption — [`DeriveError::MissingTreeRow`].
     pub fn load(conn: &Connection, root_tree_id: Option<Id>) -> Result<MemNode, DeriveError> {
         let Some(root_tree_id) = root_tree_id else {
             return Ok(MemNode::empty());
@@ -270,7 +278,12 @@ fn remove_in(node: &mut MemNode, path: &(Vec<&str>, &str)) -> bool {
 }
 
 /// Recursion for [`MemNode::load`]: rows of one node, descending into dirs.
+/// A claimed id without a `trees` row (root or sub-tree) is corruption —
+/// an empty entry set would silently truncate history, so it errors.
 fn load_node(conn: &Connection, tree_id: &Id) -> Result<MemNode, DeriveError> {
+    if db::tree_repo(conn, tree_id)?.is_none() {
+        return Err(DeriveError::MissingTreeRow(tree_id.to_hex()));
+    }
     let rows = db::tree_entries_load(conn, tree_id)?;
     let mut node = MemNode::default();
     for row in rows {
@@ -482,10 +495,15 @@ mod tests {
         let loaded = MemNode::load(&conn, Some(root)).unwrap();
         assert_eq!(loaded, node);
 
-        // Unknown tree id → empty node (all its rows are missing).
-        let unknown = MemNode::load(&conn, Some(id(200))).unwrap();
-        assert_eq!(unknown, MemNode::empty());
-        // None root → empty node.
+        // A claimed tree id with no `trees` row is corruption, NOT an empty
+        // tree: load errors naming the id (missing rows must never read as
+        // a legitimate empty tree).
+        let unknown = MemNode::load(&conn, Some(id(200)));
+        assert!(
+            matches!(&unknown, Err(DeriveError::MissingTreeRow(hex)) if hex == &id(200).to_hex()),
+            "unknown tree id must be MissingTreeRow, got {unknown:?}"
+        );
+        // None root → empty node (the legitimate empty tree).
         assert_eq!(MemNode::load(&conn, None).unwrap(), MemNode::empty());
     }
 }
