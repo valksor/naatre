@@ -526,7 +526,10 @@ fn map_derive(e: crate::tree_derive::DeriveError) -> ApiError {
 }
 
 /// Fetches one changeset with its parents and file changes (any
-/// authenticated principal; ids and path metadata are repo-visible).
+/// authenticated principal; ids and path metadata are repo-visible). An
+/// actively-tombstoned changeset answers 410 `object_redacted` (M10b —
+/// attribution never serves after the mark; the row itself persists until
+/// the redaction purge).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/changesets/{id}",
@@ -538,7 +541,8 @@ fn map_derive(e: crate::tree_derive::DeriveError) -> ApiError {
         (status = 200, description = "The changeset", body = ChangesetResponse),
         (status = 400, description = "Id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 404, description = "No such repo, or no such changeset in this repo")
+        (status = 404, description = "No such repo, or no such changeset in this repo"),
+        (status = 410, description = "The changeset is redacted in this repo (`object_redacted`)")
     )
 )]
 pub async fn get_changeset(
@@ -548,8 +552,17 @@ pub async fn get_changeset(
 ) -> Result<Json<ChangesetResponse>, ApiError> {
     let id = parse_id(&id_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
+    let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
     let fetched = state
         .read(move |conn| {
+            // The redaction gate first: the tombstone wins over the row
+            // lookup (410 even after a concurrent purge removed the row).
+            if db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)? {
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!("changeset {gate_hex} is redacted in {gate_repo}"),
+                ));
+            }
             let Some(row) =
                 db::changeset_get(conn, repo_id, &id).map_err(ApiError::log_internal)?
             else {
@@ -597,7 +610,9 @@ pub async fn get_changeset(
     }))
 }
 
-/// Fetches a changeset's derived root-tree id.
+/// Fetches a changeset's derived root-tree id. Tombstoned changesets
+/// answer 410 `object_redacted` (the same gate as the changeset fetch — a
+/// redacted node's subtree pointers do not serve either).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/changesets/{id}/root",
@@ -609,7 +624,8 @@ pub async fn get_changeset(
         (status = 200, description = "The root tree id", body = ChangesetRootResponse),
         (status = 400, description = "Id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 404, description = "No such repo, or no such changeset in this repo")
+        (status = 404, description = "No such repo, or no such changeset in this repo"),
+        (status = 410, description = "The changeset is redacted in this repo (`object_redacted`)")
     )
 )]
 pub async fn get_root(
@@ -619,8 +635,15 @@ pub async fn get_root(
 ) -> Result<Json<ChangesetRootResponse>, ApiError> {
     let id = parse_id(&id_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
+    let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
     let root = state
         .read(move |conn| {
+            if db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)? {
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!("changeset {gate_hex} is redacted in {gate_repo}"),
+                ));
+            }
             db::changeset_get(conn, repo_id, &id)
                 .map_err(ApiError::log_internal)
                 .map(|row| row.and_then(|r| r.root_tree_id))

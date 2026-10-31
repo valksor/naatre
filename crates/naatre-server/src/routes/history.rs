@@ -146,10 +146,22 @@ pub async fn log(
                             "from id is not in this repo",
                         ));
                     }
+                    // Naming a tombstoned changeset directly is the same
+                    // 410 as the changeset fetch (attribution never serves
+                    // after the mark).
+                    if db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)? {
+                        return Err(ApiError::new(
+                            ApiCode::ObjectRedacted,
+                            format!("changeset {} is redacted in {repo}", id.to_hex()),
+                        ));
+                    }
                     Some(id)
                 }
                 Start::After(cursor) => {
-                    // Resume at the cursor's first parent.
+                    // Resume at the cursor's first parent (the cursor was
+                    // this page's last SERVED entry — it cannot be
+                    // tombstoned; a stale cursor at a since-redacted id
+                    // still resumes cleanly at that node's parent).
                     db::changeset_graph(conn, repo_id, &cursor)
                         .map_err(ApiError::log_internal)?
                         .ok_or_else(|| {
@@ -167,6 +179,9 @@ pub async fn log(
             let Some(from) = from else {
                 return Ok(Vec::new());
             };
+            // log_chain drops actively-tombstoned nodes as it walks (the
+            // universal gate: the page never carries one, and cursors
+            // resume past them).
             db::log_chain(conn, repo_id, &from, limit + 1).map_err(ApiError::log_internal)
         })
         .await?;
@@ -372,10 +387,17 @@ pub struct DiffEntry {
     pub path: String,
     /// `add` | `mod` | `del`.
     pub kind: String,
-    /// Hex blob id on the `a` side; null for adds.
+    /// Hex blob id on the `a` side; null for adds — and null with
+    /// `redacted: true` when the blob is tombstoned in this repo (M10b's
+    /// structured degradation: the path-level fact serves, the pointer to
+    /// redacted content does not).
     pub a_blob: Option<String>,
-    /// Hex blob id on the `b` side; null for deletes.
+    /// Hex blob id on the `b` side; null for deletes — and null with
+    /// `redacted: true` when the blob is tombstoned in this repo.
     pub b_blob: Option<String>,
+    /// True when either side's blob of this entry is tombstoned in this
+    /// repo and its pointer is withheld.
+    pub redacted: bool,
 }
 
 /// A path-level diff between two changesets' root trees, sorted by path.
@@ -385,7 +407,9 @@ pub struct DiffResponse {
 }
 
 /// Diffs two changesets' root trees (any authenticated principal): a
-/// blob/exec difference is a `mod`; the output is sorted by path.
+/// blob/exec difference is a `mod`; the output is sorted by path. Either
+/// endpoint tombstoned → 410 `object_redacted`; entries whose blob is
+/// tombstoned serve with `redacted: true` and null blob pointers.
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/diff",
@@ -397,7 +421,8 @@ pub struct DiffResponse {
         (status = 200, description = "Path-level changes between the two root trees", body = DiffResponse),
         (status = 400, description = "An id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 404, description = "No such repo, or a or b is not a changeset of this repo")
+        (status = 404, description = "No such repo, or a or b is not a changeset of this repo"),
+        (status = 410, description = "a or b is redacted in this repo (`object_redacted`)")
     )
 )]
 pub async fn diff(
@@ -411,6 +436,14 @@ pub async fn diff(
     let repo_id = repo_id_or_404(&state, &repo).await?;
     let entries = state
         .read(move |conn| {
+            for (name, cs) in [("a", &a), ("b", &b)] {
+                if db::redaction_active(conn, repo_id, cs).map_err(ApiError::log_internal)? {
+                    return Err(ApiError::new(
+                        ApiCode::ObjectRedacted,
+                        format!("changeset {name}={} is redacted in {repo}", cs.to_hex()),
+                    ));
+                }
+            }
             let root = |cs: &Id| -> Result<Id, ApiError> {
                 let row = db::changeset_get(conn, repo_id, cs)
                     .map_err(ApiError::log_internal)?
@@ -425,35 +458,56 @@ pub async fn diff(
             let b_root = root(&b)?;
             let a_files = list_files(conn, &a_root)?;
             let b_files = list_files(conn, &b_root)?;
+            // One redaction probe per distinct blob on either side (the
+            // batch probe; chunked IN-lists).
+            let probe: std::collections::HashSet<Id> = a_files
+                .values()
+                .map(|(id, _)| *id)
+                .chain(b_files.values().map(|(id, _)| *id))
+                .collect();
+            let redacted: std::collections::HashSet<Id> =
+                db::redactions_active_among(conn, repo_id, &probe.into_iter().collect::<Vec<_>>())
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .collect();
+            let hex_of = |id: &Id, redacted: bool| (!redacted).then(|| id.to_hex());
             // BTreeMap iteration gives the sorted-by-path contract.
             let mut changes = Vec::new();
             for (path, a_meta) in &a_files {
                 match b_files.get(path) {
                     Some(b_meta) => {
                         if a_meta != b_meta {
+                            let hit = redacted.contains(&a_meta.0) || redacted.contains(&b_meta.0);
                             changes.push(DiffEntry {
                                 path: path.clone(),
                                 kind: "mod".into(),
-                                a_blob: Some(a_meta.0.to_hex()),
-                                b_blob: Some(b_meta.0.to_hex()),
+                                a_blob: hex_of(&a_meta.0, hit),
+                                b_blob: hex_of(&b_meta.0, hit),
+                                redacted: hit,
                             });
                         }
                     }
-                    None => changes.push(DiffEntry {
-                        path: path.clone(),
-                        kind: "del".into(),
-                        a_blob: Some(a_meta.0.to_hex()),
-                        b_blob: None,
-                    }),
+                    None => {
+                        let hit = redacted.contains(&a_meta.0);
+                        changes.push(DiffEntry {
+                            path: path.clone(),
+                            kind: "del".into(),
+                            a_blob: hex_of(&a_meta.0, hit),
+                            b_blob: None,
+                            redacted: hit,
+                        });
+                    }
                 }
             }
             for (path, b_meta) in &b_files {
                 if !a_files.contains_key(path) {
+                    let hit = redacted.contains(&b_meta.0);
                     changes.push(DiffEntry {
                         path: path.clone(),
                         kind: "add".into(),
                         a_blob: None,
-                        b_blob: Some(b_meta.0.to_hex()),
+                        b_blob: hex_of(&b_meta.0, hit),
+                        redacted: hit,
                     });
                 }
             }
@@ -555,6 +609,15 @@ pub async fn merge_base(
                     ));
                 }
             }
+            // The redaction exclusion set: the walk traverses THROUGH a
+            // tombstoned node (the ancestors above it stay reachable) but
+            // never NAMES one as the answer — the best common ancestor is
+            // the best NON-tombstoned one, and null when none remains.
+            let excluded: std::collections::HashSet<Id> =
+                db::redactions_active_changesets(conn, repo_id)
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .collect();
             // The derived fetch: generation + parents (primary rows,
             // always sound) plus skip entries only off a DONE and UNTAINTED
             // row. A tainted row derived over a poisoned ancestor's empty
@@ -593,7 +656,7 @@ pub async fn merge_base(
                     skips,
                 }))
             };
-            Ok(merge_base_skip(&graph_fetch, &a, &b))
+            Ok(merge_base_skip(&graph_fetch, &a, &b, &excluded))
         })
         .await?;
     Ok(Json(MergeBaseResponse {
@@ -620,7 +683,10 @@ pub(crate) struct SkipEdge {
 }
 
 /// The skip-list merge-base: an alignment climb over the derived skip
-/// lists, then the plain seeded walk for the intersection.
+/// lists, then the plain seeded walk for the intersection. `excluded` names
+/// the actively-tombstoned changesets (M10b): the walk traverses through
+/// them but they are never candidates for the answer (see
+/// [`merge_base_walk_seeded`]).
 ///
 /// Phase 1 climbs the higher-generation side's FIRST-parent chain while it
 /// sits strictly above the lower side's generation. Every climbed node has
@@ -651,7 +717,12 @@ pub(crate) struct SkipEdge {
 /// first-parent step, and a hard iteration cap ends the climb outright —
 /// the seeded walk below is exact from any stopping point and is itself
 /// cycle-safe (seen-set).
-pub(crate) fn merge_base_skip<F>(fetch: &F, a: &Id, b: &Id) -> Option<Id>
+pub(crate) fn merge_base_skip<F>(
+    fetch: &F,
+    a: &Id,
+    b: &Id,
+    excluded: &std::collections::HashSet<Id>,
+) -> Option<Id>
 where
     F: Fn(&Id) -> Result<Option<SkipNode>, ApiError>,
 {
@@ -729,15 +800,24 @@ where
     };
     let mut hi_seeds = frontier;
     hi_seeds.push(hi_id);
-    merge_base_walk_seeded(&base_fetch, std::slice::from_ref(&lo_id), &hi_seeds)
+    merge_base_walk_seeded(
+        &base_fetch,
+        std::slice::from_ref(&lo_id),
+        &hi_seeds,
+        excluded,
+    )
 }
 
 /// The generation-bounded merge-base walk over explicit seeds:
 /// `set_seeds` build the ancestor set (one side), `walk_seeds` are BFS'd
 /// (the other side), and the highest-generation node of the walk found in
-/// the set wins (the best common ancestor). Deterministic: the queue order
-/// is seeds-then-parents-in-`ord`-order, and the first hit with a strictly
-/// greater generation wins ties.
+/// the set wins (the best common ancestor). `excluded` names the actively
+/// tombstoned changesets (M10b): the walk still traverses THROUGH them
+/// (their parents stay reachable, so the intersection stays exact) but an
+/// excluded node is never NAMED — it cannot win the best-selection; when
+/// every common ancestor is excluded the answer is `None`. Deterministic:
+/// the queue order is seeds-then-parents-in-`ord`-order, and the first hit
+/// with a strictly greater generation wins ties.
 ///
 /// Generations bound the walk: a parent's generation is always at least
 /// one below its child's, so both passes strictly descend and terminate.
@@ -745,6 +825,7 @@ pub(crate) fn merge_base_walk_seeded<F>(
     fetch: &F,
     set_seeds: &[Id],
     walk_seeds: &[Id],
+    excluded: &std::collections::HashSet<Id>,
 ) -> Option<Id>
 where
     F: Fn(&Id) -> Result<Option<(i64, Vec<Id>)>, ApiError>,
@@ -771,7 +852,10 @@ where
         let Ok(Some((generation, parents))) = fetch(&id) else {
             continue;
         };
-        if ancestor_set.contains(&id) && best.is_none_or(|(best_gen, _)| generation > best_gen) {
+        if ancestor_set.contains(&id)
+            && !excluded.contains(&id)
+            && best.is_none_or(|(best_gen, _)| generation > best_gen)
+        {
             best = Some((generation, id));
         }
         queue.extend(parents);
@@ -786,7 +870,12 @@ pub(crate) fn merge_base_walk<F>(fetch: &F, a: &Id, b: &Id) -> Option<Id>
 where
     F: Fn(&Id) -> Result<Option<(i64, Vec<Id>)>, ApiError>,
 {
-    merge_base_walk_seeded(fetch, std::slice::from_ref(a), std::slice::from_ref(b))
+    merge_base_walk_seeded(
+        fetch,
+        std::slice::from_ref(a),
+        std::slice::from_ref(b),
+        &std::collections::HashSet::new(),
+    )
 }
 
 // ---- blame -----------------------------------------------------------------
@@ -908,6 +997,13 @@ struct BlameWalk {
     degraded: bool,
 }
 
+/// The author string a tombstone boundary carries: the redacted changeset's
+/// real author must never serve (the plan's tombstone-meta rule), so the
+/// boundary is labeled with this placeholder instead — attribution to the
+/// node's ID (which `poisoned_cs` names, the same pointer the taint
+/// machinery names) without its author.
+const REDACTED_AUTHOR: &str = "(redacted)";
+
 /// Blames one file at one changeset (any authenticated principal) by
 /// walking the first-parent chain over the derived blame diff-state:
 /// per node one `derive_state` lookup and one `blame_state` point query;
@@ -920,7 +1016,11 @@ struct BlameWalk {
 /// answer). Quarantine degrades, never lies: the walk stops at the
 /// quarantined node and every unresolvable line is attributed to it (its
 /// blob provably contains those lines), with `degraded: true` and the node
-/// in `poisoned_cs`.
+/// in `poisoned_cs`. A tombstoned chain node (M10b) is a boundary of the
+/// same shape — the mark poisons its queue rows, and the per-node redaction
+/// probe below is the belt-and-braces for a node whose derive rows were
+/// (re)created after the mark — with the author withheld
+/// ([`REDACTED_AUTHOR`]): its lines carry its id and no author.
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/blame",
@@ -933,6 +1033,7 @@ struct BlameWalk {
         (status = 400, description = "`at` is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo/changeset, or the path is absent at `at`"),
+        (status = 410, description = "`at` — or a blob on the walked chain — is redacted in this repo (`object_redacted`); or the walk crossed a tombstoned chain node (degraded 200 with the node named in poisoned_cs and its author withheld)"),
         (status = 503, description = "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded a read cap (chain length / blob bytes / line count / response bytes — `blame_too_large`, not retryable)")
     )
 )]
@@ -947,6 +1048,14 @@ pub async fn blame(
     let path = q.path.clone();
     let walk = state
         .read(move |conn| {
+            // Naming a tombstoned changeset directly is the same 410 as the
+            // changeset fetch.
+            if db::redaction_active(conn, repo_id, &at).map_err(ApiError::log_internal)? {
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!("changeset {} is redacted in {repo}", at.to_hex()),
+                ));
+            }
             let row = db::changeset_get(conn, repo_id, &at)
                 .map_err(ApiError::log_internal)?
                 .ok_or_else(|| ApiError::new(ApiCode::NotFound, "changeset is not in this repo"))?;
@@ -991,6 +1100,30 @@ pub async fn blame(
                 if chain_nodes > BLAME_MAX_CHAIN_NODES {
                     return Err(blame_too_large());
                 }
+                // The M10b tombstone boundary: the mark poisons the node's
+                // queue rows (the taint machinery carries the hole to
+                // re-derived descendants), and this probe is the
+                // belt-and-braces for a node whose derive rows were created
+                // (or re-derived) after the mark. A tombstoned node is a
+                // boundary of the poison shape with its author WITHHELD —
+                // its lines carry its id (named in poisoned_cs, the pointer
+                // the taint machinery uses) and never its author.
+                let redacted_here = db::redaction_active(conn, repo_id, &current)
+                    .map_err(ApiError::log_internal)?;
+                if redacted_here {
+                    let blob = match nodes.last() {
+                        Some(n) => n
+                            .blob_parent
+                            .expect("walk only advances past a parent-blob node"),
+                        None => final_blob,
+                    };
+                    boundary = Some(BlameBoundary {
+                        cs: current,
+                        author: REDACTED_AUTHOR.to_string(),
+                        blob,
+                    });
+                    break;
+                }
                 let Some(row) = db::derive_get(conn, kind_id, repo_id, &current)
                     .map_err(ApiError::log_internal)?
                 else {
@@ -1016,6 +1149,10 @@ pub async fn blame(
                         };
                         boundary = Some(BlameBoundary {
                             cs: current,
+                            // A redacted node never reaches this arm (the
+                            // tombstone probe above breaks first, author
+                            // withheld), so the quarantined node's own
+                            // author is servable here.
                             author: cs_row.author,
                             blob,
                         });
@@ -1103,7 +1240,8 @@ pub async fn blame(
     }
     let poisoned_cs: Vec<String> = poisoned_ids.iter().map(Id::to_hex).collect();
 
-    // Membership-gate every blob the assembly will stream.
+    // Membership-gate + redaction-gate every blob the assembly will stream
+    // (a tombstoned blob's bytes never serve — not even as blame layers).
     let mut blob_ids: Vec<Id> = vec![walk.final_blob];
     blob_ids.extend(walk.nodes.iter().map(|n| n.blob_new));
     if let Some(b) = &walk.boundary {
@@ -1111,19 +1249,33 @@ pub async fn blame(
     }
     blob_ids.dedup();
     let ids_for_check = blob_ids.clone();
-    let missing = state
+    let (missing, redacted_blobs) = state
         .read(move |conn| {
+            let redacted: std::collections::HashSet<Id> =
+                db::redactions_active_among(conn, repo_id, &ids_for_check)
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .collect();
             let mut out = Vec::new();
             for id in &ids_for_check {
+                if redacted.contains(id) {
+                    continue; // answered below as 410
+                }
                 match db::repo_blob_check(conn, repo_id, id) {
                     Ok(false) => out.push(*id),
                     Ok(true) => {}
                     Err(e) => return Err(ApiError::log_internal(e)),
                 }
             }
-            Ok(out)
+            Ok((out, redacted))
         })
         .await?;
+    if let Some(id) = redacted_blobs.iter().next() {
+        return Err(ApiError::new(
+            ApiCode::ObjectRedacted,
+            format!("blob {} is redacted in this repo", id.to_hex()),
+        ));
+    }
     if let Some(id) = missing.first() {
         return Err(ApiError::new(
             ApiCode::ObjectNotFound,
@@ -1256,7 +1408,9 @@ pub struct FileResponse {
 
 /// Looks one path up in a changeset's root tree (any authenticated
 /// principal). Absent path, or a path that crosses a file, or a directory
-/// path → 404 `not_found`.
+/// path → 404 `not_found`. A tombstoned `at` — or a tombstoned blob at the
+/// resolved path — answers 410 `object_redacted` (M10b's structured
+/// degradation: the pointer to redacted content does not serve).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/file",
@@ -1268,7 +1422,8 @@ pub struct FileResponse {
         (status = 200, description = "The file's blob pointer", body = FileResponse),
         (status = 400, description = "`at` is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 404, description = "No such repo/changeset, path absent, or path crosses a file")
+        (status = 404, description = "No such repo/changeset, path absent, or path crosses a file"),
+        (status = 410, description = "`at`, or the blob at the path, is redacted in this repo (`object_redacted`)")
     )
 )]
 pub async fn file(
@@ -1283,6 +1438,12 @@ pub async fn file(
     let found = state
         .read(move |conn| {
             let path = q.path;
+            if db::redaction_active(conn, repo_id, &at).map_err(ApiError::log_internal)? {
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!("changeset {} is redacted in {repo}", at.to_hex()),
+                ));
+            }
             let Some(row) =
                 db::changeset_get(conn, repo_id, &at).map_err(ApiError::log_internal)?
             else {
@@ -1312,6 +1473,16 @@ pub async fn file(
                 let last = i == components.len() - 1;
                 match (entry.kind, last) {
                     (0, true) => {
+                        // The resolved blob must not be tombstoned in this
+                        // repo (the pointer to redacted content degrades).
+                        if db::redaction_active(conn, repo_id, &object)
+                            .map_err(ApiError::log_internal)?
+                        {
+                            return Err(ApiError::new(
+                                ApiCode::ObjectRedacted,
+                                format!("blob {} is redacted in this repo", object.to_hex()),
+                            ));
+                        }
                         return Ok(Some((object, entry.size as u64, entry.exec)));
                     }
                     // Descend through intermediate directories; a file
@@ -1524,7 +1695,12 @@ mod tests {
                     id.and_then(|id| fetch(&id).unwrap().map(|(generation, _)| generation))
                 };
                 let plain = merge_base_walk(&fetch, &cid(a), &cid(b));
-                let skipped = merge_base_skip(&skip_fetch, &cid(a), &cid(b));
+                let skipped = merge_base_skip(
+                    &skip_fetch,
+                    &cid(a),
+                    &cid(b),
+                    &std::collections::HashSet::new(),
+                );
                 let brute = brute_force_gen(&fetch, &cid(a), &cid(b));
                 assert_eq!(gen_of(plain), brute, "plain vs brute for ({a},{b})");
                 assert_eq!(
@@ -1548,17 +1724,32 @@ mod tests {
         edges.push((201u8, 1, vec![0u8]));
         let skip_fetch = skip_graph(edges);
         assert_eq!(
-            merge_base_skip(&skip_fetch, &cid(200), &cid(201)),
+            merge_base_skip(
+                &skip_fetch,
+                &cid(200),
+                &cid(201),
+                &std::collections::HashSet::new()
+            ),
             Some(cid(0))
         );
         assert_eq!(
-            merge_base_skip(&skip_fetch, &cid(201), &cid(200)),
+            merge_base_skip(
+                &skip_fetch,
+                &cid(201),
+                &cid(200),
+                &std::collections::HashSet::new()
+            ),
             Some(cid(0)),
             "argument order must not matter"
         );
         // ancestor case: base is the lower endpoint itself
         assert_eq!(
-            merge_base_skip(&skip_fetch, &cid(200), &cid(5)),
+            merge_base_skip(
+                &skip_fetch,
+                &cid(200),
+                &cid(5),
+                &std::collections::HashSet::new()
+            ),
             Some(cid(5))
         );
     }
@@ -1579,7 +1770,12 @@ mod tests {
         ];
         let skip_fetch = skip_graph(edges.clone());
         assert_eq!(
-            merge_base_skip(&skip_fetch, &cid(6), &cid(5)),
+            merge_base_skip(
+                &skip_fetch,
+                &cid(6),
+                &cid(5),
+                &std::collections::HashSet::new()
+            ),
             Some(cid(5)),
             "the base sits on m's second parent — the frontier must carry it"
         );
@@ -1626,8 +1822,24 @@ mod tests {
             }
             Ok(Some(node))
         };
-        assert_eq!(merge_base_skip(&corrupt, &cid(6), &cid(0)), Some(cid(0)));
-        assert_eq!(merge_base_skip(&corrupt, &cid(0), &cid(6)), Some(cid(0)));
+        assert_eq!(
+            merge_base_skip(
+                &corrupt,
+                &cid(6),
+                &cid(0),
+                &std::collections::HashSet::new()
+            ),
+            Some(cid(0))
+        );
+        assert_eq!(
+            merge_base_skip(
+                &corrupt,
+                &cid(0),
+                &cid(6),
+                &std::collections::HashSet::new()
+            ),
+            Some(cid(0))
+        );
     }
 
     /// A corrupt CYCLIC first-parent edge (a node its own parent, equal
@@ -1652,7 +1864,15 @@ mod tests {
                 skips: Vec::new(),
             }))
         };
-        assert_eq!(merge_base_skip(&as_skip, &cid(1), &cid(2)), None);
+        assert_eq!(
+            merge_base_skip(
+                &as_skip,
+                &cid(1),
+                &cid(2),
+                &std::collections::HashSet::new()
+            ),
+            None
+        );
     }
 
     /// A linear chain `0 → 1 → … → n`, generation = tag.

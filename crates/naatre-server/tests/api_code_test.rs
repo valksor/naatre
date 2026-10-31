@@ -23,6 +23,7 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
     ),
     (ApiCode::DirtyWorkingCopy, "dirty_working_copy", 409),
     (ApiCode::GitHistoryDiverged, "git_history_diverged", 409),
+    (ApiCode::RedactedBase, "redacted_base", 409),
     (
         ApiCode::ConflictMarkersPresent,
         "conflict_markers_present",
@@ -70,6 +71,7 @@ fn all_variants() -> Vec<ApiCode> {
         IdempotencyKeySettled,
         DirtyWorkingCopy,
         GitHistoryDiverged,
+        RedactedBase,
         ConflictMarkersPresent,
         Malformed,
         Validation,
@@ -107,6 +109,7 @@ fn all_variants() -> Vec<ApiCode> {
             | IdempotencyKeySettled
             | DirtyWorkingCopy
             | GitHistoryDiverged
+            | RedactedBase
             | ConflictMarkersPresent
             | Malformed
             | Validation

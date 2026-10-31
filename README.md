@@ -241,10 +241,29 @@ naatre gc --data ./naatre-data [--json]     # one full pass, to convergence
 naatre fsck --data ./naatre-data [--json]   # consistency check; exit 0 clean, 1 findings
 ```
 
+**Redaction** (M10b) rides the same pass: `naatre redact blob|changeset
+<id> --reason R --repo <name> --data ./naatre-data` tombstones one
+object in one repo — every serving path then refuses it
+immediately (by-id fetches answer 410 `object_redacted`, `/log` and
+path-history drop the node, diff/file degrade structurally, blame
+degrades at the tombstone with the author withheld, a snapshot holding
+the blob becomes unrestorable inside its TTL, and a land whose base
+chain crosses it answers 409 `redacted_base`) — while the GC's
+redaction phase reclaims the bytes/rows later, and only when NO repo
+still references the content (two repos sharing a subtree redact
+independently; the other repo keeps serving). Remote administration
+goes through `POST/GET /v1/repos/{r}/redactions` (admin, audited):
+the tombstone ROW carries path + date only — never an author, no
+reason, no actor (free text can carry personal data; the actor and the
+reason live ONLY in the audited `redact` action, which is the
+accountability record).
+
 `fsck` is read-only: dangling-reference anti-joins (a nonzero count
 anywhere is dirt), reachability counts (total vs marked), CAS presence
 vs the DB inventory (missing bytes for a DB-known blob dirty the store),
-the pending-candidate ledger, and the cumulative GC audit totals. On the
+the pending-candidate ledger, the cumulative GC audit totals, and the
+redaction counts (tombstoned-but-unpurged is normal; a tombstone stamped
+purged whose object still exists is DRIFT and dirties the store). On the
 S3 backend it attaches the external-drift note: bucket-side lifecycle
 rules or versioning can delete or resurrect objects outside naatre's
 control — that is drift to investigate, never silently repaired.
@@ -415,6 +434,7 @@ a generic message + `request_id` only.
 | `idempotency_key_settled` | 409 | land key already settled with a different payload |
 | `dirty_working_copy` | 409 | sync/restore refused: local edits or colliding untracked files |
 | `git_history_diverged` | 409 | import graft refused: histories diverged |
+| `redacted_base` | 409 | the land's base chain crosses a redacted changeset (details name it) |
 | `conflict_markers_present` | 409 | commit content contains conflict markers (M12) |
 | `malformed` | 400 | structurally malformed payload |
 | `validation` | 422 | semantic validation failure |
@@ -481,38 +501,49 @@ boundary.
 
 Destroying the data dir erases everything in it. Backup copies and the TLS
 proxy's own access logs are **not** covered — the operator owns those.
-History is append-only until M10's redaction. Personal-data carriers,
-explicitly:
+History is append-only; redaction (M10) is the sanctioned exception.
+Personal-data carriers, explicitly:
 
 - **`changesets.author`** — the client-supplied `Name <email>` string, and
-  the same names/emails as imported from git.
-- **`changesets.canonical`** — the immutable canonical bytes embed the same
-  author string, so out-of-band surgery that rewrites only the columns
-  above leaves the author in the blob; the surgery must rewrite `canonical`
-  alongside the `author` column (M10's tombstone + purge handles the
-  canonical bytes instead).
+  the same names/emails as imported from git. Redaction is the erasure
+  tool: a tombstoned changeset stops serving (author, message, attribution
+  — everywhere) at mark time, and the GC's redaction phase later purges
+  its rows — the canonical bytes that embed the author included — once
+  nothing references the node anymore. Whole-changeset granularity: a
+  changeset is redacted or it is not; there is no author-only rewrite.
+- **Blob content** — redactable the same way: the tombstone gates every
+  fetch (history, batch, snapshot restore, blame layers) immediately, and
+  the purge deletes the CAS bytes once no repo references remain.
 - **Principal-attributed columns** — `changesets.principal`,
   `refs.last_principal`, `lands.principal` + `lands.result_json`,
   `snapshots.principal` (TTL-bounded by the snapshot TTL, capped at
   366 days).
-- **The `principals` table** and **revoked-but-retained `tokens` rows**.
+- **The `principals` table** and **`tokens` rows** — deletable:
+  `naatre principal delete <name>` (admin) deletes the principal and all
+  its token rows and pseudonymizes the audit actor to `deleted:<name>`.
 - **`audit_log`** — `principal` plus the actor fields in `details_json`.
   The log is append-only and retained **indefinitely on a
-  security-accountability basis**; principal deletion (M10) pseudonymizes
-  the actor rather than deleting rows.
-- **Snapshot blob content** expires at the TTL (rows go with it).
+  security-accountability basis**; principal deletion pseudonymizes the
+  actor rather than deleting rows, and `details_json` payloads are history
+  and stay.
+- **Snapshot blob content** expires at the TTL (rows go with it) — and a
+  redacted blob id makes every snapshot holding it unrestorable
+  immediately, ahead of the TTL.
+
+**The honest limit**: history attribution survives principal deletion —
+`changesets.principal`, `refs.last_principal`, and the lands rows keep the
+name unless the changesets are themselves tombstoned. Whole-changeset
+redaction is the erasure primitive; there is no name-only rewrite of
+history, because the canonical bytes are content-addressed (rewriting a
+name rewrites every descendant id — that is a history migration, not an
+erasure, and naatre does not have one).
 
 **Client-side copies sit outside every server-side purge**: the mount
 hydrate cache (`~/.cache/naatre/mounts/…` — persistent, no TTL, only
 LRU-capped) and every clone's working copy hold plaintext blob content
-that is user/operator-owned. Server-side erasure — physical purge, GC,
+that is user/operator-owned. Server-side erasure — redaction purge, GC,
 data-dir destruction — never reaches those; erasing them is the client
 machine's own story.
-
-Until M10 (GC + redaction + principal deletion), per-subject erasure on a
-shared instance is out-of-band database surgery — same framing as backward
-ref moves. On a single-person instance, deleting the data dir is complete
-erasure.
 
 **External metadata changes the erasure surface**: with
 `meta = "postgres"` the rows above (and the append-only `audit_log`) live

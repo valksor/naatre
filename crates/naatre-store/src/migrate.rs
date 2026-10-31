@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 9;
+pub const MAX_SUPPORTED: i64 = 10;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -181,6 +181,35 @@ CREATE INDEX idx_git_map_cs ON git_map(cs_id);
 CREATE INDEX idx_cs_parents_parent_id ON changeset_parents(parent);
 "#,
     ),
+    // M10b: the redaction tombstones. A row marks one object (a CAS blob or
+    // a changeset) redacted IN ONE REPO — repo-scoped by the plan's pin: two
+    // repos sharing a subtree redact independently, and the other repo's
+    // reads keep working (the gate is the (repo_id, object_id) PRIMARY KEY
+    // probe every serving path takes). The tombstone metadata records PATH +
+    // DATE ONLY, never author — and no reason, no actor: free text can
+    // carry personal data and an actor column would duplicate the
+    // accountability record, so both live ONLY in the audited `redact`
+    // action in `audit_log`. `path` is the repo path the object sits at
+    // (its first, lexicographically — the deterministic one), NULL when the
+    // object carries none; `marked_ns` is the tombstone date. `purged_ns`
+    // is stamped when the GC's redaction phase reclaims the bytes/rows:
+    // until then the tombstoned-but-unpurged state is normal (attribution
+    // is gated at every serving path; the purge only reclaims space), and
+    // after it the row stays as the tombstone record.
+    (
+        10,
+        r#"
+CREATE TABLE redactions(
+    repo_id INTEGER NOT NULL,
+    object_id BLOB NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('blob','changeset')),
+    path TEXT,
+    marked_ns INTEGER NOT NULL,
+    purged_ns INTEGER,
+    PRIMARY KEY(repo_id, object_id)
+);
+"#,
+    ),
 ];
 
 /// The Postgres migration set: one file per SQLite migration, 1–7, in
@@ -197,6 +226,7 @@ const PG_MIGRATIONS: &[&str] = &[
     include_str!("../migrations/postgres/007_generation_index.sql"),
     include_str!("../migrations/postgres/008_gc_pending.sql"),
     include_str!("../migrations/postgres/009_gc_probe_indexes.sql"),
+    include_str!("../migrations/postgres/010_redactions.sql"),
 ];
 
 const _: () = assert!(

@@ -406,8 +406,11 @@ pub async fn get_metadata(
 }
 
 /// Fetches one snapshot blob's raw bytes, hash-verified from
-/// `ephemeral/<snap-id>/` (owned by the principal; expiry re-checked FIRST —
-/// an expired snapshot serves nothing, not even its bytes).
+/// `ephemeral/<snap-id>/` (owned by the principal; the M10b redaction gate
+/// FIRST — a tombstoned blob id makes every snapshot holding it
+/// unrestorable immediately, redaction overriding the TTL root — then the
+/// expiry re-check: an expired snapshot serves nothing, not even its
+/// bytes).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/snapshots/{id}/objects/{oid}",
@@ -421,7 +424,7 @@ pub async fn get_metadata(
         (status = 400, description = "An id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo; or the snapshot does not exist, belongs to another principal, or lacks the blob"),
-        (status = 410, description = "The snapshot is past its TTL (`snapshot_expired`)")
+        (status = 410, description = "The blob is redacted in this repo (`object_redacted`), or the snapshot is past its TTL (`snapshot_expired`)")
     )
 )]
 pub async fn get_blob(
@@ -432,6 +435,25 @@ pub async fn get_blob(
     let snap_id = parse_id(&id_hex)?;
     let oid = parse_id(&oid_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
+    // The redaction gate BEFORE the TTL check: a tombstoned blob id is
+    // unrestorable now, regardless of the snapshot's remaining TTL
+    // ("redaction overrides the TTL root"). Content-addressing makes the
+    // ephemeral copy byte-identical to the gated history blob — same id,
+    // same content, same tombstone.
+    {
+        let oid_gate = oid;
+        let redacted = state
+            .read(move |conn| {
+                db::redaction_active(conn, repo_id, &oid_gate).map_err(ApiError::log_internal)
+            })
+            .await?;
+        if redacted {
+            return Err(ApiError::new(
+                ApiCode::ObjectRedacted,
+                format!("blob {} is redacted in {repo}", oid.to_hex()),
+            ));
+        }
+    }
     load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
 
     let ephemeral = Arc::clone(&state.ephemeral);

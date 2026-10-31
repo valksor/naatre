@@ -2389,6 +2389,40 @@ fn binary_admin_http_family() {
     );
 }
 
+/// `naatre principal delete <name>` (admin, M10b): deletes an existing
+/// principal (exit 0, tokens-reported), then 404s the second call. Pins
+/// the idempotent-DELETE retry wrapper at the binary level.
+#[test]
+fn binary_principal_delete_family() {
+    let server = start_server();
+    create_repo(&server, "pd");
+    let dir = server._dir.path().join("anywhere");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // A principal to delete (minted through the same admin family).
+    let out = run_binary(
+        &server,
+        &dir,
+        &["token", "create", "pdel", "--role", "reader"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+
+    let out = run_binary(&server, &dir, &["principal", "delete", "pdel"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains("deleted pdel"), "{stdout:?}");
+    assert!(stdout.contains("1 token(s)"), "{stdout:?}");
+
+    // The second delete: 404 → exit 1, the error names the principal.
+    let out = run_binary(&server, &dir, &["principal", "delete", "pdel"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr_of(&out));
+    assert!(
+        stderr_of(&out).contains("no principal named"),
+        "{:?}",
+        stderr_of(&out)
+    );
+}
+
 /// Re-landing a settled key with a different payload: exit 2 (conflict
 /// class) and the details — settled head + land-status pointer — printed.
 #[test]

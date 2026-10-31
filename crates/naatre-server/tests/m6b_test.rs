@@ -2831,6 +2831,7 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
              DROP INDEX IF EXISTS idx_git_map_cs;
              DROP INDEX IF EXISTS idx_cs_parents_parent_id;
              DROP TABLE IF EXISTS gc_pending;
+             DROP TABLE IF EXISTS redactions;
              DROP INDEX IF EXISTS idx_file_changes_blob;
              ALTER TABLE objects DROP COLUMN touched_ns;
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
@@ -3014,6 +3015,7 @@ async fn upgrade_ab_ctx(dir: &Path) -> (Ctx, String, String, String) {
              DROP INDEX IF EXISTS idx_git_map_cs;
              DROP INDEX IF EXISTS idx_cs_parents_parent_id;
              DROP TABLE IF EXISTS gc_pending;
+             DROP TABLE IF EXISTS redactions;
              DROP INDEX IF EXISTS idx_file_changes_blob;
              ALTER TABLE objects DROP COLUMN touched_ns;
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",

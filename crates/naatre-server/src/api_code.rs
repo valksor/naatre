@@ -35,6 +35,10 @@ pub enum ApiCode {
     DirtyWorkingCopy,
     /// 409 — git import graft refused: histories diverged.
     GitHistoryDiverged,
+    /// 409 — the land's 3-way base (or the head being landed) is a
+    /// redacted changeset: a structured conflict, never a silent hole in
+    /// the rebase.
+    RedactedBase,
     /// 422 — commit content contains conflict markers.
     ConflictMarkersPresent,
     /// 400 — request payload is structurally malformed.
@@ -94,7 +98,7 @@ impl ApiCode {
     /// cross-checks this list against its compile-time-exhaustive variant
     /// list (a `match` with no wildcard arm) and the wire-string table, so
     /// the published enum cannot silently drift from the registry.
-    pub const ALL: [ApiCode; 33] = [
+    pub const ALL: [ApiCode; 34] = [
         ApiCode::TokenInvalid,
         ApiCode::TokenExpired,
         ApiCode::TokenRevoked,
@@ -107,6 +111,7 @@ impl ApiCode {
         ApiCode::IdempotencyKeySettled,
         ApiCode::DirtyWorkingCopy,
         ApiCode::GitHistoryDiverged,
+        ApiCode::RedactedBase,
         ApiCode::ConflictMarkersPresent,
         ApiCode::Malformed,
         ApiCode::Validation,
@@ -145,6 +150,7 @@ impl ApiCode {
             Self::IdempotencyKeySettled => "idempotency_key_settled",
             Self::DirtyWorkingCopy => "dirty_working_copy",
             Self::GitHistoryDiverged => "git_history_diverged",
+            Self::RedactedBase => "redacted_base",
             Self::ConflictMarkersPresent => "conflict_markers_present",
             Self::Malformed => "malformed",
             Self::Validation => "validation",
@@ -182,6 +188,7 @@ impl ApiCode {
             | Self::IdempotencyKeySettled
             | Self::DirtyWorkingCopy
             | Self::GitHistoryDiverged
+            | Self::RedactedBase
             | Self::ConflictMarkersPresent => StatusCode::CONFLICT,
             Self::Malformed => StatusCode::BAD_REQUEST,
             Self::Validation

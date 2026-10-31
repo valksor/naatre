@@ -1319,8 +1319,8 @@ async fn diff_between_roots() {
     assert_eq!(
         resp.body["changes"],
         json!([
-            { "path": "a/b.txt", "kind": "mod", "a_blob": b1, "b_blob": b2 },
-            { "path": "a/c/d.txt", "kind": "del", "a_blob": bd, "b_blob": null },
+            { "path": "a/b.txt", "kind": "mod", "a_blob": b1, "b_blob": b2, "redacted": false },
+            { "path": "a/c/d.txt", "kind": "del", "a_blob": bd, "b_blob": null, "redacted": false },
         ])
     );
 

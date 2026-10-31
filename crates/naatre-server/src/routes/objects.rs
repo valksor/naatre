@@ -101,10 +101,14 @@ pub struct BatchGetRequest {
 /// `repo_blobs(repo, id)` row lands in `missing` even when the CAS holds
 /// the file (cross-repo isolation). A missing or unreadable file after a
 /// membership hit is also reported in `missing` (logged server-side).
+/// Actively-tombstoned ids land in `redacted` (M10b): the tombstone wins
+/// over membership, and the bytes never serve.
 #[derive(Serialize, ToSchema)]
 pub struct BatchGetResponse {
     pub objects: Vec<StoredObject>,
     pub missing: Vec<String>,
+    /// Ids redacted in this repo (the tombstone overrides membership).
+    pub redacted: Vec<String>,
 }
 
 /// The object id echo of a successful PUT.
@@ -372,7 +376,9 @@ pub async fn record_batch(state: &AppState, rows: Vec<(Id, i64, i64)>) -> Result
 
 /// Batch fetch (any authenticated principal), membership-enforced: only ids
 /// with a `repo_blobs` row for this repo are served; the rest land in
-/// `missing`. More than 256 ids → 422; a non-hex id → 400.
+/// `missing`. Actively-tombstoned ids (M10b) are gated out of `objects` and
+/// reported in `redacted` — never served, never silently `missing`. More
+/// than 256 ids → 422; a non-hex id → 400.
 #[utoipa::path(
     post,
     path = "/v1/repos/{r}/objects/get",
@@ -395,23 +401,29 @@ pub async fn get_batch(
     let ids = parse_id_batch(&body.0.ids)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
 
-    // Membership first: this is the cross-repo isolation gate.
-    let ids_for_membership = ids.clone();
-    let member = state
+    // The redaction gate first (the tombstone wins over membership), then
+    // membership: this is the cross-repo isolation gate.
+    let ids_for_gates = ids.clone();
+    let (redacted_ids, member) = state
         .read(move |conn| {
-            ids_for_membership
+            let redacted = db::redactions_active_among(conn, repo_id, &ids_for_gates)
+                .map_err(ApiError::log_internal)?;
+            let member = ids_for_gates
                 .iter()
                 .map(|id| db::repo_blob_check(conn, repo_id, id).map_err(ApiError::log_internal))
-                .collect::<Result<Vec<bool>, ApiError>>()
+                .collect::<Result<Vec<bool>, ApiError>>()?;
+            Ok((redacted, member))
         })
         .await?;
+    let redacted_set: std::collections::HashSet<Id> = redacted_ids.iter().copied().collect();
 
-    // Fetch the members' bytes off the runtime.
+    // Fetch the members' bytes off the runtime (redacted ids excluded even
+    // when a membership row exists).
     let cas = Arc::clone(&state.cas);
     let member_ids: Vec<Id> = ids
         .iter()
         .zip(&member)
-        .filter_map(|(id, m)| m.then_some(*id))
+        .filter_map(|(id, m)| (*m && !redacted_set.contains(id)).then_some(*id))
         .collect();
     let fetched = state
         .blocking(move || {
@@ -435,9 +447,14 @@ pub async fn get_batch(
     // Reassemble in request order.
     let mut objects = Vec::new();
     let mut missing = Vec::new();
+    let mut redacted: Vec<String> = redacted_ids.iter().map(Id::to_hex).collect();
     let mut fetched = fetched.into_iter();
     for (id, is_member) in ids.iter().zip(&member) {
-        if !*is_member {
+        if redacted_set.contains(id) {
+            if !redacted.contains(&id.to_hex()) {
+                redacted.push(id.to_hex());
+            }
+        } else if !*is_member {
             missing.push(id.to_hex());
         } else if let Some((hex, Some(bytes))) = fetched.next() {
             objects.push(StoredObject {
@@ -448,10 +465,16 @@ pub async fn get_batch(
             missing.push(id.to_hex());
         }
     }
-    Ok(Json(BatchGetResponse { objects, missing }))
+    Ok(Json(BatchGetResponse {
+        objects,
+        missing,
+        redacted,
+    }))
 }
 
-/// Raw fetch (any authenticated principal), membership-enforced: no
+/// Raw fetch (any authenticated principal), redaction-gated then
+/// membership-enforced: an actively-tombstoned id answers 410
+/// `object_redacted` (M10b — the tombstone wins over everything); no
 /// `repo_blobs` row for this repo → 404 `object_not_found` (a cross-repo
 /// id is indistinguishable from a nonexistent one). Serves the raw
 /// decompressed bytes as `application/octet-stream` with
@@ -466,7 +489,8 @@ pub async fn get_batch(
     responses(
         (status = 200, description = "Raw object bytes"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
-        (status = 404, description = "No such repo; or the object is not a member of this repo; or the file is missing from the CAS")
+        (status = 404, description = "No such repo; or the object is not a member of this repo; or the file is missing from the CAS"),
+        (status = 410, description = "The object is redacted in this repo (`object_redacted`)")
     )
 )]
 pub async fn get_raw(
@@ -477,9 +501,22 @@ pub async fn get_raw(
     let id = parse_single_id(&id_hex)?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
 
-    let is_member = state
-        .read(move |conn| db::repo_blob_check(conn, repo_id, &id).map_err(ApiError::log_internal))
+    // The redaction gate first (the tombstone wins over membership), then
+    // the cross-repo isolation gate.
+    let (is_redacted, is_member) = state
+        .read(move |conn| {
+            Ok::<_, ApiError>((
+                db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)?,
+                db::repo_blob_check(conn, repo_id, &id).map_err(ApiError::log_internal)?,
+            ))
+        })
         .await?;
+    if is_redacted {
+        return Err(ApiError::new(
+            ApiCode::ObjectRedacted,
+            format!("object {id_hex} is redacted in {repo:?}"),
+        ));
+    }
     if !is_member {
         return Err(ApiError::new(
             ApiCode::ObjectNotFound,

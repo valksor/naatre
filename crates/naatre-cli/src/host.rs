@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use naatre_server::api_error::ApiError;
 use naatre_server::auth::mint_token;
 use naatre_server::db;
 use naatre_server::import::{ImportOptions, Report};
@@ -353,6 +354,122 @@ pub fn gc(data: &Path, json: bool) -> i32 {
     }
 }
 
+/// `naatre redact blob|changeset <id> --reason R --repo <name>
+/// --data <dir>`: mark one object tombstoned in one repo (M10b, host-local
+/// admin verb under the data dir flock). The mark, the tombstoned
+/// changeset's derived-row invalidation, and the `redact` audit row (actor
+/// `admin`, reason in its details — the tombstone ROW carries path + date
+/// only) commit in one transaction; the GC's redaction phase reclaims the
+/// bytes/rows later. Remote administration goes through
+/// `POST /v1/repos/{r}/redactions` (the same statement layer). Exit 0
+/// marked, 1 error.
+pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -> i32 {
+    let kind = match kind {
+        "blob" => "blob".to_string(),
+        "changeset" => "changeset".to_string(),
+        other => {
+            return fail(format!("kind must be `blob` or `changeset`, got {other:?}"));
+        }
+    };
+    let Some(id) = naatre_core::ids::Id::from_hex(id_hex) else {
+        return fail("id must be 64 lowercase hex characters");
+    };
+    if reason.trim().is_empty() {
+        return fail("reason must not be empty");
+    }
+    // The async closures are 'static: own the verb's strings.
+    let (repo, reason) = (repo.to_string(), reason.to_string());
+    match block_on_state(data, |state| async move {
+        let repo_id = state
+            .read({
+                let repo = repo.clone();
+                move |conn| {
+                    db::repo_id_by_name(conn, &repo)
+                        .map_err(ApiError::log_internal)?
+                        .ok_or_else(|| {
+                            ApiError::new(
+                                naatre_server::api_code::ApiCode::RepoNotFound,
+                                format!("no repo named {repo:?} on this server"),
+                            )
+                        })
+                }
+            })
+            .await?;
+        // The target must be a real object (same contract as the route: a
+        // changeset of THIS repo, or a blob whose content the server holds
+        // — the gate stays repo-scoped either way).
+        let is_blob = kind == "blob";
+        let exists = state
+            .read(move |conn| {
+                if is_blob {
+                    db::objects_missing(conn, &[id])
+                        .map(|missing| missing.is_empty())
+                        .map_err(ApiError::log_internal)
+                } else {
+                    db::changeset_get(conn, repo_id, &id)
+                        .map(|row| row.is_some())
+                        .map_err(ApiError::log_internal)
+                }
+            })
+            .await?;
+        if !exists {
+            return Err(ApiError::new(
+                naatre_server::api_code::ApiCode::ObjectNotFound,
+                format!("no {kind} {} in this repo", id.to_hex()),
+            ));
+        }
+        let now_ns = state.now_ns() as i64;
+        let marked = state
+            .write(move |store| {
+                let conn = store.conn();
+                let tx = conn.transaction().map_err(ApiError::log_internal)?;
+                let (row, inserted) = db::redaction_mark(&tx, repo_id, &id, &kind, now_ns)
+                    .map_err(ApiError::log_internal)?;
+                if inserted {
+                    db::redaction_invalidate_derived(&tx, repo_id, &id)
+                        .map_err(ApiError::log_internal)?;
+                    db::audit_append(
+                        &tx,
+                        now_ns,
+                        "admin",
+                        "redact",
+                        &serde_json::json!({
+                            "repo": repo,
+                            "id": id.to_hex(),
+                            "kind": kind,
+                            "reason": reason,
+                        })
+                        .to_string(),
+                    )
+                    .map_err(ApiError::log_internal)?;
+                }
+                tx.commit().map_err(ApiError::log_internal)?;
+                Ok((row, inserted))
+            })
+            .await?;
+        Ok::<_, ApiError>(marked)
+    }) {
+        Ok(Ok((row, inserted))) => {
+            if inserted {
+                print!("redacted {} {}", row.kind, row.object_id.to_hex());
+                if let Some(path) = &row.path {
+                    print!(" at {path}");
+                }
+                println!(" (marked_ns {})", row.marked_ns);
+            } else {
+                print!("already redacted {} {}", row.kind, row.object_id.to_hex());
+                if let Some(path) = &row.path {
+                    print!(" at {path}");
+                }
+                println!(" (marked_ns {} stands)", row.marked_ns);
+            }
+            0
+        }
+        Ok(Err(e)) => fail(e),
+        Err(e) => fail(e),
+    }
+}
+
 /// `naatre fsck --data <dir> [--json]`: the consistency checker —
 /// dangling references, reachability counts, CAS presence vs the DB
 /// inventory — read-only under the data dir flock. Exit 0 clean, 1
@@ -420,6 +537,18 @@ pub fn fsck(data: &Path, json: bool) -> i32 {
                     println!(
                         "fsck: advisory membership -{} +{} (missing/extra repo_blobs rows; ignored by GC)",
                         report.advisory_membership_missing, report.advisory_membership_extra
+                    );
+                }
+                if report.redactions_active > 0 || report.redactions_purged > 0 {
+                    println!(
+                        "fsck: redactions {} active (tombstoned-but-unpurged is normal), {} purged",
+                        report.redactions_active, report.redactions_purged
+                    );
+                }
+                if report.redaction_purge_drift > 0 {
+                    println!(
+                        "fsck: REDACTION DRIFT: {} purged tombstone(s) whose object row still exists",
+                        report.redaction_purge_drift
                     );
                 }
                 println!("fsck: {}", if clean { "clean" } else { "FINDINGS" });

@@ -10,6 +10,8 @@ pub mod history;
 pub mod land;
 pub mod objects;
 pub mod openapi;
+pub mod principals;
+pub mod redactions;
 pub mod refs;
 pub mod repos;
 pub mod snapshots;

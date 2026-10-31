@@ -125,6 +125,19 @@ pub const GC_CRASH_POINTS: [&str; 4] = [
     "gc_mid_blob_batch",
 ];
 
+/// The redaction purge phase's crash points (M10b; the same closed-enum
+/// pattern, listed separately from [`GC_CRASH_POINTS`] because the phases
+/// need different seed shapes — the M10a matrix's condemned-blob scenario
+/// never reaches them):
+///
+/// * `redact_mid_cs_purge` — between redaction changeset-purge batches
+///   (some tombstoned changesets already purged, the rest pending).
+/// * `redact_mid_blob_purge` — INSIDE a blob purge: the CAS bytes are
+///   already unlinked, the row/stamp transaction not yet committed (the
+///   orphan-direction pin; the re-run converges over rows claiming absent
+///   bytes because the blob store's delete skips absent ids).
+pub const REDACT_CRASH_POINTS: [&str; 2] = ["redact_mid_cs_purge", "redact_mid_blob_purge"];
+
 /// Panics when `NAATRE_CRASH_POINT` (read once per process) names this
 /// call site; debug builds only, release no-op — same contract as
 /// [`crate::land::crash_point`], its own OnceLock so land's closed enum
@@ -161,12 +174,36 @@ pub struct GcReport {
     pub blobs_condemned: usize,
     /// History tree rows collected (with entries + junction rows).
     pub trees_collected: usize,
+    /// Tombstoned changesets purged by the redaction phase (M10b).
+    pub redactions_purged_cs: usize,
+    /// Tombstoned blobs purged by the redaction phase, the tombstoned
+    /// changesets' exclusively-referenced blobs included (M10b).
+    pub redactions_purged_blobs: usize,
 }
 
 impl GcReport {
     /// True when the pass collected anything (the audit-row condition).
     pub fn collected_any(&self) -> bool {
         self.cs_collected > 0 || self.blobs_collected > 0 || self.trees_collected > 0
+    }
+}
+
+/// What one redaction-purge phase did (M10b; for logs, the CLI, and tests).
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RedactionPurgeReport {
+    /// Tombstoned changesets purged (rows + advisory M6 rows + ledger row;
+    /// the changeset row last) with `purged_ns` stamped.
+    pub cs_purged: usize,
+    /// Tombstoned blobs purged (bytes + objects/membership/ledger rows),
+    /// the purged changesets' exclusively-referenced blobs included, with
+    /// `purged_ns` stamped on every tombstone row of each id.
+    pub blobs_purged: usize,
+}
+
+impl RedactionPurgeReport {
+    /// True when the phase purged anything (the audit-row condition).
+    pub fn purged_any(&self) -> bool {
+        self.cs_purged > 0 || self.blobs_purged > 0
     }
 }
 
@@ -551,14 +588,16 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
         }
     }
 
-    // 5. The tree sweep is the pass's LAST collecting phase, so its
-    // loop-ending batch is the pass's final write transaction and carries
-    // the audit row (the snapshots_gc atomic pattern: one audit row per
-    // collecting pass, actor "system", committed with the deletes it
-    // reports). Nothing collected → no row — a quiet server must not spam
-    // the append-only log. A crash between an earlier collecting batch and
-    // this one loses the audit row for the already-committed deletes (the
-    // deletes stand; the next collecting pass writes its own row).
+    // 5. The tree sweep is the pass's last REACHABILITY-collecting phase,
+    // so its loop-ending batch carries the pass's `gc` audit row (the
+    // snapshots_gc atomic pattern: one audit row per collecting pass, actor
+    // "system", committed with the deletes it reports). Nothing collected →
+    // no row — a quiet server must not spam the append-only log. A crash
+    // between an earlier collecting batch and this one loses the audit row
+    // for the already-committed deletes (the deletes stand; the next
+    // collecting pass writes its own row). The REDACTION purge phase
+    // (M10b) follows as its own phase with its own `redact_purge` audit
+    // row.
     loop {
         let collected = {
             let cs = report.cs_collected;
@@ -606,6 +645,197 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
             blobs = report.blobs_collected,
             trees = report.trees_collected,
             "reachability GC pass"
+        );
+    }
+
+    // 6. The redaction purge phase (M10b): reclaim the bytes/rows of every
+    // actively-tombstoned object the gates have long stopped serving. Runs
+    // AFTER the reachability sweep (the sweep's tree `live` set is computed
+    // from the surviving changeset roots; a purged tombstone's trees become
+    // sweepable the NEXT pass — the same one-pass convergence lag the blob
+    // phases already have).
+    let redact = redaction_purge_pass(state).await?;
+    report.redactions_purged_cs = redact.cs_purged;
+    report.redactions_purged_blobs = redact.blobs_purged;
+
+    Ok(report)
+}
+
+/// The redaction purge phase (M10b): reclaim the bytes and rows behind every
+/// ACTIVE tombstone and stamp `redactions.purged_ns`. Tombstoned-but-
+/// unpurged is a normal state — the universal gate stopped serving the
+/// object at mark time; this phase only reclaims space, so it needs NO grace
+/// window of its own: selection re-verifies inside each `BEGIN IMMEDIATE`
+/// batch (the single-writer slot serializes it against every referencing
+/// write), the blob probes honor the same upload touch grace as the
+/// reachability sweep (a client between a blob PUT and its referencing
+/// create is never overtaken; a record step racing the delete answers the
+/// retryable 503 `blob_swept`), and a crash mid-purge converges on the
+/// re-run (bytes first — the blob store's delete skips absent ids — then
+/// rows+stamp in one transaction; the changeset batch re-selects the same
+/// rows). A tombstoned changeset purgeable ONLY when nothing references it
+/// (no ref, lands, git_map, or child): a tombstone under a serving ref or
+/// with children stays until history moves past it. Never dangles across
+/// repos: a blob another repo still references is spared by the same probe
+/// set the reachability sweep uses (the shared-subtree pin).
+///
+/// One `redact_purge` audit row per purging pass, actor `"system"` (a
+/// background or host-local pass drives it, never a principal) — committed
+/// after the purge batches (a crash between them loses the row for the
+/// already-committed deletes; the next purging pass writes its own — the
+/// documented snapshots_gc-style caveat). An idle phase (no active
+/// tombstones) never takes the write slot and never rows anything.
+pub async fn redaction_purge_pass(state: &AppState) -> Result<RedactionPurgeReport, ApiError> {
+    let now_i = state.now_ns() as i64;
+    let cut = now_i.saturating_sub(state.gc_grace.as_nanos() as i64);
+
+    // Read-probe first: a quiet tombstone table never occupies the
+    // single-writer slot (the derive-queue quiet-pass pattern).
+    let pending = state
+        .read(|conn| db::redactions_active_all(conn).map_err(ApiError::log_internal))
+        .await?;
+    if pending.is_empty() {
+        return Ok(RedactionPurgeReport::default());
+    }
+
+    // The settled lands' recorded results (the in-memory filter — JSON is
+    // not statement surface; a landed id is main's tip and thereby also
+    // under a ref, but the filter is kept for the clause's letter, the same
+    // as the reachability sweep's).
+    let landed: HashSet<Id> = {
+        state
+            .read(|conn| {
+                let mut landed = HashSet::new();
+                for repo_id in db::gc_repos(conn).map_err(ApiError::log_internal)? {
+                    landed_ids(
+                        db::gc_land_result_jsons(conn, repo_id).map_err(ApiError::log_internal)?,
+                        &mut landed,
+                    );
+                }
+                Ok(landed)
+            })
+            .await?
+    };
+
+    let mut report = RedactionPurgeReport::default();
+
+    // Phase 1: tombstoned CHANGESETS — rows first (their file_changes rows
+    // are the references the blob probes read), the changeset row last, and
+    // the batch's exclusively-referenced blobs via the blob rule in the same
+    // transaction (an erasure act must not wait a grace window to make the
+    // content vanish).
+    loop {
+        crash_point("redact_mid_cs_purge");
+        let purged = {
+            let landed = landed.clone();
+            let cas = Arc::clone(&state.cas);
+            state
+                .write(move |store| {
+                    let conn = store.conn();
+                    let tx = conn
+                        .transaction_immediate()
+                        .map_err(ApiError::log_internal)?;
+                    let batch = db::redact_purgeable_cs(&tx, GC_BATCH_ROWS)
+                        .map_err(ApiError::log_internal)?;
+                    let batch: Vec<Id> = batch
+                        .into_iter()
+                        .filter(|id| !landed.contains(id))
+                        .collect();
+                    if batch.is_empty() {
+                        return Ok(0usize);
+                    }
+                    // The blobs the batch's file_changes carry, read BEFORE
+                    // the rows go.
+                    let blobs =
+                        db::file_change_blobs_of_cs(&tx, &batch).map_err(ApiError::log_internal)?;
+                    let purged =
+                        db::redact_collect_cs(&tx, &batch).map_err(ApiError::log_internal)?;
+                    // The exclusively-referenced ones: no reference left
+                    // anywhere and no upload touch inside the grace window.
+                    let exclusive = db::blobs_without_references(&tx, &blobs, cut)
+                        .map_err(ApiError::log_internal)?;
+                    if !exclusive.is_empty() {
+                        BlobStore::delete(cas.as_ref(), &exclusive)
+                            .map_err(ApiError::log_internal)?;
+                        crash_point("redact_mid_blob_purge");
+                        db::redact_collect_blobs(&tx, &exclusive)
+                            .map_err(ApiError::log_internal)?;
+                    }
+                    for id in &batch {
+                        db::redaction_stamp_purged(&tx, "changeset", id, now_i)
+                            .map_err(ApiError::log_internal)?;
+                    }
+                    tx.commit().map_err(ApiError::log_internal)?;
+                    Ok(purged + exclusive.len())
+                })
+                .await?
+        };
+        report.cs_purged += purged;
+        if purged == 0 {
+            // Loop guard (the invariant: selection is deterministic and
+            // NOTHING was purged — every entry was a settled land's recorded
+            // result, or the work list drained). Defer the residue to the
+            // next pass.
+            break;
+        }
+        if purged < GC_BATCH_ROWS {
+            break;
+        }
+    }
+
+    // Phase 2: tombstoned BLOBS (bytes first, the orphan-direction rule; the
+    // stamp covers every repo whose tombstone names the id).
+    loop {
+        let purged = {
+            let cas = Arc::clone(&state.cas);
+            state
+                .write(move |store| {
+                    let conn = store.conn();
+                    let tx = conn
+                        .transaction_immediate()
+                        .map_err(ApiError::log_internal)?;
+                    let batch = db::redact_purgeable_blobs(&tx, cut, GC_BATCH_BLOBS)
+                        .map_err(ApiError::log_internal)?;
+                    if batch.is_empty() {
+                        return Ok(0usize);
+                    }
+                    BlobStore::delete(cas.as_ref(), &batch).map_err(ApiError::log_internal)?;
+                    crash_point("redact_mid_blob_purge");
+                    db::redact_collect_blobs(&tx, &batch).map_err(ApiError::log_internal)?;
+                    for id in &batch {
+                        db::redaction_stamp_purged(&tx, "blob", id, now_i)
+                            .map_err(ApiError::log_internal)?;
+                    }
+                    tx.commit().map_err(ApiError::log_internal)?;
+                    Ok(batch.len())
+                })
+                .await?
+        };
+        report.blobs_purged += purged;
+        if purged < GC_BATCH_BLOBS {
+            break;
+        }
+    }
+
+    if report.purged_any() {
+        let cs = report.cs_purged;
+        let blobs = report.blobs_purged;
+        state
+            .write(move |store| {
+                db::audit_append(
+                    store.conn(),
+                    now_i,
+                    "system",
+                    "redact_purge",
+                    &serde_json::json!({ "cs": cs, "blobs": blobs }).to_string(),
+                )
+                .map_err(ApiError::log_internal)
+            })
+            .await?;
+        tracing::info!(
+            cs = report.cs_purged,
+            blobs = report.blobs_purged,
+            "redaction purge pass"
         );
     }
     Ok(report)

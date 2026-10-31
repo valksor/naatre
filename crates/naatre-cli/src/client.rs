@@ -241,6 +241,23 @@ impl Client {
         })
     }
 
+    /// DELETE a path; succeeds on any 2xx with the parsed JSON. Routed
+    /// through the idempotent-verb retry contract: every DELETE this
+    /// client makes is keyed and idempotent (`token revoke`,
+    /// `principal delete`), so a replay cannot double-apply — the same
+    /// uniform rule as the idempotent POSTs above.
+    pub fn delete_json_idempotent(&self, path: &str) -> Result<Value, HttpError> {
+        self.check_version();
+        let url = format!("{}{}", self.base, path);
+        self.retrying_codes(&POST_SAFE_RETRY_CODES, move || {
+            let res = self
+                .with_bearer(self.agent.delete(&url))
+                .call()
+                .map_err(|e| HttpError::transport(e, &url))?;
+            self.finish_json(res).map(|(_, v)| v)
+        })
+    }
+
     /// Raw GET of bytes (blob fetch). A non-2xx answer is parsed as the
     /// error envelope when possible. A read — routed through the
     /// idempotent-verb retry contract.
@@ -479,6 +496,11 @@ pub fn token_list() -> i32 {
 }
 
 /// `naatre token create <principal>` (admin). Prints the token once.
+/// Routed through the idempotent-POST retry contract: `writer_busy` /
+/// `server_busy` are PRE-execution rejections (the single-writer slot was
+/// busy, or the shed happened before any work started), so a replay cannot
+/// double-apply — and the boot-time derive backfill makes a slot collision
+/// a realistic first-try event, not a pathological one.
 pub fn token_create(
     principal: &str,
     role: &str,
@@ -493,7 +515,7 @@ pub fn token_create(
     if let Some(scope) = scope {
         body["scope_path"] = json!(scope);
     }
-    match client.post_json("/v1/tokens", &body) {
+    match client.post_json_idempotent("/v1/tokens", &body) {
         Ok((_, value)) => {
             // Printed exactly once; the server stores only the hash. The
             // numeric id is what `token revoke` takes.
@@ -505,21 +527,34 @@ pub fn token_create(
     }
 }
 
-/// `naatre token revoke <id>` (admin; idempotent).
+/// `naatre token revoke <id>` (admin; idempotent) — through the
+/// idempotent-DELETE retry contract.
 pub fn token_revoke(id: u64) -> i32 {
     let client = Client::from_env();
-    let path = format!("/v1/tokens/{id}");
-    let run = || -> Result<(), HttpError> {
-        let url = format!("{}{}", client.base, path);
-        let res = client
-            .with_bearer(client.agent.delete(&url))
-            .call()
-            .map_err(|e| HttpError::transport(e, &url))?;
-        client.finish_json(res).map(|_| ())
-    };
-    match run() {
-        Ok(()) => {
+    match client.delete_json_idempotent(&format!("/v1/tokens/{id}")) {
+        Ok(_) => {
             println!("revoked {id}");
+            0
+        }
+        Err(e) => report(&e),
+    }
+}
+
+/// `naatre principal delete <name>` (admin). The server deletes the
+/// principal + token rows and pseudonymizes the audit actor to
+/// `deleted:<name>`; history attribution survives unless the changesets
+/// are themselves tombstoned. Through the idempotent-DELETE retry
+/// contract.
+pub fn principal_delete(name: &str) -> i32 {
+    let client = Client::from_env();
+    let path = format!("/v1/principals/{}", uri_segment(name));
+    match client.delete_json_idempotent(&path) {
+        Ok(value) => {
+            println!(
+                "deleted {} ({} token(s) went with it)",
+                value["principal"].as_str().unwrap_or(name),
+                value["tokens_deleted"]
+            );
             0
         }
         Err(e) => report(&e),

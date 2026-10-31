@@ -248,6 +248,22 @@ fn land_in_txn(
         }
     }
 
+    // M10b tombstone gate: a redacted head, a redacted `main` tip, or any
+    // redacted node on the rebase chain — the 3-way base included — is a
+    // STRUCTURED 409 conflict, never a silent hole (the rebase would copy
+    // redacted attribution and build on redacted content). Probed before
+    // any write: a refused land leaves zero rows and the key unsettled.
+    let redacted_conflict = |id: &Id| -> ApiError {
+        ApiError::new(
+            ApiCode::RedactedBase,
+            "the land's base chain crosses a redacted changeset",
+        )
+        .with_details(serde_json::json!({ "redacted": id.to_hex() }))
+    };
+    if db::redaction_active(conn, repo_id, &cmd.head).map_err(ApiError::log_internal)? {
+        return Err(redacted_conflict(&cmd.head));
+    }
+
     // Pending row first (plan: BEGIN IMMEDIATE → pending lands row → load
     // main). It commits only together with the finished land.
     db::land_insert_pending(conn, repo_id, &cmd.principal, &cmd.key, &cmd.head)
@@ -268,6 +284,9 @@ fn land_in_txn(
             ));
         }
     };
+    if db::redaction_active(conn, repo_id, &old_main).map_err(ApiError::log_internal)? {
+        return Err(redacted_conflict(&old_main));
+    }
 
     let fetch_graph = |id: &Id| -> Result<Option<(i64, Vec<Id>)>, ApiError> {
         db::changeset_graph(conn, repo_id, id)
@@ -337,6 +356,9 @@ fn land_in_txn(
     let mut chain: Vec<Id> = Vec::new();
     let mut cursor = cmd.head;
     while !in_main.contains(&cursor) {
+        if db::redaction_active(conn, repo_id, &cursor).map_err(ApiError::log_internal)? {
+            return Err(redacted_conflict(&cursor));
+        }
         chain.push(cursor);
         let graph = fetch_graph(&cursor)?.ok_or_else(|| {
             ApiError::new(ApiCode::NotFound, "head is not a changeset of this repo")
@@ -350,6 +372,11 @@ fn land_in_txn(
                 ));
             }
         }
+    }
+    // The walk's exit node is the rebase's 3-way base (the first changeset
+    // contained in main): tombstoned base → the same structured conflict.
+    if db::redaction_active(conn, repo_id, &cursor).map_err(ApiError::log_internal)? {
+        return Err(redacted_conflict(&cursor));
     }
     chain.reverse();
 

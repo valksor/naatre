@@ -69,6 +69,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RepoCmd,
     },
+    /// Principal verbs (HTTP client, admin).
+    Principal {
+        #[command(subcommand)]
+        cmd: PrincipalCmd,
+    },
     /// Import a LOCAL git repository into a naatre repo (one-way, offline,
     /// under the data dir flock; refuses URLs).
     Import {
@@ -230,6 +235,29 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Mark an object redacted in a repo (host-local admin verb, M10b: the
+    /// tombstone drops the object from every serving path at mark time;
+    /// the GC's redaction phase reclaims the bytes/rows later). Audited as
+    /// actor `admin`. Remote administration goes through
+    /// `POST /v1/repos/{r}/redactions` instead.
+    Redact {
+        /// What the id names: `blob` or `changeset`.
+        kind: String,
+        /// The object id, 64 lowercase hex.
+        id: String,
+        /// Why the object is redacted (audited as the `redact` action's
+        /// details; the tombstone ROW itself carries path + date only).
+        #[arg(long)]
+        reason: String,
+        /// The repo to tombstone the object in (redactions are
+        /// repo-scoped: another repo referencing the same content keeps
+        /// serving it).
+        #[arg(long)]
+        repo: String,
+        /// Existing data directory (uninitialized → run naatre init first).
+        #[arg(long)]
+        data: PathBuf,
+    },
     /// Capture the working copy as an ephemeral server-side snapshot
     /// (default TTL 7d). Prints {"id","expires_ns"}; head and index stay.
     Snapshot {
@@ -333,6 +361,17 @@ enum RepoCmd {
     /// Repo counters: changesets, objects, bytes, cbytes (admin).
     Stats {
         /// Repo name.
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrincipalCmd {
+    /// Delete a principal (admin): token + principal rows go, the audit
+    /// actor is pseudonymized to `deleted:<name>`; history attribution
+    /// survives unless the changesets are themselves tombstoned.
+    Delete {
+        /// Principal name.
         name: String,
     },
 }
@@ -498,6 +537,16 @@ fn main() {
         }
         Cmd::Gc { data, json } => host::gc(&data, json),
         Cmd::Fsck { data, json } => host::fsck(&data, json),
+        Cmd::Redact {
+            kind,
+            id,
+            reason,
+            repo,
+            data,
+        } => host::redact(&data, &repo, &kind, &id, &reason),
+        Cmd::Principal { cmd } => match cmd {
+            PrincipalCmd::Delete { name } => client::principal_delete(&name),
+        },
         Cmd::Snapshot { ttl, net } => wc_locked(cwd, || {
             verbs::snapshot::run(cwd, ttl.as_deref(), &net.net())
         }),

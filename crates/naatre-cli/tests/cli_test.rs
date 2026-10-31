@@ -155,3 +155,131 @@ fn new_admin_token_requires_initialized_dir() {
     let stdout = string_of(&out.stdout);
     assert!(stdout.contains("admin token: ntk_"), "{stdout:?}");
 }
+
+/// `naatre redact blob|changeset <id>` (host-local, M10b): the positional
+/// kind + id shape, the audit actor, and the tombstone ROW's column set —
+/// path + date only, no reason, no principal. Seeds a repo + a referenced
+/// blob straight into the initialized SQLite file (the direct-DB seeding
+/// technique the M2a tests use), then drives the verb against the data dir.
+#[test]
+fn redact_marks_a_blob_and_carries_path_date_only() {
+    use rusqlite::Connection;
+
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let out = run(&["init", "--data", data.to_str().unwrap()]);
+    assert!(out.status.success(), "init: {}", string_of(&out.stderr));
+
+    // Seed: one repo, one objects row, one file_changes row naming a path
+    // (the tombstone's `path` derives from it).
+    let blob = [7u8; 32];
+    {
+        let conn = Connection::open(data.join("naatre.db")).unwrap();
+        conn.execute_batch("INSERT INTO repos(id, name, created_ns) VALUES (1, 'seeded', 1);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO objects(object_id, size, csize, touched_ns) VALUES (?1, 1, 1, 1)",
+            rusqlite::params![&blob[..]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
+             VALUES (1, x'01', 'leaked.txt', 0, ?1, 1, 0)",
+            rusqlite::params![&blob[..]],
+        )
+        .unwrap();
+    }
+    let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
+    let data_arg = data.to_str().unwrap();
+
+    // Usage: the kind is POSITIONAL (`redact blob <id>`); a flag-shaped
+    // invocation is a usage error (exit 3).
+    let out = run(&[
+        "redact", "--kind", "blob", &hex, "--repo", "seeded", "--data", data_arg,
+    ]);
+    assert_eq!(out.status.code(), Some(3), "positional kind: {out:?}");
+
+    // Unknown repo → exit 1 naming it.
+    let out = run(&[
+        "redact", "blob", &hex, "--reason", "r", "--repo", "nope", "--data", data_arg,
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        string_of(&out.stderr).contains("no repo named"),
+        "{:?}",
+        string_of(&out.stderr)
+    );
+
+    // The mark: exit 0, stdout names the object and its path.
+    let out = run(&[
+        "redact",
+        "blob",
+        &hex,
+        "--reason",
+        "takedown 9",
+        "--repo",
+        "seeded",
+        "--data",
+        data_arg,
+    ]);
+    assert!(out.status.success(), "{}", string_of(&out.stderr));
+    let stdout = string_of(&out.stdout);
+    assert!(stdout.contains(&hex), "{stdout:?}");
+    assert!(
+        stdout.contains("leaked.txt"),
+        "the path is recorded: {stdout:?}"
+    );
+
+    // The tombstone ROW: exactly the path + date column set, path filled.
+    let conn = Connection::open(data.join("naatre.db")).unwrap();
+    let columns: String = conn
+        .query_row(
+            "SELECT group_concat(name, ',') FROM \
+             (SELECT name FROM pragma_table_info('redactions') ORDER BY cid)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        columns, "repo_id,object_id,kind,path,marked_ns,purged_ns",
+        "no reason column, no principal column"
+    );
+    let (path, reason_cols, principal_cols): (String, i64, i64) = conn
+        .query_row(
+            "SELECT r.path, \
+             (SELECT COUNT(*) FROM pragma_table_info('redactions') WHERE name = 'reason'), \
+             (SELECT COUNT(*) FROM pragma_table_info('redactions') WHERE name = 'principal') \
+             FROM redactions r LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(path, "leaked.txt");
+    assert_eq!((reason_cols, principal_cols), (0, 0));
+
+    // The audit row carries the actor + reason (the accountability record).
+    let (actor, details): (String, String) = conn
+        .query_row(
+            "SELECT principal, details_json FROM audit_log WHERE action = 'redact'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(actor, "admin");
+    assert!(details.contains("takedown 9"), "{details:?}");
+
+    // Re-run: idempotent, the earliest mark stands, no second audit row.
+    let out = run(&[
+        "redact", "blob", &hex, "--reason", "again", "--repo", "seeded", "--data", data_arg,
+    ]);
+    assert!(out.status.success(), "{}", string_of(&out.stderr));
+    assert!(string_of(&out.stdout).contains("already redacted"));
+    let audits: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'redact'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(audits, 1);
+}

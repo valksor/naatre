@@ -76,7 +76,7 @@
         "type": "object"
       },
       "BatchGetResponse": {
-        "description": "Batch fetch result. Membership-enforced: an id without a\n`repo_blobs(repo, id)` row lands in `missing` even when the CAS holds\nthe file (cross-repo isolation). A missing or unreadable file after a\nmembership hit is also reported in `missing` (logged server-side).",
+        "description": "Batch fetch result. Membership-enforced: an id without a\n`repo_blobs(repo, id)` row lands in `missing` even when the CAS holds\nthe file (cross-repo isolation). A missing or unreadable file after a\nmembership hit is also reported in `missing` (logged server-side).\nActively-tombstoned ids land in `redacted` (M10b): the tombstone wins\nover membership, and the bytes never serve.",
         "properties": {
           "missing": {
             "items": {
@@ -89,11 +89,19 @@
               "$ref": "#/components/schemas/StoredObject"
             },
             "type": "array"
+          },
+          "redacted": {
+            "description": "Ids redacted in this repo (the tombstone overrides membership).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
           "objects",
-          "missing"
+          "missing",
+          "redacted"
         ],
         "type": "object"
       },
@@ -434,6 +442,29 @@
         ],
         "type": "object"
       },
+      "CreateRedactionRequest": {
+        "description": "Request body of `POST /v1/repos/{r}/redactions`.",
+        "properties": {
+          "id": {
+            "description": "The object id to tombstone, 64 lowercase hex (a blob id or a\nchangeset id — `kind` says which).",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`blob` or `changeset`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the object is being redacted (free text). Audited ONLY — it\nnever lands in the tombstone row (free text can carry personal\ndata; the tombstone records path + date).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "reason"
+        ],
+        "type": "object"
+      },
       "CreateRefRequest": {
         "description": "Request body of the ref move.",
         "properties": {
@@ -543,14 +574,14 @@
         "description": "One path-level diff entry.",
         "properties": {
           "a_blob": {
-            "description": "Hex blob id on the `a` side; null for adds.",
+            "description": "Hex blob id on the `a` side; null for adds — and null with\n`redacted: true` when the blob is tombstoned in this repo (M10b's\nstructured degradation: the path-level fact serves, the pointer to\nredacted content does not).",
             "type": [
               "string",
               "null"
             ]
           },
           "b_blob": {
-            "description": "Hex blob id on the `b` side; null for deletes.",
+            "description": "Hex blob id on the `b` side; null for deletes — and null with\n`redacted: true` when the blob is tombstoned in this repo.",
             "type": [
               "string",
               "null"
@@ -562,11 +593,16 @@
           },
           "path": {
             "type": "string"
+          },
+          "redacted": {
+            "description": "True when either side's blob of this entry is tombstoned in this\nrepo and its pointer is withheld.",
+            "type": "boolean"
           }
         },
         "required": [
           "path",
-          "kind"
+          "kind",
+          "redacted"
         ],
         "type": "object"
       },
@@ -600,6 +636,7 @@
           "idempotency_key_settled",
           "dirty_working_copy",
           "git_history_diverged",
+          "redacted_base",
           "conflict_markers_present",
           "malformed",
           "validation",
@@ -960,6 +997,102 @@
         },
         "required": [
           "missing"
+        ],
+        "type": "object"
+      },
+      "PrincipalDeleted": {
+        "description": "Deletion result.",
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "tokens_deleted": {
+            "description": "Token rows deleted with the principal (revoked or not — deletion is\nstronger than revocation).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "principal",
+          "tokens_deleted"
+        ],
+        "type": "object"
+      },
+      "RedactionEntry": {
+        "description": "One tombstone as served by the list and the POST responses.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "marked_ns": {
+            "description": "The tombstone date (ns since the epoch). A re-POST keeps the\nEARLIEST mark.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The repo path the object sits at (its first, lexicographically),\nnull when the object carries none — the tombstone's only descriptive\nmetadata.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purged_ns": {
+            "description": "The reclaim date once the GC's redaction phase purged the object;\nnull while it stands tombstoned-but-unpurged (a normal state).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "marked_ns"
+        ],
+        "type": "object"
+      },
+      "RedactionListResponse": {
+        "description": "List body.",
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "description": "`after:<id>` of this page's last entry, or null when done.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redactions": {
+            "items": {
+              "$ref": "#/components/schemas/RedactionEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "redactions",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "RedactionMarked": {
+        "description": "Mark response (201 on a new tombstone; an idempotent re-POST answers 200\nwith the recorded row — the earliest `marked_ns` stands).",
+        "properties": {
+          "redaction": {
+            "$ref": "#/components/schemas/RedactionEntry"
+          }
+        },
+        "required": [
+          "redaction"
         ],
         "type": "object"
       },
@@ -1495,6 +1628,47 @@
         ]
       }
     },
+    "/v1/principals/{name}": {
+      "delete": {
+        "operationId": "delete",
+        "parameters": [
+          {
+            "description": "Principal name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalDeleted"
+                }
+              }
+            },
+            "description": "Principal deleted"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "Authenticated without the admin role"
+          },
+          "404": {
+            "description": "No principal with that name"
+          }
+        },
+        "summary": "Deletes a principal (admin, audited `principal_delete`): its token rows\nand principals row are deleted, and every `audit_log` row it acted on is\npseudonymized to `deleted:<name>` (the log is append-only on a\nsecurity-accountability basis — rows are rewritten in the actor column\nonly; `details_json` payloads are history and stay). History attribution\n(`changesets.principal`, `refs.last_principal`, `lands.*`,\n`snapshots.principal`) is left as-is: attribution survives unless the\nchangesets are themselves tombstoned. Unknown principal → 404.",
+        "tags": [
+          "routes::principals"
+        ]
+      }
+    },
     "/v1/repos": {
       "get": {
         "operationId": "list",
@@ -1594,7 +1768,7 @@
     },
     "/v1/repos/{r}/blame": {
       "get": {
-        "description": "Read-during-backlog: any chain node still queued or deriving → 503\n`derivation_pending` + `Retry-After` (never an empty-as-if-no-history\nanswer). Quarantine degrades, never lies: the walk stops at the\nquarantined node and every unresolvable line is attributed to it (its\nblob provably contains those lines), with `degraded: true` and the node\nin `poisoned_cs`.",
+        "description": "Read-during-backlog: any chain node still queued or deriving → 503\n`derivation_pending` + `Retry-After` (never an empty-as-if-no-history\nanswer). Quarantine degrades, never lies: the walk stops at the\nquarantined node and every unresolvable line is attributed to it (its\nblob provably contains those lines), with `degraded: true` and the node\nin `poisoned_cs`. A tombstoned chain node (M10b) is a boundary of the\nsame shape — the mark poisons its queue rows, and the per-node redaction\nprobe below is the belt-and-braces for a node whose derive rows were\n(re)created after the mark — with the author withheld\n([`REDACTED_AUTHOR`]): its lines carry its id and no author.",
         "operationId": "blame",
         "parameters": [
           {
@@ -1644,6 +1818,9 @@
           },
           "404": {
             "description": "No such repo/changeset, or the path is absent at `at`"
+          },
+          "410": {
+            "description": "`at` — or a blob on the walked chain — is redacted in this repo (`object_redacted`); or the walk crossed a tombstoned chain node (degraded 200 with the node named in poisoned_cs and its author withheld)"
           },
           "503": {
             "description": "The blame index is still being derived (`derivation_pending`, `Retry-After: 1`), or the read exceeded a read cap (chain length / blob bytes / line count / response bytes — `blame_too_large`, not retryable)"
@@ -1757,9 +1934,12 @@
           },
           "404": {
             "description": "No such repo, or no such changeset in this repo"
+          },
+          "410": {
+            "description": "The changeset is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Fetches one changeset with its parents and file changes (any\nauthenticated principal; ids and path metadata are repo-visible).",
+        "summary": "Fetches one changeset with its parents and file changes (any\nauthenticated principal; ids and path metadata are repo-visible). An\nactively-tombstoned changeset answers 410 `object_redacted` (M10b —\nattribution never serves after the mark; the row itself persists until\nthe redaction purge).",
         "tags": [
           "routes::changesets"
         ]
@@ -1807,9 +1987,12 @@
           },
           "404": {
             "description": "No such repo, or no such changeset in this repo"
+          },
+          "410": {
+            "description": "The changeset is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Fetches a changeset's derived root-tree id.",
+        "summary": "Fetches a changeset's derived root-tree id. Tombstoned changesets\nanswer 410 `object_redacted` (the same gate as the changeset fetch — a\nredacted node's subtree pointers do not serve either).",
         "tags": [
           "routes::changesets"
         ]
@@ -1866,9 +2049,12 @@
           },
           "404": {
             "description": "No such repo, or a or b is not a changeset of this repo"
+          },
+          "410": {
+            "description": "a or b is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Diffs two changesets' root trees (any authenticated principal): a\nblob/exec difference is a `mod`; the output is sorted by path.",
+        "summary": "Diffs two changesets' root trees (any authenticated principal): a\nblob/exec difference is a `mod`; the output is sorted by path. Either\nendpoint tombstoned → 410 `object_redacted`; entries whose blob is\ntombstoned serve with `redacted: true` and null blob pointers.",
         "tags": [
           "routes::history"
         ]
@@ -1925,9 +2111,12 @@
           },
           "404": {
             "description": "No such repo/changeset, path absent, or path crosses a file"
+          },
+          "410": {
+            "description": "`at`, or the blob at the path, is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Looks one path up in a changeset's root tree (any authenticated\nprincipal). Absent path, or a path that crosses a file, or a directory\npath → 404 `not_found`.",
+        "summary": "Looks one path up in a changeset's root tree (any authenticated\nprincipal). Absent path, or a path that crosses a file, or a directory\npath → 404 `not_found`. A tombstoned `at` — or a tombstoned blob at the\nresolved path — answers 410 `object_redacted` (M10b's structured\ndegradation: the pointer to redacted content does not serve).",
         "tags": [
           "routes::history"
         ]
@@ -2303,7 +2492,7 @@
             "description": "More than 256 ids"
           }
         },
-        "summary": "Batch fetch (any authenticated principal), membership-enforced: only ids\nwith a `repo_blobs` row for this repo are served; the rest land in\n`missing`. More than 256 ids → 422; a non-hex id → 400.",
+        "summary": "Batch fetch (any authenticated principal), membership-enforced: only ids\nwith a `repo_blobs` row for this repo are served; the rest land in\n`missing`. Actively-tombstoned ids (M10b) are gated out of `objects` and\nreported in `redacted` — never served, never silently `missing`. More\nthan 256 ids → 422; a non-hex id → 400.",
         "tags": [
           "routes::objects"
         ]
@@ -2395,9 +2584,12 @@
           },
           "404": {
             "description": "No such repo; or the object is not a member of this repo; or the file is missing from the CAS"
+          },
+          "410": {
+            "description": "The object is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Raw fetch (any authenticated principal), membership-enforced: no\n`repo_blobs` row for this repo → 404 `object_not_found` (a cross-repo\nid is indistinguishable from a nonexistent one). Serves the raw\ndecompressed bytes as `application/octet-stream` with\n`X-Content-Type-Options: nosniff`.",
+        "summary": "Raw fetch (any authenticated principal), redaction-gated then\nmembership-enforced: an actively-tombstoned id answers 410\n`object_redacted` (M10b — the tombstone wins over everything); no\n`repo_blobs` row for this repo → 404 `object_not_found` (a cross-repo\nid is indistinguishable from a nonexistent one). Serves the raw\ndecompressed bytes as `application/octet-stream` with\n`X-Content-Type-Options: nosniff`.",
         "tags": [
           "routes::objects"
         ]
@@ -2475,6 +2667,142 @@
         "summary": "Raw PUT (writer and above, repo-level): body bytes are hash-verified\nagainst the URL id, then fsynced into the CAS, then the `objects` row\ncommits. First PUT → 201; identical re-PUT → 200 (idempotent).",
         "tags": [
           "routes::objects"
+        ]
+      }
+    },
+    "/v1/repos/{r}/redactions": {
+      "get": {
+        "operationId": "list",
+        "parameters": [
+          {
+            "description": "Repo name",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size (1–200; default 50).",
+            "in": "path",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Opaque `after:<id>` cursor from the previous page.",
+            "in": "path",
+            "name": "cursor",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedactionListResponse"
+                }
+              }
+            },
+            "description": "One page of tombstones (purged state included)"
+          },
+          "400": {
+            "description": "Non-integer limit, or a malformed cursor"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "Authenticated without the admin role"
+          },
+          "404": {
+            "description": "No such repo"
+          },
+          "422": {
+            "description": "limit out of the 1..=200 range"
+          }
+        },
+        "summary": "Lists the repo's tombstones (admin), oldest id first, purged rows\nincluded (their `purged_ns` shows the reclaim date).",
+        "tags": [
+          "routes::redactions"
+        ]
+      },
+      "post": {
+        "operationId": "create",
+        "parameters": [
+          {
+            "description": "Repo name",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRedactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedactionMarked"
+                }
+              }
+            },
+            "description": "Already tombstoned (idempotent re-POST; the earliest marked_ns stands)"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedactionMarked"
+                }
+              }
+            },
+            "description": "Tombstone marked"
+          },
+          "400": {
+            "description": "The id is not 64 lowercase hex"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "Authenticated without the admin role"
+          },
+          "404": {
+            "description": "No such repo; or the target id is not an object of this repo"
+          },
+          "422": {
+            "description": "kind is not `blob`/`changeset`, or the reason is empty"
+          }
+        },
+        "summary": "Marks an object redacted in this repo (admin, audited `redact`: the\nacting admin is the audit row's principal and the reason its details —\nthe tombstone ROW itself carries path + date only, never author). 201\non a new tombstone; an idempotent re-POST answers 200 keeping the\nearliest `marked_ns` (and writes no second audit row). The mark ALSO\ninvalidates the target changeset's derived rows (every `derive_state`\nrow goes to the poison terminal state, so re-derivations propagate the\nhole through the taint machinery) in the same transaction.",
+        "tags": [
+          "routes::redactions"
         ]
       }
     },
@@ -2765,10 +3093,10 @@
             "description": "No such repo; or the snapshot does not exist, belongs to another principal, or lacks the blob"
           },
           "410": {
-            "description": "The snapshot is past its TTL (`snapshot_expired`)"
+            "description": "The blob is redacted in this repo (`object_redacted`), or the snapshot is past its TTL (`snapshot_expired`)"
           }
         },
-        "summary": "Fetches one snapshot blob's raw bytes, hash-verified from\n`ephemeral/<snap-id>/` (owned by the principal; expiry re-checked FIRST —\nan expired snapshot serves nothing, not even its bytes).",
+        "summary": "Fetches one snapshot blob's raw bytes, hash-verified from\n`ephemeral/<snap-id>/` (owned by the principal; the M10b redaction gate\nFIRST — a tombstoned blob id makes every snapshot holding it\nunrestorable immediately, redaction overriding the TTL root — then the\nexpiry re-check: an expired snapshot serves nothing, not even its\nbytes).",
         "tags": [
           "routes::snapshots"
         ]

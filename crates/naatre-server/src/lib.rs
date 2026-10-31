@@ -120,6 +120,11 @@ pub fn router(state: AppState) -> axum::Router {
             get(routes::tokens::list).post(routes::tokens::create),
         )
         .route("/v1/tokens/{id}", delete(routes::tokens::revoke))
+        .route("/v1/principals/{name}", delete(routes::principals::delete))
+        .route(
+            "/v1/repos/{r}/redactions",
+            get(routes::redactions::list).post(routes::redactions::create),
+        )
         .route("/v1/whoami", get(routes::whoami::whoami))
         .route("/v1/audit", get(routes::audit::list))
         .route("/v1/openapi.json", get(routes::openapi::serve))

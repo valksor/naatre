@@ -18,6 +18,12 @@
 //! so they cannot affect collection; the next GC pass repairs stale ledger
 //! rows as a side effect of its set-difference.
 //!
+//! Redaction consistency (M10b): tombstoned-but-unpurged is a NORMAL state
+//! (counted, never drift — the gates stopped serving at mark time and the
+//! redaction phase reclaims later); PURGED-but-still-referenced (a
+//! tombstone stamped purged whose changeset/objects row still exists) IS
+//! drift — the purge claimed the space but a reference survived.
+//!
 //! Exit contract (the CLI's pinned codes): 0 clean, 1 findings.
 
 use std::collections::HashSet;
@@ -87,17 +93,32 @@ pub struct FsckReport {
     /// (per repo, summed; rows for unknown objects count under
     /// `danglings` instead).
     pub advisory_membership_extra: usize,
+    /// Actively-tombstoned objects (M10b redactions with no `purged_ns`).
+    /// Tombstoned-but-unpurged is a NORMAL state — the gates stopped
+    /// serving at mark time; the redaction phase reclaims later.
+    pub redactions_active: usize,
+    /// Tombstones whose purge completed (`purged_ns` stamped).
+    pub redactions_purged: usize,
+    /// DRIFT: tombstones stamped purged whose object row STILL exists (a
+    /// changeset row for kind `changeset`, an `objects` row for kind
+    /// `blob`) — the purge claimed the space but a reference survived, the
+    /// purge-side violation of the never-dangling invariant.
+    pub redaction_purge_drift: usize,
     /// Set when `blob_backend` is "s3": the external-drift note.
     pub external_drift: Option<&'static str>,
 }
 
 impl FsckReport {
-    /// 0 findings: every dangling count zero and no DB-known blob missing
-    /// its bytes. Advisory mismatches, unrecorded CAS bytes, and stale
-    /// ledger rows do NOT dirty the store (they are repairable or
-    /// informational); missing BYTES for a DB-known blob do.
+    /// 0 findings: every dangling count zero, no DB-known blob missing
+    /// its bytes, and no purged-but-still-referenced tombstone. Advisory
+    /// mismatches, unrecorded CAS bytes, stale ledger rows, and active
+    /// (unpurged) tombstones do NOT dirty the store (they are repairable,
+    /// informational, or the redaction design's normal state); missing
+    /// BYTES for a DB-known blob and purge drift do.
     pub fn clean(&self) -> bool {
-        self.danglings.iter().all(|(_, n)| *n == 0) && self.bytes_missing == 0
+        self.danglings.iter().all(|(_, n)| *n == 0)
+            && self.bytes_missing == 0
+            && self.redaction_purge_drift == 0
     }
 }
 
@@ -119,8 +140,8 @@ pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
     let cut = now_i.saturating_sub(state.gc_grace.as_nanos() as i64);
 
     // The mark + the anti-joins + the ledger counts + the stale-candidate
-    // check, in one read pass.
-    let (mark_counts, danglings, candidates, stale_candidates) = state
+    // check + the redaction counts, in one read pass.
+    let (mark_counts, danglings, candidates, stale_candidates, redactions) = state
         .read(move |conn| {
             let mark = gc::mark(conn, now_i).map_err(ApiError::log_internal)?;
             let danglings = db::fsck_danglings(conn).map_err(ApiError::log_internal)?;
@@ -133,11 +154,13 @@ pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
                     }
                 }
             }
+            let redactions = db::fsck_redactions(conn).map_err(ApiError::log_internal)?;
             Ok((
                 (mark.cs_len(), mark.blobs_len(), mark.trees_len()),
                 danglings,
                 candidates,
                 stale,
+                redactions,
             ))
         })
         .await?;
@@ -260,6 +283,9 @@ pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
         stale_candidates,
         advisory_membership_missing: missing_membership,
         advisory_membership_extra: extra_membership,
+        redactions_active: redactions.0.max(0) as usize,
+        redactions_purged: redactions.1.max(0) as usize,
+        redaction_purge_drift: redactions.2.max(0) as usize,
         external_drift: (state.blob_backend == "s3").then_some(S3_DRIFT_NOTE),
     })
 }
