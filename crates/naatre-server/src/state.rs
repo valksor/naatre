@@ -24,13 +24,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
-use naatre_store::backend::{BackendConfig, MetaKind};
+use naatre_store::backend::{BackendConfig, BlobKind, MetaKind};
 use naatre_store::cas::Cas;
 use naatre_store::data_dir::DataDir;
-use naatre_store::ephemeral::Ephemeral;
 use naatre_store::error::StoreError;
 use naatre_store::store::Store;
-use naatre_store::{BlobStore, Db};
+use naatre_store::{BlobStore, Db, EphemeralStore, S3Store};
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
@@ -168,9 +167,11 @@ pub struct ServerState {
     /// backend behind the trait). Blocking CAS work goes through
     /// [`ServerState::blocking`].
     pub cas: Arc<dyn BlobStore>,
-    /// Ephemeral snapshot store over the same data dir (`ephemeral/<snap>/`).
-    /// Blocking filesystem work goes through [`ServerState::blocking`].
-    pub ephemeral: Arc<Ephemeral>,
+    /// Ephemeral snapshot store (`ephemeral/<snap>/` on fs; the
+    /// `ephemeral/<snap>/objects/…` key namespace in the bucket when
+    /// `blob = s3` — the same [`EphemeralStore`] contract on both).
+    /// Blocking storage work goes through [`ServerState::blocking`].
+    pub ephemeral: Arc<dyn EphemeralStore>,
     /// Nanosecond clock used for token expiry, audit timestamps, and the
     /// auth-failure window. Tests replace this after [`ServerState::open`].
     pub clock: ClockFn,
@@ -286,7 +287,7 @@ impl ServerState {
         let data_dir_display = data.path().to_path_buf();
         let db_path = data.db_path();
         let cas: Arc<dyn BlobStore> = Arc::new(Cas::new(&data)?);
-        let ephemeral = Arc::new(Ephemeral::new(&data)?);
+        let ephemeral: Arc<dyn EphemeralStore> = Arc::new(naatre_store::Ephemeral::new(&data)?);
         // The write store opens first: migrations run there, and its
         // connection recovers the WAL before any read-only connection
         // opens (a read-only connection cannot run recovery).
@@ -319,15 +320,36 @@ impl ServerState {
 
     /// [`ServerState::open`] for the CONFIGURED backend: the metadata
     /// connection comes from `cfg` (SQLite default, or Postgres via the
-    /// parsed DSN), while the blob CAS and ephemeral namespace stay on the
-    /// data dir. The caller must have run
+    /// parsed DSN), and the blob/ephemeral pair follows `cfg.blob` — the
+    /// data-dir CAS + ephemeral dirs, or the S3 bucket's `objects/` and
+    /// `ephemeral/` key namespaces (one S3Store behind both traits; its
+    /// operations serialize on the store's runtime, see
+    /// [`naatre_store::s3`]). The caller must have run
     /// [`naatre_store::backend::check_data_dir_backend`] — the
     /// config/data-dir agreement is refused upstream, not here.
     pub fn open_backend(data: DataDir, cfg: &BackendConfig) -> Result<Self, StoreError> {
         let data_dir_display = data.path().to_path_buf();
         let db_path = data.db_path();
-        let cas: Arc<dyn BlobStore> = Arc::new(Cas::new(&data)?);
-        let ephemeral = Arc::new(Ephemeral::new(&data)?);
+        // Blob + ephemeral backends are selected together (the brief's
+        // documented decision: on S3 deployments the ephemeral namespace
+        // lives in the same bucket — a split backend would break snapshot
+        // restore on any blob=s3 deployment).
+        let (cas, ephemeral): (Arc<dyn BlobStore>, Arc<dyn EphemeralStore>) = match cfg.blob {
+            BlobKind::Fs => (
+                Arc::new(Cas::new(&data)?),
+                Arc::new(naatre_store::Ephemeral::new(&data)?),
+            ),
+            BlobKind::S3 => {
+                let s3 = cfg.s3.as_ref().ok_or_else(|| {
+                    StoreError::Backend(naatre_store::backend::BackendError::S3KeyMissing {
+                        key: "bucket",
+                        env: naatre_store::backend::ENV_S3_BUCKET,
+                    })
+                })?;
+                let s3 = Arc::new(S3Store::new(s3, cfg.allow_plaintext)?);
+                (s3.clone(), s3)
+            }
+        };
         // The write store opens first: migrations run there (and SQLite's
         // WAL is recovered) before any read-only connection opens.
         let store = Arc::new(Mutex::new(Store::open_backend(data, cfg)?));

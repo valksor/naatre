@@ -134,10 +134,16 @@ naatre refuses to read a looser one):
 ```toml
 [backend]
 meta = "postgres"        # or "sqlite" (default when the file is absent)
-blob = "fs"              # "s3" arrives in M9b
+blob = "s3"              # or "fs" (default when the file is absent)
 dsn = "postgres://db.internal:5432/naatre?sslmode=verify-full"
 user = "naatre"          # or NAATRE_PG_USER
 password = "…"           # or NAATRE_PG_PASSWORD — never in the URL
+endpoint = "minio.lan:9000"  # S3: bare host[:port]; absent = AWS defaults
+bucket = "naatre-history"    # S3: required
+region = "us-east-1"         # S3: optional (driver default us-east-1)
+access_key_id = "…"          # S3: or NAATRE_S3_ACCESS_KEY_ID
+secret = "…"                 # S3: or NAATRE_S3_SECRET — never in a URL
+path_style = true            # S3: path-style URLs (minio); default virtual-host
 allow_plaintext = false  # the explicit plaintext opt-in (see below)
 ```
 
@@ -165,6 +171,23 @@ allow_plaintext = false  # the explicit plaintext opt-in (see below)
   land blocks, then answers the same retryable `writer_busy`-shaped 503
   as SQLite lock contention. The data-dir flock keeps same-dir processes
   fully exclusive.
+- **S3-compatible blob CAS** (`blob = "s3"`, M9b): history blobs live at
+  `objects/ab/cd/<62hex>` in the bucket and snapshot blobs at
+  `ephemeral/<snap>/objects/…` — the same layout and zstd encoding as the
+  fs CAS, so a backend migration is a byte-for-byte copy of `objects/`
+  into the bucket (a data dir holding fs objects is never switched in
+  place: the mismatch refusal names both sides; start a fresh data dir or
+  copy out-of-band). **TLS by default**: an `endpoint` is reached over
+  HTTPS unless `allow_plaintext = true` (the LAN-minio opt-in); without an
+  `endpoint`, AWS defaults are used (always TLS). `path_style` selects
+  path-style URLs for minio-shaped endpoints. GC of the ephemeral
+  namespace deletes by key prefix with the same both-gates semantics as
+  the fs dirs.
+- **Two TLS stacks ship** (stated honestly): Postgres rides
+  `native-tls` (OpenSSL/Security.framework — every rustls connector in the
+  ecosystem targets tokio-postgres, none the sync client naatre uses), S3
+  rides `object_store`'s rustls. Static-musl builds therefore need an
+  OpenSSL for the target — relevant to release/Docker images.
 - `naatre init`/`token`/`import` honor the same file, so admin verbs work
   unchanged against a Postgres-backed dir (there is no `naatre.db` in it).
 
@@ -434,9 +457,30 @@ erasure.
 `meta = "postgres"` the rows above (and the append-only `audit_log`) live
 in the Postgres database, not the data dir — destroying the data dir
 erases only blobs and config, and the metadata's erasure is the Postgres
-deployment's own story (its backups included). When `blob = "s3"` lands
-(M9b), bucket contents also outlive the data dir — that enumeration gains
-its clause in M9b.
+deployment's own story (its backups included).
+
+**S3 blobs outlive the data dir too** (`blob = "s3"`, M9b): destroying
+the data dir erases nothing in the bucket — history and snapshot keys
+remain, and the bucket's erasure is the S3 deployment's own story (its
+versioning and lifecycle configuration included). Two operator duties
+follow, and they are the price of the backend, not bugs:
+
+- **Lifecycle policies and versioned buckets can violate the
+  never-dangling invariant**: a bucket-side lifecycle rule (or a manual
+  expiry) can delete object versions naatre's rows still reference, and
+  object versioning can retain bytes after naatre deletes them — the
+  first breaks reads (dangling references), the second weakens M10's
+  physical purge (bytes survive that the DB believes erased). Configure
+  the bucket with NO lifecycle rules and NO versioning; naatre owns its
+  own expiry (the snapshot TTL) and its own GC (M10).
+- **External drift is visible, not corrected**: `fsck` / repo stats
+  (M10) walk every referenced id and report which are missing from the
+  bucket (or unreferenced in it) — a presence scan over external state.
+  Repairing drift caused outside naatre is the operator's action;
+  naatre never guesses.
+
+The same framing as the Postgres case: destroying a data dir is complete
+erasure only on the zero-config SQLite+fs deployment.
 
 ## Distribution note (conditional)
 

@@ -56,6 +56,15 @@ pub(crate) fn shard_path(root: &Path, id: &Id) -> PathBuf {
     root.join(&hex[0..2]).join(&hex[2..4]).join(&hex[4..])
 }
 
+/// Zstd (level 3) compression of one CAS payload — the single content
+/// encoding shared by the fs CAS and the S3 backend (the S3 keys are
+/// byte-for-byte copies of the fs object files, see `s3.rs`).
+pub(crate) fn compress_payload(payload: &[u8]) -> Result<Vec<u8>, StoreError> {
+    let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).map_err(zstr)?;
+    encoder.write_all(payload).map_err(zstr)?;
+    encoder.finish().map_err(zstr)
+}
+
 /// Writes `payload` into the CAS at `objects_root`, compressed with zstd
 /// level 3, through `tmp_root` staging, fsyncing the file before the rename.
 ///
@@ -116,14 +125,15 @@ pub(crate) fn write_compressed(
     Ok(id)
 }
 
-/// Reads and zstd-decompresses `file` with a hard expanded-size cap. The
+/// Reads and zstd-decompresses `reader` with a hard expanded-size cap. The
 /// chunked read loop never allocates beyond `limit` plus one chunk, so a
 /// small crafted compressed input cannot expand into a huge allocation.
+/// Shared by the fs CAS (`File`) and the S3 backend (compressed bytes).
 pub(crate) fn read_decompressed_bounded(
-    mut file: File,
+    reader: impl std::io::Read,
     limit: usize,
 ) -> Result<Vec<u8>, StoreError> {
-    let mut decoder = zstd::stream::read::Decoder::new(&mut file).map_err(zstr)?;
+    let mut decoder = zstd::stream::read::Decoder::new(reader).map_err(zstr)?;
     let mut out = Vec::new();
     let mut buf = [0u8; 64 * 1024];
     let mut total = 0usize;
@@ -137,6 +147,25 @@ pub(crate) fn read_decompressed_bounded(
             return Err(StoreError::TooLarge { limit, got: total });
         }
         out.extend_from_slice(&buf[..n]);
+    }
+    Ok(out)
+}
+
+/// Decompresses `compressed` under the expanded-size cap and verifies it
+/// hashes to `id`. A content hashing differently is `HashMismatch`
+/// (nothing is deleted — the caller decides).
+pub(crate) fn decompress_verify(
+    compressed: &[u8],
+    id: &Id,
+    limit: usize,
+) -> Result<Vec<u8>, StoreError> {
+    let out = read_decompressed_bounded(compressed, limit)?;
+    let actual = object_id(Kind::Blob, &out);
+    if actual != *id {
+        return Err(StoreError::HashMismatch {
+            expected: id.to_hex(),
+            actual: actual.to_hex(),
+        });
     }
     Ok(out)
 }

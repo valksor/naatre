@@ -13,7 +13,7 @@
 //! empty tree). Each commit's root tree is built directly from the git tree
 //! via [`MemNode`] — never by replaying deltas — and every write lands in a
 //! per-commit transaction that also carries the commit's `git_map` row,
-//! after all of the commit's blobs were [`Cas::put`] (the
+//! after all of the commit's blobs were put (the
 //! fsync-before-commit invariant: a crash leaves orphans, never dangling
 //! rows).
 //!
@@ -57,7 +57,6 @@ use naatre_core::changeset::{self, Changeset, FileChange, Op};
 use naatre_core::error::CoreError;
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::path;
-use naatre_store::cas::Cas;
 use naatre_store::error::StoreError;
 use naatre_store::{DataDir, Store};
 
@@ -68,7 +67,7 @@ use crate::tree_derive::{self, MemEntry, MemNode};
 /// `init`/`token --new-admin`: the 0700 data dir).
 const PRINCIPAL: &str = "admin";
 
-/// Blob cap in bytes, mirroring `naatre_store::cas::BLOB_LIMIT`: `Cas::put`
+/// Blob cap in bytes, mirroring `naatre_store::BLOB_LIMIT`: `BlobStore::put`
 /// enforces the cap on write, but the scan must reject first and report a
 /// per-object reason instead of failing the run.
 const BLOB_LIMIT: u64 = 64 * 1024 * 1024;
@@ -225,7 +224,9 @@ pub fn run_backend(
     let head_oid = resolve_default_branch_head(&git)?;
     let git_head_hex = head_oid.to_string();
 
-    let cas = Cas::new(&data_dir)?;
+    // The CONFIGURED CAS (fs, or the S3 bucket when blob = "s3") — the
+    // import's blob writes must land where the server reads them.
+    let cas = naatre_store::blob::history_cas(&data_dir, cfg)?;
     let store = Store::open_backend(data_dir, cfg)?;
     let conn = store.conn();
 
@@ -366,7 +367,7 @@ pub fn run_backend(
     // file changes, blob membership, git_map row, derived trees, and audit.
     let mut git_map = git_map;
     for p in &importable {
-        import_commit(&git, &cas, conn, repo_id, &repo_name, derive, p)?;
+        import_commit(&git, cas.as_ref(), conn, repo_id, &repo_name, derive, p)?;
         git_map.insert(p.git_oid, p.cs_id);
         report.imported += 1;
         if p.sanitized {
@@ -1207,7 +1208,7 @@ fn replace_with_replacement_char(s: &mut String, index: usize) {
 /// one transaction.
 fn import_commit(
     git: &gix::Repository,
-    cas: &Cas,
+    cas: &dyn naatre_store::BlobStore,
     conn: &Db,
     repo_id: i64,
     repo_name: &str,
@@ -1282,7 +1283,7 @@ fn import_commit(
 /// references.
 fn build_tree_node(
     git: &gix::Repository,
-    cas: &Cas,
+    cas: &dyn naatre_store::BlobStore,
     tree_oid: ObjectId,
     prefix: &str,
 ) -> Result<MemNode, ImportError> {

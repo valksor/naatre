@@ -17,8 +17,8 @@
 //! DSN is refused ("put the password in the `password` key or
 //! NAATRE_PG_PASSWORD"). TLS is the default for Postgres (`sslmode`
 //! defaults to `require`; `disable` needs the explicit `allow_plaintext`
-//! opt-in), and will be for S3 in M9b (LAN-minio plaintext opt-in, same
-//! key).
+//! opt-in) and for S3 (an `endpoint` is reached over HTTPS unless
+//! `allow_plaintext` opts into plain HTTP for LAN minio).
 
 use std::path::{Path, PathBuf};
 
@@ -32,6 +32,11 @@ pub const BACKEND_FILE: &str = "backend.toml";
 pub const ENV_PG_DSN: &str = "NAATRE_PG_DSN";
 pub const ENV_PG_USER: &str = "NAATRE_PG_USER";
 pub const ENV_PG_PASSWORD: &str = "NAATRE_PG_PASSWORD";
+pub const ENV_S3_ENDPOINT: &str = "NAATRE_S3_ENDPOINT";
+pub const ENV_S3_BUCKET: &str = "NAATRE_S3_BUCKET";
+pub const ENV_S3_REGION: &str = "NAATRE_S3_REGION";
+pub const ENV_S3_ACCESS_KEY_ID: &str = "NAATRE_S3_ACCESS_KEY_ID";
+pub const ENV_S3_SECRET: &str = "NAATRE_S3_SECRET";
 
 /// Which metadata backend the store opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -58,7 +63,8 @@ pub enum BlobKind {
     /// Filesystem CAS under `<data>/objects` (the zero-config default).
     #[default]
     Fs,
-    /// S3-compatible CAS — arrives in M9b.
+    /// S3-compatible CAS (M9b): history blobs and the ephemeral snapshot
+    /// namespace live in the configured bucket.
     S3,
 }
 
@@ -117,6 +123,46 @@ pub struct PgConnect {
     pub schema: Option<String>,
 }
 
+impl std::fmt::Debug for S3Connect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Connect")
+            .field("endpoint", &self.endpoint)
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("access_key_id", &self.access_key_id)
+            .field("secret", &"<redacted>")
+            .field("path_style", &self.path_style)
+            .finish()
+    }
+}
+
+/// The parsed S3 connection parameters (M9b). The secret lives here only
+/// as a structured part — never in a URL — and `Debug` is REDACTED by hand.
+///
+/// TLS posture is not a field: an endpoint is reached over HTTPS unless the
+/// config's `allow_plaintext` opt-in is set, in which case plain HTTP is
+/// used (LAN minio). An absent endpoint selects the AWS default endpoints
+/// (always TLS, virtual-host style).
+#[derive(Clone)]
+pub struct S3Connect {
+    /// Bare `host[:port]` authority — no scheme, no path. `None` = the AWS
+    /// default endpoints. Refused shapes (scheme, userinfo, path) name the
+    /// rule, never the value.
+    pub endpoint: Option<String>,
+    pub bucket: String,
+    /// S3 region for signing; the driver defaults to `us-east-1` when
+    /// unset. Set it for real AWS buckets outside that region.
+    pub region: Option<String>,
+    /// File key or `NAATRE_S3_ACCESS_KEY_ID`; required when `blob = "s3"`.
+    pub access_key_id: String,
+    /// File key or `NAATRE_S3_SECRET`; required, `Debug`-redacted.
+    pub secret: String,
+    /// `true` = path-style (`https://host/bucket/key`, LAN minio's shape);
+    /// `false` = virtual-host style (`https://bucket.host/key`, AWS's
+    /// default). Default false.
+    pub path_style: bool,
+}
+
 /// The parsed backend configuration.
 #[derive(Debug, Clone, Default)]
 pub struct BackendConfig {
@@ -124,7 +170,10 @@ pub struct BackendConfig {
     pub blob: BlobKind,
     /// Present when `meta = "postgres"`.
     pub pg: Option<PgConnect>,
-    /// The plaintext opt-in: without it, `sslmode=disable` is refused.
+    /// Present when `blob = "s3"`.
+    pub s3: Option<S3Connect>,
+    /// The plaintext opt-in: without it, `sslmode=disable` (Postgres) and
+    /// plain-HTTP S3 endpoints are refused.
     pub allow_plaintext: bool,
 }
 
@@ -140,17 +189,6 @@ pub fn load(data: &Path) -> Result<BackendConfig, StoreError> {
     let cfg = parse(&text).map_err(StoreError::Backend)?;
     check_file_perms(&path)?;
     Ok(cfg)
-}
-
-/// Builds the default config plus explicit overrides (used by tests and by
-/// `Store::open_backend` callers that construct the config in code).
-pub fn explicit(meta: MetaKind, blob: BlobKind, pg: Option<PgConnect>) -> BackendConfig {
-    BackendConfig {
-        meta,
-        blob,
-        pg,
-        allow_plaintext: false,
-    }
 }
 
 fn check_file_perms(path: &Path) -> Result<(), StoreError> {
@@ -172,6 +210,21 @@ fn check_file_perms(path: &Path) -> Result<(), StoreError> {
 }
 
 impl BackendConfig {
+    /// Programmatic `blob = "s3"` construction from structured parts
+    /// (tests, embedded use) — the same shape the strict TOML surface
+    /// produces, over the SQLite default meta. `allow_plaintext` is false:
+    /// a LAN-minio test target constructs the struct directly (as the test
+    /// harness does).
+    pub fn s3(connect: S3Connect) -> BackendConfig {
+        BackendConfig {
+            meta: MetaKind::Sqlite,
+            blob: BlobKind::S3,
+            pg: None,
+            s3: Some(connect),
+            allow_plaintext: false,
+        }
+    }
+
     /// Programmatic construction with the same strict DSN parse the TOML
     /// surface uses (tests, embedded use). Credentials stay out of the URL
     /// here too; `allow_plaintext` opts into `sslmode=disable` (CI's
@@ -198,6 +251,7 @@ impl BackendConfig {
                 tls: parsed.tls,
                 schema: None,
             }),
+            s3: None,
             allow_plaintext,
         })
     }
@@ -230,7 +284,20 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         want: "a table".to_string(),
     })?;
 
-    const ALLOWED: &[&str] = &["meta", "blob", "dsn", "user", "password", "allow_plaintext"];
+    const ALLOWED: &[&str] = &[
+        "meta",
+        "blob",
+        "dsn",
+        "user",
+        "password",
+        "allow_plaintext",
+        "endpoint",
+        "bucket",
+        "region",
+        "access_key_id",
+        "secret",
+        "path_style",
+    ];
     for key in backend.keys() {
         if !ALLOWED.contains(&key.as_str()) {
             return Err(BackendError::UnknownKey {
@@ -257,11 +324,11 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         None => BlobKind::Fs,
         Some(v) => match v.as_str() {
             Some("fs") => BlobKind::Fs,
-            Some("s3") => return Err(BackendError::S3NotYet),
+            Some("s3") => BlobKind::S3,
             _ => {
                 return Err(BackendError::BadValue {
                     key: "backend.blob".to_string(),
-                    want: "\"fs\" (\"s3\" arrives in M9b)".to_string(),
+                    want: "\"fs\" or \"s3\"".to_string(),
                 });
             }
         },
@@ -322,10 +389,91 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         None
     };
 
+    // ---- S3 keys ------------------------------------------------------------
+    // (The file wins over the environment, same as the Postgres keys.)
+    let file_endpoint = str_key(backend, "endpoint")?;
+    let file_bucket = str_key(backend, "bucket")?;
+    let file_region = str_key(backend, "region")?;
+    let file_access_key_id = str_key(backend, "access_key_id")?;
+    let file_secret = str_key(backend, "secret")?;
+    let path_style = match backend.get("path_style") {
+        None => false,
+        Some(v) => v.as_bool().ok_or(BackendError::BadValue {
+            key: "backend.path_style".to_string(),
+            want: "true or false".to_string(),
+        })?,
+    };
+
+    let s3 = if blob == BlobKind::S3 {
+        // Values that only make sense for s3 are REFUSED under blob = fs —
+        // a bucket key sitting unused in the file is a misconfiguration,
+        // not an inert one (same rule as dsn under sqlite).
+        let s3 = S3Connect {
+            endpoint: file_endpoint
+                .or_else(|| std::env::var(ENV_S3_ENDPOINT).ok())
+                .map(|e| parse_endpoint(&e))
+                .transpose()?,
+            bucket: file_bucket
+                .or_else(|| std::env::var(ENV_S3_BUCKET).ok())
+                .ok_or(BackendError::S3KeyMissing {
+                    key: "bucket",
+                    env: ENV_S3_BUCKET,
+                })?,
+            region: file_region.or_else(|| std::env::var(ENV_S3_REGION).ok()),
+            access_key_id: file_access_key_id
+                .or_else(|| std::env::var(ENV_S3_ACCESS_KEY_ID).ok())
+                .ok_or(BackendError::S3KeyMissing {
+                    key: "access_key_id",
+                    env: ENV_S3_ACCESS_KEY_ID,
+                })?,
+            secret: file_secret
+                .or_else(|| std::env::var(ENV_S3_SECRET).ok())
+                .ok_or(BackendError::S3KeyMissing {
+                    key: "secret",
+                    env: ENV_S3_SECRET,
+                })?,
+            path_style,
+        };
+        validate_bucket(&s3.bucket)?;
+        Some(s3)
+    } else {
+        for (present, key) in [
+            (
+                file_endpoint.is_some() || std::env::var(ENV_S3_ENDPOINT).is_ok(),
+                "endpoint",
+            ),
+            (
+                file_bucket.is_some() || std::env::var(ENV_S3_BUCKET).is_ok(),
+                "bucket",
+            ),
+            (
+                file_region.is_some() || std::env::var(ENV_S3_REGION).is_ok(),
+                "region",
+            ),
+            (
+                file_access_key_id.is_some() || std::env::var(ENV_S3_ACCESS_KEY_ID).is_ok(),
+                "access_key_id",
+            ),
+            (
+                file_secret.is_some() || std::env::var(ENV_S3_SECRET).is_ok(),
+                "secret",
+            ),
+            (backend.contains_key("path_style"), "path_style"),
+        ] {
+            if present {
+                return Err(BackendError::KeyWithoutBlobS3 {
+                    key: key.to_string(),
+                });
+            }
+        }
+        None
+    };
+
     Ok(BackendConfig {
         meta,
         blob,
         pg,
+        s3,
         allow_plaintext,
     })
 }
@@ -347,6 +495,74 @@ fn str_key(table: &toml::Table, key: &str) -> Result<Option<String>, BackendErro
                 key: format!("backend.{key}"),
                 want: "a string".to_string(),
             }),
+    }
+}
+
+/// Validates the `endpoint` shape: a BARE `host[:port]` authority. The
+/// scheme is never written in the file (HTTPS is the default; plain HTTP
+/// is what `allow_plaintext` opts into), so anything URL-flavored is
+/// refused by rule, never echoed back.
+fn parse_endpoint(raw: &str) -> Result<String, BackendError> {
+    let refuse = |why: &str| BackendError::EndpointInvalid {
+        why: why.to_string(),
+    };
+    if raw.is_empty() || raw.chars().any(|c| c.is_whitespace()) {
+        return Err(refuse(
+            "endpoint must be a bare host[:port] (no scheme, no path, no spaces)",
+        ));
+    }
+    if raw.contains("://") {
+        return Err(refuse(
+            "endpoint takes a bare host[:port] — no scheme: https is the default, \
+             and plain HTTP is chosen by the allow_plaintext opt-in",
+        ));
+    }
+    if raw.contains('@') {
+        return Err(refuse(
+            "endpoint takes a bare host[:port] — no userinfo; access keys go in \
+             the access_key_id/secret keys or NAATRE_S3_ACCESS_KEY_ID/NAATRE_S3_SECRET",
+        ));
+    }
+    if raw.contains(['/', '?', '#']) {
+        return Err(refuse(
+            "endpoint takes a bare host[:port] — no path, query, or fragment",
+        ));
+    }
+    // host[:port] — the port side must be numeric (bracketed IPv6 hosts
+    // skip the port check; the driver owns the URL build).
+    if !raw.starts_with('[')
+        && let Some(colon) = raw.rfind(':')
+    {
+        let p = &raw[colon + 1..];
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(refuse("the port must be a number"));
+        }
+    }
+    Ok(raw.to_string())
+}
+
+/// S3 bucket naming: `[a-z0-9][a-z0-9-]{1,62}` — the modern S3 grammar
+/// (no dots), applied to the config key too. Errors name the rule, never
+/// the value.
+fn validate_bucket(bucket: &str) -> Result<(), BackendError> {
+    let ok = bucket.len() >= 3
+        && bucket.len() <= 63
+        && bucket
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && bucket
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(BackendError::BadValue {
+            key: "backend.bucket".to_string(),
+            want: "3-63 chars: lowercase letters, digits, hyphens (starting with \
+                   a letter or digit)"
+                .to_string(),
+        })
     }
 }
 
@@ -543,6 +759,24 @@ pub enum BackendError {
     KeyWithoutPostgres { key: String },
 
     #[error(
+        "backend.toml key {key:?} only applies when blob = \"s3\"; \
+         remove it or switch the blob backend"
+    )]
+    KeyWithoutBlobS3 { key: String },
+
+    #[error(
+        "backend.toml key {key:?} must be set when blob = \"s3\" \
+         (the file key or the {env} environment variable)"
+    )]
+    S3KeyMissing {
+        key: &'static str,
+        env: &'static str,
+    },
+
+    #[error("backend endpoint: {why}")]
+    EndpointInvalid { why: String },
+
+    #[error(
         "inline credentials in the DSN are rejected: use `postgres://user@host/db` \
          and put the password in the backend.toml `password` key or NAATRE_PG_PASSWORD"
     )]
@@ -560,12 +794,11 @@ pub enum BackendError {
     #[error("backend.toml {path:?} must be 0600 (found mode {mode:o}); chmod 600 it")]
     FilePerms { path: PathBuf, mode: u32 },
 
-    #[error("blob = \"s3\" is not available yet: the S3-compatible CAS backend arrives in M9b")]
-    S3NotYet,
-
     #[error(
-        "data dir metadata store is {on_disk} but the backend config selects {configured}: \
-         refusing to open (a data dir never switches backends in place)"
+        "data dir blob store is {on_disk} but the backend config selects {configured}: \
+         refusing to open (a data dir never switches backends in place; an fs-CAS \
+         data dir is NOT auto-migrated — start a fresh data dir or migrate the \
+         objects out-of-band, see the README's backend section)"
     )]
     Mismatch {
         on_disk: &'static str,
@@ -586,23 +819,56 @@ pub enum BackendError {
 }
 
 /// The mismatch guard (plan M9): refuses a data dir whose existing
-/// metadata store disagrees with the configured backend, naming both.
+/// metadata store or blob CAS disagrees with the configured backend,
+/// naming both sides.
 ///
 /// * `naatre.db` present + `meta = postgres` → [`BackendError::Mismatch`].
 /// * `meta = sqlite` + `naatre.db` absent → the standard
 ///   `DataDirUninitialized` (run `naatre init`).
 /// * `meta = postgres` + uninitialized server → checked at connect time by
 ///   `init` (a schema present there is `AlreadyInitialized`).
+/// * an fs CAS with DATA (`objects/` holds at least one shard) +
+///   `blob = s3` → [`BackendError::Mismatch`] — an fs-CAS data dir is NOT
+///   auto-migrated into a bucket (M9b); the operator starts a fresh data
+///   dir or migrates out-of-band. An EMPTY `objects/` (created by a mere
+///   open) is not a marker and passes.
+///
+/// The reverse (a bucket holding data + `blob = fs`) cannot be checked
+/// locally: there is no on-disk marker for a remote bucket, and the bucket
+/// may legitimately belong to a different deployment — the README's
+/// erasure enumeration covers what that means for an operator who points a
+/// fresh data dir at a used bucket.
 pub fn check_data_dir_backend(data: &Path, cfg: &BackendConfig) -> Result<(), StoreError> {
     let db = data.join(crate::data_dir::DB_FILE);
     match (db.exists(), cfg.meta) {
-        (true, MetaKind::Postgres) => Err(StoreError::Backend(BackendError::Mismatch {
-            on_disk: "sqlite (naatre.db present)",
-            configured: "postgres",
-        })),
-        (false, MetaKind::Sqlite) => Err(StoreError::DataDirUninitialized(data.to_path_buf())),
-        _ => Ok(()),
+        (true, MetaKind::Postgres) => {
+            return Err(StoreError::Backend(BackendError::Mismatch {
+                on_disk: "sqlite (naatre.db present)",
+                configured: "postgres",
+            }));
+        }
+        (false, MetaKind::Sqlite) => {
+            return Err(StoreError::DataDirUninitialized(data.to_path_buf()));
+        }
+        _ => {}
     }
+    if cfg.blob == BlobKind::S3 && fs_cas_has_data(data) {
+        return Err(StoreError::Backend(BackendError::Mismatch {
+            on_disk: "fs (objects/ has data)",
+            configured: "s3",
+        }));
+    }
+    Ok(())
+}
+
+/// True when `objects/` holds at least one entry — the on-disk marker of
+/// an fs CAS that has actually stored something (a bare `objects/` dir is
+/// created by opening the store; it marks nothing).
+fn fs_cas_has_data(data: &Path) -> bool {
+    data.join(crate::data_dir::OBJECTS_DIR)
+        .read_dir()
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -720,10 +986,171 @@ mod tests {
     }
 
     #[test]
-    fn blob_s3_refused_naming_m9b() {
+    fn minimal_s3_file_parses() {
+        let cfg = parse(
+            "[backend]\nblob = \"s3\"\nbucket = \"naatre-test\"\nendpoint = \"127.0.0.1:9000\"\nregion = \"us-east-1\"\naccess_key_id = \"naatre\"\nsecret = \"naatre-secret\"\npath_style = true\nallow_plaintext = true\n",
+        )
+        .unwrap();
+        let s3 = cfg.s3.unwrap();
+        assert_eq!(cfg.blob, BlobKind::S3);
+        assert_eq!(s3.endpoint.as_deref(), Some("127.0.0.1:9000"));
+        assert_eq!(s3.bucket, "naatre-test");
+        assert_eq!(s3.region.as_deref(), Some("us-east-1"));
+        assert_eq!(s3.access_key_id, "naatre");
+        assert_eq!(s3.secret, "naatre-secret");
+        assert!(s3.path_style);
+        // Default meta rides along: the backends select independently.
+        assert_eq!(cfg.meta, MetaKind::Sqlite);
+    }
+
+    #[test]
+    fn s3_defaults_and_aws_shape() {
+        // No endpoint = AWS defaults; path_style defaults to false
+        // (virtual-host style); region is optional.
+        let cfg = parse(
+            "[backend]\nblob = \"s3\"\nbucket = \"naatre-test\"\naccess_key_id = \"AKIAEXAMPLE\"\nsecret = \"s3cret\"\n",
+        )
+        .unwrap();
+        let s3 = cfg.s3.unwrap();
+        assert_eq!(s3.endpoint, None);
+        assert_eq!(s3.region, None);
+        assert!(!s3.path_style);
+        // Debug redacts the secret only.
+        let dbg = format!("{s3:?}");
+        assert!(!dbg.contains("s3cret"), "secret leaked in Debug: {dbg}");
+        assert!(dbg.contains("<redacted>"));
+    }
+
+    #[test]
+    fn s3_missing_required_keys_refused_naming_remedy() {
         let e = err_of("[backend]\nblob = \"s3\"\n");
+        assert!(matches!(
+            e,
+            BackendError::S3KeyMissing {
+                key: "bucket",
+                env: "NAATRE_S3_BUCKET"
+            }
+        ));
         let msg = e.to_string();
-        assert!(msg.contains("M9b"), "{msg}");
+        assert!(msg.contains("NAATRE_S3_BUCKET"), "{msg}");
+        let e = err_of("[backend]\nblob = \"s3\"\nbucket = \"naatre-test\"\n");
+        assert!(matches!(
+            e,
+            BackendError::S3KeyMissing {
+                key: "access_key_id",
+                ..
+            }
+        ));
+        let e =
+            err_of("[backend]\nblob = \"s3\"\nbucket = \"naatre-test\"\naccess_key_id = \"a\"\n");
+        assert!(matches!(
+            e,
+            BackendError::S3KeyMissing { key: "secret", .. }
+        ));
+    }
+
+    #[test]
+    fn s3_endpoint_shapes_refused_by_rule_not_value() {
+        for (bad, why) in [
+            ("http://10.0.0.5:9000", "no scheme"),
+            ("https://minio.lan", "no scheme"),
+            ("minio@host:9000", "no userinfo"),
+            ("u:p@host:9000", "no userinfo"),
+            ("host:9000/", "no path"),
+            ("host:9000?x=1", "no path"),
+            ("host:notaport", "port must be a number"),
+            ("", "bare host[:port]"),
+        ] {
+            let e = err_of(&format!(
+                "[backend]\nblob = \"s3\"\nbucket = \"naatre-test\"\naccess_key_id = \"a\"\nsecret = \"s\"\nendpoint = \"{bad}\"\n"
+            ));
+            assert!(
+                matches!(e, BackendError::EndpointInvalid { .. }),
+                "{bad:?}: {e}"
+            );
+            let msg = e.to_string();
+            assert!(
+                !msg.contains(bad) || bad.is_empty(),
+                "endpoint value echoed: {msg}"
+            );
+            let _ = why; // shape notes only
+        }
+        // The bracketed IPv6 literal with a port passes the shape check.
+        let cfg = parse(
+            "[backend]\nblob = \"s3\"\nbucket = \"naatre-test\"\naccess_key_id = \"a\"\nsecret = \"s\"\nendpoint = \"[::1]:9000\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.s3.unwrap().endpoint.as_deref(), Some("[::1]:9000"));
+    }
+
+    #[test]
+    fn s3_bucket_grammar_enforced() {
+        let long = "a".repeat(64);
+        for bad in ["ab", "UPPER", "with.dot", "-leading", long.as_str()] {
+            let e = err_of(&format!(
+                "[backend]\nblob = \"s3\"\nbucket = \"{bad}\"\naccess_key_id = \"a\"\nsecret = \"s\"\n"
+            ));
+            assert!(
+                matches!(e, BackendError::BadValue { ref key, .. } if key == "backend.bucket"),
+                "{bad:?}: {e}"
+            );
+            // The refused value is never echoed.
+            assert!(!e.to_string().contains(bad), "bucket value echoed: {e}");
+        }
+    }
+
+    #[test]
+    fn s3_keys_refused_under_blob_fs() {
+        for (key, value) in [
+            ("endpoint", "\"host:9000\""),
+            ("bucket", "\"naatre-test\""),
+            ("region", "\"us-east-1\""),
+            ("access_key_id", "\"a\""),
+            ("secret", "\"s\""),
+            ("path_style", "true"),
+        ] {
+            let e = err_of(&format!("[backend]\nblob = \"fs\"\n{key} = {value}\n"));
+            assert!(
+                matches!(e, BackendError::KeyWithoutBlobS3 { key: ref k } if *k == *key),
+                "{key}: {e}"
+            );
+        }
+        // A single well-formed s3 file under fs is refused the same way.
+        let e = err_of("[backend]\nblob = \"fs\"\nbucket = \"naatre-test\"\n");
+        assert!(matches!(e, BackendError::KeyWithoutBlobS3 { key: ref k } if k == "bucket"));
+    }
+
+    // NOTE: the env-fallback rule (NAATRE_S3_* consulted when the file
+    // does not carry a key; the file wins) is pinned in
+    // tests/backend_env_test.rs — env mutation is process-global, so it
+    // must not run in this binary beside the parallel parse tests.
+
+    #[test]
+    fn mismatch_guard_refuses_fs_data_dir_switched_to_s3() {
+        // The real shape: a sqlite+fs data dir (naatre.db AND objects/)
+        // whose operator switches blob to s3 in backend.toml.
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(data.join("objects/ab")).unwrap();
+        std::fs::write(data.join("objects/ab/cd"), b"a shard dir marks data").unwrap();
+        std::fs::write(data.join(crate::data_dir::DB_FILE), b"").unwrap();
+        let cfg = BackendConfig::s3(S3Connect {
+            endpoint: Some("127.0.0.1:9000".into()),
+            bucket: "naatre-test".into(),
+            region: None,
+            access_key_id: "a".into(),
+            secret: "s".into(),
+            path_style: true,
+        });
+        let e = check_data_dir_backend(&data, &cfg).unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("fs") && msg.contains("s3"), "{msg}");
+        assert!(msg.contains("NOT auto-migrated"), "{msg}");
+        // A bare objects/ dir (created by a mere open) is not a marker.
+        let bare = dir.path().join("bare");
+        std::fs::create_dir_all(bare.join("objects")).unwrap();
+        std::fs::write(bare.join(crate::data_dir::DB_FILE), b"").unwrap();
+        assert!(check_data_dir_backend(&bare, &cfg).is_ok());
     }
 
     #[test]

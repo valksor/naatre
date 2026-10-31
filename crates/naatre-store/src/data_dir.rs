@@ -12,6 +12,10 @@ use crate::fs_util::{FILE_PERMS, ensure_dir, io_ctx};
 
 /// The SQLite database file name (present only when `meta = sqlite`).
 pub const DB_FILE: &str = "naatre.db";
+/// The history CAS directory name under the data dir (populated only when
+/// `blob = fs`; its EXISTENCE is created by opening the store, its
+/// CONTENT is the fs-CAS marker the backend mismatch guard reads).
+pub const OBJECTS_DIR: &str = "objects";
 const LOCK_FILE: &str = "lockfile";
 
 /// Handle to an initialized naatre data directory (0700 — the host-local
@@ -78,7 +82,7 @@ impl DataDir {
 
     /// The history CAS root, created 0700 on first use.
     pub fn objects_dir(&self) -> Result<PathBuf, StoreError> {
-        let p = self.0.join("objects");
+        let p = self.0.join(OBJECTS_DIR);
         ensure_dir(&p)?;
         Ok(p)
     }

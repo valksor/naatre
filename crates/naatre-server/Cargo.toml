@@ -39,3 +39,8 @@ tokio = { version = "1", features = ["io-util"] }
 # Structured-mutation fuzzing of the canonical decoder (already pinned by
 # naatre-core's dev-deps — no new external crate).
 proptest = "1"
+# The M9b S3 harness (m9_s3_test) includes naatre-store's s3_provision
+# module by path: its SigV4 bootstrap and sha256 pins need these here too.
+sha2 = "0.10"
+hmac = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "blocking"] }

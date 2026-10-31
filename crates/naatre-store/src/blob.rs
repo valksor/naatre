@@ -1,24 +1,48 @@
 //! The blob-CAS backend seam (M9): history blobs go through one trait, so
 //! the filesystem CAS (the zero-config default) and the S3-compatible CAS
-//! (M9b) are interchangeable behind it.
+//! ([`crate::s3::S3Store`], M9b) are interchangeable behind it.
 //!
-//! The M9a slice ships the trait with exactly one real implementation —
-//! the filesystem [`Cas`]; `backend.toml`'s `blob = "s3"` refuses with a
-//! message naming M9b. The seam is what makes the S3 backend a drop-in:
-//! the server holds a `Arc<dyn BlobStore>` and every durability argument
+//! The server holds an `Arc<dyn BlobStore>` and every durability argument
 //! stays put — `put` fsyncs (or otherwise durably lands) the bytes before
 //! returning, and callers write referencing rows only after `put`.
 //!
-//! NOTE (M9a): `Cas::put` returning the id derives it from the payload, so
-//! the filesystem backend is content-addressed end to end. The trait
-//! keeps that contract (`put` RETURNS the id); the M9b S3 implementation
-//! uses the same id derivation as its object key, preserving hash-verified
-//! reads on every backend.
+//! NOTE: `Cas::put` returning the id derives it from the payload, so the
+//! filesystem backend is content-addressed end to end. The trait keeps
+//! that contract (`put` RETURNS the id); the S3 implementation uses the
+//! same id derivation as its object key, preserving hash-verified reads on
+//! every backend.
 
 use naatre_core::ids::Id;
 
 use crate::cas::Cas;
+use crate::data_dir::DataDir;
 use crate::error::StoreError;
+
+/// The CONFIGURED history CAS: the fs [`Cas`] or the S3 backend
+/// ([`crate::s3::S3Store`]), per `cfg.blob` — the one constructor every
+/// blob writer goes through (the server state, the offline import).
+/// Import and serve are separate processes and each own their instance;
+/// the data-dir flock keeps them exclusive.
+pub fn history_cas(
+    data: &DataDir,
+    cfg: &crate::backend::BackendConfig,
+) -> Result<std::sync::Arc<dyn BlobStore>, StoreError> {
+    match cfg.blob {
+        crate::backend::BlobKind::Fs => Ok(std::sync::Arc::new(Cas::new(data)?)),
+        crate::backend::BlobKind::S3 => {
+            let s3 = cfg.s3.as_ref().ok_or(StoreError::Backend(
+                crate::backend::BackendError::S3KeyMissing {
+                    key: "bucket",
+                    env: crate::backend::ENV_S3_BUCKET,
+                },
+            ))?;
+            Ok(std::sync::Arc::new(crate::s3::S3Store::new(
+                s3,
+                cfg.allow_plaintext,
+            )?))
+        }
+    }
+}
 
 /// Content-addressed store for HISTORY blobs.
 pub trait BlobStore: Send + Sync {

@@ -4,6 +4,13 @@
 //! This namespace never shares files with the history CAS (`objects/`) —
 //! expiry deletes whole snapshot dirs, so no refcounting is possible or
 //! needed.
+//!
+//! M9b: the same namespace exists on the S3 backend
+//! (`ephemeral/<snap-id>/objects/…` keys in the configured bucket, deleted
+//! by prefix), behind the [`EphemeralStore`] trait — the filesystem
+//! [`Ephemeral`] and the S3 store ([`crate::s3::S3Store`]) are
+//! interchangeable, so the snapshot GC's both gates work unchanged on
+//! either backend.
 
 use std::fs;
 use std::path::PathBuf;
@@ -15,7 +22,32 @@ use crate::data_dir::DataDir;
 use crate::error::StoreError;
 use crate::fs_util::{io_ctx, is_hex64, read_blob_verified, shard_path, write_compressed};
 
-/// Snapshot-scoped blob store.
+/// Snapshot-scoped blob storage (M9b trait): the per-snapshot CAS the
+/// snapshot verbs and the snapshot GC drive, with the same contract on
+/// every backend.
+pub trait EphemeralStore: Send + Sync {
+    /// Puts a blob into snapshot `snap_id_hex`'s namespace.
+    fn put_blob(&self, snap_id_hex: &str, payload: &[u8]) -> Result<Id, StoreError>;
+
+    /// Fetches and hash-verifies a blob from snapshot `snap_id_hex`.
+    fn get_blob(&self, snap_id_hex: &str, id: &Id) -> Result<Vec<u8>, StoreError>;
+
+    /// Batch existence check within snapshot `snap_id_hex`.
+    fn has(&self, snap_id_hex: &str, ids: &[Id]) -> Result<Vec<bool>, StoreError>;
+
+    /// Deletes the whole snapshot namespace. Idempotent: an already-absent
+    /// namespace is `Ok`, so GC re-runs converge. Refuses non-hex ids.
+    fn delete_snapshot(&self, snap_id_hex: &str) -> Result<(), StoreError>;
+
+    /// Lists snapshot namespaces aged past `older_than_ns` (an absolute
+    /// epoch-ns threshold; the sweeper passes `now - max_ttl`). Age is the
+    /// dir mtime on fs, the newest object's LastModified on S3. Names are
+    /// never used to build paths here; the GC cross-checks them against
+    /// `snapshots` rows and filters non-hex ones.
+    fn rowless_dirs(&self, older_than_ns: i64, now_ns: i64) -> Result<Vec<String>, StoreError>;
+}
+
+/// Snapshot-scoped blob store (the filesystem backend).
 pub struct Ephemeral {
     root: PathBuf, // <data>/ephemeral
 }
@@ -119,6 +151,28 @@ impl Ephemeral {
         }
         out.sort();
         Ok(out)
+    }
+}
+
+impl EphemeralStore for Ephemeral {
+    fn put_blob(&self, snap_id_hex: &str, payload: &[u8]) -> Result<Id, StoreError> {
+        Ephemeral::put_blob(self, snap_id_hex, payload)
+    }
+
+    fn get_blob(&self, snap_id_hex: &str, id: &Id) -> Result<Vec<u8>, StoreError> {
+        Ephemeral::get_blob(self, snap_id_hex, id)
+    }
+
+    fn has(&self, snap_id_hex: &str, ids: &[Id]) -> Result<Vec<bool>, StoreError> {
+        Ephemeral::has(self, snap_id_hex, ids)
+    }
+
+    fn delete_snapshot(&self, snap_id_hex: &str) -> Result<(), StoreError> {
+        Ephemeral::delete_snapshot(self, snap_id_hex)
+    }
+
+    fn rowless_dirs(&self, older_than_ns: i64, now_ns: i64) -> Result<Vec<String>, StoreError> {
+        Ephemeral::rowless_dirs(self, older_than_ns, now_ns)
     }
 }
 

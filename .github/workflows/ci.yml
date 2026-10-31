@@ -37,7 +37,8 @@ jobs:
     # M9: the Postgres metadata backend's legs run for real in CI — the
     # store conformance suite (incl. migration parity) and the named MVCC
     # subset of the M4 land/lease invariants (tests skip-notice locally
-    # without NAATRE_TEST_PG_DSN). Minio (S3) joins with M9b.
+    # without NAATRE_TEST_PG_DSN). M9b adds the S3 legs (below): the full
+    # four-combo matrix runs in this job.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -66,6 +67,17 @@ jobs:
         env:
           NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
           NAATRE_TEST_PG_PASSWORD: naatre
+      # M9b: the S3 legs ride the same job, completing the four-combo
+      # matrix (SQLite/PG × fs/S3 all REAL). The harness fetches the
+      # PINNED minio binary from the pinned GitHub release and
+      # sha256-verifies it on every run (dl.min.io is archived; no service
+      # container needed) — a failed download skip-notices rather than
+      # failing, which is the printed-reason contract, not a hidden skip.
+      - run: cargo test -p naatre-store --test integration --locked
+        env:
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
+          NAATRE_TEST_PG_PASSWORD: naatre
+      - run: cargo test -p naatre-server --test m9_s3_test --locked
 
   deny:
     runs-on: ubuntu-latest

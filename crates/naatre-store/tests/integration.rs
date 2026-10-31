@@ -1,10 +1,17 @@
 //! Store integration tests: migrations (including the pinned future-schema
-//! refuse-to-start fixture), durability pragmas, and the M1a durability
-//! invariant.
+//! refuse-to-start fixture), durability pragmas, the M1a durability
+//! invariant, and the M9 backend CONFORMANCE MATRIX — the same suites over
+//! every (meta, blob) combo, each combo REAL when its dependency (a
+//! PostgreSQL server / a REAL S3 server) can be produced, skip-noticed
+//! with the reason when it cannot.
+
+use std::sync::Arc;
 
 use rusqlite::Connection;
 
-use naatre_store::{Cas, DataDir, MAX_SUPPORTED, Store, StoreError, migrate};
+use naatre_store::{
+    BlobStore, Cas, DataDir, EphemeralStore, MAX_SUPPORTED, S3Store, Store, StoreError, migrate,
+};
 
 fn fresh_conn(dir: &tempfile::TempDir) -> Connection {
     Connection::open(dir.path().join("hand.db")).unwrap()
@@ -246,16 +253,19 @@ fn invariant_blob_durable_before_reference() {
 
 // ---- M9: backend conformance -------------------------------------------------
 //
-// The same store-level suite runs against every (meta, blob) combo that
-// exists. M9a ships two: SQLite+fs (always) and Postgres+fs (a REAL
-// server wherever one can be produced: NAATRE_TEST_PG_DSN, else a locally
-// provisioned throwaway cluster; the legs skip-notice only when no
-// PostgreSQL installation exists). SQLite+S3 and Postgres+S3
-// join the matrix in M9b when the S3 CAS is real.
+// The same store-level suite runs against every (meta, blob) combo. The
+// matrix is REAL wherever its dependency can be produced:
+// SQLite+fs always; Postgres+fs wherever a PostgreSQL ≥16 server exists
+// (NAATRE_TEST_PG_DSN, else a provisioned throwaway cluster); *+S3
+// wherever a REAL S3 server exists (NAATRE_TEST_S3_ENDPOINT, else the
+// pinned minio binary). The MVCC/serialization legs stay PG-meta-only
+// (naatre-server's m9_pg_test).
 
 mod pg_provision;
+mod s3_provision;
 
 use pg_provision::PgTarget;
+use s3_provision::S3Target;
 
 fn open_pg() -> Option<(PgTarget, Store)> {
     let target = pg_provision::acquire()?;
@@ -265,6 +275,14 @@ fn open_pg() -> Option<(PgTarget, Store)> {
         Ok(store) => Some((target, store)),
         Err(e) => panic!("postgres backend open failed (details withheld): {e:?}"),
     }
+}
+
+fn open_s3() -> Option<(S3Target, Arc<S3Store>)> {
+    let target = s3_provision::acquire()?;
+    let cfg = target.config();
+    let store = S3Store::new(cfg.s3.as_ref().unwrap(), cfg.allow_plaintext)
+        .expect("S3 backend builds against a live server");
+    Some((target, Arc::new(store)))
 }
 
 /// The backend-neutral store suite: migrations, schema guard, and the
@@ -487,10 +505,210 @@ fn open_sqlite() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
+/// The backend-neutral BLOB suite: the [`BlobStore`] contract's shapes
+/// every combo must satisfy — roundtrip, idempotent put, missing-blob
+/// error, the size cap, and batch existence.
+fn blob_suite(cas: &dyn BlobStore) {
+    // (1) roundtrip: empty, small, and 1 MiB of hard-to-compress bytes.
+    let mut x = 0x243f_6a88_85a3_08d3u64;
+    let mut lcg = || {
+        x = x
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (x >> 33) as u8
+    };
+    let big: Vec<u8> = (0..1024 * 1024).map(|_| lcg()).collect();
+    for payload in [&b""[..], b"conformance blob", big.as_slice()] {
+        let id = cas.put(payload).unwrap();
+        assert_eq!(cas.get(&id).unwrap(), payload);
+    }
+
+    // (2) idempotent put: identical content returns the same id, and a
+    // get still verifies.
+    let id = cas.put(b"same bytes").unwrap();
+    let id2 = cas.put(b"same bytes").unwrap();
+    assert_eq!(id, id2);
+    assert_eq!(cas.get(&id).unwrap(), b"same bytes");
+
+    // (3) missing blob is BlobMissing naming the id.
+    let absent = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"never put");
+    match cas.get(&absent) {
+        Err(StoreError::BlobMissing(hex)) => assert_eq!(hex, absent.to_hex()),
+        other => panic!("expected BlobMissing, got {other:?}"),
+    }
+
+    // (4) the cap holds before any bytes move (input size, both backends).
+    let too_big = vec![0u8; naatre_store::BLOB_LIMIT + 1];
+    match cas.put(&too_big) {
+        Err(StoreError::TooLarge { limit, got }) => {
+            assert_eq!(limit, naatre_store::BLOB_LIMIT);
+            assert_eq!(got, naatre_store::BLOB_LIMIT + 1);
+        }
+        other => panic!("expected TooLarge, got {other:?}"),
+    }
+
+    // (5) batch existence, aligned with ids, and the empty batch.
+    let res = cas.has(&[id, absent, id]).unwrap();
+    assert_eq!(res, vec![true, false, true]);
+    assert!(cas.has(&[]).unwrap().is_empty());
+}
+
+/// The backend-neutral SNAPSHOT-BLOB suite (the store-level snapshot
+/// primitive per blob backend): put/get/has inside one snapshot
+/// namespace, isolation between namespaces and from the history CAS, the
+/// non-hex id refusals, wholesale delete (idempotent, empties the
+/// namespace), and the aged-namespace listing the GC sweeps by (the
+/// brief's pinned future-threshold shape: a threshold beyond now makes
+/// even fresh namespaces count as aged).
+fn snapshot_blob_suite(eph: &dyn EphemeralStore) {
+    let snap_hex = |seed: u8| format!("{:062x}{:02x}", 0u128, seed);
+    let snap = snap_hex(0xB1);
+
+    // (1) roundtrip + has within one namespace.
+    let id = eph.put_blob(&snap, b"snapshot bytes").unwrap();
+    assert_eq!(eph.get_blob(&snap, &id).unwrap(), b"snapshot bytes");
+    assert_eq!(eph.has(&snap, &[id]).unwrap(), vec![true]);
+
+    // (2) isolation: another snapshot does not see it.
+    let other = snap_hex(0xB2);
+    assert_eq!(eph.has(&other, &[id]).unwrap(), vec![false]);
+    match eph.get_blob(&other, &id) {
+        Err(StoreError::BlobMissing(_)) => {}
+        other => panic!("expected BlobMissing in another snapshot, got {other:?}"),
+    }
+
+    // (3) non-hex snapshot ids are refused on every op.
+    let long_a = "a".repeat(63);
+    let long_g = "g".repeat(64);
+    for bad in ["", "abc", "../escape", long_a.as_str(), long_g.as_str()] {
+        assert!(
+            matches!(
+                eph.put_blob(bad, b"x"),
+                Err(StoreError::InvalidSnapshotId(_))
+            ),
+            "put must reject {bad:?}"
+        );
+        assert!(
+            matches!(
+                eph.get_blob(bad, &naatre_core::ids::Id([0u8; 32])),
+                Err(StoreError::InvalidSnapshotId(_))
+            ),
+            "get must reject {bad:?}"
+        );
+        assert!(matches!(
+            eph.has(bad, &[]),
+            Err(StoreError::InvalidSnapshotId(_))
+        ));
+        assert!(matches!(
+            eph.delete_snapshot(bad),
+            Err(StoreError::InvalidSnapshotId(_))
+        ));
+    }
+
+    // (4) wholesale delete removes the namespace and is idempotent.
+    eph.delete_snapshot(&snap).unwrap();
+    assert_eq!(eph.has(&snap, &[id]).unwrap(), vec![false]);
+    eph.delete_snapshot(&snap).unwrap(); // converges
+
+    // (5) the aged listing: a fresh namespace is not aged by a past
+    // threshold, and a future threshold (now + large) ages it.
+    let snap = snap_hex(0xB3);
+    let id = eph.put_blob(&snap, b"aged?").unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    let past = now - 60 * 1_000_000_000;
+    assert!(
+        !eph.rowless_dirs(past, now).unwrap().contains(&snap),
+        "a fresh namespace is not aged by a past threshold"
+    );
+    let aged = eph.rowless_dirs(now + 10_000_000_000, now).unwrap();
+    assert!(
+        aged.contains(&snap),
+        "a future threshold ages every namespace: {aged:?}"
+    );
+    // The listed name deletes as a namespace (what the GC does with it).
+    eph.delete_snapshot(aged.last().unwrap()).unwrap();
+    assert_eq!(eph.has(&snap, &[id]).unwrap(), vec![false]);
+}
+
+/// The S3 tamper legs: hash verification and the zstd-bomb cap against a
+/// REAL bucket, by writing foreign bytes at a content-addressed key
+/// through the maintenance hatch — the same integrity guarantees the fs
+/// unit tests pin by touching files.
+fn s3_integrity_suite(store: &S3Store) {
+    use object_store::path::Path;
+    use object_store::{ObjectStoreExt, PutPayload};
+    use std::io::Read as _;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let shard_key = |id: &naatre_core::ids::Id| {
+        let hex = id.to_hex();
+        Path::from(format!(
+            "objects/{}/{}/{}",
+            &hex[0..2],
+            &hex[2..4],
+            &hex[4..]
+        ))
+    };
+
+    // (1) HashMismatch: bytes at the key that hash elsewhere are refused,
+    // and the foreign object is left in place for diagnosis.
+    let a = store.put(b"contents of A").unwrap();
+    let b = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"not what A holds");
+    let actual_of_b = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"contents of B");
+    let compressed_b = zstd::bulk::compress(b"contents of B", 3).unwrap();
+    let key_b = shard_key(&b);
+    rt.block_on(store.raw().put(&key_b, PutPayload::from(compressed_b)))
+        .expect("raw put");
+    match store.get(&b) {
+        Err(StoreError::HashMismatch { expected, actual }) => {
+            assert_eq!(expected, b.to_hex());
+            assert_eq!(actual, actual_of_b.to_hex());
+            // Still there (nothing deleted for diagnosis).
+            assert!(
+                rt.block_on(store.raw().head(&key_b)).is_ok(),
+                "foreign object left in place"
+            );
+        }
+        other => panic!("expected HashMismatch, got {other:?}"),
+    }
+    let _ = a;
+
+    // (2) The expanded-size cap stops a zstd bomb within the read loop:
+    // ~96 MiB of zeros compresses to a few KiB but decompresses past the
+    // 64 MiB limit.
+    let bomb_payload =
+        zstd::stream::encode_all(std::io::repeat(0u8).take(96 * 1024 * 1024), 3).unwrap();
+    let bomb_id = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"bomb id");
+    let key_bomb = shard_key(&bomb_id);
+    rt.block_on(store.raw().put(&key_bomb, PutPayload::from(bomb_payload)))
+        .expect("raw put");
+    match store.get(&bomb_id) {
+        Err(StoreError::TooLarge { limit, got }) => {
+            assert_eq!(limit, naatre_store::BLOB_LIMIT);
+            assert!(got > limit, "cap must stop after passing the limit");
+        }
+        other => panic!("expected TooLarge, got {other:?}"),
+    }
+}
+
 #[test]
 fn conformance_sqlite_fs() {
     let (_dir, store) = open_sqlite();
     conformance(&store);
+
+    // The blob/ephemeral side of the combo (fs CAS).
+    let dir = tempfile::tempdir().unwrap();
+    let dd = DataDir::create(dir.path()).unwrap();
+    let cas: Arc<dyn BlobStore> = Arc::new(Cas::new(&dd).unwrap());
+    blob_suite(cas.as_ref());
+    let eph: Arc<dyn EphemeralStore> = Arc::new(naatre_store::Ephemeral::new(&dd).unwrap());
+    snapshot_blob_suite(eph.as_ref());
 }
 
 #[test]
@@ -499,6 +717,159 @@ fn conformance_postgres_fs() {
         return; // pg_provision already printed the skip notice
     };
     conformance(&store);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dd = DataDir::create(dir.path()).unwrap();
+    let cas: Arc<dyn BlobStore> = Arc::new(Cas::new(&dd).unwrap());
+    blob_suite(cas.as_ref());
+    let eph: Arc<dyn EphemeralStore> = Arc::new(naatre_store::Ephemeral::new(&dd).unwrap());
+    snapshot_blob_suite(eph.as_ref());
+}
+
+/// The full store suite on SQLite+S3: needs only the REAL S3 server.
+#[test]
+fn conformance_sqlite_s3() {
+    let Some((_target, s3)) = open_s3() else {
+        return; // s3_provision already printed the skip notice
+    };
+    let (_dir, store) = open_sqlite();
+    conformance(&store);
+
+    blob_suite(s3.as_ref());
+    snapshot_blob_suite(s3.as_ref());
+    s3_integrity_suite(&s3);
+}
+
+/// The full store suite on Postgres+S3: needs BOTH dependencies; each
+/// provisioner skip-notices its own absence (the printed reason names
+/// which dependency is missing).
+#[test]
+fn conformance_postgres_s3() {
+    let Some((_target, store)) = open_pg() else {
+        return; // pg_provision printed the reason (no PostgreSQL server)
+    };
+    let Some((_s3target, s3)) = open_s3() else {
+        return; // s3_provision printed the reason (no S3 server)
+    };
+    conformance(&store);
+
+    blob_suite(s3.as_ref());
+    snapshot_blob_suite(s3.as_ref());
+    s3_integrity_suite(&s3);
+}
+
+/// The bucket layout pin: history keys are `objects/ab/cd/<62hex>` — the
+/// fs CAS layout byte-for-byte (the documented migration shape) — and
+/// snapshot keys sit under `ephemeral/<snap>/objects/…`, a namespace the
+/// history CAS never reads and the GC deletes wholesale by prefix.
+#[test]
+fn s3_layout_mirrors_fs() {
+    let Some((_target, s3)) = open_s3() else {
+        return; // s3_provision already printed the skip notice
+    };
+    use futures::StreamExt;
+    use object_store::path::Path;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let list_keys = |prefix: Path| -> Vec<String> {
+        rt.block_on(async {
+            s3.raw()
+                .list(Some(&prefix))
+                .map(|m| m.expect("list item").location.to_string())
+                .collect::<Vec<_>>()
+                .await
+        })
+    };
+
+    // History namespace: exactly the fs shard shape.
+    let id = s3.put(b"layout pin").unwrap();
+    let hex = id.to_hex();
+    let expected = format!("objects/{}/{}/{}", &hex[0..2], &hex[2..4], &hex[4..]);
+    let keys = list_keys(Path::from("objects"));
+    assert!(
+        keys.contains(&expected),
+        "history key {expected} missing from {keys:?}"
+    );
+    assert!(
+        keys.iter().all(|k| k.starts_with("objects/")),
+        "no foreign keys under objects/: {keys:?}"
+    );
+
+    // Snapshot namespace: ephemeral/<snap>/objects/…, disjoint from
+    // history, deletable wholesale by prefix.
+    let snap = format!("{:062x}{:02x}", 0u128, 0xE1);
+    let sid = s3.put_blob(&snap, b"snapshot layout pin").unwrap();
+    let shex = sid.to_hex();
+    let expected_snap = format!(
+        "ephemeral/{snap}/objects/{}/{}/{}",
+        &shex[0..2],
+        &shex[2..4],
+        &shex[4..]
+    );
+    assert_eq!(
+        list_keys(Path::from(format!("ephemeral/{snap}"))),
+        vec![expected_snap]
+    );
+    assert!(
+        matches!(s3.get(&sid), Err(StoreError::BlobMissing(_))),
+        "a history get of a snapshot id must miss"
+    );
+    s3.delete_snapshot(&snap).unwrap();
+    assert!(list_keys(Path::from(format!("ephemeral/{snap}"))).is_empty());
+}
+
+/// The `history_cas` constructor (what the offline import and the server
+/// state share) follows `cfg.blob`: the fs CAS by default, the S3 backend
+/// for `blob = "s3"` — and two instances (the import-writes / serve-reads
+/// shape) interoperate through the bucket, leaving the data dirs empty.
+#[test]
+fn history_cas_follows_the_configured_backend() {
+    // Default config → fs CAS bytes under the data dir.
+    let dir = tempfile::tempdir().unwrap();
+    let dd = DataDir::create(dir.path()).unwrap();
+    let cas =
+        naatre_store::blob::history_cas(&dd, &naatre_store::BackendConfig::default()).unwrap();
+    let id = cas.put(b"fs through the constructor").unwrap();
+    assert!(dir.path().join("objects").join(&id.to_hex()[0..2]).exists());
+
+    // s3 config → bucket keys, readable through a second, independent
+    // instance; neither data dir holds the bytes.
+    let Some(target) = s3_provision::acquire() else {
+        return; // s3_provision already printed the skip notice
+    };
+    let cfg = target.config();
+    let writer_dir = tempfile::tempdir().unwrap();
+    let reader_dir = tempfile::tempdir().unwrap();
+    let writer = naatre_store::blob::history_cas(
+        &DataDir::create(writer_dir.path().join("d")).unwrap(),
+        &cfg,
+    )
+    .unwrap();
+    let reader = naatre_store::blob::history_cas(
+        &DataDir::create(reader_dir.path().join("d")).unwrap(),
+        &cfg,
+    )
+    .unwrap();
+    let payload = b"s3 through the constructor";
+    let sid = writer.put(payload).unwrap();
+    assert_eq!(reader.get(&sid).unwrap(), payload);
+    assert!(
+        !writer_dir
+            .path()
+            .join("objects")
+            .join(&sid.to_hex()[0..2])
+            .exists()
+    );
+    assert!(
+        !reader_dir
+            .path()
+            .join("objects")
+            .join(&sid.to_hex()[0..2])
+            .exists()
+    );
 }
 
 /// Migration PARITY: the Postgres schema after its migration set carries

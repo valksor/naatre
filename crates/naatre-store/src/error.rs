@@ -52,4 +52,11 @@ pub enum StoreError {
 
     #[error("invalid snapshot id {0:?}: must be 64 lowercase hex characters")]
     InvalidSnapshotId(String),
+
+    #[error(
+        "S3 operation failed ({op}; driver details withheld: S3 client errors can \
+         embed the endpoint and request state — check the endpoint, credentials, \
+         bucket, and bucket permissions)"
+    )]
+    S3 { op: &'static str },
 }

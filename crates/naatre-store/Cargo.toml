@@ -15,6 +15,23 @@ postgres = "0.19"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 toml = "0.9"
+# S3-compatible CAS backend (M9b): the `aws` feature only — no azure/gcp/http
+# stores, no local-filesystem store (naatre keeps its own fs CAS). rustls
+# (aws-lc-rs crypto) rides in via the feature; see s3.rs for the sync facade.
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
+# The S3 store is sync-facing (BlobStore has no async); a small private
+# current-thread runtime drives object_store's futures.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
+# Stream driving for object_store listings (already in the tree via
+# object_store).
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+# SigV4 signing for the test harness's CreateBucket call (the S3 legs run
+# against a REAL server; see tests/s3_provision).
+hmac = "0.12"
+sha2 = "0.10"
+# One CreateBucket + health poll per test server; object_store already
+# brings reqwest+rustls into the tree, this only names it for the harness.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "blocking"] }

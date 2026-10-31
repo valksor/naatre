@@ -1,7 +1,7 @@
 //! naatre store: pluggable metadata (SQLite default, Postgres 16+ from M9)
 //! behind one statement surface, a content-addressed history CAS behind
-//! the [`BlobStore`] seam (filesystem now, S3-compatible in M9b), and the
-//! ephemeral snapshot storage.
+//! the [`BlobStore`] seam (filesystem default, S3-compatible since M9b),
+//! and the ephemeral snapshot storage behind [`EphemeralStore`].
 //!
 //! The store is synchronous by design: both metadata clients are blocking,
 //! so the future server crate reaches them through `spawn_blocking`. There
@@ -24,8 +24,12 @@
 //! With `meta = postgres` there is no `naatre.db`: the metadata lives in
 //! the configured Postgres 16+ database (same schema via the parallel
 //! migration set), while the CAS, ephemeral namespace, and lockfile stay
-//! in the data dir. With `blob = s3` (M9b) the history CAS moves out too —
-//! see the README erasure enumeration for what that means for deletion.
+//! in the data dir. With `blob = s3` (M9b) the history CAS and the
+//! ephemeral namespace move into the configured bucket —
+//! `objects/ab/cd/<hex>` and `ephemeral/<snap>/objects/…` keys of the same
+//! shape as the fs layout (see [`s3`]); a data dir holding fs objects is
+//! never switched in place, and see the README erasure enumeration for
+//! what a bucket outliving the data dir means for deletion.
 //!
 //! Durability invariant: every blob is durably in the CAS before any row
 //! referencing it commits — callers must `put` before (or inside, but
@@ -41,14 +45,16 @@ pub mod error;
 pub mod fs_util;
 pub mod meta;
 pub mod migrate;
+pub mod s3;
 pub mod store;
 
-pub use backend::{BackendConfig, BlobKind, MetaKind};
+pub use backend::{BackendConfig, BlobKind, MetaKind, S3Connect};
 pub use blob::BlobStore;
 pub use cas::{BLOB_LIMIT, Cas};
 pub use data_dir::{DataDir, LockGuard};
-pub use ephemeral::Ephemeral;
+pub use ephemeral::{Ephemeral, EphemeralStore};
 pub use error::StoreError;
 pub use meta::{Db, DbError, DbTx, Dialect, IntoP, P, Row, Sql, Val};
 pub use migrate::{MAX_SUPPORTED, migrate, migrate_postgres};
+pub use s3::S3Store;
 pub use store::Store;
