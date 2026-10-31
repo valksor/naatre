@@ -9,10 +9,17 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "MPL-2.0",
     "Zlib",
     "CC0-1.0",
     "Unicode-3.0",
+    # DATA, not linked code: webpki-roots / webpki-root-certs (the Mozilla
+    # root-store snapshot riding reqwest 0.13's rustls feature, which
+    # object_store's S3 backend cannot avoid) ship under CDLA-Permissive-2.0.
+    # It is a permissive Linux Foundation data license, reviewed as
+    # DFSG-free by Debian; Fedora classifies it allowed-for-content. naatre
+    # is GPL-3.0-only: if a reviewer judges this license GPL-3-incompatible,
+    # the remedy is dropping the embedded roots, not re-licensing naatre.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
