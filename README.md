@@ -205,8 +205,27 @@ invisible to a running mount (a new mount picks up the new ref). Ctrl-C or
 SIGTERM stops the daemon. The same VFS layer runs in-process in the test
 suite (no kernel mount needed — that is how CI exercises it, including a
 byte-exact mount-vs-clone parity walk, a cold-mount cargo build of
-naatre's own sources, and corrupt-cache recovery). FUSE (Linux-only) is
-the follow-up platform front-end; this release ships NFSv3.
+naatre's own sources, and corrupt-cache recovery).
+
+**Platform front-ends.** NFSv3 ships everywhere; Linux also has the FUSE
+front-end: `naatre mount <repo> --fuse /mnt/point` (UNSTABLE) mounts
+through `fuser` (pure Rust, no libfuse; needs `/dev/fuse` and the
+`fusermount3` helper). A FUSE mount has **no network surface at all** and
+only the mounting user can access it — the AUTH_SYS caveat below does not
+apply. Stop it with SIGINT/SIGTERM (unmounts first) or an external
+`umount /mnt/point`; the writable flush runs either way.
+
+**Real-mount e2e.** Where the platform allows it, the test suite mounts
+the daemon's export with the REAL kernel client — byte parity vs a
+materialized clone (readdir + read + stat sizes + exec bits), a cold
+`cargo build` with sources served off the mount, and the writable
+`--flush-land` flow. When the environment refuses the mount or suppresses
+data operations, the tests SKIP WITH A PRINTED NOTICE (never silently);
+under root a mount failure is treated as a real defect. Note for macOS:
+`mount_nfs` defaults to a reserved source port (`resvport`), which needs
+root — the printed macOS line carries `noresvport` so a normal user can
+mount; some macOS builds accept that unprivileged mount but then suppress
+data operations (metadata-only) until the mount is made by root.
 
 Security/bind: the daemon binds **127.0.0.1 on an ephemeral port** with an
 unguessable per-mount export path (`/naatre/<32 random hex>`), and prints
@@ -215,7 +234,14 @@ non-loopback `--listen` is explicit opt-in and prints the same cleartext
 warning `serve` does. **AUTH_SYS authenticates nothing**: NFS grants by
 network identity alone, so anyone who can reach the port can read the
 export (and write to a writable one) — keep mounts on loopback or behind
-a network you control.
+a network you control. Files in the view belong to the mounting user.
+What the secret path protects, precisely: **mounting** requires it, and
+NFS file handles embed a per-mount 128-bit random secret (a forged handle
+— e.g. nfsserve's predictable default layout — is rejected as a bad
+handle; a raw-RPC test pins this). Honest limits that remain: a
+**same-user process can read an established mount**, and the NFS **mount
+command line, including the export path, is visible in `ps`** to same-user
+processes while the client mount exists.
 
 Hydration failures name the object: a missing object or a hash mismatch
 prints the id on the daemon's stderr and surfaces a distinct errno
@@ -232,8 +258,12 @@ read-only and every write op answers EROFS. With the flag, file-create
 enforces the path grammar and NFC at create (rejections name why) and
 writes buffer in a shadow dir; on exit the daemon **stages** them as a
 changeset on top of the pin and prints its id — **flush never lands
-anything** (no ref moves; re-flush re-stages). No mkdir, delete, or
-rename in this first cut.
+anything** (no ref moves; re-flush re-stages). With `--flush-land`
+(UNSTABLE, requires `--writable`), the staged changeset then goes through
+the **same land path `naatre land` uses**: the idempotency key is printed
+before the request, main advances onto the landed head, and the exit code
+mirrors land's conflict contract (2 for a 409 conflict or a settled key).
+No mkdir, delete, or rename in this first cut.
 
 ## Error codes
 
@@ -280,13 +310,17 @@ a generic message + `request_id` only.
 | `internal` | 500 | internal error; specifics stay in server logs |
 
 Retryable 503s carry `Retry-After: 1`; back off and retry. The bundled CLI
-does exactly that on idempotent verbs (reads, `repo create`, object PUT,
-snapshot POST, the POST-shaped batch reads): it retries
+does exactly that on idempotent verbs (reads, object PUT): it retries
 `writer_busy`/`server_busy`/`request_timeout` honoring `Retry-After`,
-bounded at 3 tries / 5 s of total waiting. `derivation_pending` and
-`blame_too_large` surface immediately (a derive backlog is not a 5 s
-event; a structural cap is deterministic), and keyed writes (`land`,
-changeset create) are never retried — their key semantics own duplicates.
+bounded at 3 tries / 5 s of total waiting. The idempotent POSTs (`repo
+create`, snapshot POST, the POST-shaped batch reads) retry only the
+**pre-execution** rejections `writer_busy`/`server_busy` — a
+`request_timeout` on a POST surfaces instead of replaying, because the
+shed can drop the response after the write already committed and a replay
+could double-apply. `derivation_pending` and `blame_too_large` surface
+immediately (a derive backlog is not a 5 s event; a structural cap is
+deterministic), and keyed writes (`land`, changeset create) are never
+retried — their key semantics own duplicates.
 
 ## Path grammar
 

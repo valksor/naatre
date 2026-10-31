@@ -255,10 +255,21 @@ enum Cmd {
         /// (never landed) on flush at shutdown. Read-only by default.
         #[arg(long)]
         writable: bool,
+        /// UNSTABLE (with --writable): land the staged changeset onto main
+        /// at shutdown through the same land path `naatre land` uses; the
+        /// idempotency key is printed for retries.
+        #[arg(long)]
+        flush_land: bool,
         /// Listen address (default 127.0.0.1:0; non-loopback prints the
         /// cleartext warning).
         #[arg(long)]
         listen: Option<String>,
+        /// UNSTABLE (Linux only): serve through the kernel FUSE front-end
+        /// at this mountpoint instead of NFSv3. Only the mounting user can
+        /// access the mount; SIGINT/SIGTERM unmounts and flushes first.
+        #[cfg(target_os = "linux")]
+        #[arg(long)]
+        fuse: Option<String>,
         #[command(flatten)]
         net: NetOpts,
     },
@@ -477,15 +488,44 @@ fn main() {
             repo,
             at,
             writable,
+            flush_land,
             listen,
             net,
-        } => verbs::mount::run(
-            &repo,
-            at.as_deref(),
-            writable,
-            listen.as_deref(),
-            &net.net(),
-        ),
+            #[cfg(target_os = "linux")]
+            fuse,
+        } => {
+            // The Linux-only FUSE front-end takes over when --fuse is set;
+            // exactly one of the two `let code` bindings exists per platform.
+            #[cfg(target_os = "linux")]
+            let code = match fuse.as_deref() {
+                Some(mountpoint) => verbs::fuse::run(
+                    &repo,
+                    at.as_deref(),
+                    writable,
+                    flush_land,
+                    mountpoint,
+                    &net.net(),
+                ),
+                None => verbs::mount::run(
+                    &repo,
+                    at.as_deref(),
+                    writable,
+                    flush_land,
+                    listen.as_deref(),
+                    &net.net(),
+                ),
+            };
+            #[cfg(not(target_os = "linux"))]
+            let code = verbs::mount::run(
+                &repo,
+                at.as_deref(),
+                writable,
+                flush_land,
+                listen.as_deref(),
+                &net.net(),
+            );
+            code
+        }
     };
     std::process::exit(code);
 }

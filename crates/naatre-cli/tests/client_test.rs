@@ -3854,3 +3854,171 @@ fn blame_cli_prints_the_pinned_formats() {
         "the stable binary code is still noted on stderr"
     );
 }
+
+// ---- retry pins: POSTs replay only pre-execution codes ----------------------
+
+use naatre_cli::client::{Client, HttpError};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+/// A canned HTTP responder: every request gets a 503 envelope with `code`
+/// and `Retry-After: 0`, and the hit count is observable. Lets the retry
+/// pins count attempts exactly (the real server's 503s are timing-shaped;
+/// this stub is deterministic).
+struct RetryStub {
+    base: String,
+    hits: Arc<AtomicUsize>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    _dir: tempfile::TempDir,
+}
+
+impl Drop for RetryStub {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+fn retry_stub(code: &'static str, count_path: &'static str) -> RetryStub {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_t = hits.clone();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = std::thread::spawn(move || {
+        listener.set_nonblocking(true).expect("nonblocking");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if matches!(
+                shutdown_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ) || std::time::Instant::now() > deadline
+            {
+                return;
+            }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking");
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .expect("read timeout");
+                    // Read the request head, then any body (content-length).
+                    let mut buf = [0u8; 65536];
+                    let mut got = Vec::new();
+                    loop {
+                        let n = match std::io::Read::read(&mut stream, &mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(_) => break,
+                        };
+                        got.extend_from_slice(&buf[..n]);
+                        let head_end = got.windows(4).position(|w| w == b"\r\n\r\n");
+                        if let Some(pos) = head_end {
+                            let header_text = String::from_utf8_lossy(&got[..pos]).to_lowercase();
+                            let body_len: usize = header_text
+                                .lines()
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse().ok())
+                                .unwrap_or(0);
+                            if got.len() >= pos + 4 + body_len {
+                                break;
+                            }
+                        }
+                    }
+                    // Counted BEFORE the reply bytes go out: when the client
+                    // returns, the count already includes its attempt (the
+                    // write and the increment are on the same thread). Only
+                    // the path under test counts — the client's one-shot
+                    // GET /version check must not muddy the counts.
+                    let first_line = String::from_utf8_lossy(&got)
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if first_line.contains(count_path) {
+                        hits_t.fetch_add(1, AtomicOrdering::SeqCst);
+                    }
+                    let body = format!(
+                        r#"{{"error":{{"code":"{code}","message":"stub","retryable":true,"details":null,"request_id":"stub"}}}}"#
+                    );
+                    let resp = format!(
+                        "HTTP/1.1 503 Busy\r\nContent-Type: application/json\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = std::io::Write::write_all(&mut stream, resp.as_bytes());
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        }
+    });
+    RetryStub {
+        base: format!("http://127.0.0.1:{port}"),
+        hits,
+        shutdown: Some(shutdown_tx),
+        handle: Some(handle),
+        _dir: dir,
+    }
+}
+
+impl RetryStub {
+    fn hit_count(&self) -> usize {
+        self.hits.load(AtomicOrdering::SeqCst)
+    }
+}
+
+/// The advisor pin: `request_timeout` is NOT replayed for repo create (the
+/// shed can drop the response after the write committed — a replay could
+/// double-apply or surface a spurious 409), while the same code IS replayed
+/// for reads and the pre-execution `writer_busy` IS replayed for the POST.
+#[test]
+fn repo_create_surfaced_not_replayed_on_request_timeout() {
+    // POST + request_timeout: exactly ONE attempt, error surfaced.
+    let post_stub = retry_stub("request_timeout", "/v1/repos");
+    let client = Client::new(&post_stub.base, Some("t".into()));
+    let err = client
+        .post_json_idempotent("/v1/repos", &json!({ "name": "x" }))
+        .expect_err("request_timeout must surface, not retry");
+    match err {
+        HttpError::Envelope {
+            status: 503,
+            code,
+            retry_after,
+            ..
+        } => {
+            assert_eq!(code, "request_timeout");
+            assert_eq!(retry_after, Some(0));
+        }
+        other => panic!("expected the request_timeout envelope, got {other:?}"),
+    }
+    assert_eq!(
+        post_stub.hit_count(),
+        1,
+        "repo create must NOT be replayed on request_timeout"
+    );
+
+    // Contrast, same gate both directions: a read IS replayed (idempotent).
+    let get_stub = retry_stub("request_timeout", "get /v1/repos");
+    let client = Client::new(&get_stub.base, Some("t".into()));
+    let _ = client.get_json("/v1/repos", &[]);
+    assert_eq!(
+        get_stub.hit_count(),
+        3,
+        "reads replay request_timeout (3 tries)"
+    );
+
+    // And the POST gate stays open for pre-execution rejections.
+    let wb_stub = retry_stub("writer_busy", "/v1/repos");
+    let client = Client::new(&wb_stub.base, Some("t".into()));
+    let _ = client.post_json_idempotent("/v1/repos", &json!({ "name": "x" }));
+    assert_eq!(
+        wb_stub.hit_count(),
+        3,
+        "writer_busy (pre-execution) IS replayed for repo create"
+    );
+}

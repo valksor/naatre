@@ -15,7 +15,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::{Net, VerbError};
-use crate::client::HttpError;
+use crate::client::{Client, HttpError};
 use crate::wc::{State, Wc};
 
 /// A settled land: the key used (for retries) and the server's response
@@ -26,6 +26,31 @@ pub struct LandOutcome {
     pub landed: String,
     pub main: String,
     pub rebased: u64,
+}
+
+/// The shared land POST (`{head, key}` → `{landed, main, rebased}`): the
+/// one code path `naatre land` and the mount daemon's `--flush-land` both
+/// drive. `on_key` fires BEFORE the request (a 503 or a crash must still
+/// show the key a retry needs) — the CLI prints it, the mount daemon
+/// prints it, the MCP server passes a no-op.
+pub fn land_changeset(
+    client: &Client,
+    repo: &str,
+    head: &str,
+    key: &str,
+    on_key: &mut dyn FnMut(&str),
+) -> Result<LandOutcome, HttpError> {
+    on_key(key);
+    let (_status, value) = client.post_json(
+        &format!("/v1/repos/{}/land", crate::client::uri_segment(repo)),
+        &json!({ "head": head, "key": key }),
+    )?;
+    Ok(LandOutcome {
+        key: key.to_string(),
+        landed: value["landed"].as_str().unwrap_or("?").to_string(),
+        main: value["main"].as_str().unwrap_or("?").to_string(),
+        rebased: value["rebased"].as_u64().unwrap_or(0),
+    })
 }
 
 /// Runs land; returns the pinned exit code (0 success, 2 conflict-class,
@@ -118,49 +143,30 @@ pub fn core(
     let state = wc.load_state().map_err(VerbError::Local)?;
     let client = wc.client(net).map_err(VerbError::Local)?;
     let key = key.map(str::to_string).unwrap_or_else(random_key);
-    // Printed before the request: a 503 or a crash must still show the key
-    // a retry needs.
-    on_key(&key);
 
-    let repo = &state.server_repo;
-    let body = json!({ "head": state.head, "key": key });
-    match client.post_json(
-        &format!("/v1/repos/{}/land", crate::client::uri_segment(repo)),
-        &body,
-    ) {
-        Ok((_status, value)) => {
-            let landed = value["landed"].as_str().unwrap_or("?").to_string();
-            let main = value["main"].as_str().unwrap_or("?").to_string();
-            let rebased = value["rebased"].as_u64().unwrap_or(0);
-            // The rebase rewrote the client's head server-side; advance the
-            // working copy onto the landed history and record the base.
-            if landed != "?" {
-                let new_state = State {
-                    head: landed.clone(),
-                    base: Some(main.clone()),
-                    sparse: state.sparse,
-                    server_repo: state.server_repo,
-                };
-                wc.save_state(&new_state).map_err(|e| {
-                    VerbError::Local(format!(
-                        "land settled but updating .naatre/state.json failed: {e}"
-                    ))
-                })?;
-            }
-            Ok(LandOutcome {
-                key,
-                landed,
-                main,
-                rebased,
-            })
-        }
-        Err(e) => Err(VerbError::Http(e)),
+    let outcome = land_changeset(&client, &state.server_repo, &state.head, &key, on_key)
+        .map_err(VerbError::Http)?;
+    // The rebase rewrote the client's head server-side; advance the
+    // working copy onto the landed history and record the base.
+    if outcome.landed != "?" {
+        let new_state = State {
+            head: outcome.landed.clone(),
+            base: Some(outcome.main.clone()),
+            sparse: state.sparse,
+            server_repo: state.server_repo,
+        };
+        wc.save_state(&new_state).map_err(|e| {
+            VerbError::Local(format!(
+                "land settled but updating .naatre/state.json failed: {e}"
+            ))
+        })?;
     }
+    Ok(outcome)
 }
 
 /// The default idempotency key: a random 8-hex suffix (4 bytes from the OS
 /// CSPRNG; a time-derived fallback keeps the verb working without it).
-fn random_key() -> String {
+pub fn random_key() -> String {
     let from_os = std::fs::File::open("/dev/urandom").ok().and_then(|mut f| {
         use std::io::Read as _;
         let mut b = [0u8; 4];

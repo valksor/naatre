@@ -7,6 +7,15 @@
 //! create enforcement, and stage-not-land flush run against the real
 //! server; hydration-error typing is pinned by the in-memory double in
 //! `src/vfs.rs` (the server itself refuses to create the broken states).
+//!
+//! M8b adds the REAL-kernel-mount leg (where the platform allows): the NFS
+//! e2e actually mounts the daemon's export with `mount_nfs` — byte parity
+//! vs the materialized clone, a cold cargo build against the mount, and the
+//! writable `--flush-land` flow — plus the Linux FUSE runtime mount behind
+//! `#[cfg(target_os = "linux")]` (gated on /dev/fuse + fusermount3, skip
+//! notice otherwise; macOS never compiles it). A mount attempt that fails
+//! in a non-root/sandboxed environment SKIPS with a printed notice, never
+//! silently; under root a mount failure is a real failure.
 
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -983,4 +992,931 @@ fn cargo_build_against_cold_mount() {
         "cargo build -p naatre-core failed against the cold mount"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- M8b: the REAL kernel-mount leg (where the platform allows) -------------
+
+/// The exact flags the M8b research pinned for a non-root macOS mount:
+/// `resvport` (mount_nfs's default source port) needs root, so the e2e
+/// carries `noresvport`; `nfc` aligns the client's name normalization with
+/// the grammar; `soft` keeps a dead daemon from wedging the test.
+#[cfg(target_os = "macos")]
+fn nfs_mount_flags(port: u16) -> String {
+    format!("port={port},mountport={port},tcp,nfc,noresvport,soft,nfsvers=3")
+}
+
+/// Mounts the daemon's export with the REAL kernel client. Returns true on
+/// success. A failure under root is a REAL failure (panic); a failure as
+/// non-root reads as "this environment cannot mount" (sandboxed CI): the
+/// SKIP NOTICE is printed here and false returned — never silent.
+#[cfg(target_os = "macos")]
+fn nfs_mount_or_skip_notice(port: u16, export_path: &str, mnt: &Path) -> bool {
+    let flags = nfs_mount_flags(port);
+    let out = Command::new("mount_nfs")
+        .args(["-o", &flags, &format!("localhost:{export_path}")])
+        .arg(mnt)
+        .output()
+        .expect("run mount_nfs");
+    if out.status.success() {
+        return true;
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if unsafe { libc::geteuid() } == 0 {
+        panic!(
+            "kernel mount failed under root (a real defect, not an environment gate): \
+             mount_nfs -o {flags} localhost:{export_path} {}: {stderr}",
+            mnt.display()
+        );
+    }
+    println!(
+        "SKIP NOTICE (nfs-e2e): this environment cannot mount (non-root/sandboxed); \
+         the kernel-mount leg is skipped.\n  command: mount_nfs -o {flags} \
+         localhost:{export_path} {}\n  stderr: {stderr}",
+        mnt.display()
+    );
+    false
+}
+
+/// Stage-2 capability gate: the mount succeeding is not enough. This macOS
+/// build (Darwin 25) ACCEPTS an unprivileged NFS mount but then suppresses
+/// every data op client-side — readdir/read/write fail EPERM and the
+/// kernel's RPC counters show zero data ops (verified with a bare
+/// upstream-shape nfsserve adapter, so it is not the naatre adapter). A
+/// probe readdir as non-root SKIPS with a printed notice; under root it is
+/// a real failure.
+#[cfg(target_os = "macos")]
+fn data_ops_probe_or_skip_notice(mnt: &Path) -> bool {
+    match std::fs::read_dir(mnt) {
+        Ok(_) => true,
+        Err(e) => {
+            if unsafe { libc::geteuid() } == 0 {
+                panic!(
+                    "readdir on the mount failed under root (a real defect, not an \
+                        environment gate): {e}"
+                );
+            }
+            println!(
+                "SKIP NOTICE (nfs-e2e): this macOS build accepts the unprivileged mount but \
+                 suppresses data ops (probe readdir: {e}); the kernel-mount parity leg \
+                 needs a root runner — skipping."
+            );
+            false
+        }
+    }
+}
+
+/// Unmounts. macOS `umount(8)` refuses even the mounting user (EPERM); the
+/// DiskArbitration path (`diskutil unmount`) is the documented way.
+#[cfg(target_os = "macos")]
+fn unmount_nfs(mnt: &Path) {
+    let out = Command::new("umount")
+        .arg(mnt)
+        .output()
+        .expect("run umount");
+    if !out.status.success() {
+        let out = Command::new("diskutil")
+            .args(["unmount", &mnt.to_string_lossy()])
+            .output()
+            .expect("run diskutil unmount");
+        assert!(
+            out.status.success(),
+            "unmount {} failed: {}",
+            mnt.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // Sanity: really gone (mount table walk, /tmp→/private/tmp aware).
+    let real = std::fs::canonicalize(mnt).expect("canonicalize");
+    let table = Command::new("mount").output().expect("run mount").stdout;
+    let still = String::from_utf8_lossy(&table).contains(&format!(" on {} (", real.display()));
+    assert!(
+        !still,
+        "the mount is still alive after unmount: {}",
+        real.display()
+    );
+}
+
+/// Spawns the real daemon binary against `server` for `repo` with
+/// `extra_args`, reads the 7-line banner, and returns (child, keepalive
+/// reader, port, export path). The reader MUST stay bound (never dropped)
+/// until the daemon exits: dropping it closes the stdout pipe and the
+/// daemon's next println dies on EPIPE/SIGPIPE. The cache goes to an
+/// isolated XDG_CACHE_HOME.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn spawn_mount_daemon(
+    server: &TestServer,
+    repo: &str,
+    cache: &Path,
+    extra_args: &[&str],
+) -> (
+    std::process::Child,
+    std::io::BufReader<std::process::ChildStdout>,
+    u16,
+    String,
+) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_naatre"));
+    cmd.args([
+        "mount",
+        repo,
+        "--server",
+        &server.base,
+        "--token",
+        &server.token,
+    ])
+    .args(extra_args)
+    .env("XDG_CACHE_HOME", cache)
+    .env_remove("NAATRE_URL")
+    .env_remove("NAATRE_TOKEN")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn naatre mount");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut lines = Vec::new();
+    for _ in 0..7 {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("banner line");
+        lines.push(line.trim_end().to_string());
+    }
+    let serving = &lines[1];
+    assert!(serving.starts_with("serving /naatre/"), "{serving}");
+    let port: u16 = serving
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .parse()
+        .expect("ephemeral port");
+    let export_path: String = serving
+        .split_once("serving ")
+        .expect("export prefix")
+        .1
+        .split(' ')
+        .next()
+        .expect("export path")
+        .to_string();
+    (child, reader, port, export_path)
+}
+
+/// True when the kernel mount table carries `path` (Linux /proc/mounts —
+/// no dependence on an external `mountpoint` binary).
+#[cfg(target_os = "linux")]
+fn linux_mount_table_has(path: &str) -> bool {
+    std::fs::read_to_string("/proc/mounts")
+        .map(|table| table.contains(path))
+        .unwrap_or(false)
+}
+
+/// Full recursive walk of a mounted tree: (path, abs path, is-exec) rows,
+/// name-byte sorted.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn walk_mounted_files(root: &Path) -> Vec<(String, PathBuf, bool)> {
+    fn rec(dir: &Path, rel: &str, out: &mut Vec<(String, PathBuf, bool)>) {
+        for entry in std::fs::read_dir(dir).expect("readdir on mount") {
+            let entry = entry.expect("dir entry");
+            let name = entry.file_name().into_string().expect("utf8 name");
+            let full = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            let path = dir.join(&name);
+            let meta = entry.metadata().expect("stat on mount");
+            if meta.is_dir() {
+                rec(&path, &full, out);
+            } else {
+                use std::os::unix::fs::PermissionsExt as _;
+                out.push((full, path, meta.permissions().mode() & 0o111 != 0));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(root, "", &mut out);
+    out.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    out
+}
+
+// ---- M8b item 1+4: real-mount byte parity + EROFS through the kernel -------
+
+#[cfg(target_os = "macos")]
+#[test]
+fn nfs_kernel_mount_walk_parity_bytes_sizes_exec_and_erofs() {
+    let server = start_server();
+    let files = demo_files();
+    let refs: Vec<(&str, &[u8], bool)> = files
+        .iter()
+        .map(|(p, d, e)| (*p, d.as_slice(), *e))
+        .collect();
+    seed_repo(&server, "nfsparity", &refs);
+
+    // The materialized side: a real `naatre clone`.
+    let out = tempfile::tempdir().expect("tempdir");
+    let dest = out.path().join("wc");
+    verbs::clone::value(
+        &format!("{}/nfsparity", server.base),
+        &[],
+        Some(dest.to_str().expect("utf8")),
+        &net(&server),
+    )
+    .expect("clone");
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let (mut child, _reader, port, export_path) =
+        spawn_mount_daemon(&server, "nfsparity", cache.path(), &[]);
+
+    let mnt_parent = tempfile::tempdir().expect("mnt tempdir");
+    let mnt = mnt_parent.path().join("m");
+    std::fs::create_dir_all(&mnt).expect("mkdir mnt");
+    let mnt = std::fs::canonicalize(&mnt).expect("canonicalize mnt");
+
+    if !nfs_mount_or_skip_notice(port, &export_path, &mnt) {
+        // Environment cannot mount (the SKIP NOTICE is printed above);
+        // stop the daemon and skip.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let _ = child.wait();
+        return;
+    }
+    if !data_ops_probe_or_skip_notice(&mnt) {
+        // The mount works but data ops are OS-suppressed (notice printed).
+        unmount_nfs(&mnt);
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let _ = child.wait();
+        return;
+    }
+
+    // Same path sets as the materialized clone (full walk through the kernel).
+    let index = Wc::open(&dest).expect("wc").load_index().expect("index");
+    let walked = walk_mounted_files(&mnt);
+    let mount_paths: Vec<&str> = walked.iter().map(|(p, _, _)| p.as_str()).collect();
+    let clone_paths: Vec<&str> = index.rows.keys().map(String::as_str).collect();
+    assert_eq!(
+        clone_paths, mount_paths,
+        "identical full walk through the kernel"
+    );
+
+    // Byte-exact per file; stat sizes and exec bits match the clone.
+    for (path, abs, exec) in &walked {
+        let row = &index.rows[path];
+        let bytes = std::fs::read(abs).expect("read on mount");
+        assert_eq!(
+            bytes,
+            std::fs::read(dest.join(path)).expect("disk bytes"),
+            "{path}"
+        );
+        assert_eq!(object_id(Kind::Blob, &bytes).0, row.blob, "{path} hash");
+        let size = std::fs::metadata(abs).expect("stat").len();
+        assert_eq!(size, row.size, "{path} stat size");
+        assert_eq!(*exec, row.exec, "{path} exec bit");
+    }
+    assert!(
+        index.rows["scripts/run.sh"].exec,
+        "fixture has an exec file"
+    );
+
+    // The read-only default holds THROUGH the kernel: a write attempt on
+    // the mounted tree fails (EROFS surfaces as a failed create).
+    assert!(
+        std::fs::write(mnt.join("ro.txt"), b"nope").is_err(),
+        "writing to a read-only mount must fail"
+    );
+
+    unmount_nfs(&mnt);
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().expect("wait daemon");
+    assert!(status.success(), "graceful SIGTERM exits 0: {status}");
+}
+
+// ---- M8b item 4: cold cargo build against the real mount -------------------
+
+#[cfg(target_os = "macos")]
+#[test]
+fn cargo_build_against_nfs_kernel_mount() {
+    // The toolchain gate (the in-process test's shape): skip when no cargo.
+    if Command::new("cargo").arg("--version").output().is_err() {
+        println!("skipping cargo-build-against-nfs-mount: no cargo toolchain");
+        return;
+    }
+
+    let server = start_server();
+    // Seed a repo with THIS workspace's sources (the cold-build fixture's
+    // shape): manifests + sources, ≤1 MiB each.
+    let ws = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .to_path_buf();
+    let mut files: Vec<(String, Vec<u8>, bool)> = Vec::new();
+    let skip_dirs = [".git", "target", ".research", "node_modules"];
+    fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, Vec<u8>, bool)>, skip: &[&str]) {
+        for entry in std::fs::read_dir(dir).expect("walk").flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path.is_dir() {
+                if !skip.contains(&name.as_str()) {
+                    collect(root, &path, files, skip);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs")
+                || path.file_name().is_some_and(|n| n == "Cargo.toml")
+                || path.file_name().is_some_and(|n| n == "Cargo.lock")
+            {
+                let bytes = std::fs::read(&path).expect("read source");
+                if bytes.len() > 1024 * 1024 {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(root)
+                    .expect("relative")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let exec = path
+                    .metadata()
+                    .map(|m| {
+                        use std::os::unix::fs::PermissionsExt as _;
+                        m.permissions().mode() & 0o111 != 0
+                    })
+                    .unwrap_or(false);
+                files.push((rel, bytes, exec));
+            }
+        }
+    }
+    collect(&ws, &ws, &mut files, &skip_dirs);
+    assert!(
+        files
+            .iter()
+            .any(|(p, _, _)| p == "crates/naatre-core/src/lib.rs"),
+        "the walk must carry the crate sources: {} files",
+        files.len()
+    );
+    let refs: Vec<(&str, &[u8], bool)> = files
+        .iter()
+        .map(|(p, d, e)| (p.as_str(), d.as_slice(), *e))
+        .collect();
+    seed_repo(&server, "selfhost", &refs);
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let (mut child, _reader, port, export_path) =
+        spawn_mount_daemon(&server, "selfhost", cache.path(), &[]);
+
+    let mnt_parent = tempfile::tempdir().expect("mnt tempdir");
+    let mnt = mnt_parent.path().join("m");
+    std::fs::create_dir_all(&mnt).expect("mkdir mnt");
+    let mnt = std::fs::canonicalize(&mnt).expect("canonicalize mnt");
+    if !nfs_mount_or_skip_notice(port, &export_path, &mnt) {
+        // Environment cannot mount (the SKIP NOTICE is printed above);
+        // stop the daemon and skip.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let _ = child.wait();
+        return;
+    }
+    if !data_ops_probe_or_skip_notice(&mnt) {
+        // The mount works but data ops are OS-suppressed (notice printed).
+        unmount_nfs(&mnt);
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let _ = child.wait();
+        return;
+    }
+
+    // Build AGAINST the mount: cwd on the mount reads every source through
+    // the kernel NFS client; artifacts go to a LOCAL target dir (the mount
+    // is read-only). --offline pins the warm-registry contract.
+    let target = tempfile::tempdir().expect("target tempdir");
+    let status = Command::new("cargo")
+        .args(["build", "--locked", "--offline", "-p", "naatre-core"])
+        .current_dir(&mnt)
+        .env("CARGO_TARGET_DIR", target.path())
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .status()
+        .expect("run cargo");
+    assert!(
+        status.success(),
+        "cargo build -p naatre-core failed against the real NFS mount"
+    );
+    assert!(
+        target.path().join("debug").exists(),
+        "artifacts landed in the local target dir"
+    );
+
+    unmount_nfs(&mnt);
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().expect("wait daemon");
+    assert!(status.success(), "graceful SIGTERM exits 0: {status}");
+}
+
+// ---- M8b item 3: writable mount, create+write, flush-land advances main ----
+
+#[cfg(target_os = "macos")]
+#[test]
+fn writable_kernel_mount_create_write_flush_land_advances_main() {
+    let server = start_server();
+    seed_repo(&server, "wland", &[("a.txt", b"one".as_slice(), false)]);
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let (mut child, _reader, port, export_path) = spawn_mount_daemon(
+        &server,
+        "wland",
+        cache.path(),
+        &["--writable", "--flush-land"],
+    );
+
+    let mnt_parent = tempfile::tempdir().expect("mnt tempdir");
+    let mnt = mnt_parent.path().join("m");
+    std::fs::create_dir_all(&mnt).expect("mkdir mnt");
+    let mnt = std::fs::canonicalize(&mnt).expect("canonicalize mnt");
+    if !nfs_mount_or_skip_notice(port, &export_path, &mnt) {
+        // Environment cannot mount (the SKIP NOTICE is printed above);
+        // stop the daemon and skip.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let _ = child.wait();
+        return;
+    }
+    if !data_ops_probe_or_skip_notice(&mnt) {
+        // The mount works but data ops are OS-suppressed (notice printed).
+        unmount_nfs(&mnt);
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let _ = child.wait();
+        return;
+    }
+
+    // Grammar enforced at create THROUGH the kernel mount: the reserved
+    // name is refused (the create answer maps to a failed create).
+    assert!(
+        std::fs::write(mnt.join(".git"), b"x").is_err(),
+        "creating .git through the mount must fail (grammar)"
+    );
+
+    // Create + write THROUGH the mount, then unmount, then the daemon's
+    // SIGTERM flush-lands the staged changeset onto main.
+    let payload = b"landed through the kernel mount\n".to_vec();
+    std::fs::write(mnt.join("notes.txt"), &payload).expect("create+write through the mount");
+    // Read-back through the mount shows the overlay.
+    assert_eq!(
+        std::fs::read(mnt.join("notes.txt")).expect("overlay read"),
+        payload,
+        "the overlay answers reads through the mount"
+    );
+
+    unmount_nfs(&mnt);
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let out = child.wait_with_output().expect("wait daemon");
+    assert!(
+        out.status.success(),
+        "graceful SIGTERM exits 0: {:?}",
+        out.status
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("land key: "),
+        "the flush-land key is printed: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"landed\""),
+        "the landed/main/rebased summary is printed: {stdout}"
+    );
+
+    // The staged changeset id (from the stdout json) IS the new main.
+    let landed = stdout
+        .lines()
+        .find_map(|l| {
+            serde_json::from_str::<Value>(l)
+                .ok()
+                .filter(|v| v["landed"].is_string())
+        })
+        .expect("landed json line");
+    let landed_id = landed["landed"].as_str().expect("landed id").to_string();
+    assert_eq!(
+        landed["main"].as_str().expect("main"),
+        landed_id,
+        "main advanced onto the landed changeset"
+    );
+    let (status, refv) = api(&server, "GET", "/v1/repos/wland/refs/main", None);
+    assert_eq!(status, 200, "{refv}");
+    assert_eq!(
+        refv["target"].as_str().unwrap(),
+        landed_id,
+        "refs/main is the flush-landed changeset"
+    );
+
+    // A fresh clone sees the file, byte-exact.
+    let out2 = tempfile::tempdir().expect("tempdir");
+    let dest2 = out2.path().join("wc2");
+    verbs::clone::value(
+        &format!("{}/wland", server.base),
+        &[],
+        Some(dest2.to_str().expect("utf8")),
+        &net(&server),
+    )
+    .expect("fresh clone");
+    assert_eq!(
+        std::fs::read(dest2.join("notes.txt")).expect("landed bytes"),
+        payload,
+        "the fresh clone sees the mounted write"
+    );
+    assert_eq!(
+        std::fs::read(dest2.join("a.txt")).expect("pinned file"),
+        b"one",
+        "the pinned file survives the land"
+    );
+}
+
+// ---- M8b item 3: flush-land lands via the SHARED land path -----------------
+
+/// The flush-land pin, driven at the VFS level (the transport-independent
+/// chain the NFS/FUSE front-ends call into): create (grammar+NFC enforced),
+/// write, flush, LAND through `verbs::land::land_changeset` — the same
+/// function `naatre land` and the daemon's `--flush-land` exit share — then
+/// main has advanced and a fresh clone sees the file. The kernel-mount
+/// leg of this pin lives in `writable_kernel_mount_create_write_flush_land_
+/// advances_main` (runs where the OS allows data ops).
+#[test]
+fn flush_land_lands_the_staged_writes_via_the_shared_land_path() {
+    let server = start_server();
+    let cs1 = seed_repo(&server, "wland2", &[("a.txt", b"one".as_slice(), false)]);
+
+    let dir = tmp_mount_dir("wland2");
+    let v = NaatreVfs::mount(
+        HttpMountSource::new(
+            Client::new(&server.base, Some(server.token.clone())),
+            "wland2",
+        ),
+        "wland2",
+        None,
+        dir.clone(),
+        true,
+    )
+    .expect("mount");
+    assert!(v.writable());
+
+    // Grammar + NFC enforced at create (the pin's gate).
+    match v.create("", ".git") {
+        Err(e @ VfsError::InvalidPath(_)) => {
+            assert_eq!(e.errno(), vfs::ERRNO_INVALID_PATH);
+        }
+        other => panic!("creating .git must be rejected, got {other:?}"),
+    }
+
+    // Create + write (the ops the front-ends forward).
+    let payload = b"landed through the flush-land path\n".to_vec();
+    v.create("", "notes.txt").expect("create");
+    v.write("notes.txt", &payload).expect("write");
+    v.write("a.txt", b"changed\n")
+        .expect("overwrite pinned file");
+
+    // Flush stages; LAND via the shared path with a printed-then-used key.
+    let outcome = v.flush().expect("flush").expect("something staged");
+    let key = verbs::land::random_key();
+    let client = Client::new(&server.base, Some(server.token.clone()));
+    let landed = verbs::land::land_changeset(
+        &client,
+        "wland2",
+        &outcome.changeset.to_hex(),
+        &key,
+        &mut |k| println!("land key: {k}"),
+    )
+    .expect("land");
+    assert_eq!(landed.key, key);
+    assert_eq!(landed.main, landed.landed, "main advanced onto the land");
+    let (status, refv) = api(&server, "GET", "/v1/repos/wland2/refs/main", None);
+    assert_eq!(status, 200, "{refv}");
+    assert_eq!(
+        refv["target"].as_str().unwrap(),
+        landed.landed,
+        "refs/main is the flush-landed changeset"
+    );
+    assert_ne!(landed.landed, cs1, "a NEW changeset landed");
+
+    // A fresh clone sees the mounted writes, byte-exact.
+    let out2 = tempfile::tempdir().expect("tempdir");
+    let dest2 = out2.path().join("wc2");
+    verbs::clone::value(
+        &format!("{}/wland2", server.base),
+        &[],
+        Some(dest2.to_str().expect("utf8")),
+        &net(&server),
+    )
+    .expect("fresh clone");
+    assert_eq!(
+        std::fs::read(dest2.join("notes.txt")).expect("landed bytes"),
+        payload
+    );
+    assert_eq!(
+        std::fs::read(dest2.join("a.txt")).expect("edited bytes"),
+        b"changed\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- M8b item 2: FUSE runtime mount (Linux CI with /dev/fuse only) ---------
+
+/// On Linux CI with /dev/fuse + fusermount3 present this runs the REAL FUSE
+/// mount; without them it prints a SKIP notice (cfg-compile-only
+/// elsewhere — macOS never compiles this test).
+#[cfg(target_os = "linux")]
+#[test]
+fn fuse_kernel_mount_walk_parity() {
+    let fuse_ok = Path::new("/dev/fuse").exists()
+        && Command::new("fusermount3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    if !fuse_ok {
+        println!(
+            "SKIP NOTICE (fuse-e2e): no /dev/fuse or no fusermount3 — the FUSE front-end \
+             is cfg-compile-checked only on this runner"
+        );
+        return;
+    }
+
+    let server = start_server();
+    let files = demo_files();
+    let refs: Vec<(&str, &[u8], bool)> = files
+        .iter()
+        .map(|(p, d, e)| (*p, d.as_slice(), *e))
+        .collect();
+    seed_repo(&server, "selffuse", &refs);
+
+    let out = tempfile::tempdir().expect("tempdir");
+    let dest = out.path().join("wc");
+    verbs::clone::value(
+        &format!("{}/selffuse", server.base),
+        &[],
+        Some(dest.to_str().expect("utf8")),
+        &net(&server),
+    )
+    .expect("clone");
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let mnt_parent = tempfile::tempdir().expect("mnt tempdir");
+    let mnt = mnt_parent.path().join("m");
+    std::fs::create_dir_all(&mnt).expect("mkdir mnt");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_naatre"))
+        .args([
+            "mount",
+            "selffuse",
+            "--server",
+            &server.base,
+            "--token",
+            &server.token,
+            "--fuse",
+            &mnt.to_string_lossy(),
+        ])
+        .env("XDG_CACHE_HOME", cache.path())
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn naatre mount --fuse");
+
+    // The mountpoint appears in the kernel mount table when the daemon
+    // mounted it (bounded wait; /proc/mounts — no external binary).
+    let mut filled = false;
+    let mnt_str = std::fs::canonicalize(&mnt)
+        .expect("canonicalize mnt")
+        .to_string_lossy()
+        .to_string();
+    for _ in 0..100 {
+        if linux_mount_table_has(&mnt_str) {
+            filled = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if !filled {
+        let e = child.wait_with_output().expect("daemon output");
+        panic!(
+            "the FUSE mount never appeared: stdout {} stderr {}",
+            String::from_utf8_lossy(&e.stdout),
+            String::from_utf8_lossy(&e.stderr)
+        );
+    }
+
+    // Byte parity vs the materialized clone through the kernel FUSE mount.
+    let index = Wc::open(&dest).expect("wc").load_index().expect("index");
+    let walked = walk_mounted_files(&mnt);
+    let mount_paths: Vec<&str> = walked.iter().map(|(p, _, _)| p.as_str()).collect();
+    let clone_paths: Vec<&str> = index.rows.keys().map(String::as_str).collect();
+    assert_eq!(clone_paths, mount_paths, "identical full walk through FUSE");
+    for (path, abs, exec) in &walked {
+        let row = &index.rows[path];
+        let bytes = std::fs::read(abs).expect("read on fuse mount");
+        assert_eq!(
+            bytes,
+            std::fs::read(dest.join(path)).expect("disk bytes"),
+            "{path}"
+        );
+        assert_eq!(object_id(Kind::Blob, &bytes).0, row.blob, "{path} hash");
+        let size = std::fs::metadata(abs).expect("stat").len();
+        assert_eq!(size as u64, row.size, "{path} stat size");
+        assert_eq!(*exec, row.exec, "{path} exec bit");
+    }
+
+    // EROFS default through FUSE too.
+    assert!(
+        std::fs::write(mnt.join("ro.txt"), b"nope").is_err(),
+        "writing to a read-only FUSE mount must fail"
+    );
+
+    // SIGTERM unmounts + cleans up.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let out = child.wait_with_output().expect("wait daemon");
+    assert!(
+        out.status.success(),
+        "graceful SIGTERM exits 0: {:?}",
+        out.status
+    );
+    assert!(
+        !linux_mount_table_has(&mnt_str),
+        "the FUSE mount is gone after SIGTERM"
+    );
+}
+
+// ---- M8b security pin: NFS handles are unforgeable without the secret -------
+//
+// The unguessable export path gates only MOUNT; GETATTR/READ need nothing
+// but a structurally valid handle, and nfsserve 0.11's default encoding is
+// `[u64 epoch-millis-at-daemon-start LE || u64 fileid LE]` (`vfs.rs::
+// get_generation_number`) — brute-forceable from a rough start time. The
+// daemon overrides id_to_fh/fh_to_id to embed a per-mount 128-bit CSPRNG
+// secret: this test drives RAW NFS RPCs at the real daemon binary and pins
+// that the REAL handle (mountd MNT hands it out only for the secret path)
+// serves GETATTR while both the forged-secret handle and the old default
+// layout are rejected as bad handles. No kernel mount needed — runs on
+// every platform.
+
+const NFS_PROGRAM: u32 = 100003;
+const MOUNT_PROGRAM: u32 = 100005;
+const NFS3_OK: u32 = 0;
+const NFS3ERR_BADHANDLE: u32 = 10001;
+
+/// One raw RPC over a fresh TCP connection (record-marked, AUTH_SYS
+/// credential), returning the raw reply body.
+fn raw_rpc(port: u16, prog: u32, vers: u32, proc_num: u32, payload: &[u8]) -> Vec<u8> {
+    use std::io::{Read as _, Write as _};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect daemon");
+    let mut call = Vec::new();
+    call.extend_from_slice(&0x1a2b_3c4du32.to_be_bytes()); // xid
+    call.extend_from_slice(&0u32.to_be_bytes()); // CALL
+    call.extend_from_slice(&2u32.to_be_bytes()); // rpcvers
+    call.extend_from_slice(&prog.to_be_bytes());
+    call.extend_from_slice(&vers.to_be_bytes());
+    call.extend_from_slice(&proc_num.to_be_bytes());
+    // cred: AUTH_SYS (flavor 1) — stamp, machinename "tst" (padded), uid,
+    // gid, zero auxiliary gids.
+    let mut cred = Vec::new();
+    cred.extend_from_slice(&0u32.to_be_bytes());
+    cred.extend_from_slice(&3u32.to_be_bytes());
+    cred.extend_from_slice(b"tst");
+    cred.push(0);
+    cred.extend_from_slice(&1000u32.to_be_bytes());
+    cred.extend_from_slice(&1000u32.to_be_bytes());
+    cred.extend_from_slice(&0u32.to_be_bytes());
+    call.extend_from_slice(&1u32.to_be_bytes()); // cred flavor
+    call.extend_from_slice(&(cred.len() as u32).to_be_bytes());
+    call.extend_from_slice(&cred);
+    call.extend_from_slice(&0u32.to_be_bytes()); // verf flavor AUTH_NULL
+    call.extend_from_slice(&0u32.to_be_bytes()); // verf length
+    call.extend_from_slice(payload);
+    // One record-marked fragment: last-fragment bit + length.
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&((call.len() as u32) | 0x8000_0000).to_be_bytes());
+    frame.extend_from_slice(&call);
+    stream.write_all(&frame).expect("send rpc");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("read timeout");
+    let mut hdr = [0u8; 4];
+    stream.read_exact(&mut hdr).expect("reply header");
+    let len = u32::from_be_bytes(hdr) & 0x7fff_ffff;
+    let mut reply = vec![0u8; len as usize];
+    stream.read_exact(&mut reply).expect("reply body");
+    reply
+}
+
+/// The nfsstat3 of an accepted RPC reply (msg_type REPLY, accepted, empty
+/// verifier, success) — panics otherwise.
+fn nfs_status(reply: &[u8]) -> u32 {
+    assert!(reply.len() >= 28, "short reply: {} bytes", reply.len());
+    assert_eq!(&reply[4..8], &1u32.to_be_bytes(), "msg_type = REPLY");
+    assert_eq!(&reply[8..12], &0u32.to_be_bytes(), "accepted");
+    assert_eq!(&reply[16..20], &0u32.to_be_bytes(), "empty verifier");
+    assert_eq!(&reply[20..24], &0u32.to_be_bytes(), "success");
+    u32::from_be_bytes(reply[24..28].try_into().expect("status"))
+}
+
+/// XDR opaque for `bytes` (length-prefixed, padded to 4).
+fn xdr_opaque(bytes: &[u8]) -> Vec<u8> {
+    let mut out = (bytes.len() as u32).to_be_bytes().to_vec();
+    out.extend_from_slice(bytes);
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+    out
+}
+
+/// mountd MNT with the export path → the REAL root file handle (mountd
+/// refuses any other dirpath with MNT3ERR_NOENT, so this also proves the
+/// handle only falls out of the secret path).
+fn mnt_real_handle(port: u16, export_path: &str) -> Vec<u8> {
+    let reply = raw_rpc(
+        port,
+        MOUNT_PROGRAM,
+        3,
+        1,
+        &xdr_opaque(export_path.as_bytes()),
+    );
+    let status = u32::from_be_bytes(reply[24..28].try_into().expect("mnt status"));
+    assert_eq!(status, 0, "MNT must succeed for the secret export path");
+    let fh_len = u32::from_be_bytes(reply[28..32].try_into().expect("fh len")) as usize;
+    reply[32..32 + fh_len].to_vec()
+}
+
+#[test]
+fn forged_nfs_handles_are_rejected_real_handle_serves() {
+    let server = start_server();
+    seed_repo(
+        &server,
+        "handles",
+        &[("a.txt", b"secret bytes".as_slice(), false)],
+    );
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let (mut child, _reader, port, export_path) =
+        spawn_mount_daemon(&server, "handles", cache.path(), &[]);
+
+    // The REAL handle: 24 bytes = [secret(16) || fileid(8)].
+    let real = mnt_real_handle(port, &export_path);
+    assert_eq!(real.len(), 24, "handle = [secret(16) || fileid(8)]");
+    assert_eq!(
+        nfs_status(&raw_rpc(port, NFS_PROGRAM, 3, 1, &xdr_opaque(&real))),
+        NFS3_OK,
+        "the real handle serves GETATTR"
+    );
+
+    // Forged: right layout, WRONG secret → bad handle (no distinguishing
+    // error — same code for wrong length and wrong secret, no oracle).
+    let mut forged = vec![0xAAu8; 16];
+    forged.extend_from_slice(&1u64.to_le_bytes());
+    assert_eq!(
+        nfs_status(&raw_rpc(port, NFS_PROGRAM, 3, 1, &xdr_opaque(&forged))),
+        NFS3ERR_BADHANDLE,
+        "a forged-secret handle is a bad handle"
+    );
+
+    // The old nfsserve DEFAULT layout ([epoch-ms || fileid]) is dead.
+    let mut default_layout = 1_700_000_000_000u64.to_le_bytes().to_vec();
+    default_layout.extend_from_slice(&1u64.to_le_bytes());
+    assert_eq!(
+        nfs_status(&raw_rpc(
+            port,
+            NFS_PROGRAM,
+            3,
+            1,
+            &xdr_opaque(&default_layout)
+        )),
+        NFS3ERR_BADHANDLE,
+        "the predictable default layout is rejected"
+    );
+
+    // And mountd still refuses non-secret export paths.
+    let noent = raw_rpc(
+        port,
+        MOUNT_PROGRAM,
+        3,
+        1,
+        &xdr_opaque(b"/naatre/00000000000000000000000000000000"),
+    );
+    assert_eq!(
+        u32::from_be_bytes(noent[24..28].try_into().expect("mnt status")),
+        2, // MNT3ERR_NOENT
+        "the wrong export path never yields a handle"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().expect("wait daemon");
+    assert!(status.success(), "graceful SIGTERM exits 0: {status}");
 }

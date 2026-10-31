@@ -1,5 +1,5 @@
-//! `naatre mount <repo> [--at REF] [--writable] [--listen ADDR]` — serve a
-//! PINNED ref as a lazily-hydrated filesystem (plan M8).
+//! `naatre mount <repo> [--at REF] [--writable] [--flush-land] [--listen ADDR]`
+//! — serve a PINNED ref as a lazily-hydrated filesystem (plan M8).
 //!
 //! The daemon resolves the ref → changeset once at startup and serves that
 //! tree for its whole life: advancing the ref afterwards is invisible to
@@ -12,8 +12,7 @@
 //!
 //! Platform front-ends: NFSv3 via `nfsserve` (one loopback TCP port carries
 //! the NFS, mount, and portmap programs — the printed mount lines pin the
-//! port for both `port=` and `mountport=`). FUSE (Linux-only) is the M8b
-//! follow-up; this slice ships NFS-only. The in-process suite drives
+//! port for both `port=` and `mountport=`). The in-process suite drives
 //! [`crate::vfs::NaatreVfs`] directly — no kernel mount needed (CI-feasible).
 //!
 //! The hydrate cache lives under the per-mount dir
@@ -22,7 +21,13 @@
 //! SIGKILL leaves its dir; the next mount evicts stale dirs (dead
 //! `session.json` pid). On graceful exit (SIGINT/SIGTERM) a `--writable`
 //! mount flushes its shadow writes into a STAGED changeset (printed; never
-//! landed) and removes its dir.
+//! landed) — with the UNSTABLE `--flush-land`, the staged changeset then
+//! goes through the SAME land path `naatre land` uses (key printed, main
+//! advances) — and the dir is removed.
+//!
+//! Platform front-ends: NFSv3 here; the Linux-only FUSE front-end
+//! (`--fuse <mountpoint>`, M8b) lives in `verbs::fuse`, behind
+//! `#[cfg(target_os = "linux")]`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,7 +35,7 @@ use std::time::SystemTime;
 
 use async_trait::async_trait;
 use nfsserve::nfs::{
-    fattr3, fileid3, filename3, ftype3, nfspath3, nfsstat3, nfstime3, sattr3, specdata3,
+    fattr3, fileid3, filename3, ftype3, nfs_fh3, nfspath3, nfsstat3, nfstime3, sattr3, specdata3,
 };
 use nfsserve::tcp::{NFSTcp, NFSTcpListener};
 use nfsserve::vfs::{DirEntry, NFSFileSystem, ReadDirResult, VFSCapabilities};
@@ -44,13 +49,28 @@ use crate::vfs::{
 };
 
 /// `naatre mount <repo> …` — the daemon. Returns the pinned exit code.
-pub fn run(repo: &str, at: Option<&str>, writable: bool, listen: Option<&str>, net: &Net) -> i32 {
+pub fn run(
+    repo: &str,
+    at: Option<&str>,
+    writable: bool,
+    flush_land: bool,
+    listen: Option<&str>,
+    net: &Net,
+) -> i32 {
+    if flush_land && !writable {
+        return VerbError::Usage(
+            "--flush-land requires --writable (the read-only default has \
+                                 nothing to flush)"
+                .into(),
+        )
+        .report();
+    }
     let cache_root = match mount_cache_root() {
         Ok(r) => r,
         Err(m) => return VerbError::Local(m).report(),
     };
     let mounts_root = cache_root.join("naatre").join("mounts");
-    let plan = match MountPlan::new(listen, mounts_root, writable) {
+    let plan = match MountPlan::new(listen, mounts_root, writable, flush_land) {
         Ok(p) => p,
         Err(m) => return VerbError::Usage(m).report(),
     };
@@ -82,13 +102,14 @@ pub fn run(repo: &str, at: Option<&str>, writable: bool, listen: Option<&str>, n
             return VerbError::Local(format!("starting the async runtime: {e}")).report();
         }
     };
-    runtime.block_on(serve(plan, vfs))
+    runtime.block_on(serve(plan, vfs, mount_client(net)))
 }
 
 /// Mount reads its server/token from `--server`/`--token` flags, then
 /// `NAATRE_URL`/`NAATRE_TOKEN` env (no working copy — config.toml does not
-/// apply; the default is the pinned default URL).
-fn mount_client(net: &Net) -> Client {
+/// apply; the default is the pinned default URL). The FUSE front-end shares
+/// it for its own land-on-exit client.
+pub(crate) fn mount_client(net: &Net) -> Client {
     let base = net
         .server
         .clone()
@@ -102,7 +123,7 @@ fn mount_client(net: &Net) -> Client {
 }
 
 /// Maps a VFS failure from mount-time setup into the pinned exit codes.
-fn vfs_error_verb(e: VfsError) -> i32 {
+pub(crate) fn vfs_error_verb(e: VfsError) -> i32 {
     match e {
         VfsError::Http(e) => VerbError::Http(e).report(),
         other => VerbError::Local(other.to_string()).report(),
@@ -147,6 +168,8 @@ pub struct MountPlan {
     pub mount_dir: PathBuf,
     /// The UNSTABLE writable mode.
     pub writable: bool,
+    /// The UNSTABLE land-at-exit mode (implies the writable flush).
+    pub flush_land: bool,
     non_loopback: bool,
 }
 
@@ -155,8 +178,9 @@ impl MountPlan {
         listen: Option<&str>,
         mounts_root: PathBuf,
         writable: bool,
+        flush_land: bool,
     ) -> Result<MountPlan, String> {
-        Self::with_export(listen, mounts_root, writable, new_export_id())
+        Self::with_export(listen, mounts_root, writable, flush_land, new_export_id())
     }
 
     /// [`MountPlan::new`] with an injected export id (tests pin the shape).
@@ -164,6 +188,7 @@ impl MountPlan {
         listen: Option<&str>,
         mounts_root: PathBuf,
         writable: bool,
+        flush_land: bool,
         export_id: String,
     ) -> Result<MountPlan, String> {
         let listen = listen.unwrap_or("127.0.0.1:0");
@@ -177,6 +202,7 @@ impl MountPlan {
             mounts_root: mounts_root.clone(),
             mount_dir: mounts_root.join(&export_id),
             writable,
+            flush_land,
             non_loopback: !addr.ip().is_loopback(),
         })
     }
@@ -203,19 +229,24 @@ pub fn cleartext_warning(addr: &str) -> String {
 
 /// The per-platform mount command lines (printed with the resolved port).
 /// Both `port=` and `mountport=` carry the daemon's single port (nfsserve
-/// multiplexes the NFS and MOUNT programs on one TCP listener).
+/// multiplexes the NFS and MOUNT programs on one TCP listener). The macOS
+/// line carries `noresvport` because mount_nfs's default source port
+/// (`resvport`) needs root — this is what makes the pasted line work for a
+/// non-root dev user (verified against a real `mount_nfs` in the M8b e2e);
+/// `nfc` keeps the client's name normalization aligned with the grammar.
 pub fn mount_commands(port: u16, export_path: &str) -> (String, String) {
     let src = format!("127.0.0.1:{export_path}");
-    let opts = format!("port={port},mountport={port},tcp,soft");
+    let macos = format!("port={port},mountport={port},tcp,nfc,noresvport,soft");
+    let linux = format!("port={port},mountport={port},tcp,soft");
     (
-        format!("mkdir -p <mountpoint> && mount_nfs -o {opts},nfsvers=3 {src} <mountpoint>"),
-        format!("mkdir -p <mountpoint> && mount -t nfs -o {opts},vers=3 {src} <mountpoint>"),
+        format!("mkdir -p <mountpoint> && mount_nfs -o {macos},nfsvers=3 {src} <mountpoint>"),
+        format!("mkdir -p <mountpoint> && mount -t nfs -o {linux},vers=3 {src} <mountpoint>"),
     )
 }
 
 /// Writes this mount's session file (0600): the pid stale-dir eviction
-/// checks on the next mount.
-fn write_session(mount_dir: &Path) -> std::io::Result<()> {
+/// checks on the next mount. The FUSE front-end calls it too.
+pub(crate) fn write_session(mount_dir: &Path) -> std::io::Result<()> {
     let body = json!({
         "pid": std::process::id(),
         "created_ns": crate::wc::now_ns(),
@@ -262,8 +293,8 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 /// The async daemon: bind, print the mount lines, serve until SIGINT or
-/// SIGTERM, flush (writable), clean up.
-async fn serve(plan: MountPlan, vfs: NaatreVfs<HttpMountSource>) -> i32 {
+/// SIGTERM, flush (writable; lands with `--flush-land`), clean up.
+async fn serve(plan: MountPlan, vfs: NaatreVfs<HttpMountSource>, client: Client) -> i32 {
     let vfs = Arc::new(vfs);
     let adapter = NfsAdapter {
         vfs: vfs.clone(),
@@ -271,6 +302,7 @@ async fn serve(plan: MountPlan, vfs: NaatreVfs<HttpMountSource>) -> i32 {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as u32)
             .unwrap_or(0),
+        handle_secret: HandleSecret::generate(),
     };
     let mut listener = match NFSTcpListener::bind(&plan.listen_addr, adapter).await {
         Ok(l) => l,
@@ -291,17 +323,74 @@ async fn serve(plan: MountPlan, vfs: NaatreVfs<HttpMountSource>) -> i32 {
         }
         _ = naatre_server::serve::unix_shutdown_signal() => {}
     }
-    // Graceful exit: the unstable writable mode stages its shadow writes
-    // (printed, never landed); then the mount dir goes away.
+    flush_and_cleanup(&plan, &vfs, &client)
+}
+
+/// The graceful-exit tail both front-ends share: the unstable writable mode
+/// stages its shadow writes (printed; landed onto main only under
+/// --flush-land, through the SAME land path `naatre land` drives — key
+/// printed before the request, exit codes mirror land's contract); then the
+/// mount dir goes away.
+pub(crate) fn flush_and_cleanup(
+    plan: &MountPlan,
+    vfs: &NaatreVfs<HttpMountSource>,
+    client: &Client,
+) -> i32 {
     let mut code = 0;
     if plan.writable {
         match vfs.flush() {
-            Ok(Some(outcome)) => println!(
-                "staged changeset: {} ({} file(s), root tree {}) — staged only, NOT landed",
-                outcome.changeset.to_hex(),
-                outcome.files,
-                outcome.root_tree.to_hex()
-            ),
+            Ok(Some(outcome)) => {
+                if plan.flush_land {
+                    let key = super::land::random_key();
+                    println!("land key: {key}");
+                    match super::land::land_changeset(
+                        client,
+                        vfs.repo(),
+                        &outcome.changeset.to_hex(),
+                        &key,
+                        &mut |_| {},
+                    ) {
+                        Ok(landed) => println!(
+                            "{}",
+                            json!({
+                                "landed": landed.landed,
+                                "main": landed.main,
+                                "rebased": landed.rebased,
+                            })
+                        ),
+                        Err(crate::client::HttpError::Envelope {
+                            code: c, details, ..
+                        }) => {
+                            eprintln!("error: flush-land failed: {c}");
+                            if c == "writer_busy" {
+                                eprintln!(
+                                    "the land was NOT settled (writer slot busy, or another \
+                                     land with the same key is in flight); a retry re-stages \
+                                     and lands with a fresh key"
+                                );
+                            }
+                            if let Some(recipe) =
+                                details.as_ref().and_then(|d| d["recipe"].as_str())
+                            {
+                                eprintln!("recipe: {recipe}");
+                            }
+                            code = conflict_code(&c);
+                        }
+                        Err(e) => {
+                            eprintln!("error: flush-land failed: {e}");
+                            code = 1;
+                        }
+                    }
+                } else {
+                    println!(
+                        "staged changeset: {} ({} file(s), root tree {}) — staged only, NOT \
+                         landed",
+                        outcome.changeset.to_hex(),
+                        outcome.files,
+                        outcome.root_tree.to_hex()
+                    );
+                }
+            }
             Ok(None) => println!("flush: nothing staged"),
             Err(e) => {
                 eprintln!("error: flush failed: {e}");
@@ -313,8 +402,20 @@ async fn serve(plan: MountPlan, vfs: NaatreVfs<HttpMountSource>) -> i32 {
     code
 }
 
+/// Land's pinned conflict-class exit code (2 for a 409 conflict or a
+/// settled key); everything else in a flush-land failure is generic (1).
+fn conflict_code(envelope_code: &str) -> i32 {
+    if matches!(envelope_code, "ref_conflict" | "idempotency_key_settled") {
+        2
+    } else {
+        1
+    }
+}
+
 fn print_banner(plan: &MountPlan, port: u16, repo: &str, pinned_cs: String) {
-    let pin_note = if plan.writable {
+    let pin_note = if plan.flush_land {
+        "writable (UNSTABLE; --flush-land lands staged writes onto main at exit)"
+    } else if plan.writable {
         "writable (UNSTABLE)"
     } else {
         "read-only"
@@ -342,12 +443,37 @@ fn print_banner(plan: &MountPlan, port: u16, repo: &str, pinned_cs: String) {
         plan.mount_dir.display(),
         crate::vfs::BLOB_CACHE_MAX_ENTRIES
     );
-    println!(
-        "Ctrl-C or SIGTERM stops the daemon (writable mounts stage their shadow writes first)."
-    );
+    if plan.flush_land {
+        println!(
+            "Ctrl-C or SIGTERM stops the daemon (this mount LANDS its staged writes onto main)."
+        );
+    } else {
+        println!(
+            "Ctrl-C or SIGTERM stops the daemon (writable mounts stage their shadow writes first)."
+        );
+    }
 }
 
 // ---- the nfsserve front-end -------------------------------------------------
+
+/// The per-mount file-handle secret: 16 CSPRNG bytes generated once at
+/// daemon start and embedded in EVERY NFS file handle. This closes the
+/// gap the export path alone cannot: nfsserve's default encoding is
+/// `[u64 process-generation LE || u64 fileid LE]` with the generation =
+/// epoch-milliseconds captured once per process (`vfs.rs::get_generation_number`)
+/// — brute-forceable from a rough start time (e.g. `ps`), and then plain
+/// GETATTR/READ walk every sequential fileid WITHOUT knowing the secret
+/// export path. With the override below, a handle is
+/// `[secret(16) || fileid(8)]` (24 bytes); anything else is a bad handle.
+struct HandleSecret([u8; 16]);
+
+impl HandleSecret {
+    fn generate() -> HandleSecret {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).expect("CSPRNG available");
+        HandleSecret(bytes)
+    }
+}
 
 /// Bridges the sync [`NaatreVfs`] into nfsserve's async trait: every VFS
 /// call runs under `block_in_place` (the daemon runs a multi-thread
@@ -355,6 +481,7 @@ fn print_banner(plan: &MountPlan, port: u16, repo: &str, pinned_cs: String) {
 struct NfsAdapter {
     vfs: Arc<NaatreVfs<HttpMountSource>>,
     started_secs: u32,
+    handle_secret: HandleSecret,
 }
 
 /// Runs one blocking VFS call, printing hydration failures (they name the
@@ -416,12 +543,15 @@ impl NfsAdapter {
             seconds: self.started_secs,
             nseconds: 0,
         };
+        // Files in the view belong to the mounting user (AUTH_SYS maps them
+        // client-side; hardcoded 0 would advertise root-owned files). The
+        // FUSE front-end does the same.
         fattr3 {
             ftype,
             mode,
             nlink: 1,
-            uid: 0,
-            gid: 0,
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
             size: meta.size,
             used: meta.size,
             rdev: specdata3::default(),
@@ -446,6 +576,29 @@ impl NFSFileSystem for NfsAdapter {
 
     fn root_dir(&self) -> fileid3 {
         self.vfs.root_fileid()
+    }
+
+    /// File handles carry the per-mount secret (see [`HandleSecret`]): the
+    /// unguessable export path gates MOUNT only, while GETATTR/READ need
+    /// nothing but a structurally valid handle — so the handle layer must
+    /// uphold the same unguessability. 24 bytes: `[secret(16) || fileid(8)]`.
+    fn id_to_fh(&self, id: fileid3) -> nfs_fh3 {
+        let mut data = Vec::with_capacity(24);
+        data.extend_from_slice(&self.handle_secret.0);
+        data.extend_from_slice(&id.to_le_bytes());
+        nfs_fh3 { data }
+    }
+
+    fn fh_to_id(&self, id: &nfs_fh3) -> Result<fileid3, nfsstat3> {
+        if id.data.len() != 24 || id.data[..16] != self.handle_secret.0 {
+            // Wrong length OR wrong secret — the forged-handle case — is a
+            // bad handle, not a distinguishable "wrong secret" (no oracle).
+            return Err(nfsstat3::NFS3ERR_BADHANDLE);
+        }
+        let bytes: [u8; 8] = id.data[16..24]
+            .try_into()
+            .map_err(|_| nfsstat3::NFS3ERR_BADHANDLE)?;
+        Ok(u64::from_le_bytes(bytes))
     }
 
     async fn lookup(&self, dirid: fileid3, filename: &filename3) -> Result<fileid3, nfsstat3> {
@@ -631,7 +784,7 @@ mod tests {
     #[test]
     fn mount_plan_defaults_to_loopback_ephemeral_with_hidden_export() {
         let root = tmp_root("plan");
-        let plan = MountPlan::new(None, root.clone(), false).expect("plan");
+        let plan = MountPlan::new(None, root.clone(), false, false).expect("plan");
         assert_eq!(plan.listen_addr, "127.0.0.1:0");
         assert!(!plan.non_loopback(), "loopback by default");
         let id = plan.export.strip_prefix("naatre/").expect("export prefix");
@@ -639,13 +792,14 @@ mod tests {
         assert_eq!(plan.export_path(), format!("/naatre/{id}"));
         assert_eq!(plan.mount_dir, root.join(id));
         assert!(!plan.writable);
+        assert!(!plan.flush_land);
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn non_loopback_listen_is_opt_in_with_the_serve_warning() {
         let root = tmp_root("plan2");
-        let plan = MountPlan::new(Some("0.0.0.0:20490"), root, false).expect("plan");
+        let plan = MountPlan::new(Some("0.0.0.0:20490"), root, false, false).expect("plan");
         assert!(plan.non_loopback());
         let warning = cleartext_warning(&plan.listen_addr);
         // The same cleartext warning `serve` prints (host.rs), verbatim shape.
@@ -656,7 +810,7 @@ mod tests {
     #[test]
     fn invalid_listen_is_a_usage_error() {
         let root = tmp_root("plan3");
-        assert!(MountPlan::new(Some("nope"), root, false).is_err());
+        assert!(MountPlan::new(Some("nope"), root, false, false).is_err());
     }
 
     #[test]
@@ -669,6 +823,11 @@ mod tests {
         );
         assert!(macos.contains("nfsvers=3"), "{macos}");
         assert!(macos.contains("127.0.0.1:/naatre/abc"), "{macos}");
+        // The researched non-root pin: mount_nfs's default source port
+        // (resvport) needs root — noresvport is what makes the printed line
+        // work for the dev-machine user (exercised by the real-mount e2e).
+        assert!(macos.contains("noresvport"), "{macos}");
+        assert!(macos.contains("nfc"), "{macos}");
         assert!(linux.contains("mount -t nfs"), "{linux}");
         assert!(linux.contains("vers=3"), "{linux}");
         assert!(linux.contains("port=51412"), "{linux}");

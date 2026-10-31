@@ -48,6 +48,14 @@ async-trait = "0.1"
 # dirs (already in the lockfile via getrandom).
 libc = "0.2"
 
+# FUSE front-end for `naatre mount --fuse` (M8b, Linux-only target): the
+# adapter lives behind `#[cfg(target_os = "linux")]`, so this dep never
+# compiles on macOS. Pure-Rust FUSE client (no libfuse at build time; it
+# shells out to fusermount3 to mount/unmount, which the front-end's docs
+# name). MIT; GPL-3 compatible (re-verified in the M8b dependency table).
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = "0.18"
+
 [dev-dependencies]
 tempfile = "3"
 # Direct-DB seeding of the `main` ref row (land, its only writer, is M4) —

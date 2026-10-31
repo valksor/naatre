@@ -11,6 +11,9 @@
 pub mod clone;
 pub mod commit;
 pub mod doctor;
+// The Linux-only FUSE front-end for `naatre mount --fuse` (M8b).
+#[cfg(target_os = "linux")]
+pub mod fuse;
 pub mod land;
 pub mod login;
 pub mod mcp;
