@@ -194,7 +194,7 @@ fn is_not_found(e: &object_store::Error) -> bool {
 }
 
 impl crate::blob::BlobStore for S3Store {
-    fn put(&self, payload: &[u8]) -> Result<Id, StoreError> {
+    fn put(&self, payload: &[u8]) -> Result<crate::blob::PutInfo, StoreError> {
         if payload.len() > BLOB_LIMIT {
             return Err(StoreError::TooLarge {
                 limit: BLOB_LIMIT,
@@ -210,8 +210,9 @@ impl crate::blob::BlobStore for S3Store {
         // demands (the fs backend's short-circuit is only a disk-space
         // optimization, not a semantics difference).
         let compressed = compress_payload(payload)?;
+        let csize = compressed.len() as u64;
         self.op("put", self.store.put(&key, PutPayload::from(compressed)))?;
-        Ok(id)
+        Ok(crate::blob::PutInfo { id, csize })
     }
 
     fn get(&self, id: &Id) -> Result<Vec<u8>, StoreError> {
@@ -242,6 +243,84 @@ impl crate::blob::BlobStore for S3Store {
         }
         Ok(out)
     }
+
+    /// Deletes the history blobs for `ids` by key (M10a's sweep), in
+    /// delete_stream batches. Idempotent: S3 DeleteObject on an absent key
+    /// succeeds, so a crash between the delete and the row purge converges
+    /// on re-run (same contract as the fs unlink).
+    ///
+    /// ORDER (pinned): the sweep deletes OBJECTS FIRST and the referencing
+    /// `objects`/ledger rows after, in the row transaction that follows.
+    /// S3 deletes and DB rows cannot share a transaction, so a crash
+    /// between the two leaves DB rows naming absent bytes — for UNREACHABLE
+    /// data only (the mark never selects reachable candidates), the
+    /// orphan direction: the next pass re-selects the same candidates,
+    /// re-deletes idempotently, and purges the rows. The reverse
+    /// (rows-first) would instead strand ledger rows over bytes the sweep
+    /// no longer tracks — also convergent, but the chosen order keeps the
+    /// failure shape identical to the fs backend's (unlink before the row
+    /// commit; bytes gone ⇒ rows still claim them ⇒ re-run finishes the
+    /// rows), so one argument covers both backends.
+    fn delete(&self, ids: &[Id]) -> Result<(), StoreError> {
+        for batch in ids.chunks(1000) {
+            let paths: Vec<Path> = batch.iter().map(S3Store::objects_key).collect();
+            self.op("delete", async {
+                let batch = stream::iter(paths.into_iter().map(Ok::<_, object_store::Error>));
+                let mut results = self.store.delete_stream(Box::pin(batch));
+                while let Some(r) = results.next().await {
+                    r?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Lists every history-blob id present under the `objects/` prefix —
+    /// the fs CAS's directory walk, over keys. Keys outside the shard
+    /// shape are skipped (nothing naatre wrote). Unspecified order; the
+    /// listing is materialized (the sweep batched over it). Paginated via
+    /// `list_with_offset` (keys list in lexicographic order, so the last
+    /// key of a page resumes the next).
+    fn ids(&self) -> Result<Vec<Id>, StoreError> {
+        let prefix = Path::from("objects");
+        let mut out = Vec::new();
+        let mut start_after: Option<Path> = None;
+        loop {
+            let listed: Vec<Path> = self.op("list", async {
+                let mut page = Vec::new();
+                let mut stream = self.store.list_with_offset(start_after.as_ref(), &prefix);
+                while let Some(meta) = stream.next().await {
+                    page.push(meta?.location);
+                    if page.len() == 1000 {
+                        break; // page cap; the outer loop resumes after the last key
+                    }
+                }
+                Ok(page)
+            })?;
+            let done = listed.len() < 1000;
+            for key in &listed {
+                if let Some(id) = objects_key_id(key) {
+                    out.push(id);
+                }
+            }
+            if done {
+                return Ok(out);
+            }
+            start_after = listed.last().cloned();
+        }
+    }
+}
+
+/// The blob id a `objects/<2hex>/<2hex>/<62hex>` key carries, or `None`
+/// when the key is outside the shard shape (a foreign object in the
+/// bucket — skipped, never parsed into an id).
+fn objects_key_id(key: &Path) -> Option<Id> {
+    let parts: Vec<&str> = key.as_ref().split('/').collect();
+    if parts.len() != 4 || parts[0] != "objects" {
+        return None;
+    }
+    Id::from_hex(&format!("{}{}{}", parts[1], parts[2], parts[3]))
 }
 
 impl crate::ephemeral::EphemeralStore for S3Store {

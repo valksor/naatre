@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use naatre_core::ids::Id;
-use naatre_store::{Db, DbError, Row, Sql, pv};
+use naatre_store::{Db, DbError, P, Row, Sql, pv};
 
 /// One row of `repos`.
 pub struct RepoRow {
@@ -269,12 +269,18 @@ fn ref_cas_inner(conn: &Db, mv: RefMove<'_>, via: Option<&str>) -> Result<RefCas
 // ---- objects -------------------------------------------------------------
 
 /// Records (or refreshes) the `objects` row for a CAS blob that was already
-/// fsynced. Returns `true` when the row already existed (idempotent re-PUT).
+/// fsynced, stamping `touched_ns` (M10a's upload grace clock: a content-
+/// addressed re-PUT of an OLD blob is a CAS no-op, but the row touch moves
+/// the blob back inside the sweep's grace window — otherwise a re-uploaded
+/// orphan referenced by a concurrent changeset could be collected while
+/// committed history points at it). Returns `true` when the row already
+/// existed (idempotent re-PUT).
 pub fn object_row_upsert(
     conn: &Db,
     object_id: &Id,
     size: i64,
     csize: i64,
+    touched_ns: i64,
 ) -> Result<bool, DbError> {
     let existed: Option<i64> = conn.query_opt_map(
         &Sql::plain("SELECT 1 FROM objects WHERE object_id = ?1"),
@@ -283,10 +289,18 @@ pub fn object_row_upsert(
     )?;
     conn.execute(
         &Sql::plain(
-            "INSERT INTO objects(object_id, size, csize) VALUES (?1, ?2, ?3) \
-         ON CONFLICT(object_id) DO UPDATE SET size = excluded.size, csize = excluded.csize",
+            "INSERT INTO objects(object_id, size, csize, touched_ns) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(object_id) DO UPDATE SET size = excluded.size, csize = excluded.csize, \
+           touched_ns = excluded.touched_ns",
         ),
-        &pv![object_id.0.as_slice(), size, csize],
+        &pv![object_id.0.as_slice(), size, csize, touched_ns],
+    )?;
+    // Any touch clears the two-phase delete's condemnation mark (the GC's
+    // phase B only deletes bytes+rows while the mark is still set) — an
+    // upload wins over a pending condemnation in the same write slot.
+    conn.execute(
+        &Sql::plain("UPDATE gc_pending SET condemned_at = NULL WHERE scope = 'blob' AND id = ?1"),
+        &pv![object_id.0.as_slice()],
     )?;
     Ok(existed.is_some())
 }
@@ -2125,6 +2139,685 @@ pub fn changeset_parent_count(conn: &Db, repo_id: i64, cs: &Id) -> Result<i64, D
         &Sql::plain("SELECT COUNT(*) FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2"),
         &pv![repo_id, cs.0.as_slice()],
         |r| r.get(0),
+    )
+}
+
+// ---- reachability GC (M10a) -----------------------------------------------
+//
+// Statement layer for the mark-and-sweep in [`crate::gc`]. The mark reads
+// PRIMARY TABLES ONLY — refs, changesets + parents + file_changes, unexpired
+// snapshots, lands' head/base/result references, git_map — never the
+// `repo_blobs` membership index or the M6 derived tables (advisory, never
+// authoritative). The sweep works over `gc_pending` (the first-unreachable
+// ledger): a candidate collects only past the grace window AND only while
+// the re-verification inside the collecting transaction still finds it
+// unreachable, so a concurrent write that references a candidate again
+// spares it and a crash mid-sweep converges on the re-run (set-difference,
+// not a destructive cursor).
+
+/// `gc_pending.scope` value: an unreachable changeset.
+pub const GC_SCOPE_CS: &str = "cs";
+/// `gc_pending.scope` value: an unreachable CAS blob.
+pub const GC_SCOPE_BLOB: &str = "blob";
+/// `gc_pending.scope` value: an unreachable `trees` row.
+pub const GC_SCOPE_TREE: &str = "tree";
+
+/// IN-list chunk size for the id-set statements. Safely under both
+/// backends' parameter ceilings and small enough that each statement's
+/// plan stays a set of indexed probes.
+pub(crate) const GC_IN_CHUNK: usize = 400;
+
+fn id_params(ids: &[Id]) -> Vec<P> {
+    ids.iter().map(|id| P::B(id.0.to_vec())).collect()
+}
+
+/// Every repo, ascending by id (the mark walks repo by repo; every per-repo
+/// statement keeps its indexes' leading `repo_id` column constrained).
+pub fn gc_repos(conn: &Db) -> Result<Vec<i64>, DbError> {
+    conn.query_all_map(
+        &Sql::plain("SELECT id FROM repos ORDER BY id ASC"),
+        &pv![],
+        |r| r.get(0),
+    )
+}
+
+/// The repo's seed changesets: every ref target, every lands head/base,
+/// every git_map cs_id. (The lands `result_json` "landed" id is parsed by
+/// the caller — [`gc_land_result_jsons`] — JSON is not statement surface.)
+pub fn gc_seed_changesets(conn: &Db, repo_id: i64) -> Result<Vec<Id>, DbError> {
+    let mut out = Vec::new();
+    let mut push = |raw: Option<Vec<u8>>| {
+        if let Some(b) = raw
+            && let Ok(arr) = <[u8; 32]>::try_from(b)
+        {
+            out.push(Id(arr));
+        }
+        Ok::<(), DbError>(())
+    };
+    let rows: Vec<Option<Vec<u8>>> = conn.query_all_map(
+        &Sql::plain("SELECT target FROM refs WHERE repo_id = ?1 AND target IS NOT NULL"),
+        &pv![repo_id],
+        |r| r.get(0),
+    )?;
+    for raw in rows {
+        push(raw)?;
+    }
+    let rows: Vec<Option<Vec<u8>>> = conn.query_all_map(
+        &Sql::plain(
+            "SELECT head FROM lands WHERE repo_id = ?1 AND head IS NOT NULL \
+             UNION ALL SELECT base FROM lands WHERE repo_id = ?1 AND base IS NOT NULL",
+        ),
+        &pv![repo_id],
+        |r| r.get(0),
+    )?;
+    for raw in rows {
+        push(raw)?;
+    }
+    let rows: Vec<Vec<u8>> = conn.query_all_map(
+        &Sql::plain("SELECT cs_id FROM git_map WHERE repo_id = ?1"),
+        &pv![repo_id],
+        |r| r.get(0),
+    )?;
+    for raw in rows {
+        push(Some(raw))?;
+    }
+    Ok(out)
+}
+
+/// The repo's lands `result_json` payloads (the settled `{landed, …}`
+/// records); the caller parses the landed changeset ids out of them.
+pub fn gc_land_result_jsons(conn: &Db, repo_id: i64) -> Result<Vec<String>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT result_json FROM lands \
+             WHERE repo_id = ?1 AND result_json IS NOT NULL",
+        ),
+        &pv![repo_id],
+        |r| r.get(0),
+    )
+}
+
+/// The parents of `cs_ids` in `repo_id` (one BFS level, chunked IN-lists on
+/// the `(repo_id, cs, …)` PRIMARY KEY prefix).
+pub fn gc_parent_ids(conn: &Db, repo_id: i64, cs_ids: &[Id]) -> Result<Vec<Id>, DbError> {
+    let mut out = Vec::new();
+    for chunk in cs_ids.chunks(GC_IN_CHUNK) {
+        // `?1` is the repo; the IN-list numbers from ?2.
+        let list = (2..=chunk.len() + 1)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut params = vec![P::I(repo_id)];
+        params.extend(id_params(chunk));
+        let rows: Vec<Vec<u8>> = conn.query_all_map(
+            &Sql::plain_owned(format!(
+                "SELECT parent FROM changeset_parents \
+                 WHERE repo_id = ?1 AND cs IN ({list})"
+            )),
+            &params,
+            |r| r.get(0),
+        )?;
+        for raw in rows {
+            if let Ok(arr) = <[u8; 32]>::try_from(raw) {
+                out.push(Id(arr));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The repo's whole changeset inventory: `(id, root_tree_id)` — the mark's
+/// candidate side is the inventory minus the reachable set, and the roots
+/// of the reachable set seed the protected-tree closure.
+pub fn gc_all_changesets(conn: &Db, repo_id: i64) -> Result<Vec<(Id, Option<Id>)>, DbError> {
+    conn.query_all_map(
+        &Sql::plain("SELECT id, root_tree_id FROM changesets WHERE repo_id = ?1"),
+        &pv![repo_id],
+        |r| {
+            let id: Vec<u8> = r.get(0)?;
+            let root: Option<Vec<u8>> = r.get(1)?;
+            let id = Id(<[u8; 32]>::try_from(id).map_err(|_| {
+                DbError::from(std::io::Error::other("changesets.id is not 32 bytes"))
+            })?);
+            let root = root
+                .map(|b| <[u8; 32]>::try_from(b).map(Id))
+                .transpose()
+                .map_err(|_| {
+                    DbError::from(std::io::Error::other(
+                        "changesets.root_tree_id is not 32 bytes",
+                    ))
+                })?;
+            Ok((id, root))
+        },
+    )
+}
+
+/// The repo's `file_changes` blob references: `(cs, blob_id)` rows — the
+/// mark filters this inventory by the reachable set in memory (one full
+/// read of the table per pass is the mark's honest cost, per the plan
+/// clause: the mark reads `file_changes`).
+pub fn gc_file_change_blobs(conn: &Db, repo_id: i64) -> Result<Vec<(Id, Id)>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT cs, blob_id FROM file_changes \
+             WHERE repo_id = ?1 AND blob_id IS NOT NULL",
+        ),
+        &pv![repo_id],
+        |r| {
+            let cs: Vec<u8> = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            Ok((
+                Id(<[u8; 32]>::try_from(cs).map_err(|_| {
+                    DbError::from(std::io::Error::other("file_changes.cs is not 32 bytes"))
+                })?),
+                Id(<[u8; 32]>::try_from(blob).map_err(|_| {
+                    DbError::from(std::io::Error::other(
+                        "file_changes.blob_id is not 32 bytes",
+                    ))
+                })?),
+            ))
+        },
+    )
+}
+
+/// The child entries of `tree_ids`: `(kind, object_id)` per entry (one BFS
+/// level of the tree closure, chunked IN-lists on the `(tree_id, name)`
+/// PRIMARY KEY prefix).
+pub fn gc_tree_children(conn: &Db, tree_ids: &[Id]) -> Result<Vec<(i64, Id)>, DbError> {
+    let mut out = Vec::new();
+    for chunk in tree_ids.chunks(GC_IN_CHUNK) {
+        let list = (1..=chunk.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows: Vec<(i64, Vec<u8>)> = conn.query_all_map(
+            &Sql::plain_owned(format!(
+                "SELECT kind, object_id FROM tree_entries WHERE tree_id IN ({list})"
+            )),
+            &id_params(chunk),
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        for (kind, raw) in rows {
+            if let Ok(arr) = <[u8; 32]>::try_from(raw) {
+                out.push((kind, Id(arr)));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The repo's unexpired snapshot roots (`expires_ns > now_ns`).
+pub fn gc_snapshot_roots(conn: &Db, repo_id: i64, now_ns: i64) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain("SELECT tree_id FROM snapshots WHERE repo_id = ?1 AND expires_ns > ?2"),
+        &pv![repo_id, now_ns],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("snapshots.tree_id is not 32 bytes"))
+            })?))
+        },
+    )
+}
+
+/// Every `objects` row (the DB-known blob inventory).
+pub fn gc_all_object_ids(conn: &Db) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(&Sql::plain("SELECT object_id FROM objects"), &pv![], |r| {
+        let b: Vec<u8> = r.get(0)?;
+        Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+            DbError::from(std::io::Error::other("objects.object_id is not 32 bytes"))
+        })?))
+    })
+}
+
+/// Every `trees` row id (the tree inventory the sweep differs against).
+pub fn gc_all_tree_ids(conn: &Db) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(&Sql::plain("SELECT id FROM trees"), &pv![], |r| {
+        let b: Vec<u8> = r.get(0)?;
+        Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+            DbError::from(std::io::Error::other("trees.id is not 32 bytes"))
+        })?))
+    })
+}
+
+// -- gc_pending ledger -------------------------------------------------------
+
+/// Records `ids` as first-observed-unreachable at `first_ns`. `INSERT OR
+/// IGNORE` keeps the FIRST timestamp: a candidate that stays unreachable
+/// ages from when it actually became garbage, not from when a pass last
+/// looked. Returns the rows actually added.
+pub fn gc_candidates_upsert(
+    conn: &Db,
+    scope: &str,
+    ids: &[Id],
+    first_ns: i64,
+) -> Result<usize, DbError> {
+    let mut added = 0;
+    for chunk in ids.chunks(GC_IN_CHUNK) {
+        for id in chunk {
+            added += conn.execute(
+                &Sql::ignore(
+                    "INSERT OR IGNORE INTO gc_pending(scope, id, first_ns) VALUES (?1, ?2, ?3)",
+                ),
+                &pv![scope, id.0.as_slice(), first_ns],
+            )?;
+        }
+    }
+    Ok(added)
+}
+
+/// Deletes the ledger rows for `ids` (the repair direction: reachable
+/// again, or collected).
+pub fn gc_candidates_delete(conn: &Db, scope: &str, ids: &[Id]) -> Result<usize, DbError> {
+    let mut n = 0;
+    for chunk in ids.chunks(GC_IN_CHUNK) {
+        // `?1` is the scope; the IN-list numbers from ?2.
+        let list = (2..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut params = vec![P::S(scope.to_string())];
+        params.extend(id_params(chunk));
+        n += conn.execute(
+            &Sql::plain_owned(format!(
+                "DELETE FROM gc_pending WHERE scope = ?1 AND id IN ({list})"
+            )),
+            &params,
+        )?;
+    }
+    Ok(n)
+}
+
+/// Counts the ledger rows (fsck's pending total), optionally split by
+/// whether they are already past `cut_ns`.
+pub fn gc_candidate_counts(conn: &Db, cut_ns: i64) -> Result<(i64, i64), DbError> {
+    let pending: i64 = conn.query_row_map(
+        &Sql::plain("SELECT COUNT(*) FROM gc_pending"),
+        &pv![],
+        |r| r.get(0),
+    )?;
+    let past: i64 = conn.query_row_map(
+        &Sql::plain("SELECT COUNT(*) FROM gc_pending WHERE first_ns <= ?1"),
+        &pv![cut_ns],
+        |r| r.get(0),
+    )?;
+    Ok((pending, past))
+}
+
+/// Every ledger row id for `scope` (fsck's stale-candidate check).
+pub fn gc_pending_ids(conn: &Db, scope: &str) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain("SELECT id FROM gc_pending WHERE scope = ?1"),
+        &pv![scope],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(b.try_into().expect("gc_pending id is 32 bytes")))
+        },
+    )
+}
+
+// -- collectible selection (re-verified inside the collecting transaction) ----
+
+/// The changeset candidates past the grace cut that are STILL unreferenced
+/// at read time: no ref target, no lands head/base, no git_map row, no
+/// changeset child — each an indexed probe (the JSON `landed` side is the
+/// caller's in-memory set; a landed id is main's tip and thereby also under
+/// a ref, but the caller filters it explicitly to honor the plan clause
+/// verbatim). Generation-ordered like the batched backfill (children collect
+/// after parents' chains, deterministic across crash re-runs). Runs inside
+/// the collecting transaction — selection and deletion are one atomic step.
+pub fn gc_collectible_cs(conn: &Db, cut_ns: i64, limit: usize) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT p.id FROM gc_pending p \
+             JOIN changesets c ON c.id = p.id \
+             WHERE p.scope = 'cs' AND p.first_ns <= ?1 \
+               AND NOT EXISTS (SELECT 1 FROM refs r WHERE r.target = p.id) \
+               AND NOT EXISTS (SELECT 1 FROM lands l WHERE l.head = p.id OR l.base = p.id) \
+               AND NOT EXISTS (SELECT 1 FROM git_map g WHERE g.cs_id = p.id) \
+               AND NOT EXISTS (SELECT 1 FROM changeset_parents par WHERE par.parent = p.id) \
+             ORDER BY c.generation ASC, p.id ASC LIMIT ?2",
+        ),
+        &pv![cut_ns, limit as i64],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
+            })?))
+        },
+    )
+}
+
+/// Phase A's selector: the blob candidates past the grace cut that are
+/// STILL unreferenced at read time AND not yet condemned (`condemned_at IS
+/// NULL` — a stamped row belongs to phase B; a touch cleared the stamp, so
+/// a re-PUT's blob re-enters here honestly): no `file_changes` row and no
+/// blob `tree_entries` row — both probes indexed (migration 8's
+/// `idx_file_changes_blob`, migration 3's `idx_tree_entries_object`) — and
+/// no upload touch inside the grace window (`objects.touched_ns`: a
+/// content-addressed re-PUT of an old orphan is a CAS no-op, and the row
+/// touch is what re-enters it into grace, so a re-referenced blob can
+/// never collect under a concurrent pass). Any live reference spares the
+/// blob for this transaction; a tree row of a tree that is itself dying
+/// spares it too and the blob follows one phase later (never dangling,
+/// always converging).
+pub fn gc_collectible_blobs(conn: &Db, cut_ns: i64, limit: usize) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT p.id FROM gc_pending p \
+             WHERE p.scope = 'blob' AND p.first_ns <= ?1 \
+               AND p.condemned_at IS NULL \
+               AND NOT EXISTS (SELECT 1 FROM objects o \
+                               WHERE o.object_id = p.id AND o.touched_ns > ?1) \
+               AND NOT EXISTS (SELECT 1 FROM file_changes f WHERE f.blob_id = p.id) \
+               AND NOT EXISTS (SELECT 1 FROM tree_entries te \
+                               WHERE te.kind = 0 AND te.object_id = p.id) \
+             ORDER BY p.first_ns ASC, p.id ASC LIMIT ?2",
+        ),
+        &pv![cut_ns, limit as i64],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
+            })?))
+        },
+    )
+}
+
+/// The tree candidates past the grace cut that the CURRENT protective
+/// closure still does not reach: the recursive `live` set is computed from
+/// every surviving changeset root plus every unexpired snapshot, inside the
+/// collecting transaction — a land or snapshot POST that commits a
+/// reference mid-pass is already committed here (the single-writer slot
+/// serializes the two) and spares its shared subtrees.
+pub fn gc_collectible_trees(
+    conn: &Db,
+    now_ns: i64,
+    cut_ns: i64,
+    limit: usize,
+) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "WITH RECURSIVE live(tree_id) AS ( \
+                 SELECT root_tree_id FROM changesets WHERE root_tree_id IS NOT NULL \
+                 UNION \
+                 SELECT tree_id FROM snapshots WHERE expires_ns > ?1 \
+                 UNION \
+                 SELECT te.object_id FROM live l \
+                 JOIN tree_entries te ON te.tree_id = l.tree_id AND te.kind = 1 \
+             ) \
+             SELECT p.id FROM gc_pending p \
+             WHERE p.scope = 'tree' AND p.first_ns <= ?2 \
+               AND NOT EXISTS (SELECT 1 FROM live l WHERE l.tree_id = p.id) \
+             ORDER BY p.first_ns ASC, p.id ASC LIMIT ?3",
+        ),
+        &pv![now_ns, cut_ns, limit as i64],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
+            })?))
+        },
+    )
+}
+
+/// The two-phase delete's PHASE A: stamps `condemned_at` on the past-grace,
+/// unreferenced blob candidates selected by [`gc_collectible_blobs`] — the
+/// bytes are NOT touched this pass. A later pass's phase B
+/// ([`gc_condemned_blobs`]) deletes them only while the mark is still set;
+/// any PUT's row touch ([`object_row_upsert`]) clears it first. Returns
+/// the rows condemned.
+pub fn gc_condemn_blobs(conn: &Db, ids: &[Id], condemned_at: i64) -> Result<usize, DbError> {
+    let mut n = 0;
+    for chunk in ids.chunks(GC_IN_CHUNK) {
+        let list = (2..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut params = vec![P::I(condemned_at)];
+        params.extend(id_params(chunk));
+        n += conn.execute(
+            &Sql::plain_owned(format!(
+                "UPDATE gc_pending SET condemned_at = ?1 \
+                 WHERE scope = 'blob' AND id IN ({list})"
+            )),
+            &params,
+        )?;
+    }
+    Ok(n)
+}
+
+/// The two-phase delete's PHASE B selector: blob candidates condemned by an
+/// EARLIER pass (`condemned_at < now_ns`, so this pass's own phase-A
+/// stamps never qualify), still unreferenced at read time, and still
+/// condemned — the mark is the proof no upload touched the row since the
+/// stamp. Runs inside the deleting transaction (the slot serializes it
+/// against the record step, whose touch clears the mark in the same
+/// slot).
+pub fn gc_condemned_blobs(
+    conn: &Db,
+    now_ns: i64,
+    cut_ns: i64,
+    limit: usize,
+) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT p.id FROM gc_pending p \
+             WHERE p.scope = 'blob' AND p.first_ns <= ?1 \
+               AND p.condemned_at IS NOT NULL AND p.condemned_at < ?2 \
+               AND NOT EXISTS (SELECT 1 FROM file_changes f WHERE f.blob_id = p.id) \
+               AND NOT EXISTS (SELECT 1 FROM tree_entries te \
+                               WHERE te.kind = 0 AND te.object_id = p.id) \
+             ORDER BY p.first_ns ASC, p.id ASC LIMIT ?3",
+        ),
+        &pv![cut_ns, now_ns, limit as i64],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(b.try_into().expect("gc_pending id is 32 bytes")))
+        },
+    )
+}
+
+// -- collection (the deleting half of a batch) --------------------------------
+
+/// Collects `ids` (changesets): the changeset row, its parents and file
+/// changes, and every advisory row keyed by it — the M6 queue/reports and
+/// the blame/path-history stores — plus the ledger row. The advisory
+/// deletes are the "M6 indexes are advisory" clause taken to its sweep
+/// consequence: rows keyed by a collected changeset would dangle forever.
+/// Returns the changesets collected.
+pub fn gc_collect_cs(conn: &Db, ids: &[Id]) -> Result<usize, DbError> {
+    let mut n = 0;
+    for chunk in ids.chunks(GC_IN_CHUNK) {
+        let list = (1..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let params = id_params(chunk);
+        for table in [
+            "changesets",
+            "changeset_parents",
+            "file_changes",
+            "derive_state",
+            "derive_reports",
+            "blame_state",
+            "path_history",
+        ] {
+            let key = match table {
+                "changesets" => "id",
+                _ => "cs",
+            };
+            conn.execute(
+                &Sql::plain_owned(format!("DELETE FROM {table} WHERE {key} IN ({list})")),
+                &params,
+            )?;
+        }
+        n += conn.execute(
+            &Sql::plain_owned(format!(
+                "DELETE FROM gc_pending WHERE scope = 'cs' AND id IN ({list})"
+            )),
+            &params,
+        )?;
+    }
+    Ok(n)
+}
+
+/// Collects `ids` (blobs): the `objects` row, the advisory `repo_blobs`
+/// membership rows, and the ledger row. The CAS bytes were already unlinked
+/// by the caller (bytes first — the orphan-direction rule: a crash leaves
+/// DB rows claiming absent bytes for UNREACHABLE data, which the re-run
+/// converges on, never reachable data missing bytes).
+pub fn gc_collect_blobs(conn: &Db, ids: &[Id]) -> Result<(), DbError> {
+    for chunk in ids.chunks(GC_IN_CHUNK) {
+        let list = (1..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let params = id_params(chunk);
+        for sql in [
+            format!("DELETE FROM objects WHERE object_id IN ({list})"),
+            format!("DELETE FROM repo_blobs WHERE object_id IN ({list})"),
+            format!("DELETE FROM gc_pending WHERE scope = 'blob' AND id IN ({list})"),
+        ] {
+            conn.execute(&Sql::plain_owned(sql), &params)?;
+        }
+    }
+    Ok(())
+}
+
+/// Collects `ids` (trees): the `trees` row, its entries, the `repo_trees`
+/// junction rows (the tree is unreachable from every surviving changeset,
+/// so every junction row is stale — `repo_has_tree` must never admit a
+/// tree whose bytes are gone), and the ledger row. Returns the trees
+/// collected.
+pub fn gc_collect_trees(conn: &Db, ids: &[Id]) -> Result<usize, DbError> {
+    let mut n = 0;
+    for chunk in ids.chunks(GC_IN_CHUNK) {
+        let list = (1..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let params = id_params(chunk);
+        for sql in [
+            format!("DELETE FROM tree_entries WHERE tree_id IN ({list})"),
+            format!("DELETE FROM repo_trees WHERE tree_id IN ({list})"),
+            format!("DELETE FROM trees WHERE id IN ({list})"),
+            format!("DELETE FROM gc_pending WHERE scope = 'tree' AND id IN ({list})"),
+        ] {
+            conn.execute(&Sql::plain_owned(sql), &params)?;
+        }
+        n += chunk.len();
+    }
+    Ok(n)
+}
+
+// ---- fsck (M10a) -----------------------------------------------------------
+//
+// The consistency checker's statement layer: every check is one read-only
+// anti-join over the primary tables (dangling-reference counts), plus the
+// inventory loads the caller differences against the CAS and the ledger.
+
+/// The dangling-reference checks, each as `(name, count)`. A nonzero count
+/// anywhere is fsck dirt: a reference the primary tables carry but the
+/// referenced row cannot be found for (broken graph, missing blob row,
+/// missing tree row — the never-dangling invariant violated).
+pub fn fsck_danglings(conn: &Db) -> Result<Vec<(&'static str, i64)>, DbError> {
+    const CHECKS: &[(&str, &str)] = &[
+        (
+            "changeset_parent_missing",
+            "SELECT COUNT(*) FROM changeset_parents p \
+             WHERE NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = p.parent)",
+        ),
+        (
+            "file_change_blob_row_missing",
+            "SELECT COUNT(*) FROM file_changes f WHERE f.blob_id IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = f.blob_id)",
+        ),
+        (
+            "tree_blob_row_missing",
+            "SELECT COUNT(*) FROM tree_entries te WHERE te.kind = 0 \
+             AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = te.object_id)",
+        ),
+        (
+            "tree_child_row_missing",
+            "SELECT COUNT(*) FROM tree_entries te WHERE te.kind = 1 \
+             AND NOT EXISTS (SELECT 1 FROM trees t WHERE t.id = te.object_id)",
+        ),
+        (
+            "changeset_root_tree_missing",
+            "SELECT COUNT(*) FROM changesets c WHERE c.root_tree_id IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM trees t WHERE t.id = c.root_tree_id)",
+        ),
+        (
+            "ref_target_missing",
+            "SELECT COUNT(*) FROM refs r WHERE r.target IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = r.target)",
+        ),
+        (
+            "land_head_missing",
+            "SELECT COUNT(*) FROM lands l WHERE l.head IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = l.head)",
+        ),
+        (
+            "land_base_missing",
+            "SELECT COUNT(*) FROM lands l WHERE l.base IS NOT NULL \
+             AND NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = l.base)",
+        ),
+        (
+            "git_map_cs_missing",
+            "SELECT COUNT(*) FROM git_map g \
+             WHERE NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = g.cs_id)",
+        ),
+        (
+            "membership_row_object_missing",
+            "SELECT COUNT(*) FROM repo_blobs rb \
+             WHERE NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = rb.object_id)",
+        ),
+        (
+            "derive_state_cs_missing",
+            "SELECT COUNT(*) FROM derive_state d \
+             WHERE NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = d.cs)",
+        ),
+        (
+            "derive_report_cs_missing",
+            "SELECT COUNT(*) FROM derive_reports d \
+             WHERE NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = d.cs)",
+        ),
+        (
+            "blame_state_cs_missing",
+            "SELECT COUNT(*) FROM blame_state b \
+             WHERE NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = b.cs)",
+        ),
+        (
+            "path_history_cs_missing",
+            "SELECT COUNT(*) FROM path_history h \
+             WHERE NOT EXISTS (SELECT 1 FROM changesets c WHERE c.id = h.cs)",
+        ),
+    ];
+    CHECKS
+        .iter()
+        .map(|(name, sql)| {
+            let count: i64 = conn.query_row_map(&Sql::plain(sql), &pv![], |r| r.get(0))?;
+            Ok((*name, count))
+        })
+        .collect()
+}
+
+/// One repo's `repo_blobs` membership rows (fsck's advisory comparison:
+/// the index vs the blob references the repo's `file_changes` carry).
+pub fn gc_repo_blobs(conn: &Db, repo_id: i64) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain("SELECT object_id FROM repo_blobs WHERE repo_id = ?1"),
+        &pv![repo_id],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(b.try_into().expect("object id is 32 bytes")))
+        },
     )
 }
 

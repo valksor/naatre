@@ -1,9 +1,10 @@
-//! The NAATRE_S3_* environment fallback, pinned in its own process: env
-//! mutation is process-global, and this binary runs no other parse tests
-//! whose expectations an exported variable could disturb.
+//! The environment fallbacks (`NAATRE_S3_*`, `NAATRE_PG_DSN`), pinned in
+//! their own process: env mutation is process-global, so this binary runs
+//! ONE test — no other parse test's expectations an exported variable
+//! could disturb, and no second test racing the same variables.
 
 use naatre_store::backend::{
-    BackendError, ENV_S3_ACCESS_KEY_ID, ENV_S3_BUCKET, ENV_S3_ENDPOINT, ENV_S3_REGION,
+    BackendError, ENV_PG_DSN, ENV_S3_ACCESS_KEY_ID, ENV_S3_BUCKET, ENV_S3_ENDPOINT, ENV_S3_REGION,
     ENV_S3_SECRET, parse,
 };
 
@@ -12,7 +13,7 @@ fn err_of(text: &str) -> BackendError {
 }
 
 #[test]
-fn s3_keys_via_environment_fall_back_file_wins_and_refuse_under_fs() {
+fn env_fallbacks_file_wins_and_refusals_hold() {
     unsafe {
         std::env::set_var(ENV_S3_BUCKET, "naatre-test");
         std::env::set_var(ENV_S3_ACCESS_KEY_ID, "envkey");
@@ -46,5 +47,37 @@ fn s3_keys_via_environment_fall_back_file_wins_and_refuse_under_fs() {
         std::env::remove_var(ENV_S3_SECRET);
         std::env::remove_var(ENV_S3_ENDPOINT);
         std::env::remove_var(ENV_S3_REGION);
+    }
+
+    // The DSN obeys the same precedence as every other key: the FILE wins
+    // over `NAATRE_PG_DSN` (env-wins made a file's dsn a lie whenever the
+    // variable was set). Env-only still configures (the CI/secret-store
+    // injection point), and a dsn from either side is refused under
+    // `meta = "sqlite"` unchanged.
+    unsafe {
+        std::env::set_var(ENV_PG_DSN, "postgres://envhost:1111/envdb?sslmode=require");
+    }
+    // Env-only configuration parses.
+    let cfg = parse("[backend]\nmeta = \"postgres\"\n").unwrap();
+    let pg = cfg.pg.unwrap();
+    assert_eq!(pg.host, "envhost");
+    assert_eq!(pg.port, 1111);
+    assert_eq!(pg.dbname, "envdb");
+    // The file wins over the environment.
+    let cfg = parse(
+        "[backend]\nmeta = \"postgres\"\ndsn = \"postgres://filehost:2222/filedb?sslmode=require\"\n",
+    )
+    .unwrap();
+    let pg = cfg.pg.unwrap();
+    assert_eq!(pg.host, "filehost");
+    assert_eq!(pg.port, 2222);
+    assert_eq!(pg.dbname, "filedb");
+    // Refused under sqlite unchanged (file key present).
+    let e = err_of(
+        "[backend]\nmeta = \"sqlite\"\ndsn = \"postgres://filehost:2222/filedb?sslmode=require\"\n",
+    );
+    assert!(matches!(e, BackendError::KeyWithoutPostgres { ref key } if key == "dsn"));
+    unsafe {
+        std::env::remove_var(ENV_PG_DSN);
     }
 }

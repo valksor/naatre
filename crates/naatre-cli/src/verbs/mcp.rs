@@ -217,7 +217,10 @@ fn tool_defs() -> Vec<Tool> {
         Tool {
             name: "clone",
             description: "Clone a repo into a NEW working copy (fresh directory; this session \
-                          stays bound to its own working copy). Relative --into paths resolve \
+                          stays bound to its own working copy). The url must be this \
+                          session's configured server — a different origin is refused unless \
+                          the call carries its own explicit token (the session's token is \
+                          never sent to another origin). Relative --into paths resolve \
                           inside the MCP server process's working directory.",
             schema: json!({
                 "type": "object",
@@ -229,6 +232,10 @@ fn tool_defs() -> Vec<Tool> {
                     "into": { "type": "string",
                               "description": "Destination directory (default: the repo name; \
                                               must not exist)" },
+                    "token": { "type": "string",
+                               "description": "Explicit bearer for cloning from an origin \
+                                               OTHER than this session's server; required \
+                                               there (the session's token never crosses)" },
                 },
                 "required": ["url"],
                 "additionalProperties": false,
@@ -569,12 +576,47 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
             let url = take_str(args, "url", true)?;
             let sparse = take_str_list(args, "sparse")?.unwrap_or_default();
             let into = take_str(args, "into", false)?;
-            let payload = tool(super::clone::value(
-                url.as_deref().unwrap_or_default(),
-                &sparse,
-                into.as_deref(),
-                net,
-            ))?;
+            let token = take_str(args, "token", false)?;
+            let url = url.as_deref().unwrap_or_default();
+            // sec-C2: the clone tool is the one tool whose target the
+            // CALLER names — the channel a prompt injection reaches for.
+            // The session's bearer must never cross to a foreign origin:
+            // a url whose origin is not the session's configured server is
+            // refused (error names the configured server; no request is
+            // sent), unless the call carries its own explicit token — which
+            // then REPLACES the session's for that one clone.
+            let session_origin = Wc::open(root)
+                .and_then(|wc| wc.load_config().map(|c| c.server_url))
+                .map_err(ToolFailure::Tool)?
+                .trim_end_matches('/')
+                .to_string();
+            let (url_origin, _) = super::clone::split_url(url, net)
+                .map_err(|e| ToolFailure::Tool(verb_error_text(e)))?;
+            if url_origin.trim_end_matches('/') != session_origin {
+                match token.as_deref() {
+                    None => {
+                        return Err(ToolFailure::Tool(format!(
+                            "refusing to clone from {url_origin}: it is not this session's \
+                             configured server ({session_origin}); the session's token is \
+                             never sent to another origin — pass an explicit \"token\" \
+                             argument to clone from elsewhere"
+                        )));
+                    }
+                    Some(explicit) => {
+                        let net = Net {
+                            server: None,
+                            token: Some(explicit.to_string()),
+                        };
+                        let payload =
+                            tool(super::clone::value(url, &sparse, into.as_deref(), &net))?;
+                        return Ok(ToolOk {
+                            payload,
+                            notes: vec![],
+                        });
+                    }
+                }
+            }
+            let payload = tool(super::clone::value(url, &sparse, into.as_deref(), net))?;
             Ok(ToolOk {
                 payload,
                 notes: vec![],
@@ -968,5 +1010,146 @@ mod tests {
         }));
         assert!(text.starts_with("ref_conflict: land conflict"));
         assert!(text.contains("re-land with the same key"));
+    }
+
+    /// A session working copy bound to one origin, with the token an
+    /// injection would be after.
+    fn session_wc(server_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".naatre")).unwrap();
+        let wc = Wc::open(dir.path()).unwrap();
+        wc.save_config(&crate::wc::Config {
+            server_url: server_url.to_string(),
+            token: Some("session-secret-token".into()),
+        })
+        .unwrap();
+        let path = dir.path().to_path_buf();
+        (dir, path)
+    }
+
+    fn clone_call(url: &str, extra: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":9,"method":"tools/call",
+                "params":{{"name":"clone","arguments":{{{url}{extra}}}}}}}"#
+        )
+    }
+
+    /// sec-C2 pin: a prompt-injection-shaped url naming a foreign origin is
+    /// REFUSED — the tool error names the session's configured server,
+    /// never quotes the token, and NO request reaches the foreign origin
+    /// (a recording listener stands in for it and must stay silent).
+    #[test]
+    fn clone_refuses_a_foreign_origin_without_sending_the_session_token() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let foreign = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let (_dir, root) = session_wc("http://127.0.0.1:7400");
+        let response = handle(
+            &clone_call(&format!("\"url\":\"{foreign}/repo\""), ""),
+            &root,
+            false,
+            &Net::default(),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(v["result"]["isError"], true, "{response}");
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("http://127.0.0.1:7400"),
+            "the error names the configured server: {text}"
+        );
+        assert!(
+            !text.contains("session-secret-token"),
+            "the error never quotes the token: {text}"
+        );
+        // The recording origin stays silent: nothing was sent.
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking recording listener");
+        for _ in 0..20 {
+            assert!(
+                listener.accept().is_err(),
+                "a request reached the foreign origin"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    /// The explicit-token escape hatch: a foreign-origin clone WITH its own
+    /// token argument proceeds, and the recording origin sees exactly that
+    /// bearer — never the session's.
+    #[test]
+    fn clone_foreign_origin_with_explicit_token_sends_only_that_token() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let foreign = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let (_dir, root) = session_wc("http://127.0.0.1:7400");
+        // The recording origin accepts + reads request heads on its own
+        // thread (while handle() blocks on the clone). The client's FIRST
+        // request is the bearer-less /version probe; the recorder answers
+        // each probe and reports the first request that carries
+        // Authorization — the clone call itself.
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            listener
+                .set_nonblocking(false)
+                .expect("blocking recorder listener");
+            for _ in 0..10 {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                    .expect("read timeout");
+                let mut got = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            got.extend_from_slice(&buf[..n]);
+                            if got.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let head = String::from_utf8_lossy(&got).to_string();
+                // ureq emits lowercase header names.
+                let authed = head.to_lowercase().contains("authorization:");
+                let _ = stream.write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                drop(stream);
+                if authed {
+                    let _ = tx.send(head);
+                    return;
+                }
+            }
+            let _ = tx.send(String::new());
+        });
+        let _response = handle(
+            &clone_call(
+                &format!("\"url\":\"{foreign}/repo\""),
+                ", \"token\":\"explicit-token\"",
+            ),
+            &root,
+            false,
+            &Net::default(),
+        )
+        .unwrap();
+        let head = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the recorded request head");
+        assert!(
+            head.to_lowercase()
+                .contains("authorization: bearer explicit-token"),
+            "the explicit token rides the foreign request: {head}"
+        );
+        assert!(
+            !head.contains("session-secret-token"),
+            "the session's token never crosses: {head}"
+        );
     }
 }

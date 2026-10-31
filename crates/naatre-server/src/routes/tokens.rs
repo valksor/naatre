@@ -101,13 +101,27 @@ pub async fn create(
                 "scope_path must be a non-empty path or null",
             ));
         }
-        Some(p) if p.ends_with('/') => {
-            return Err(ApiError::new(
-                ApiCode::Validation,
-                "scope_path must not end with '/'",
-            ));
+        // ONE trailing slash is trimmed, not a 422: README examples and
+        // shell completions hand them over constantly (`--scope src/`), and
+        // the scope's meaning is identical. Anything still ending in '/'
+        // ("src//") stays a validation error — that is a typo, not a
+        // convention.
+        Some(p) => {
+            let p = p.strip_suffix('/').unwrap_or(p);
+            if p.is_empty() {
+                return Err(ApiError::new(
+                    ApiCode::Validation,
+                    "scope_path must be a non-empty path or null",
+                ));
+            }
+            if p.ends_with('/') {
+                return Err(ApiError::new(
+                    ApiCode::Validation,
+                    "scope_path must not end with '/'",
+                ));
+            }
+            Some(p.to_string())
         }
-        Some(p) => Some(p.to_string()),
     };
     let expires_ns = match body.ttl_days {
         None => None,

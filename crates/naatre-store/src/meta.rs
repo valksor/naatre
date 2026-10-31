@@ -426,6 +426,10 @@ pub enum DbError {
         col: String,
         backend: &'static str,
     },
+    /// The `sslrootcert` file is missing, loose (not 0600), or not PEM —
+    /// named with the file path only (the path is config the operator
+    /// wrote; no credential ever rides it).
+    SslRootCert(String),
     Io(std::io::Error),
 }
 
@@ -477,6 +481,7 @@ impl std::fmt::Display for DbError {
                 "column {col:?} has a type {backend} does not map onto the \
                  statement surface's value domain"
             ),
+            DbError::SslRootCert(why) => write!(f, "sslrootcert: {why}"),
             DbError::Io(e) => write!(f, "io error: {e}"),
         }
     }
@@ -665,6 +670,38 @@ impl Db {
             crate::backend::PgTls::Disable => cfg.connect(postgres::NoTls).map_err(pg_redacted)?,
             tls_mode => {
                 let mut builder = native_tls::TlsConnector::builder();
+                // `sslrootcert`: a private-CA bundle ADDED to the platform
+                // roots (a self-hosted Postgres is exactly the shape the
+                // system trust store cannot verify). The file is
+                // 0600-checked and PEM-parsed here — a broken or loose one
+                // is a named, redaction-safe LOCAL error, not a driver
+                // failure to squint at.
+                if let Some(cert_path) = &pg.sslrootcert {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = std::fs::metadata(cert_path)
+                            .map_err(|e| {
+                                DbError::SslRootCert(format!("{}: {e}", cert_path.display()))
+                            })?
+                            .permissions()
+                            .mode();
+                        if mode & 0o177 != 0 {
+                            return Err(DbError::SslRootCert(format!(
+                                "{} must be 0600 (found mode {:o}); chmod 600 it",
+                                cert_path.display(),
+                                mode & 0o777
+                            )));
+                        }
+                    }
+                    let pem = std::fs::read(cert_path).map_err(|e| {
+                        DbError::SslRootCert(format!("{}: {e}", cert_path.display()))
+                    })?;
+                    let cert = native_tls::Certificate::from_pem(&pem).map_err(|e| {
+                        DbError::SslRootCert(format!("{}: {e}", cert_path.display()))
+                    })?;
+                    builder.add_root_certificate(cert);
+                }
                 match tls_mode {
                     // `require`: encryption without certificate verification.
                     crate::backend::PgTls::Require => {
@@ -1057,6 +1094,11 @@ fn pg_row(row: &postgres::Row) -> Result<Row, DbError> {
             Type::INT8 => opt(row.try_get::<_, Option<i64>>(i), &col)?
                 .map(Val::I)
                 .unwrap_or(null),
+            // SUM(bigint) answers numeric, not int8 — without this arm
+            // every aggregate SELECT (repo stats) 500s on Postgres.
+            Type::NUMERIC => opt(row.try_get::<_, Option<PgNumericI64>>(i), &col)?
+                .map(|v| Val::I(v.0))
+                .unwrap_or(null),
             Type::INT4 => opt(row.try_get::<_, Option<i32>>(i), &col)?
                 .map(|v| Val::I(i64::from(v)))
                 .unwrap_or(null),
@@ -1085,6 +1127,68 @@ fn pg_row(row: &postgres::Row) -> Result<Row, DbError> {
         vals.push(val);
     }
     Ok(Row(vals))
+}
+
+/// A Postgres `numeric` read raw (binary `numeric_send`) and converted
+/// LOSSLESSLY to `i64`: base-10000 digits accumulated in i128, fractional
+/// digits must be zero (a rounding-free parse — a true fraction is a
+/// domain error, never rounded away), anything past i64 is an overflow
+/// error. Errors surface as the column's [`DbError::ColumnDomain`].
+struct PgNumericI64(i64);
+
+impl<'a> postgres::types::FromSql<'a> for PgNumericI64 {
+    fn from_sql(
+        _: &postgres::types::Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        const NEG: u16 = 0x4000;
+        const NAN: u16 = 0xC000;
+        const PINF: u16 = 0xD000;
+        const NINF: u16 = 0xF000;
+        fn be_i16(b: &[u8], i: usize) -> Result<i16, Box<dyn std::error::Error + Sync + Send>> {
+            if b.len() < 2 * (i + 1) {
+                return Err("short numeric".into());
+            }
+            Ok(i16::from_be_bytes([b[2 * i], b[2 * i + 1]]))
+        }
+        let ndigits = be_i16(raw, 0)? as usize;
+        let weight = be_i16(raw, 1)?;
+        let sign = be_i16(raw, 2)? as u16;
+        let _dscale = be_i16(raw, 3)?;
+        match sign {
+            NEG => {}
+            NAN | PINF | NINF => return Err("numeric is NaN or infinite".into()),
+            0 => {}
+            other => return Err(format!("unknown numeric sign {other:#06x}").into()),
+        }
+        // Digits run contiguously from `weight` (most significant) down.
+        let mut acc: i128 = 0;
+        for i in 0..ndigits {
+            let d = be_i16(raw, 4 + i)? as i64;
+            if !(0..=9999).contains(&d) {
+                return Err("numeric digit out of range".into());
+            }
+            if weight - (i as i16) < 0 {
+                // Fractional digit: only zero survives a lossless i64 read.
+                if d != 0 {
+                    return Err("numeric has a fractional part".into());
+                }
+                continue;
+            }
+            acc = acc
+                .checked_mul(10_000)
+                .and_then(|a| a.checked_add(i128::from(d)))
+                .ok_or("numeric overflows i64")?;
+        }
+        let signed = if sign == NEG { -acc } else { acc };
+        Ok(PgNumericI64(
+            i64::try_from(signed).map_err(|_| "numeric overflows i64")?,
+        ))
+    }
+
+    fn accepts(ty: &postgres::types::Type) -> bool {
+        *ty == postgres::types::Type::NUMERIC
+    }
 }
 
 /// A typed column read: a driver failure here means the column's declared

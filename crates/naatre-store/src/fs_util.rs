@@ -69,13 +69,16 @@ pub(crate) fn compress_payload(payload: &[u8]) -> Result<Vec<u8>, StoreError> {
 /// level 3, through `tmp_root` staging, fsyncing the file before the rename.
 ///
 /// Durability invariant: after the rename, the bytes are on disk. Returns
-/// the object id; an existing object file short-circuits to `Ok(id)`.
+/// the object id and the STORED (compressed) byte size — the server's
+/// `objects.csize` column reads it from the backend, never by re-statting a
+/// local shard (the S3 backend has none). An existing object file
+/// short-circuits to the same `(id, size)` without touching it.
 pub(crate) fn write_compressed(
     objects_root: &Path,
     tmp_root: &Path,
     payload: &[u8],
     limit: usize,
-) -> Result<Id, StoreError> {
+) -> Result<(Id, u64), StoreError> {
     if payload.len() > limit {
         return Err(StoreError::TooLarge {
             limit,
@@ -85,8 +88,10 @@ pub(crate) fn write_compressed(
     let id = object_id(Kind::Blob, payload);
     let hex = id.to_hex();
     let final_path = shard_path(objects_root, &id);
-    if final_path.exists() {
-        return Ok(id);
+    if let Ok(meta) = std::fs::metadata(&final_path) {
+        // Identical content-addressed bytes: the size on disk IS this
+        // payload's stored size.
+        return Ok((id, meta.len()));
     }
 
     ensure_dir(tmp_root)?;
@@ -122,7 +127,10 @@ pub(crate) fn write_compressed(
         }
     }
 
-    Ok(id)
+    let csize = std::fs::metadata(&final_path)
+        .map(|m| m.len())
+        .map_err(|e| io_ctx(e, &final_path))?;
+    Ok((id, csize))
 }
 
 /// Reads and zstd-decompresses `reader` with a hard expanded-size cap. The

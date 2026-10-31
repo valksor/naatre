@@ -8,7 +8,8 @@
 //!
 //! NOTE: `Cas::put` returning the id derives it from the payload, so the
 //! filesystem backend is content-addressed end to end. The trait keeps
-//! that contract (`put` RETURNS the id); the S3 implementation uses the
+//! that contract (`put` RETURNS the id — inside [`PutInfo`], next to the
+//! stored size the caller records); the S3 implementation uses the
 //! same id derivation as its object key, preserving hash-verified reads on
 //! every backend.
 
@@ -44,12 +45,24 @@ pub fn history_cas(
     }
 }
 
+/// What a successful put reports: the content-derived id and the STORED
+/// (compressed) byte size. The size travels with the put so callers record
+/// the backend's own `csize` — no caller may re-stat a local shard for it
+/// (the S3 backend has no local shard; statting one behind `blob = "s3"`
+/// made every history PUT a 500 in the M9b matrix's blind spot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PutInfo {
+    pub id: Id,
+    pub csize: u64,
+}
+
 /// Content-addressed store for HISTORY blobs.
 pub trait BlobStore: Send + Sync {
-    /// Stores `payload` and returns its blob id. Idempotent: a second put
-    /// of identical content must be a no-op. Durable on return — callers
-    /// may commit referencing rows afterwards (durability invariant 1).
-    fn put(&self, payload: &[u8]) -> Result<Id, StoreError>;
+    /// Stores `payload` and returns its [`PutInfo`] (id + stored size).
+    /// Idempotent: a second put of identical content must be a no-op.
+    /// Durable on return — callers may commit referencing rows afterwards
+    /// (durability invariant 1).
+    fn put(&self, payload: &[u8]) -> Result<PutInfo, StoreError>;
 
     /// Fetches, decompresses, and hash-verifies the blob for `id`.
     /// [`StoreError::BlobMissing`] when absent; [`StoreError::HashMismatch`]
@@ -58,10 +71,23 @@ pub trait BlobStore: Send + Sync {
 
     /// Batch existence check, aligned with `ids`.
     fn has(&self, ids: &[Id]) -> Result<Vec<bool>, StoreError>;
+
+    /// Deletes the blobs for `ids` (M10a's reachability GC sweep).
+    /// Idempotent: an already-absent id is not an error, so a crash between
+    /// the delete and the referencing-row purge converges on re-run.
+    /// Deleting a LIVE blob is the caller's crime — reachability is the
+    /// caller's (the GC's mark) to prove; the seam only deletes bytes.
+    fn delete(&self, ids: &[Id]) -> Result<(), StoreError>;
+
+    /// Lists every blob id present in the CAS — the GC's sweep universe
+    /// and fsck's presence scan (CAS-present vs DB-known mismatches). The
+    /// order is unspecified; the whole set is materialized (sweeping is a
+    /// batched set-difference over it).
+    fn ids(&self) -> Result<Vec<Id>, StoreError>;
 }
 
 impl BlobStore for Cas {
-    fn put(&self, payload: &[u8]) -> Result<Id, StoreError> {
+    fn put(&self, payload: &[u8]) -> Result<PutInfo, StoreError> {
         Cas::put(self, payload)
     }
 
@@ -71,6 +97,14 @@ impl BlobStore for Cas {
 
     fn has(&self, ids: &[Id]) -> Result<Vec<bool>, StoreError> {
         Cas::has(self, ids)
+    }
+
+    fn delete(&self, ids: &[Id]) -> Result<(), StoreError> {
+        Cas::delete(self, ids)
+    }
+
+    fn ids(&self) -> Result<Vec<Id>, StoreError> {
+        Cas::ids(self)
     }
 }
 
@@ -85,8 +119,17 @@ mod tests {
         let dd = DataDir::create(dir.path()).unwrap();
         let cas: std::sync::Arc<dyn BlobStore> = std::sync::Arc::new(Cas::new(&dd).unwrap());
         let payload = b"through the seam";
-        let id = cas.put(payload).unwrap();
-        assert_eq!(cas.get(&id).unwrap(), payload);
-        assert_eq!(cas.has(&[id]).unwrap(), vec![true]);
+        let info = cas.put(payload).unwrap();
+        assert_eq!(cas.get(&info.id).unwrap(), payload);
+        assert_eq!(cas.has(&[info.id]).unwrap(), vec![true]);
+        // The stored size comes from the backend, not a local stat.
+        let hex = info.id.to_hex();
+        let path = dir
+            .path()
+            .join("objects")
+            .join(&hex[0..2])
+            .join(&hex[2..4])
+            .join(&hex[4..]);
+        assert_eq!(info.csize, std::fs::metadata(&path).unwrap().len());
     }
 }

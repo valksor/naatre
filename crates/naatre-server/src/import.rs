@@ -1222,7 +1222,7 @@ fn import_commit(
             && !blobs.contains(&id)
         {
             let content = read_blob(git, git_blob)?;
-            let put = cas.put(&content)?;
+            let put = cas.put(&content)?.id;
             if put != id {
                 return Err(ImportError::Internal(format!(
                     "blob id mismatch for path {:?}: scan computed {}, CAS put {}",
@@ -1298,7 +1298,7 @@ fn build_tree_node(
             }
             mode @ (EXEC_MODE | REGULAR_MODE) => {
                 let content = read_blob(git, entry.oid)?;
-                let blob = cas.put(&content)?;
+                let blob = cas.put(&content)?.id;
                 node.entries.insert(
                     name,
                     MemEntry::File {

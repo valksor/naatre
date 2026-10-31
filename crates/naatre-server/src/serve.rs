@@ -76,6 +76,10 @@ pub async fn serve(
         "data dir"
     );
     tracing::info!(schema_version, "schema version");
+    // The kind NAME only — the redaction rule (the field carries no
+    // endpoint/credential text; the README's "metadata backend: postgres"
+    // promise is this line).
+    tracing::info!(backend = cfg.state.meta_backend, "metadata backend");
     tracing::info!(
         protocol_version = crate::PROTOCOL_VERSION,
         "protocol version"
@@ -157,6 +161,38 @@ pub async fn serve(
                 interval.tick().await;
                 if let Err(e) = crate::derive::derive_pass(&dq_state).await {
                     tracing::warn!(error = %e, "background derive pass failed");
+                }
+            }
+        });
+    }
+
+    // Background reachability GC (M10a): a mark-and-sweep pass per tick on
+    // the state's interval (default one hour — the mark is a full-table
+    // walk; the M5 snapshot GC keeps its own faster task). The pass batches
+    // through the single-writer slot, so ticks only ever 503 writes for one
+    // batch at a time. `gc_interval_secs = 0` in backend.toml leaves the
+    // sweep to the host-local `naatre gc` verb; a failed pass is logged and
+    // retried on the next tick (idempotent by construction).
+    if cfg.state.gc_enabled {
+        let gc_state = Arc::clone(&cfg.state);
+        let gc_interval = cfg.state.gc_interval;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(gc_interval);
+            loop {
+                interval.tick().await;
+                match crate::gc::gc_pass(&gc_state).await {
+                    Ok(report) if report.collected_any() => {
+                        tracing::info!(
+                            cs = report.cs_collected,
+                            blobs = report.blobs_collected,
+                            trees = report.trees_collected,
+                            "background reachability GC collected"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "background reachability GC failed")
+                    }
                 }
             }
         });

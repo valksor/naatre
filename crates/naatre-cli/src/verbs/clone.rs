@@ -21,8 +21,12 @@ use crate::wc::{Config, StageDir, State};
 /// Splits `http://host[:port]/<repo>` into (origin, repo), or treats a bare
 /// name as the repo on `NAATRE_URL` / `--server` / the default URL. Any
 /// other scheme (https included) is a usage error — the client never
-/// downgrades a URL to plain http behind the user's back.
-fn split_url(url: &str, net: &Net) -> Result<(String, String), VerbError> {
+/// downgrades a URL to plain http behind the user's back. `pub(crate)`:
+/// the MCP clone tool reuses this to compare a caller-named url's origin
+/// against the session's configured server (sec-C2 — the clone tool is the
+/// one tool whose target the CALLER names, so it is the exfiltration
+/// channel a prompt injection reaches for).
+pub(crate) fn split_url(url: &str, net: &Net) -> Result<(String, String), VerbError> {
     if let Some(rest) = url.strip_suffix('/')
         && !rest.is_empty()
     {

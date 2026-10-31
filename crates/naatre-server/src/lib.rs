@@ -25,6 +25,8 @@ pub mod db;
 pub mod derive;
 pub mod derived;
 pub mod extract;
+pub mod fsck;
+pub mod gc;
 pub mod import;
 pub mod land;
 pub mod land_join;

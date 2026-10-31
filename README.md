@@ -138,6 +138,7 @@ blob = "s3"              # or "fs" (default when the file is absent)
 dsn = "postgres://db.internal:5432/naatre?sslmode=verify-full"
 user = "naatre"          # or NAATRE_PG_USER
 password = "…"           # or NAATRE_PG_PASSWORD — never in the URL
+sslrootcert = "…"        # optional: PEM CA bundle (0600) for verify-* with a private-CA server
 endpoint = "minio.lan:9000"  # S3: bare host[:port]; absent = AWS defaults
 bucket = "naatre-history"    # S3: required
 region = "us-east-1"         # S3: optional (driver default us-east-1)
@@ -152,7 +153,14 @@ allow_plaintext = false  # the explicit plaintext opt-in (see below)
 - **TLS by default.** The DSN's `sslmode` defaults to `require`;
   `verify-ca` and `verify-full` are supported; `sslmode=disable` is
   refused unless `allow_plaintext = true` is set (the LAN-dev opt-in).
-  `allow`/`prefer` are not supported — pick one posture.
+  `allow`/`prefer` are not supported — pick one posture. `verify-*`
+  verify the server certificate against the **platform root store**
+  (public CAs) plus the optional `sslrootcert` file key — a PEM CA
+  bundle, 0600, added to the roots. That key is how a self-hosted
+  Postgres with a private CA reaches `verify-full`; without it,
+  `verify-*` can only verify publicly-trusted certificates. Production
+  wants `verify-full` (+ `sslrootcert` where the CA is private);
+  `require` encrypts but authenticates nothing.
 - **Inline credentials are rejected**: `postgres://user:password@host/db`
   fails at parse. The password goes in the `password` key or
   `NAATRE_PG_PASSWORD` (the file wins over the environment; env vars:
@@ -255,9 +263,11 @@ mirror the HTTP API's query parameters (`docs/openapi.json`).
 Auth: the session uses the working copy's stored token, or `--token` on the
 command line (**argv is visible in `ps` — prefer the token store**).
 **Use a least-privilege scoped token**: `naatre token create agent \
---role writer --scope src/` mints a token that can only write under
+--role writer --scope src` mints a token that can only write under
 `src/` of that repo — an agent leaking or misusing it cannot touch other
-repos or paths. `--read-only` runs the allowlist mode: only the pure reads
+repos or paths. (A single trailing slash on `--scope` is trimmed by the
+server; a doubled one is a 422.) `--read-only` runs the allowlist mode:
+only the pure reads
 (`status`, `log`, `diff`, `cat`, `ls`, `blame`) answer; every other tool
 returns an error naming the flag.
 
@@ -447,6 +457,13 @@ explicitly:
   security-accountability basis**; principal deletion (M10) pseudonymizes
   the actor rather than deleting rows.
 - **Snapshot blob content** expires at the TTL (rows go with it).
+
+**Client-side copies sit outside every server-side purge**: the mount
+hydrate cache (`~/.cache/naatre/mounts/…` — persistent, no TTL, only
+LRU-capped) and every clone's working copy hold plaintext blob content
+that is user/operator-owned. Server-side erasure — physical purge, GC,
+data-dir destruction — never reaches those; erasing them is the client
+machine's own story.
 
 Until M10 (GC + redaction + principal deletion), per-subject erasure on a
 shared instance is out-of-band database surgery — same framing as backward

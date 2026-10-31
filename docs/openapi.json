@@ -619,6 +619,7 @@
           "blame_too_large",
           "request_timeout",
           "server_busy",
+          "blob_swept",
           "internal"
         ],
         "type": "string"

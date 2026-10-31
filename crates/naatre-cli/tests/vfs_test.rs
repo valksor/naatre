@@ -754,6 +754,78 @@ fn writable_mode_enforces_grammar_nfc_and_stages_without_landing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ---- 6b. the daemon exit tail: a failed flush NEVER destroys the buffer ----
+
+#[test]
+fn flush_failure_keeps_mount_dir_success_cleans_it() {
+    let server = start_server();
+    let _cs1 = seed_repo(&server, "flushtail", &[("a.txt", b"one".as_slice(), false)]);
+
+    // SUCCESS direction: reachable server — the staged writes flush and the
+    // mount dir is cleaned.
+    let root = tempfile::tempdir().expect("mounts root");
+    let plan =
+        verbs::mount::MountPlan::new(None, root.path().to_path_buf(), true, false).expect("plan");
+    let v = NaatreVfs::mount(
+        HttpMountSource::new(
+            Client::new(&server.base, Some(server.token.clone())),
+            "flushtail",
+        ),
+        "flushtail",
+        None,
+        plan.mount_dir.clone(),
+        true,
+    )
+    .expect("mount");
+    v.write("a.txt", b"two\n").expect("stage");
+    let code = verbs::mount::flush_and_cleanup(
+        &plan,
+        &v,
+        &Client::new(&server.base, Some(server.token.clone())),
+    );
+    assert_eq!(code, 0);
+    assert!(!plan.mount_dir.exists(), "success cleans the mount dir");
+
+    // FAILURE direction: the server dies after the buffered writes exist
+    // (server unreachable + Ctrl-C). The mount dir is KEPT — its shadow
+    // holds the ONLY copy of the buffered writes — and the exit code is 1.
+    let base = server.base.clone();
+    let root2 = tempfile::tempdir().expect("mounts root 2");
+    let plan2 =
+        verbs::mount::MountPlan::new(None, root2.path().to_path_buf(), true, false).expect("plan2");
+    let v2 = NaatreVfs::mount(
+        HttpMountSource::new(Client::new(&base, Some(server.token.clone())), "flushtail"),
+        "flushtail",
+        None,
+        plan2.mount_dir.clone(),
+        true,
+    )
+    .expect("mount 2");
+    v2.write("a.txt", b"precious\n").expect("stage 2");
+    drop(server); // the daemon dies right before the flush — the scenario
+    let code2 = verbs::mount::flush_and_cleanup(&plan2, &v2, &Client::new(&base, None));
+    assert_eq!(code2, 1, "a failed flush exits 1");
+    assert!(
+        plan2.mount_dir.exists(),
+        "a failed flush KEEPS the mount dir (the recovery location)"
+    );
+    let shadow = plan2.mount_dir.join("shadow");
+    assert!(shadow.is_dir(), "the shadow dir survives for recovery");
+    let staged: Vec<_> = std::fs::read_dir(&shadow)
+        .expect("shadow listing")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("shadow entries");
+    assert!(
+        !staged.is_empty(),
+        "the only local copy of the buffered write survives"
+    );
+    assert_eq!(
+        std::fs::read(staged[0].path()).expect("shadow copy"),
+        b"precious\n",
+        "byte-identical: the buffer is recoverable"
+    );
+}
+
 // ---- 7. the real daemon binary: banner, loopback, export, SIGKILL cleanup ----
 
 #[test]

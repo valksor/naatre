@@ -23,7 +23,9 @@
 //! mount flushes its shadow writes into a STAGED changeset (printed; never
 //! landed) — with the UNSTABLE `--flush-land`, the staged changeset then
 //! goes through the SAME land path `naatre land` uses (key printed, main
-//! advances) — and the dir is removed.
+//! advances) — and the dir is removed. A FAILED flush KEEPS the dir (its
+//! shadow/ holds the only copy of the buffered writes; the path is printed
+//! as the recovery location) and exits 1.
 //!
 //! Platform front-ends: NFSv3 here; the Linux-only FUSE front-end
 //! (`--fuse <mountpoint>`, M8b) lives in `verbs::fuse`, behind
@@ -76,10 +78,16 @@ pub fn run(
     };
     // Stale dirs from SIGKILLed mounts go BEFORE our own dir exists.
     prune_stale_mounts(&plan.mounts_root);
+    // The client resolves BEFORE the pin: a broken server configuration is
+    // a clean error before the daemon binds anything.
+    let client = match mount_client(net) {
+        Ok(c) => c,
+        Err(m) => return VerbError::Local(m).report(),
+    };
     // The pin resolves FIRST: a bad repo/ref is a clean error before the
     // daemon binds anything (this also creates the mount dir).
     let vfs = match NaatreVfs::mount(
-        HttpMountSource::new(mount_client(net), repo),
+        HttpMountSource::new(client, repo),
         repo,
         at,
         plan.mount_dir.clone(),
@@ -102,14 +110,36 @@ pub fn run(
             return VerbError::Local(format!("starting the async runtime: {e}")).report();
         }
     };
-    runtime.block_on(serve(plan, vfs, mount_client(net)))
+    let serve_client = match mount_client(net) {
+        Ok(c) => c,
+        Err(m) => {
+            let _ = std::fs::remove_dir_all(&plan.mount_dir);
+            return VerbError::Local(m).report();
+        }
+    };
+    runtime.block_on(serve(plan, vfs, serve_client))
 }
 
-/// Mount reads its server/token from `--server`/`--token` flags, then
-/// `NAATRE_URL`/`NAATRE_TOKEN` env (no working copy — config.toml does not
-/// apply; the default is the pinned default URL). The FUSE front-end shares
-/// it for its own land-on-exit client.
-pub(crate) fn mount_client(net: &Net) -> Client {
+/// Mount resolves its server/token through the SAME precedence as every
+/// other verb when run inside a working copy — `--server`/`--token` flags,
+/// then `NAATRE_URL`/`NAATRE_TOKEN` env, then that working copy's
+/// `config.toml` (a malformed config, or no server configured anywhere,
+/// is the same error the other verbs report). Outside a working copy —
+/// mount takes a repo NAME, so this is normal — the tail falls back to
+/// the pinned default URL. The FUSE front-end shares this for its own
+/// land-on-exit client.
+pub(crate) fn mount_client(net: &Net) -> Result<Client, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("reading the current directory: {e}"))?;
+    mount_client_in(&cwd, net)
+}
+
+/// [`mount_client`] at an explicit directory (the test seam; production
+/// always passes the process cwd).
+pub(crate) fn mount_client_in(cwd: &Path, net: &Net) -> Result<Client, String> {
+    if let Ok(wc) = crate::wc::Wc::open(cwd) {
+        let (server, token) = wc.resolve_server(net.server.as_deref(), net.token.as_deref())?;
+        return Ok(Client::new(&server, token));
+    }
     let base = net
         .server
         .clone()
@@ -119,7 +149,7 @@ pub(crate) fn mount_client(net: &Net) -> Client {
         .token
         .clone()
         .or_else(|| std::env::var("NAATRE_TOKEN").ok().filter(|v| !v.is_empty()));
-    Client::new(&base, token)
+    Ok(Client::new(&base, token))
 }
 
 /// Maps a VFS failure from mount-time setup into the pinned exit codes.
@@ -330,8 +360,14 @@ async fn serve(plan: MountPlan, vfs: NaatreVfs<HttpMountSource>, client: Client)
 /// stages its shadow writes (printed; landed onto main only under
 /// --flush-land, through the SAME land path `naatre land` drives — key
 /// printed before the request, exit codes mirror land's contract); then the
-/// mount dir goes away.
-pub(crate) fn flush_and_cleanup(
+/// mount dir goes away. A FAILED flush keeps the mount dir: it holds the
+/// shadow copies — the only local material of the buffered writes — and
+/// destroying the only copy because staging failed would be silent data
+/// loss (server unreachable + Ctrl-C is exactly when this fires). The
+/// printed path is the recovery location; a later flush re-stages from it.
+/// `pub` for the daemon-exit pin (tests/vfs_test.rs drives the real server
+/// against it).
+pub fn flush_and_cleanup(
     plan: &MountPlan,
     vfs: &NaatreVfs<HttpMountSource>,
     client: &Client,
@@ -394,7 +430,13 @@ pub(crate) fn flush_and_cleanup(
             Ok(None) => println!("flush: nothing staged"),
             Err(e) => {
                 eprintln!("error: flush failed: {e}");
-                code = 1;
+                eprintln!(
+                    "the mount dir is KEPT at {} — its shadow/ holds the only copy of the \
+                     buffered writes; fix the cause and flush again (or salvage shadow/ by \
+                     hand)",
+                    plan.mount_dir.display()
+                );
+                return 1;
             }
         }
     }
@@ -871,5 +913,48 @@ mod tests {
         assert!(!corrupt_dir.exists(), "corrupt-session dir evicted");
         assert!(live_dir.exists(), "this process's dir stays");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Inside a working copy, mount resolves through the SAME precedence as
+    /// every other verb — config.toml joins the tail (eu-C4). The client's
+    /// base is private, so the pin drives the resolution and observes it
+    /// through the failure of a bogus-server mount: a wc-configured server
+    /// wins over the default when no flags/env speak.
+    #[test]
+    fn mount_resolves_config_inside_a_working_copy() {
+        let dir = tempfile::tempdir().expect("wc root");
+        std::fs::create_dir_all(dir.path().join(".naatre")).expect(".naatre");
+        let wc = crate::wc::Wc::open(dir.path()).expect("wc");
+        wc.save_config(&crate::wc::Config {
+            server_url: "http://127.0.0.1:7499".into(),
+            token: Some("wc-token".into()),
+        })
+        .expect("config");
+        // Flags override the file, as everywhere.
+        let client = mount_client_in(
+            dir.path(),
+            &Net {
+                server: Some("http://127.0.0.1:7501".into()),
+                token: None,
+            },
+        )
+        .expect("flag wins");
+        assert_eq!(client.base, "http://127.0.0.1:7501");
+        // With no flags, the wc's config.toml answers (never the pinned
+        // default URL).
+        let client = mount_client_in(dir.path(), &Net::default()).expect("config resolves");
+        assert_eq!(client.base, "http://127.0.0.1:7499");
+        // No server anywhere in the wc → the same error other verbs report.
+        wc.save_config(&crate::wc::Config::default())
+            .expect("empty config");
+        let Err(err) = mount_client_in(dir.path(), &Net::default()) else {
+            panic!("no server configured must error");
+        };
+        assert!(err.contains("no server configured"), "{err}");
+        // Outside a working copy the pinned default still applies (mount
+        // takes a repo name; it works with no checkout at all).
+        let outside = tempfile::tempdir().expect("plain dir");
+        let client = mount_client_in(outside.path(), &Net::default()).expect("default URL");
+        assert_eq!(client.base, DEFAULT_URL);
     }
 }

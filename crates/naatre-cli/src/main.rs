@@ -208,6 +208,28 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
+    /// Run one reachability GC pass against a data dir (host-local, under
+    /// the data dir flock; the serve-side task runs the same pass on an
+    /// interval). Exit 0 on success, 1 on error.
+    Gc {
+        /// Existing data directory (uninitialized → run naatre init first).
+        #[arg(long)]
+        data: PathBuf,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a data dir's consistency: dangling references, reachability
+    /// counts, CAS presence vs the DB inventory (host-local, flocked,
+    /// read-only). Exit 0 clean, 1 findings, 2 error.
+    Fsck {
+        /// Existing data directory (uninitialized → run naatre init first).
+        #[arg(long)]
+        data: PathBuf,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Capture the working copy as an ephemeral server-side snapshot
     /// (default TTL 7d). Prints {"id","expires_ns"}; head and index stay.
     Snapshot {
@@ -289,7 +311,8 @@ enum TokenCmd {
         /// Token lifetime in days (omit for never-expiring).
         #[arg(long)]
         ttl_days: Option<u64>,
-        /// Segment-aligned path scope (no trailing slash).
+        /// Segment-aligned path scope (one trailing slash is trimmed by
+        /// the server).
         #[arg(long)]
         scope: Option<String>,
     },
@@ -473,6 +496,8 @@ fn main() {
         Cmd::Doctor { rebuild, net } => {
             wc_locked(cwd, || verbs::doctor::run(cwd, rebuild, &net.net()))
         }
+        Cmd::Gc { data, json } => host::gc(&data, json),
+        Cmd::Fsck { data, json } => host::fsck(&data, json),
         Cmd::Snapshot { ttl, net } => wc_locked(cwd, || {
             verbs::snapshot::run(cwd, ttl.as_deref(), &net.net())
         }),

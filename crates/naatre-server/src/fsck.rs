@@ -1,0 +1,251 @@
+//! `naatre fsck` (M10a): the server-side consistency checker.
+//!
+//! Read-only: the mark runs cheaply over the primary tables (the same
+//! [`crate::gc::mark`] the sweep uses), every dangling-reference anti-join
+//! must come back zero (the never-dangling invariant), and the counts —
+//! total vs marked changesets and blobs, the ledger's pending candidates,
+//! the cumulative `gc` audit totals — go into one report. The CAS presence
+//! side differences the DB-known inventory against what the backend
+//! actually holds, per backend (fs directory walk; S3 `objects/` prefix
+//! listing), with the S3 external-drift note attached: bucket-side
+//! lifecycle rules or versioning can delete or resurrect objects outside
+//! naatre's control, so a DB-known blob missing from the bucket is drift to
+//! investigate, not proof of local corruption.
+//!
+//! Advisory mismatches (the `repo_blobs` membership index vs the repo's
+//! `file_changes` references; ledger rows for data that is reachable
+//! again) are REPORTED, never repaired here — the mark never reads them,
+//! so they cannot affect collection; the next GC pass repairs stale ledger
+//! rows as a side effect of its set-difference.
+//!
+//! Exit contract (the CLI's pinned codes): 0 clean, 1 findings.
+
+use std::collections::HashSet;
+
+use naatre_core::ids::Id;
+use serde::Serialize;
+
+use crate::api_error::ApiError;
+use crate::db;
+use crate::gc;
+use crate::state::AppState;
+
+/// The S3 note attached to every S3-backed report: bucket-side changes are
+/// external drift, not local corruption.
+pub const S3_DRIFT_NOTE: &str = "S3 backend: bucket-side lifecycle rules or versioning \
+     can delete or resurrect objects outside naatre's control — a DB-known blob missing \
+     from the bucket may be external drift; check the bucket's lifecycle configuration \
+     before treating this as corruption";
+
+/// One fsck run's findings.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct FsckReport {
+    /// The blob backend the report's presence side came from ("fs"/"s3").
+    pub blob_backend: &'static str,
+    // -- inventory counts ---------------------------------------------------
+    /// Surviving changeset rows.
+    pub changesets: usize,
+    /// Changesets the primary-table mark reaches.
+    pub changesets_marked: usize,
+    /// `objects` rows (the DB-known blob inventory).
+    pub blobs_db: usize,
+    /// Blob ids present in the CAS (per backend).
+    pub blobs_cas: usize,
+    /// Blob ids the mark reaches.
+    pub blobs_marked: usize,
+    /// `trees` rows.
+    pub trees: usize,
+    /// Trees the mark protects.
+    pub trees_protected: usize,
+    /// `gc_pending` rows (first-unreachable ledger).
+    pub candidates_pending: usize,
+    /// Ledger rows already past the grace cut (the next pass collects
+    /// them, unless the re-verification spares them).
+    pub candidates_past_grace: usize,
+    /// Cumulative `gc` audit totals: (changesets, blobs, trees) across all
+    /// recorded collecting passes.
+    pub collected: (usize, usize, usize),
+    /// How many collecting passes the audit log carries.
+    pub gc_passes: usize,
+    // -- findings (all zero on a clean store) --------------------------------
+    /// Dangling-reference counts, named per check
+    /// ([`db::fsck_danglings`]).
+    pub danglings: Vec<(String, usize)>,
+    /// DB-known blobs whose CAS bytes are absent (the read-breaking
+    /// direction; on S3 see `external_drift`).
+    pub bytes_missing: usize,
+    /// CAS-present blob ids without an `objects` row (the orphaned-upload
+    /// direction — collectible garbage; note the offline import records no
+    /// `objects` rows, so a freshly imported repo reports its blobs here).
+    pub cas_unrecorded: usize,
+    /// Ledger rows whose data is reachable again (the next pass repairs).
+    pub stale_candidates: usize,
+    /// Advisory: `file_changes` blob references with no `repo_blobs`
+    /// membership row (per repo, summed).
+    pub advisory_membership_missing: usize,
+    /// Advisory: `repo_blobs` membership rows no `file_changes` reference
+    /// (per repo, summed; rows for unknown objects count under
+    /// `danglings` instead).
+    pub advisory_membership_extra: usize,
+    /// Set when `blob_backend` is "s3": the external-drift note.
+    pub external_drift: Option<&'static str>,
+}
+
+impl FsckReport {
+    /// 0 findings: every dangling count zero and no DB-known blob missing
+    /// its bytes. Advisory mismatches, unrecorded CAS bytes, and stale
+    /// ledger rows do NOT dirty the store (they are repairable or
+    /// informational); missing BYTES for a DB-known blob do.
+    pub fn clean(&self) -> bool {
+        self.danglings.iter().all(|(_, n)| *n == 0) && self.bytes_missing == 0
+    }
+}
+
+/// One read-pass bundle: the DB-side inventories fsck differences against
+/// the CAS and the ledger.
+struct Inventory {
+    blobs_db: Vec<Id>,
+    trees: Vec<Id>,
+    changesets: usize,
+    /// Per-repo `(file_changes blob references, repo_blobs membership)`.
+    membership: Vec<(HashSet<Id>, HashSet<Id>)>,
+}
+
+/// Runs every check against `state` (read-only; its blob store is touched
+/// only through presence reads and the id listing). The host-local verb and
+/// tests call this directly.
+pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
+    let now_i = state.now_ns() as i64;
+    let cut = now_i.saturating_sub(state.gc_grace.as_nanos() as i64);
+
+    // The mark + the anti-joins + the ledger counts + the stale-candidate
+    // check, in one read pass.
+    let (mark_counts, danglings, candidates, stale_candidates) = state
+        .read(move |conn| {
+            let mark = gc::mark(conn, now_i).map_err(ApiError::log_internal)?;
+            let danglings = db::fsck_danglings(conn).map_err(ApiError::log_internal)?;
+            let candidates = db::gc_candidate_counts(conn, cut).map_err(ApiError::log_internal)?;
+            let mut stale = 0usize;
+            for scope in [db::GC_SCOPE_CS, db::GC_SCOPE_BLOB, db::GC_SCOPE_TREE] {
+                for id in db::gc_pending_ids(conn, scope).map_err(ApiError::log_internal)? {
+                    if mark.reachable(scope, &id) {
+                        stale += 1;
+                    }
+                }
+            }
+            Ok((
+                (mark.cs_len(), mark.blobs_len(), mark.trees_len()),
+                danglings,
+                candidates,
+                stale,
+            ))
+        })
+        .await?;
+
+    // The inventories (one read pass).
+    let inventory = state
+        .read(|conn| {
+            let blobs_db = db::gc_all_object_ids(conn).map_err(ApiError::log_internal)?;
+            let trees = db::gc_all_tree_ids(conn).map_err(ApiError::log_internal)?;
+            let mut changesets = 0usize;
+            let mut membership = Vec::new();
+            for repo_id in db::gc_repos(conn).map_err(ApiError::log_internal)? {
+                changesets += db::gc_all_changesets(conn, repo_id)
+                    .map_err(ApiError::log_internal)?
+                    .len();
+                let expected: HashSet<Id> = db::gc_file_change_blobs(conn, repo_id)
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .map(|(_, blob)| blob)
+                    .collect();
+                let actual: HashSet<Id> = db::gc_repo_blobs(conn, repo_id)
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .collect();
+                membership.push((expected, actual));
+            }
+            Ok(Inventory {
+                blobs_db,
+                trees,
+                changesets,
+                membership,
+            })
+        })
+        .await?;
+
+    // CAS presence (blocking): what the DB-known ids hold bytes for, and
+    // what the CAS holds beyond the rows.
+    let cas = std::sync::Arc::clone(&state.cas);
+    let cas_ids = state
+        .blocking(move || cas.ids().map_err(ApiError::log_internal))
+        .await?;
+    let cas_set: HashSet<Id> = cas_ids.iter().copied().collect();
+    let blobs_db = inventory.blobs_db;
+    let missing: Vec<usize> = {
+        let cas = std::sync::Arc::clone(&state.cas);
+        let known = blobs_db.clone();
+        state
+            .blocking(move || {
+                let mut counts = Vec::new();
+                for chunk in known.chunks(1000) {
+                    let hits = naatre_store::BlobStore::has(cas.as_ref(), chunk)
+                        .map_err(ApiError::log_internal)?;
+                    counts.push(hits.iter().filter(|h| !**h).count());
+                }
+                Ok(counts)
+            })
+            .await?
+    };
+    let bytes_missing: usize = missing.into_iter().sum();
+    let cas_unrecorded = cas_set.iter().filter(|id| !blobs_db.contains(*id)).count();
+
+    // Advisory membership mismatches, per repo.
+    let (mut missing_membership, mut extra_membership) = (0usize, 0usize);
+    for (expected, actual) in &inventory.membership {
+        missing_membership += expected.difference(actual).count();
+        extra_membership += actual.difference(expected).count();
+    }
+
+    // Cumulative gc audit totals (the append-only log is the record of
+    // what past passes collected).
+    let rows = state
+        .read(|conn| db::audit_list(conn, i64::MAX, 10_000).map_err(ApiError::log_internal))
+        .await?;
+    let (mut collected, mut gc_passes) = ((0usize, 0usize, 0usize), 0usize);
+    for row in rows {
+        if row.action != "gc" {
+            continue;
+        }
+        gc_passes += 1;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.details_json) {
+            collected.0 += v.get("cs").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            collected.1 += v.get("blobs").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            collected.2 += v.get("trees").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+        }
+    }
+
+    Ok(FsckReport {
+        blob_backend: state.blob_backend,
+        changesets: inventory.changesets,
+        changesets_marked: mark_counts.0,
+        blobs_db: blobs_db.len(),
+        blobs_cas: cas_set.len(),
+        blobs_marked: mark_counts.1,
+        trees: inventory.trees.len(),
+        trees_protected: mark_counts.2,
+        candidates_pending: candidates.0 as usize,
+        candidates_past_grace: candidates.1 as usize,
+        collected,
+        gc_passes,
+        danglings: danglings
+            .into_iter()
+            .map(|(name, count)| (name.to_string(), count.max(0) as usize))
+            .collect(),
+        bytes_missing,
+        cas_unrecorded,
+        stale_candidates,
+        advisory_membership_missing: missing_membership,
+        advisory_membership_extra: extra_membership,
+        external_drift: (state.blob_backend == "s3").then_some(S3_DRIFT_NOTE),
+    })
+}

@@ -66,8 +66,13 @@ pub fn run(
         Err(m) => return VerbError::Usage(m).report(),
     };
     super::mount::prune_stale_mounts(&plan.mounts_root);
+    // The client resolves BEFORE the pin (same clean-error order as NFS).
+    let client = match super::mount::mount_client(net) {
+        Ok(c) => c,
+        Err(m) => return VerbError::Local(m).report(),
+    };
     let vfs = match NaatreVfs::mount(
-        HttpMountSource::new(super::mount::mount_client(net), repo),
+        HttpMountSource::new(client, repo),
         repo,
         at,
         plan.mount_dir.clone(),
@@ -134,8 +139,15 @@ pub fn run(
     }
 
     // The shared graceful-exit tail: flush (staged, or landed with
-    // --flush-land), remove the mount dir, exit code.
-    let client = super::mount::mount_client(net);
+    // --flush-land), remove the mount dir — unless the flush failed (the
+    // dir is then the recovery location) — and the exit code.
+    let client = match super::mount::mount_client(net) {
+        Ok(c) => c,
+        Err(m) => {
+            eprintln!("error: {m}");
+            return 1;
+        }
+    };
     super::mount::flush_and_cleanup(&plan, &vfs, &client)
 }
 

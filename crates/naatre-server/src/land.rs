@@ -423,7 +423,7 @@ fn land_in_txn(
             if written_blobs.contains(blob_id) {
                 continue;
             }
-            let put = cas.put(bytes).map_err(ApiError::log_internal)?;
+            let put = cas.put(bytes).map_err(ApiError::log_internal)?.id;
             if put != *blob_id {
                 return Err(ApiError::log_internal(format!(
                     "merged blob id mismatch: computed {}, CAS wrote {}",

@@ -8,11 +8,10 @@
 //! Membership: writes record the global `objects` row only. `repo_blobs`
 //! membership rows arrive with changesets (M2a); until then batch/raw
 //! fetches report freshly-PUT objects as missing (no membership row yet),
-//! and `present` only asks the filesystem. Batch PUT is effectively one
+//! and `present` only asks the backend. Batch PUT is effectively one
 //! max-size blob per request (the 64 MiB payload dominates the 96 MiB
 //! body cap) — use the raw PUT for large blobs.
 
-use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -190,24 +189,58 @@ pub async fn put_raw(
     }
 
     let cas = Arc::clone(&state.cas);
-    let data_dir = state.data_dir_display.clone();
     let payload_owned = payload.clone();
     let csize = state
-        .blocking(move || put_and_size(cas.as_ref(), &data_dir, &id, &payload_owned))
+        .blocking(move || put_and_size(cas.as_ref(), &id, &payload_owned))
         .await?;
 
-    let existed = state
-        .write(move |store| {
-            db::object_row_upsert(store.conn(), &id, payload.len() as i64, csize)
-                .map_err(ApiError::log_internal)
-        })
-        .await?;
+    let existed = record_object(&state, id, payload.len() as i64, csize).await?;
     let status = if existed {
         StatusCode::OK
     } else {
         StatusCode::CREATED
     };
     Ok((status, Json(StoredObjectId { id: id.to_hex() })).into_response())
+}
+
+/// The upload RECORD step — bytes-then-row on both sides of the race with
+/// the reachability GC's sweep. The CAS step ran outside the slot; by the
+/// time this record takes the single-writer slot, the sweep may have
+/// committed a batch that unlinked exactly these bytes (an old, still
+/// unreferenced re-PUT past its grace window). So the record VERIFIES the
+/// bytes are present first — inside the same slot-held transaction that
+/// would write the row — and answers a RETRYABLE 503 `blob_swept` when
+/// they are gone, instead of re-writing (a raw PUT may be up to 64 MiB;
+/// re-writing inside the write slot is a stall the retry avoids — the
+/// client re-PUTs, which is idempotent at a content-addressed URL, and the
+/// retry's own record sees the fresh bytes). The row is written ONLY after
+/// the check, so it can never name absent bytes. The per-upload presence
+/// check is a hot-path cost (one backend `has` per PUT inside the slot —
+/// a network HEAD on S3); it is the price of the ordering argument and
+/// runs on every upload, not only when the sweep raced. Returns whether
+/// the row already existed. `pub` for the M10a race pin (the fs and S3
+/// suites drive this step after a full sweep).
+pub async fn record_object(
+    state: &AppState,
+    id: Id,
+    size: i64,
+    csize: i64,
+) -> Result<bool, ApiError> {
+    let cas = Arc::clone(&state.cas);
+    let now_i = state.now_ns() as i64;
+    state
+        .write(move |store| {
+            if !BlobStore::has(cas.as_ref(), &[id]).map_err(ApiError::log_internal)?[0] {
+                return Err(ApiError::new(
+                    ApiCode::BlobSwept,
+                    "the blob's bytes were removed by gc mid-upload; re-upload it",
+                )
+                .retryable(true));
+            }
+            db::object_row_upsert(store.conn(), &id, size, csize, now_i)
+                .map_err(ApiError::log_internal)
+        })
+        .await
 }
 
 /// Batch PUT (writer and above): every entry is hash-verified like the raw
@@ -259,34 +292,65 @@ pub async fn create_batch(
     // blocking closure.
     let stored: Vec<String> = verified.iter().map(|(id, _)| id.to_hex()).collect();
 
-    // File first: all blobs fsynced in one blocking step…
+    // File first: all blobs fsynced in one blocking step.
     let cas = Arc::clone(&state.cas);
-    let data_dir = state.data_dir_display.clone();
     let rows = state
         .blocking(move || {
             let mut rows = Vec::with_capacity(verified.len());
             for (id, payload) in &verified {
-                let csize = put_and_size(cas.as_ref(), &data_dir, id, payload)?;
+                let csize = put_and_size(cas.as_ref(), id, payload)?;
                 rows.push((*id, payload.len() as i64, csize));
             }
             Ok(rows)
         })
         .await?;
 
-    // …then the rows, in one single-writer transaction.
+    // …then the rows, in one single-writer transaction — the batch form of
+    // [`record_object`]'s contract ([`record_batch`]).
     if !rows.is_empty() {
-        state
-            .write(move |store| {
-                for (id, size, csize) in &rows {
-                    db::object_row_upsert(store.conn(), id, *size, *csize)
-                        .map_err(ApiError::log_internal)?;
-                }
-                Ok(())
-            })
-            .await?;
+        record_batch(&state, rows).await?;
     }
 
     Ok(Json(BatchPutResponse { stored, rejected }))
+}
+
+/// The batch form of [`record_object`]: verify EVERY entry's bytes first —
+/// in the same slot-held transaction that writes the rows — and answer one
+/// retryable 503 `blob_swept` naming the swept ids instead of recording
+/// any of them (the batch is all-or-nothing on the row side, so no entry's
+/// row can name absent bytes; the client re-PUTs the named ids). `pub` for
+/// the M10a race pin.
+pub async fn record_batch(state: &AppState, rows: Vec<(Id, i64, i64)>) -> Result<(), ApiError> {
+    let cas = Arc::clone(&state.cas);
+    let now_i = state.now_ns() as i64;
+    state
+        .write(move |store| {
+            let present = BlobStore::has(
+                cas.as_ref(),
+                &rows.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+            )
+            .map_err(ApiError::log_internal)?;
+            let swept: Vec<String> = rows
+                .iter()
+                .zip(&present)
+                .filter(|(_, ok)| !**ok)
+                .map(|(row, _)| row.0.to_hex())
+                .collect();
+            if !swept.is_empty() {
+                return Err(ApiError::new(
+                    ApiCode::BlobSwept,
+                    "blob bytes were removed by gc mid-upload; re-upload them",
+                )
+                .retryable(true)
+                .with_details(serde_json::json!({ "missing_blobs": swept })));
+            }
+            for (id, size, csize) in &rows {
+                db::object_row_upsert(store.conn(), id, *size, *csize, now_i)
+                    .map_err(ApiError::log_internal)?;
+            }
+            Ok(())
+        })
+        .await
 }
 
 /// Batch fetch (any authenticated principal), membership-enforced: only ids
@@ -485,33 +549,14 @@ fn decode_entry(entry: &BatchPutEntry) -> Result<(Id, Vec<u8>), &'static str> {
     Ok((id, payload))
 }
 
-/// `Cas::put` (file fsynced) plus the stored file's byte size, for the
-/// `objects.csize` column.
-///
-/// The shard layout (`objects/<2hex>/<2hex>/<62hex>` under the data dir) is
-/// the documented data-dir contract (see the `naatre_store` crate docs);
-/// reading the stored size here keeps `naatre-store` untouched by this
-/// slice. A successful put with no file behind it is a broken invariant.
-fn put_and_size(
-    cas: &dyn BlobStore,
-    data_dir: &FsPath,
-    id: &Id,
-    payload: &[u8],
-) -> Result<i64, ApiError> {
+/// `BlobStore::put` plus nothing else: the STORED (compressed) size comes
+/// back in the backend's own [`PutInfo`] — the route never re-stats a
+/// local shard for the `objects.csize` column. Statting the fs shard here
+/// made every history PUT behind `blob = "s3"` a 500 (the blob landed in
+/// the bucket, the row never upserted, the object invisible forever): the
+/// M9b matrix exercised `S3Store` behind the seam, never these routes.
+fn put_and_size(cas: &dyn BlobStore, id: &Id, payload: &[u8]) -> Result<i64, ApiError> {
     let stored = cas.put(payload).map_err(ApiError::log_internal)?;
-    debug_assert_eq!(stored, *id, "cas.put must address the verified payload");
-    let path = shard_file(data_dir, id);
-    std::fs::metadata(&path)
-        .map(|meta| meta.len() as i64)
-        .map_err(ApiError::log_internal)
-}
-
-/// CAS file path for `id` under the data dir: `objects/ab/cd/<62hex>`.
-fn shard_file(data_dir: &FsPath, id: &Id) -> PathBuf {
-    let hex = id.to_hex();
-    data_dir
-        .join("objects")
-        .join(&hex[0..2])
-        .join(&hex[2..4])
-        .join(&hex[4..])
+    debug_assert_eq!(stored.id, *id, "cas.put must address the verified payload");
+    Ok(stored.csize as i64)
 }

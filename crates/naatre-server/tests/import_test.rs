@@ -647,7 +647,7 @@ fn graft_b_native_lands_refuse_main_move() {
         .unwrap()
         .unwrap();
     let content = b"native landing\n";
-    let blob = cas.put(content).unwrap();
+    let blob = cas.put(content).unwrap().id;
     let mut node = MemNode::load(
         &conn,
         parent_graph

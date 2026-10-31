@@ -289,3 +289,144 @@ fn print_report(report: &Report) {
     }
     println!("{}", report.to_json_line());
 }
+
+/// The host-local verbs that run async server passes against the store:
+/// flock first, then the backend open (migrations), then one
+/// current-thread runtime with blocking+io+time enabled (the S3 facade's
+/// client and every spawn_blocking hop run on it).
+fn block_on_state<T, Fut>(
+    data: &Path,
+    with: impl FnOnce(Arc<naatre_server::state::ServerState>) -> Fut,
+) -> Result<T, StoreError>
+where
+    Fut: std::future::Future<Output = T>,
+{
+    let cfg = backend_cfg::load(data)?;
+    let data_dir = DataDir::open_any(data);
+    check_data_dir_backend(data_dir.path(), &cfg)?;
+    // Flock first (serve/import hold it across their whole run; a GC or
+    // fsck against a live data dir is refused the same way).
+    let _lock = data_dir.lock()?;
+    let state = naatre_server::state::ServerState::open_backend(data_dir, &cfg)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| StoreError::S3 { op: "runtime" })?;
+    Ok(rt.block_on(with(Arc::new(state))))
+}
+
+/// `naatre gc --data <dir> [--json]`: one reachability GC pass (to
+/// convergence) against the data dir, flocked like import. The grace
+/// window and the serve-side interval come from backend.toml
+/// (`gc_grace_secs`, `gc_interval_secs`); this verb runs regardless of
+/// `gc_interval_secs = 0`.
+pub fn gc(data: &Path, json: bool) -> i32 {
+    match block_on_state(data, |state| async move {
+        naatre_server::gc::gc_pass(&state).await
+    }) {
+        Ok(Ok(report)) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&report).expect("report serializes")
+                );
+            } else {
+                println!(
+                    "gc: ledger +{} -{}",
+                    report.candidates_new, report.candidates_repaired
+                );
+                println!(
+                    "gc: collected changesets {}, blobs {}, trees {}",
+                    report.cs_collected, report.blobs_collected, report.trees_collected
+                );
+            }
+            0
+        }
+        Ok(Err(e)) => fail(e),
+        Err(e) => fail(e),
+    }
+}
+
+/// `naatre fsck --data <dir> [--json]`: the consistency checker —
+/// dangling references, reachability counts, CAS presence vs the DB
+/// inventory — read-only under the data dir flock. Exit 0 clean, 1
+/// findings, 2 error.
+pub fn fsck(data: &Path, json: bool) -> i32 {
+    match block_on_state(data, |state| async move {
+        naatre_server::fsck::fsck(&state).await
+    }) {
+        Ok(Ok(report)) => {
+            let clean = report.clean();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&report).expect("report serializes")
+                );
+            } else {
+                println!("fsck: blob backend {}", report.blob_backend);
+                println!(
+                    "fsck: changesets {} total, {} marked",
+                    report.changesets, report.changesets_marked
+                );
+                println!(
+                    "fsck: blobs {} db, {} cas, {} marked",
+                    report.blobs_db, report.blobs_cas, report.blobs_marked
+                );
+                println!(
+                    "fsck: trees {} total, {} protected",
+                    report.trees, report.trees_protected
+                );
+                println!(
+                    "fsck: candidates {} pending, {} past grace",
+                    report.candidates_pending, report.candidates_past_grace
+                );
+                println!(
+                    "fsck: collected (cs {}, blobs {}, trees {}) across {} pass(es)",
+                    report.collected.0, report.collected.1, report.collected.2, report.gc_passes
+                );
+                for (check, count) in &report.danglings {
+                    if *count > 0 {
+                        println!("fsck: DANGLING {check}: {count}");
+                    }
+                }
+                if report.bytes_missing > 0 {
+                    println!(
+                        "fsck: MISSING BYTES for {} db-known blob(s)",
+                        report.bytes_missing
+                    );
+                }
+                if let Some(note) = report.external_drift {
+                    println!("fsck: note: {note}");
+                }
+                if report.cas_unrecorded > 0 {
+                    println!(
+                        "fsck: {} cas-present blob(s) without an objects row (orphaned uploads; import records no rows)",
+                        report.cas_unrecorded
+                    );
+                }
+                if report.stale_candidates > 0 {
+                    println!(
+                        "fsck: {} stale candidate row(s) for reachable data (the next pass repairs)",
+                        report.stale_candidates
+                    );
+                }
+                if report.advisory_membership_missing > 0 || report.advisory_membership_extra > 0 {
+                    println!(
+                        "fsck: advisory membership -{} +{} (missing/extra repo_blobs rows; ignored by GC)",
+                        report.advisory_membership_missing, report.advisory_membership_extra
+                    );
+                }
+                println!("fsck: {}", if clean { "clean" } else { "FINDINGS" });
+            }
+            if clean { 0 } else { 1 }
+        }
+        Ok(Err(e)) => {
+            fail(e);
+            2
+        }
+        Err(e) => {
+            fail(e);
+            2
+        }
+    }
+}

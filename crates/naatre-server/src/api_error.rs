@@ -85,6 +85,11 @@ impl ApiError {
         self.code
     }
 
+    /// Whether the envelope invited a retry (the `retryable` wire field).
+    pub fn is_retryable(&self) -> bool {
+        self.retryable
+    }
+
     /// The structured recovery details, for callers that parse them (the
     /// land-join fallback reads `settled_head` out of a leader's 409).
     pub fn details(&self) -> &serde_json::Value {

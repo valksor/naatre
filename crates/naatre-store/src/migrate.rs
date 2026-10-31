@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 7;
+pub const MAX_SUPPORTED: i64 = 8;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -136,6 +136,32 @@ ALTER TABLE derive_state ADD COLUMN poison_cs BLOB;
 CREATE INDEX idx_changesets_generation ON changesets(generation);
 "#,
     ),
+    // M10a: the reachability GC's pending-collection ledger. `gc_pending`
+    // records when an object (scope: a changeset, a CAS blob, or a tree
+    // row) was FIRST observed unreachable from the primary-table mark —
+    // INSERT OR IGNORE preserves that first-seen timestamp across passes,
+    // so the grace window (default 30 days) is measured from the moment
+    // the data actually became garbage, and a crash mid-GC is idempotent:
+    // the next pass recomputes the same set-difference. The blob index
+    // backs the sweep's per-batch re-verification ("is this candidate
+    // referenced again?") and the mark's blob collection — without it every
+    // candidate check would full-scan `file_changes`. `objects.touched_ns`
+    // is the upload grace clock: every PUT refreshes it in the same
+    // transaction as the row (content-addressed re-PUTs are CAS no-ops, so
+    // an OLD orphan re-uploaded and re-referenced while a GC pass is in
+    // flight must re-enter the grace window, not collect under it).
+    // `gc_pending.condemned_at` is the two-phase delete's mark: phase A
+    // stamps it (bytes stay), phase B deletes bytes+rows only while it is
+    // STILL set — any PUT's row touch clears it, shrinking the
+    // byte-deletion race window to one pass interval.
+    (
+        8,
+        r#"
+CREATE TABLE gc_pending(scope TEXT NOT NULL CHECK(scope IN ('cs','blob','tree')), id BLOB NOT NULL, first_ns INTEGER NOT NULL, condemned_at INTEGER, PRIMARY KEY(scope, id));
+CREATE INDEX idx_file_changes_blob ON file_changes(blob_id);
+ALTER TABLE objects ADD COLUMN touched_ns INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
 ];
 
 /// The Postgres migration set: one file per SQLite migration, 1–7, in
@@ -150,6 +176,7 @@ const PG_MIGRATIONS: &[&str] = &[
     include_str!("../migrations/postgres/005_blame_path_history.sql"),
     include_str!("../migrations/postgres/006_poison_taint.sql"),
     include_str!("../migrations/postgres/007_generation_index.sql"),
+    include_str!("../migrations/postgres/008_gc_pending.sql"),
 ];
 
 const _: () = assert!(

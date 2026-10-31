@@ -46,6 +46,7 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
     (ApiCode::BlameTooLarge, "blame_too_large", 503),
     (ApiCode::RequestTimeout, "request_timeout", 503),
     (ApiCode::ServerBusy, "server_busy", 503),
+    (ApiCode::BlobSwept, "blob_swept", 503),
     (ApiCode::Internal, "internal", 500),
 ];
 
@@ -88,6 +89,7 @@ fn all_variants() -> Vec<ApiCode> {
         BlameTooLarge,
         RequestTimeout,
         ServerBusy,
+        BlobSwept,
         Internal,
     ];
     for code in &all {
@@ -124,6 +126,7 @@ fn all_variants() -> Vec<ApiCode> {
             | BlameTooLarge
             | RequestTimeout
             | ServerBusy
+            | BlobSwept
             | Internal => true,
         };
     }

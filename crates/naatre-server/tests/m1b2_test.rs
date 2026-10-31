@@ -1173,7 +1173,8 @@ async fn token_lifecycle_roles_ttl() {
     assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
     assert_eq!(code_of(&resp), "token_expired");
 
-    // Validation: unknown role, trailing-slash scope, negative ttl.
+    // Validation: unknown role, doubled trailing-slash scope, negative ttl.
+    // (A SINGLE trailing slash is trimmed, not a 422 — pinned below.)
     let resp = post_json(
         &t.app,
         "/v1/tokens",
@@ -1186,7 +1187,15 @@ async fn token_lifecycle_roles_ttl() {
         &t.app,
         "/v1/tokens",
         Some(t.admin()),
-        &json!({ "principal": "x", "role": "writer", "scope_path": "a/" }),
+        &json!({ "principal": "x", "role": "writer", "scope_path": "a//" }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let resp = post_json(
+        &t.app,
+        "/v1/tokens",
+        Some(t.admin()),
+        &json!({ "principal": "x", "role": "writer", "scope_path": "/" }),
     )
     .await;
     assert_eq!(resp.status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -1198,6 +1207,24 @@ async fn token_lifecycle_roles_ttl() {
     )
     .await;
     assert_eq!(resp.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A SINGLE trailing slash is trimmed, never a 422 (the README's
+    // `--scope src/` habit): the minted token's scope is the trimmed path,
+    // visible through whoami.
+    let resp = post_json(
+        &t.app,
+        "/v1/tokens",
+        Some(t.admin()),
+        &json!({ "principal": "trimmed", "role": "reader", "scope_path": "src/" }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let trimmed = resp.body["token"].as_str().unwrap().to_string();
+    let resp = get(&t.app, "/v1/whoami", Some(&trimmed)).await;
+    assert_eq!(
+        resp.body,
+        json!({ "principal": "trimmed", "role": "reader", "scope_path": "src" })
+    );
 
     // A valid scope round-trips through whoami.
     let resp = post_json(

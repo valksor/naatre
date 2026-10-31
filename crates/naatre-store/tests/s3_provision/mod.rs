@@ -48,6 +48,15 @@ pub const MINIO_SHA256: &str = "";
 const MINIO_ASSET: &str = "minio.darwin-arm64";
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const MINIO_ASSET: &str = "minio.linux-amd64";
+// Every OTHER target compiles with an empty asset: download_minio's ""
+// arm then skip-notices (or panics under NAATRE_TEST_S3_REQUIRED=1) —
+// without this arm the module itself would not compile off the two
+// pinned platforms.
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", target_arch = "x86_64")
+)))]
+const MINIO_ASSET: &str = "";
 
 /// Fixed loopback credentials (test-only; never a production secret).
 const TEST_ACCESS_KEY: &str = "naatre";
@@ -107,8 +116,13 @@ impl Drop for MinioServer {
 }
 
 /// The test S3 server: the env endpoint, or a provisioned pinned minio, or
-/// `None` (skip — no usable S3 server).
+/// `None` (skip — no usable S3 server). Under `NAATRE_TEST_S3_REQUIRED=1`
+/// (CI) the skip becomes a PANIC: a required-but-skipped leg is green
+/// vacuously, which is exactly how the S3 half of a conformance matrix can
+/// rot while the job stays green. The local default stays
+/// skip-with-notice.
 pub fn acquire() -> Option<S3Target> {
+    let required = std::env::var("NAATRE_TEST_S3_REQUIRED").as_deref() == Ok("1");
     if let Ok(endpoint) = std::env::var("NAATRE_TEST_S3_ENDPOINT") {
         for (var, needed) in [
             (
@@ -130,7 +144,16 @@ pub fn acquire() -> Option<S3Target> {
         ensure_bucket(&endpoint);
         return Some(S3Target::External { endpoint });
     }
-    let bin = find_or_fetch_minio()?;
+    let bin = match find_or_fetch_minio() {
+        Some(bin) => bin,
+        // The specific reason was already printed to stderr by the fetch
+        // path; the panic names the mode.
+        None if required => panic!(
+            "NAATRE_TEST_S3_REQUIRED=1 but no usable S3 server could be produced \
+             (no pinned minio binary and the download failed) — the S3 legs must RUN in CI"
+        ),
+        None => return None,
+    };
     Some(S3Target::Provisioned(start_minio(&bin)))
 }
 
@@ -365,22 +388,38 @@ fn ensure_bucket(endpoint: &str) {
     let access =
         std::env::var("NAATRE_TEST_S3_ACCESS_KEY").unwrap_or_else(|_| TEST_ACCESS_KEY.into());
     let secret = std::env::var("NAATRE_TEST_S3_SECRET").unwrap_or_else(|_| TEST_SECRET.into());
-    let (status, body) = sigv4_request(
-        "PUT",
-        endpoint,
-        &format!("/{bucket}/"),
-        b"",
-        &access,
-        &secret,
-    );
-    match status {
-        200 => {}
-        409 if body.contains("BucketAlreadyOwnedByYou") => {}
-        other => panic!(
-            "CreateBucket for the test bucket failed: HTTP {other} (details withheld; \
-             check the endpoint, credentials, and bucket permissions)"
-        ),
+    // Bounded retry on 5xx: a just-started minio can 503 the first
+    // CreateBucket even after health went 200 (several suites provision
+    // their own instance concurrently in a full-workspace run — an
+    // intermittent diagnosed 2026-10-31). Non-5xx answers are final.
+    let mut last: Option<(u16, String)> = None;
+    for attempt in 0..6 {
+        let (status, body) = sigv4_request(
+            "PUT",
+            endpoint,
+            &format!("/{bucket}/"),
+            b"",
+            &access,
+            &secret,
+        );
+        match status {
+            200 => return,
+            409 if body.contains("BucketAlreadyOwnedByYou") => return,
+            s if s >= 500 => {
+                last = Some((s, body));
+                std::thread::sleep(Duration::from_millis(500).saturating_mul(attempt + 1));
+            }
+            other => panic!(
+                "CreateBucket for the test bucket failed: HTTP {other} (details withheld; \
+                 check the endpoint, credentials, and bucket permissions)"
+            ),
+        }
     }
+    let (status, _) = last.expect("retry loop exhausted with a 5xx recorded");
+    panic!(
+        "CreateBucket for the test bucket kept failing: HTTP {status} after retries \
+         (details withheld; check the endpoint, credentials, and bucket permissions)"
+    );
 }
 
 /// One SigV4-signed request against `endpoint` (bare host:port, plain

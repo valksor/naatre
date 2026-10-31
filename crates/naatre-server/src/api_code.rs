@@ -79,6 +79,12 @@ pub enum ApiCode {
     /// 503 — the server is at its concurrent-request limit; shed before any
     /// work started; safe to retry with backoff.
     ServerBusy,
+    /// 503 — an upload's record step found the blob's bytes gone: the
+    /// reachability GC's sweep removed them between the upload's CAS step
+    /// and the record's turn in the write slot (an old, unreferenced re-PUT
+    /// past its grace window). The row was never written; a retry re-PUTs
+    /// the bytes and lands the row fresh.
+    BlobSwept,
     /// 500 — internal error; details never reach the client.
     Internal,
 }
@@ -88,7 +94,7 @@ impl ApiCode {
     /// cross-checks this list against its compile-time-exhaustive variant
     /// list (a `match` with no wildcard arm) and the wire-string table, so
     /// the published enum cannot silently drift from the registry.
-    pub const ALL: [ApiCode; 32] = [
+    pub const ALL: [ApiCode; 33] = [
         ApiCode::TokenInvalid,
         ApiCode::TokenExpired,
         ApiCode::TokenRevoked,
@@ -120,6 +126,7 @@ impl ApiCode {
         ApiCode::BlameTooLarge,
         ApiCode::RequestTimeout,
         ApiCode::ServerBusy,
+        ApiCode::BlobSwept,
         ApiCode::Internal,
     ];
 
@@ -157,6 +164,7 @@ impl ApiCode {
             Self::BlameTooLarge => "blame_too_large",
             Self::RequestTimeout => "request_timeout",
             Self::ServerBusy => "server_busy",
+            Self::BlobSwept => "blob_swept",
             Self::Internal => "internal",
         }
     }
@@ -192,7 +200,8 @@ impl ApiCode {
             | Self::DerivationPending
             | Self::BlameTooLarge
             | Self::RequestTimeout
-            | Self::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
+            | Self::ServerBusy
+            | Self::BlobSwept => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

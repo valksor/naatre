@@ -79,7 +79,7 @@ impl Ephemeral {
             .parent()
             .expect("objects has ephemeral/<snap> parent")
             .join("tmp");
-        write_compressed(&objects, &tmp, payload, crate::cas::BLOB_LIMIT)
+        write_compressed(&objects, &tmp, payload, crate::cas::BLOB_LIMIT).map(|(id, _)| id)
     }
 
     /// Fetches and hash-verifies a blob from snapshot `snap_id_hex`.

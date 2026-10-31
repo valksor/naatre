@@ -29,8 +29,9 @@ impl Cas {
         })
     }
 
-    /// Stores `payload` and returns its blob id. Idempotent: a second put
-    /// of identical content returns the same id without touching the file.
+    /// Stores `payload` and returns its blob id plus the stored
+    /// (compressed) size. Idempotent: a second put of identical content
+    /// returns the same id without touching the file.
     ///
     /// Durability invariant: every blob is fsynced into the CAS *before*
     /// any row referencing it commits — callers must call `put` before (or
@@ -40,8 +41,10 @@ impl Cas {
     /// objects the safe backup ordering.
     ///
     /// `payload` must be at most [`BLOB_LIMIT`] uncompressed bytes.
-    pub fn put(&self, payload: &[u8]) -> Result<Id, StoreError> {
-        write_compressed(&self.objects_root, &self.tmp_root, payload, BLOB_LIMIT)
+    pub fn put(&self, payload: &[u8]) -> Result<crate::blob::PutInfo, StoreError> {
+        let (id, csize) =
+            write_compressed(&self.objects_root, &self.tmp_root, payload, BLOB_LIMIT)?;
+        Ok(crate::blob::PutInfo { id, csize })
     }
 
     /// Fetches and decompresses the blob for `id`, verifying its hash.
@@ -61,6 +64,88 @@ impl Cas {
             .iter()
             .map(|id| shard_path(&self.objects_root, id).exists())
             .collect())
+    }
+
+    /// Deletes the blobs for `ids` (M10a's sweep). Idempotent: an absent
+    /// file is skipped (a crash between the unlink and the referencing-row
+    /// purge re-runs into the absence and converges). After each unlink the
+    /// shard's two parent dirs are fsynced best-effort — the same durability
+    /// posture as the write path (some platforms refuse directory fsyncs).
+    /// Empty shard dirs are left in place: a shard dir per se marks no data
+    /// (the backend mismatch guard only reads whether `objects/` holds any
+    /// entry), and re-creating them on the next write costs nothing.
+    pub fn delete(&self, ids: &[Id]) -> Result<(), StoreError> {
+        for id in ids {
+            let path = shard_path(&self.objects_root, id);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    if let Some(parent) = path.parent() {
+                        if let Ok(d) = std::fs::File::open(parent) {
+                            let _ = d.sync_all();
+                        }
+                        if let Some(grandparent) = parent.parent()
+                            && let Ok(d) = std::fs::File::open(grandparent)
+                        {
+                            let _ = d.sync_all();
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(crate::fs_util::io_ctx(e, &path)),
+            }
+        }
+        Ok(())
+    }
+
+    /// Lists every blob id present in the CAS: a walk of
+    /// `objects/<2hex>/<2hex>/<60hex>` (the id's hex split across the two
+    /// shard dirs and the file name — [`shard_path`]). Names that do not
+    /// reassemble into a 64-hex id are skipped (nothing naatre wrote; a
+    /// junk name carries no `objects` row, so fsck's mismatch counts are
+    /// unaffected). Unspecified order.
+    pub fn ids(&self) -> Result<Vec<Id>, StoreError> {
+        let mut out = Vec::new();
+        if !self.objects_root.exists() {
+            return Ok(out);
+        }
+        for shard2 in std::fs::read_dir(&self.objects_root)
+            .map_err(|e| crate::fs_util::io_ctx(e, &self.objects_root))?
+        {
+            let shard2 = shard2.map_err(|e| crate::fs_util::io_ctx(e, &self.objects_root))?;
+            let l1 = shard2.path();
+            if !l1.is_dir() {
+                continue;
+            }
+            let entries = match std::fs::read_dir(&l1) {
+                Ok(e) => e,
+                Err(e) => return Err(crate::fs_util::io_ctx(e, &l1)),
+            };
+            for shard4 in entries {
+                let shard4 = shard4.map_err(|e| crate::fs_util::io_ctx(e, &l1))?;
+                let l2 = shard4.path();
+                if !l2.is_dir() {
+                    continue;
+                }
+                let entries = match std::fs::read_dir(&l2) {
+                    Ok(e) => e,
+                    Err(e) => return Err(crate::fs_util::io_ctx(e, &l2)),
+                };
+                for obj in entries {
+                    let obj = obj.map_err(|e| crate::fs_util::io_ctx(e, &l2))?;
+                    let name = obj.file_name();
+                    let name = name.to_string_lossy();
+                    let hex = format!(
+                        "{}{}{name}",
+                        shard2.file_name().to_string_lossy(),
+                        shard4.file_name().to_string_lossy()
+                    );
+                    if let Some(id) = Id::from_hex(&hex) {
+                        out.push(id);
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -94,7 +179,7 @@ mod tests {
     fn roundtrip_empty_small_and_1mib() {
         let (_d, cas) = cas();
         for payload in [&b""[..], b"hello naatre", &pseudo_random(1024 * 1024)[..]] {
-            let id = cas.put(payload).unwrap();
+            let id = cas.put(payload).unwrap().id;
             assert_eq!(cas.get(&id).unwrap(), payload);
         }
     }
@@ -103,11 +188,14 @@ mod tests {
     fn put_is_idempotent_and_untouched() {
         let (_d, cas) = cas();
         let payload = b"same bytes";
-        let id = cas.put(payload).unwrap();
-        let path = shard_path(&cas.objects_root, &id);
+        let info = cas.put(payload).unwrap();
+        let path = shard_path(&cas.objects_root, &info.id);
         let before = std::fs::read(&path).unwrap();
-        let id2 = cas.put(payload).unwrap();
-        assert_eq!(id, id2);
+        // csize is the STORED (compressed) size, read from the backend.
+        assert_eq!(info.csize, before.len() as u64);
+        let info2 = cas.put(payload).unwrap();
+        assert_eq!(info.id, info2.id);
+        assert_eq!(info2.csize, before.len() as u64);
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
@@ -142,7 +230,7 @@ mod tests {
     fn file_for_a_requested_as_b_is_hash_mismatch() {
         let (_d, cas) = cas();
         let a_payload = b"contents of A";
-        let id_a = cas.put(a_payload).unwrap();
+        let id_a = cas.put(a_payload).unwrap().id;
         // Construct B: a different id whose file is a copy of A's file.
         let id_b = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"not what A holds");
         assert_ne!(id_a, id_b);
@@ -197,7 +285,7 @@ mod tests {
     #[test]
     fn has_batch_mixed() {
         let (_d, cas) = cas();
-        let id_yes = cas.put(b"present").unwrap();
+        let id_yes = cas.put(b"present").unwrap().id;
         let id_no = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"absent");
         let res = cas.has(&[id_yes, id_no, id_yes]).unwrap();
         assert_eq!(res, vec![true, false, true]);
@@ -214,5 +302,35 @@ mod tests {
             leftovers.is_empty(),
             "tmp must be clean after successful puts"
         );
+    }
+
+    #[test]
+    fn delete_removes_and_is_idempotent() {
+        let (_d, cas) = cas();
+        let id = cas.put(b"doomed").unwrap().id;
+        let live = cas.put(b"staying").unwrap().id;
+        cas.delete(&[id, id]).unwrap();
+        assert_eq!(cas.has(&[id]).unwrap(), vec![false]);
+        // Re-delete of an absent id is a no-op (the sweep converges).
+        cas.delete(&[id]).unwrap();
+        // The live neighbor is untouched and still reads byte-identical.
+        assert_eq!(cas.has(&[live]).unwrap(), vec![true]);
+        assert_eq!(cas.get(&live).unwrap(), b"staying");
+    }
+
+    #[test]
+    fn ids_lists_every_object_and_skips_junk_names() {
+        let (_d, cas) = cas();
+        let a = cas.put(b"alpha").unwrap().id;
+        let b = cas.put(b"beta").unwrap().id;
+        // A foreign file in the shard tree: not an id, never listed.
+        let junk_dir = cas.objects_root.join("zz").join("zz");
+        std::fs::create_dir_all(&junk_dir).unwrap();
+        std::fs::write(junk_dir.join("not-an-id"), b"junk").unwrap();
+        let mut ids = cas.ids().unwrap();
+        ids.sort_by_key(|id| id.to_hex());
+        let mut want = vec![a, b];
+        want.sort_by_key(|id| id.to_hex());
+        assert_eq!(ids, want);
     }
 }

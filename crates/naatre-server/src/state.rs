@@ -213,6 +213,31 @@ pub struct ServerState {
     /// manual [`crate::snapshots_gc::gc_snapshots`] call. Default:
     /// [`crate::serve::SNAPSHOT_GC_INTERVAL`].
     pub snapshot_gc_interval: Duration,
+    /// Which blob backend is open — an fsck fact (the kind name only, no
+    /// endpoint; the S3 backend's CAS-vs-DB mismatches get the
+    /// external-drift note, see `fsck`).
+    pub blob_backend: &'static str,
+    /// Reachability GC switch (M10a): `serve`'s background interval task
+    /// checks it. Off-switch for tests that drive
+    /// [`crate::gc::gc_pass`] directly and assert its effects
+    /// deterministically (same pattern as `snapshot_gc_enabled`).
+    pub gc_enabled: bool,
+    /// Reachability GC background-pass interval (`serve`'s task ticks on
+    /// this). From `backend.toml` `gc_interval_secs` (0 = task off);
+    /// default [`crate::gc::GC_DEFAULT_INTERVAL_SECS`].
+    pub gc_interval: Duration,
+    /// The collection grace window: a `gc_pending` candidate collects only
+    /// when its FIRST-unreachable timestamp is at least this old AND no
+    /// upload touched it inside the window. From `backend.toml`
+    /// `gc_grace_secs`; default [`crate::gc::GC_DEFAULT_GRACE_SECS`].
+    /// Injectable so tests can run the whole window with the injected
+    /// clock instead of 30 real days.
+    pub gc_grace: Duration,
+    /// Test-only pause between the reachability GC's mark and its sweep
+    /// (ZERO in production). Widens the mark→sweep race window
+    /// deterministically so the re-reference pin can re-PUT an old orphan
+    /// and reference it while the pass is between phases.
+    pub gc_test_delay_after_mark: Duration,
     /// Registered derived-data kinds (M6a). Empty until
     /// [`ServerState::register_deriver`] — M6b registers the real kinds;
     /// tests register throwaway kinds.
@@ -295,6 +320,7 @@ impl ServerState {
         let read_pool = ReadPool::open(&db_path, READ_POOL_SIZE)?;
         Ok(Self {
             meta_backend: MetaKind::Sqlite.as_str(),
+            blob_backend: BlobKind::Fs.as_str(),
             store,
             read_pool,
             cas,
@@ -307,6 +333,10 @@ impl ServerState {
             join_deadline: JOIN_DEADLINE,
             snapshot_gc_enabled: true,
             snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
+            gc_enabled: true,
+            gc_interval: Duration::from_secs(crate::gc::GC_DEFAULT_INTERVAL_SECS),
+            gc_grace: Duration::from_secs(crate::gc::GC_DEFAULT_GRACE_SECS),
+            gc_test_delay_after_mark: Duration::ZERO,
             derive: Arc::new(crate::derive::DeriveRegistry::default()),
             derive_queue_enabled: true,
             derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
@@ -359,6 +389,7 @@ impl ServerState {
         };
         Ok(Self {
             meta_backend: cfg.meta.as_str(),
+            blob_backend: cfg.blob.as_str(),
             store,
             read_pool,
             cas,
@@ -371,6 +402,16 @@ impl ServerState {
             join_deadline: JOIN_DEADLINE,
             snapshot_gc_enabled: true,
             snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
+            gc_enabled: cfg.gc_interval_secs != Some(0),
+            gc_interval: Duration::from_secs(
+                cfg.gc_interval_secs
+                    .unwrap_or(crate::gc::GC_DEFAULT_INTERVAL_SECS),
+            ),
+            gc_grace: Duration::from_secs(
+                cfg.gc_grace_secs
+                    .unwrap_or(crate::gc::GC_DEFAULT_GRACE_SECS),
+            ),
+            gc_test_delay_after_mark: Duration::ZERO,
             derive: Arc::new(crate::derive::DeriveRegistry::default()),
             derive_queue_enabled: true,
             derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
@@ -523,4 +564,21 @@ impl ServerState {
 /// rolls its transaction back on drop), so the store stays usable.
 fn lock_store(store: &Mutex<Store>) -> MutexGuard<'_, Store> {
     store.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The banner's "metadata backend" line reads this field off the state;
+    /// the README promises the kind name per backend. SQLite side here
+    /// (the Postgres side is pinned by m9_pg_test's route leg against a
+    /// live server).
+    #[test]
+    fn meta_backend_is_the_configured_kind_name_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = DataDir::create(dir.path()).unwrap();
+        let state = ServerState::open(data).unwrap();
+        assert_eq!(state.meta_backend, "sqlite");
+    }
 }

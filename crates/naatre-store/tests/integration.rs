@@ -117,6 +117,9 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          DROP TABLE IF EXISTS blame_state;
          DROP TABLE IF EXISTS path_history;
          DROP INDEX IF EXISTS idx_changesets_generation;
+         DROP INDEX IF EXISTS idx_file_changes_blob;
+         DROP TABLE IF EXISTS gc_pending;
+         ALTER TABLE objects DROP COLUMN touched_ns;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
          -- One tree shared by both repos (content-addressed id), containing
@@ -215,7 +218,7 @@ fn invariant_blob_durable_before_reference() {
 
     let cas = Cas::new(&dd).unwrap();
     let payload = b"durable before reference";
-    let id = cas.put(payload).unwrap();
+    let id = cas.put(payload).unwrap().id;
 
     // (a) The write path leaves nothing behind under tmp/.
     let tmp = dd.tmp_dir().unwrap();
@@ -273,7 +276,10 @@ fn open_pg() -> Option<(PgTarget, Store)> {
     let data = DataDir::create(tempfile::tempdir().unwrap().path().join("data")).unwrap();
     match Store::open_backend(data, &cfg) {
         Ok(store) => Some((target, store)),
-        Err(e) => panic!("postgres backend open failed (details withheld): {e:?}"),
+        // The store error is redacted by construction (no DSN in its
+        // text), so the panic prints it honestly — no "(details
+        // withheld)" label contradicting the payload.
+        Err(e) => panic!("postgres backend open failed: {e:?}"),
     }
 }
 
@@ -519,14 +525,14 @@ fn blob_suite(cas: &dyn BlobStore) {
     };
     let big: Vec<u8> = (0..1024 * 1024).map(|_| lcg()).collect();
     for payload in [&b""[..], b"conformance blob", big.as_slice()] {
-        let id = cas.put(payload).unwrap();
+        let id = cas.put(payload).unwrap().id;
         assert_eq!(cas.get(&id).unwrap(), payload);
     }
 
     // (2) idempotent put: identical content returns the same id, and a
     // get still verifies.
-    let id = cas.put(b"same bytes").unwrap();
-    let id2 = cas.put(b"same bytes").unwrap();
+    let id = cas.put(b"same bytes").unwrap().id;
+    let id2 = cas.put(b"same bytes").unwrap().id;
     assert_eq!(id, id2);
     assert_eq!(cas.get(&id).unwrap(), b"same bytes");
 
@@ -658,7 +664,7 @@ fn s3_integrity_suite(store: &S3Store) {
 
     // (1) HashMismatch: bytes at the key that hash elsewhere are refused,
     // and the foreign object is left in place for diagnosis.
-    let a = store.put(b"contents of A").unwrap();
+    let a = store.put(b"contents of A").unwrap().id;
     let b = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"not what A holds");
     let actual_of_b = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, b"contents of B");
     let compressed_b = zstd::bulk::compress(b"contents of B", 3).unwrap();
@@ -785,7 +791,7 @@ fn s3_layout_mirrors_fs() {
     };
 
     // History namespace: exactly the fs shard shape.
-    let id = s3.put(b"layout pin").unwrap();
+    let id = s3.put(b"layout pin").unwrap().id;
     let hex = id.to_hex();
     let expected = format!("objects/{}/{}/{}", &hex[0..2], &hex[2..4], &hex[4..]);
     let keys = list_keys(Path::from("objects"));
@@ -832,7 +838,7 @@ fn history_cas_follows_the_configured_backend() {
     let dd = DataDir::create(dir.path()).unwrap();
     let cas =
         naatre_store::blob::history_cas(&dd, &naatre_store::BackendConfig::default()).unwrap();
-    let id = cas.put(b"fs through the constructor").unwrap();
+    let id = cas.put(b"fs through the constructor").unwrap().id;
     assert!(dir.path().join("objects").join(&id.to_hex()[0..2]).exists());
 
     // s3 config → bucket keys, readable through a second, independent
@@ -854,7 +860,7 @@ fn history_cas_follows_the_configured_backend() {
     )
     .unwrap();
     let payload = b"s3 through the constructor";
-    let sid = writer.put(payload).unwrap();
+    let sid = writer.put(payload).unwrap().id;
     assert_eq!(reader.get(&sid).unwrap(), payload);
     assert!(
         !writer_dir

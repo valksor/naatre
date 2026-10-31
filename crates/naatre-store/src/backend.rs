@@ -118,6 +118,11 @@ pub struct PgConnect {
     /// From the `password` key or `NAATRE_PG_PASSWORD` — never from the URL.
     pub password: Option<String>,
     pub tls: PgTls,
+    /// The `sslrootcert` file key: a PEM CA bundle ADDED to the platform
+    /// roots for `verify-ca`/`verify-full` — the private-CA shape of a
+    /// self-hosted Postgres, which the system trust store cannot verify.
+    /// 0600-checked where it is read (the connect path).
+    pub sslrootcert: Option<std::path::PathBuf>,
     /// Test isolation only (per-test PG schema): never parseable from TOML
     /// — the strict surface refuses it there.
     pub schema: Option<String>,
@@ -175,6 +180,17 @@ pub struct BackendConfig {
     /// The plaintext opt-in: without it, `sslmode=disable` (Postgres) and
     /// plain-HTTP S3 endpoints are refused.
     pub allow_plaintext: bool,
+    /// The reachability GC's serve-side pass interval in seconds (M10a);
+    /// `None` = the default (3600), `Some(0)` = the background task off.
+    pub gc_interval_secs: Option<u64>,
+    /// The reachability GC's collection grace window in seconds (M10a);
+    /// `None` = the default (30 days). A candidate collects only after
+    /// this long past its first-unreachable mark.
+    pub gc_grace_secs: Option<u64>,
+    /// The `sslrootcert` file key (a PEM CA bundle for Postgres
+    /// `verify-ca`/`verify-full`); carried here from the file, consumed by
+    /// the connect path.
+    pub sslrootcert: Option<std::path::PathBuf>,
 }
 
 /// Reads and parses `<data>/backend.toml`; an absent file selects the
@@ -222,6 +238,9 @@ impl BackendConfig {
             pg: None,
             s3: Some(connect),
             allow_plaintext: false,
+            gc_interval_secs: None,
+            gc_grace_secs: None,
+            sslrootcert: None,
         }
     }
 
@@ -249,10 +268,14 @@ impl BackendConfig {
                 user: user.or(parsed.user),
                 password,
                 tls: parsed.tls,
+                sslrootcert: None,
                 schema: None,
             }),
             s3: None,
             allow_plaintext,
+            gc_interval_secs: None,
+            gc_grace_secs: None,
+            sslrootcert: None,
         })
     }
 }
@@ -290,6 +313,7 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         "dsn",
         "user",
         "password",
+        "sslrootcert",
         "allow_plaintext",
         "endpoint",
         "bucket",
@@ -297,6 +321,8 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         "access_key_id",
         "secret",
         "path_style",
+        "gc_interval_secs",
+        "gc_grace_secs",
     ];
     for key in backend.keys() {
         if !ALLOWED.contains(&key.as_str()) {
@@ -340,18 +366,39 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
             want: "true or false".to_string(),
         })?,
     };
+    // The M10a GC knobs: seconds; 0 for the interval switches the serve-side
+    // background task off (the host-local `naatre gc` verb still runs).
+    let gc_interval_secs = match backend.get("gc_interval_secs") {
+        None => None,
+        Some(v) => Some(u64_key(v, "backend.gc_interval_secs")?),
+    };
+    let gc_grace_secs = match backend.get("gc_grace_secs") {
+        None => None,
+        Some(v) => Some(u64_key(v, "backend.gc_grace_secs")?),
+    };
 
     let file_dsn = str_key(backend, "dsn")?;
     let has_file_dsn = file_dsn.is_some();
-    let dsn = std::env::var(ENV_PG_DSN).unwrap_or_else(|_| file_dsn.unwrap_or_default());
+    // The file wins over the environment — the SAME precedence every other
+    // key follows (the S3 keys below: "(The file wins over the
+    // environment, same as the Postgres keys.)"). Env-wins made a file's
+    // dsn a lie whenever NAATRE_PG_DSN happened to be set.
+    let dsn = file_dsn
+        .clone()
+        .unwrap_or_else(|| std::env::var(ENV_PG_DSN).unwrap_or_default());
     let file_user = str_key(backend, "user")?;
     let file_password = str_key(backend, "password")?;
+    // The `verify-ca`/`verify-full` CA bundle (a private-CA Postgres is
+    // the shape the platform roots cannot verify). File-only — no env
+    // var: a trust anchor is a deployment decision, not an injection
+    // point.
+    let sslrootcert = str_key(backend, "sslrootcert")?;
 
     let pg = if meta == MetaKind::Postgres {
-        let source = if std::env::var(ENV_PG_DSN).is_ok() {
-            PgDsnSource::Env
-        } else if has_file_dsn {
+        let source = if has_file_dsn {
             PgDsnSource::File
+        } else if std::env::var(ENV_PG_DSN).is_ok() {
+            PgDsnSource::Env
         } else {
             PgDsnSource::Missing
         };
@@ -370,6 +417,7 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
             user,
             password,
             tls: parsed.tls,
+            sslrootcert: sslrootcert.clone().map(std::path::PathBuf::from),
             schema: None,
         })
     } else {
@@ -384,6 +432,11 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         if file_user.is_some() || file_password.is_some() {
             return Err(BackendError::KeyWithoutPostgres {
                 key: "user/password".to_string(),
+            });
+        }
+        if sslrootcert.is_some() {
+            return Err(BackendError::KeyWithoutPostgres {
+                key: "sslrootcert".to_string(),
             });
         }
         None
@@ -475,7 +528,20 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         pg,
         s3,
         allow_plaintext,
+        gc_interval_secs,
+        gc_grace_secs,
+        sslrootcert: sslrootcert.map(std::path::PathBuf::from),
     })
+}
+
+/// An optional non-negative integer config value (`u64`; seconds).
+fn u64_key(v: &toml::Value, key: &str) -> Result<u64, BackendError> {
+    v.as_integer()
+        .and_then(|i| u64::try_from(i).ok())
+        .ok_or(BackendError::BadValue {
+            key: key.to_string(),
+            want: "a non-negative integer (seconds)".to_string(),
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -898,6 +964,26 @@ mod tests {
         assert_eq!(pg.user.as_deref(), Some("naatre"));
         assert_eq!(pg.tls, PgTls::VerifyFull);
         assert!(pg.password.is_none());
+    }
+
+    #[test]
+    fn sslrootcert_key_parses_into_pg_and_is_refused_under_sqlite() {
+        let cfg = parse(
+            "[backend]\nmeta = \"postgres\"\ndsn = \"postgres://db.example/naatre?sslmode=verify-full\"\nsslrootcert = \"/etc/naatre/ca.pem\"\n",
+        )
+        .unwrap();
+        let pg = cfg.pg.unwrap();
+        assert_eq!(
+            pg.sslrootcert.as_deref(),
+            Some(std::path::Path::new("/etc/naatre/ca.pem"))
+        );
+        // PG-only, like user/password: sitting unused under sqlite is a
+        // misconfiguration, not an inert key.
+        let e = err_of("[backend]\nsslrootcert = \"/etc/naatre/ca.pem\"\n");
+        assert!(
+            matches!(e, BackendError::KeyWithoutPostgres { ref key } if key == "sslrootcert"),
+            "{e}"
+        );
     }
 
     #[test]

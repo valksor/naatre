@@ -21,10 +21,20 @@ pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:7400";
 /// The 503 envelope codes the CLI retries on idempotent verbs: the
 /// single-writer slot, the concurrent-request shed, and the per-request
 /// time budget — each `retryable: true` with a pinned `Retry-After` in the
-/// closed registry. `derivation_pending` and `blame_too_large` are 503s
-/// that must surface instead (a backlog is not a 5 s event; a structural
-/// cap is deterministic).
-const RETRY_CODES: [&str; 3] = ["writer_busy", "server_busy", "request_timeout"];
+/// closed registry. `blob_swept` joins them for the raw-PUT path: the GC's
+/// sweep removed an old orphan's bytes mid-upload, the record step never
+/// wrote the row, and the content-addressed re-PUT is idempotent — the
+/// retry lands the bytes and the row fresh (the CLI's raw-PUT upload path
+/// therefore re-uploads on the sweep race, the same recovery its batch
+/// sibling gets from re-PUTting missing blobs). `derivation_pending` and
+/// `blame_too_large` are 503s that must surface instead (a backlog is not
+/// a 5 s event; a structural cap is deterministic).
+const RETRY_CODES: [&str; 4] = [
+    "writer_busy",
+    "server_busy",
+    "request_timeout",
+    "blob_swept",
+];
 /// POST verbs that are NOT safe to replay after a request_timeout: the shed
 /// drops the response but the blocking write may have committed (the server's
 /// spawn_blocking task survives the future drop). Retrying these on

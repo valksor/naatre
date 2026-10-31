@@ -801,3 +801,112 @@ async fn backfill_cursor_batches_on_postgres() {
     .unwrap();
     assert!(done, "backfill set the completion marker");
 }
+
+// ---- 6. the route legs the M9 matrix owed Postgres: objects PUT
+//         roundtrip, refs CAS, and stats (SUM(bigint) → NUMERIC) -------------
+
+/// GET returning raw bytes (the object fetch leg).
+async fn send_bytes(app: &Router, uri: &str, token: &str) -> (StatusCode, axum::body::Bytes) {
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = BodyExt::collect(res.into_body())
+        .await
+        .expect("body")
+        .to_bytes();
+    (status, bytes)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stats_objects_and_refs_routes_on_postgres() {
+    let Some(_) = pg_target() else {
+        return; // pg_provision already printed the skip notice
+    };
+    let (ctx, _repo) = open_ctx_blocking(false);
+
+    // The startup banner's "metadata backend" line reads the kind off the
+    // state — postgres on this backend (sqlite side pinned in state.rs).
+    assert_eq!(ctx.state.meta_backend, "postgres");
+
+    // objects PUT roundtrip: add_cs uploads through the raw PUT route and
+    // creates the referencing changeset; the blob then reads back
+    // byte-identical through the membership-gated fetch.
+    let content = b"pg route roundtrip\n";
+    let blob = object_id(Kind::Blob, content);
+    let main = main_head(&ctx).await;
+    add_cs(&ctx, json!([main]), "pg-route.txt", content).await;
+    let (status, bytes) = send_bytes(
+        &ctx.app,
+        &format!("/v1/repos/{REPO}/objects/{}", blob.to_hex()),
+        &ctx.writer,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&bytes[..], content);
+
+    // An admin principal for the admin-only routes (refs CAS, stats).
+    let admin = with_seed(&ctx, |conn| {
+        let (token, hash) = naatre_server::auth::mint_token();
+        db::principal_upsert(conn, "admin-p", "admin", BASE_NS as i64).unwrap();
+        db::token_insert(conn, "admin-p", &hash, None, None).unwrap();
+        token
+    })
+    .await;
+
+    // refs CAS on a non-main ref: create (expected null) → v1; a stale
+    // expectation → 409 ref_conflict naming the current version; the
+    // current one moves it → v2.
+    let head = main_head(&ctx).await;
+    let create = send(
+        &ctx.app,
+        "POST",
+        &format!("/v1/repos/{REPO}/refs/release"),
+        &admin,
+        Some(json!({ "target": head, "expected": null })),
+    )
+    .await;
+    assert_eq!(create.status, StatusCode::OK, "{}", create.body);
+    assert_eq!(create.body["version"], 1);
+    let stale = send(
+        &ctx.app,
+        "POST",
+        &format!("/v1/repos/{REPO}/refs/release"),
+        &admin,
+        Some(json!({ "target": head, "expected": { "version": 999 } })),
+    )
+    .await;
+    assert_eq!(stale.status, StatusCode::CONFLICT, "{}", stale.body);
+    assert_eq!(code_of(&stale), "ref_conflict");
+    assert_eq!(stale.body["error"]["details"]["current_version"], 1);
+    let moved = send(
+        &ctx.app,
+        "POST",
+        &format!("/v1/repos/{REPO}/refs/release"),
+        &admin,
+        Some(json!({ "target": head, "expected": { "version": 1 } })),
+    )
+    .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.body);
+    assert_eq!(moved.body["version"], 2);
+
+    // stats: SUM(bigint) answers NUMERIC on Postgres — the mapper arm this
+    // fix slice added; the route 500ed before it existed.
+    let stats = send(
+        &ctx.app,
+        "GET",
+        &format!("/v1/repos/{REPO}/stats"),
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(stats.status, StatusCode::OK, "{}", stats.body);
+    assert!(stats.body["changesets"].as_u64().unwrap() >= 1);
+    assert!(stats.body["objects"].as_u64().unwrap() >= 1);
+    assert_eq!(stats.body["bytes"].as_u64(), Some(content.len() as u64));
+    assert!(stats.body["cbytes"].as_u64().unwrap() >= 1);
+}
