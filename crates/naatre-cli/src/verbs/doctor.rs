@@ -91,7 +91,7 @@ fn blob_presence(root: &Path, repo: &str, ids: &[Id], net: &Net) -> Result<Vec<S
     for chunk in ids.chunks(256) {
         let body = json!({ "ids": chunk.iter().map(Id::to_hex).collect::<Vec<_>>() });
         let (_status, v) = client
-            .post_json(
+            .post_json_idempotent(
                 &format!(
                     "/v1/repos/{}/objects/present",
                     crate::client::uri_segment(repo)

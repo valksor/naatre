@@ -170,7 +170,10 @@ fn try_run(root: &Path, ttl: Option<&str>, net: &Net) -> Result<(), VerbError> {
     if let Some(secs) = ttl_secs {
         body["ttl_secs"] = json!(secs);
     }
-    let (_status, created) = client.post_json(
+    // The snap id is client-generated per attempt (see the PUTs above): a
+    // retried POST re-PUTs the same trees against the same id — idempotent,
+    // so the retry contract applies.
+    let (_status, created) = client.post_json_idempotent(
         &format!("/v1/repos/{}/snapshots", crate::client::uri_segment(repo)),
         &body,
     )?;

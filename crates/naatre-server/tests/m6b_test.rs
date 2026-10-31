@@ -78,6 +78,21 @@ fn in_memory_ctx(register: bool) -> Ctx {
     }
 }
 
+/// [`in_memory_ctx`] with a pre-`Arc` configuration hook (the
+/// `open_ctx_with` pattern): the injectable caps/batch-size fields live on
+/// `ServerState` and must be set before the state is shared.
+fn in_memory_ctx_with(register: bool, configure: impl FnOnce(&mut ServerState)) -> Ctx {
+    let dir = tempfile::tempdir().unwrap();
+    let data_path = dir.path().join("data");
+    let dd = DataDir::create(&data_path).unwrap();
+    std::fs::write(dd.db_path(), b"").unwrap();
+    let ctx = open_ctx_with(&data_path, register, configure);
+    Ctx {
+        _dir: Some(dir),
+        ..ctx
+    }
+}
+
 /// Opens a data dir (migrations already applied or to-be-applied), applies
 /// the test clock and optional production registration, seeds a writer,
 /// and builds the router. The production shape of `naatre serve`.
@@ -1963,8 +1978,13 @@ async fn deep_path_changeset_poisons_on_the_charged_walk_budget() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blame_kind_own_budget_quarantines_a_priced_deep_shape() {
     let ctx = in_memory_ctx(true);
-    const DEPTH: usize = 300;
-    const ROWS: usize = 3_400;
+    // 256 components: AT the grammar's component cap — the deepest shape
+    // the grammar admits, so this is the honest worst case per row
+    // (1 charge per row + 256 probe charges). 4,200 rows x 257 charges
+    // ≈ 1.08M exceeds blame's own 1,000,000 budget; the pin fails if the
+    // budget is raised past that without re-pricing this shape.
+    const DEPTH: usize = 256;
+    const ROWS: usize = 4_200;
     let deep = |i: usize| -> &'static str {
         let mut p = String::new();
         for _ in 0..DEPTH - 1 {
@@ -2162,6 +2182,105 @@ async fn blame_response_cap_trips_on_encoded_size_not_below_it() {
     );
 }
 
+/// The streamed-blob-bytes cap, both directions, with the cap injected
+/// small (the state-field pattern — 256 MiB of real loads is not a test):
+/// a 100-byte file's single-add blame loads it twice (final + base) = 200
+/// bytes, exactly AT the cap → full 200. The three-layer file loads
+/// 100 + 110 + 120 = 330 > 200 → 503 `blame_too_large`. Both shapes sit
+/// far under the line and response caps — this pin trips the bytes cap
+/// alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_blob_bytes_cap_trips_at_the_boundary_not_below_it() {
+    let ctx = in_memory_ctx_with(true, |s| s.blame_max_blob_bytes = 200);
+
+    let under = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("under.txt", &[b'a'; 100])],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&under, "under.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(
+        resp.body["lines"].as_array().unwrap().len(),
+        1,
+        "at-cap blame is complete, never truncated"
+    );
+
+    let base = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("over.txt", &[b'x'; 100])],
+        )
+        .await;
+    let m1 = ctx
+        .commit(
+            Some(&base),
+            "Bob <bob@example.com>",
+            vec![ch("over.txt", &[b'x'; 110])],
+        )
+        .await;
+    let tip = ctx
+        .commit(
+            Some(&m1),
+            "Bob <bob@example.com>",
+            vec![ch("over.txt", &[b'x'; 120])],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&tip, "over.txt").await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], json!("blame_too_large"));
+}
+
+/// The binary short-circuit still PAYS the bytes charge: the final blob's
+/// load happens before the UTF-8 check, so a binary blob over the (injected
+/// small) cap is a 503 `blame_too_large` — not the structured binary
+/// result; the same shape under the cap is the structured empty binary 200.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_binary_short_circuit_still_charges_the_bytes_cap() {
+    let ctx = in_memory_ctx_with(true, |s| s.blame_max_blob_bytes = 200);
+
+    let over = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("big.bin", &[0xffu8; 300])],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&over, "big.bin").await;
+    assert_eq!(
+        resp.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        resp.body
+    );
+    assert_eq!(resp.body["error"]["code"], json!("blame_too_large"));
+
+    let under = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("small.bin", &[0xffu8; 60])],
+        )
+        .await;
+    ctx.drain().await;
+    let resp = ctx.blame(&under, "small.bin").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["binary"], json!(true));
+    assert_eq!(resp.body["binary_code"], json!("blame_binary"));
+    assert_eq!(resp.body["lines"], json!([]));
+}
+
 /// A first-parent chain past the read cap degrades with `blame_too_large`
 /// (retryable false, no Retry-After) — never a hang, never a silent
 /// truncation. The chain is crafted in SQL: one real root commit carries
@@ -2243,6 +2362,83 @@ async fn blame_chain_past_the_cap_degrades_not_hangs() {
     );
 }
 
+/// The chain cap's under-leg, same crafting as the over-leg above: a
+/// 9,999-node first-parent chain stays under the 10,000 cap — the walk
+/// (9,999 synthetic nodes + the real root) reaches the root's add row and
+/// answers 200 with the one true line, exact (degraded false). One more
+/// synthetic node would trip the cap; this is the boundary's cheap side.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blame_chain_under_the_cap_answers_in_full() {
+    let ctx = in_memory_ctx(true);
+    let c0 = ctx
+        .commit(
+            None,
+            "Ann <ann@example.com>",
+            vec![add_ch("f.txt", b"one\n")],
+        )
+        .await;
+    // The walk terminates at c0's derived add row — it must exist.
+    ctx.drain().await;
+    let repo_id: i64 = ctx.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
+    let root_tree: Vec<u8> = ctx
+        .db()
+        .query_row(
+            "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            rusqlite::params![repo_id, id_of(&c0).0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let blame_kind: i64 = ctx
+        .db()
+        .query_row(
+            "SELECT id FROM derive_kinds WHERE name = 'blame'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    const UNDER_CAP: i64 = 9_999;
+    let conn = ctx.db();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut prev = id_of(&c0).0;
+    let mut tip = prev;
+    for i in 1..=UNDER_CAP {
+        let mut id = [0u8; 32];
+        id[..8].copy_from_slice(&(0xC6u64 << 32 | i as u64).to_be_bytes());
+        conn.execute(
+            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+             timestamp_ns, generation, principal, root_tree_id) \
+             VALUES (?1, ?2, ?3, 'Ann', 'bulk', 0, ?4, 'm6b-test', ?5)",
+            rusqlite::params![repo_id, id, b"bulk", i, root_tree],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
+            rusqlite::params![repo_id, id, prev],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state, attempts, output) \
+             VALUES (?1, ?2, ?3, 'done', 0, ?4)",
+            rusqlite::params![blame_kind, repo_id, id, b""],
+        )
+        .unwrap();
+        prev = id;
+        tip = id;
+    }
+    conn.execute_batch("COMMIT").unwrap();
+    let tip_hex: String = tip.iter().map(|b| format!("{b:02x}")).collect();
+
+    let resp = ctx.blame(&tip_hex, "f.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["degraded"], json!(false));
+    assert_eq!(
+        resp.body["lines"].as_array().unwrap().len(),
+        1,
+        "the under-cap blame is the full, exact answer"
+    );
+}
+
 /// A corrupt-but-untainted SELF-REFERENTIAL skip row cannot hang the
 /// merge-base (the unbounded-climb fix): the non-descending jump is
 /// refused, the climb falls back to the plain first-parent step, and the
@@ -2304,6 +2500,82 @@ async fn merge_base_survives_a_self_referential_skip_row() {
 }
 
 // ---- 7. the backfill pins ------------------------------------------------------
+
+/// The multi-batch pin: with the batch size injected to 4, twelve ROWLESS
+/// changesets (the boot-backfill shape, crafted in SQL like the chain pins)
+/// force the loop through at least three batches — and the completion
+/// marker lands only over a FULL anti-join. A one-batch loop exit or a
+/// dropped batch cursor would set `derive_backfill_done` with rows
+/// unrowed (reads answer 200 over a hole); the marker-honesty probe
+/// ([`naatre_server::derive::backfill`]'s final
+/// `derive_backfill_rowless_exists` check) fails the backfill instead, so
+/// the marker-set assertion below cannot pass over a hole.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backfill_marker_lands_only_over_a_full_anti_join() {
+    let ctx = in_memory_ctx_with(true, |s| s.derive_backfill_batch_size = 4);
+    let c0 = ctx
+        .commit(None, "Ann <ann@example.com>", vec![add_ch("f.txt", b"0\n")])
+        .await;
+    let repo_id: i64 = ctx.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
+    let root_tree: Vec<u8> = ctx
+        .db()
+        .query_row(
+            "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            rusqlite::params![repo_id, id_of(&c0).0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    // Twelve changesets with NO derive rows, in distinct generations.
+    const ROWLESS: i64 = 12;
+    {
+        let conn = ctx.db();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        for i in 1..=ROWLESS {
+            let mut id = [0u8; 32];
+            id[..8].copy_from_slice(&(0xC7u64 << 32 | i as u64).to_be_bytes());
+            conn.execute(
+                "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+                 timestamp_ns, generation, principal, root_tree_id) \
+                 VALUES (?1, ?2, ?3, 'Ann', 'bulk', 0, ?4, 'm6b-test', ?5)",
+                rusqlite::params![repo_id, id, b"bulk", 1_000 + i, root_tree],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("COMMIT").unwrap();
+    }
+    let rowless_before: i64 = ctx.count(
+        "SELECT COUNT(*) FROM changesets c WHERE NOT EXISTS (\
+         SELECT 1 FROM derive_state d WHERE d.repo_id = c.repo_id AND d.cs = c.id)",
+    );
+    assert!(rowless_before >= ROWLESS, "the unrowed window exists");
+
+    naatre_server::derive::backfill(&ctx.state)
+        .await
+        .expect("the backfill completes over the injected batch size");
+
+    // Every production kind's marker is set — and the anti-join is empty
+    // for every kind: no changeset anywhere lacks its row.
+    assert_eq!(
+        ctx.count("SELECT COUNT(*) FROM meta WHERE key LIKE 'derive_backfill_done:%'"),
+        3,
+        "every kind's completion marker set"
+    );
+    for kind in [
+        naatre_server::derived::KIND_BLAME,
+        naatre_server::derived::KIND_PATH_HISTORY,
+        naatre_server::derived::KIND_COMMIT_GRAPH,
+    ] {
+        assert_eq!(
+            ctx.count(&format!(
+                "SELECT COUNT(*) FROM changesets c WHERE NOT EXISTS (\
+                 SELECT 1 FROM derive_state d JOIN derive_kinds k ON k.id = d.kind \
+                 WHERE k.name = '{kind}' AND d.repo_id = c.repo_id AND d.cs = c.id)"
+            )),
+            0,
+            "{kind}: unrowed changesets survived the backfill"
+        );
+    }
+}
 
 /// Pin 1: bulk import. `naatre import` runs with NO registered kinds; on
 /// the serving side (`naatre serve`'s boot-time backfill over the SAME
@@ -2466,6 +2738,7 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
         conn.execute_batch(
             "DROP TABLE derive_state; DROP TABLE derive_reports; DROP TABLE derive_kinds;
              DROP TABLE blame_state; DROP TABLE path_history;
+             DROP INDEX IF EXISTS idx_changesets_generation;
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
         )
         .unwrap();
@@ -2632,6 +2905,7 @@ async fn upgrade_ab_ctx(dir: &Path) -> (Ctx, String, String, String) {
         conn.execute_batch(
             "DROP TABLE derive_state; DROP TABLE derive_reports; DROP TABLE derive_kinds;
              DROP TABLE blame_state; DROP TABLE path_history;
+             DROP INDEX IF EXISTS idx_changesets_generation;
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
         )
         .unwrap();

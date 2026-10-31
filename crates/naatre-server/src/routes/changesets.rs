@@ -400,6 +400,15 @@ async fn persist(
             // Duality: apply the delta to the parent's tree in memory.
             let mut node = MemNode::load(conn, parent_root).map_err(map_derive)?;
             node.apply(&cs.changes).map_err(|e| {
+                // The depth cap is grammar (422 validation), not duality —
+                // the route's own validation rejected it earlier; apply's
+                // check is derivation's own enforcement of the same rule.
+                if let ApplyError::TooDeep { path } = &e {
+                    return ApiError::new(
+                        ApiCode::Validation,
+                        format!("{path}: exceeds the 256-component path cap"),
+                    );
+                }
                 let (path, why): (&str, &str) = match &e {
                     ApplyError::FileInPath { path } => (
                         path,
@@ -410,6 +419,9 @@ async fn persist(
                     }
                     ApplyError::DelNotFile { path } => {
                         (path, "del target is not a file in the parent tree")
+                    }
+                    ApplyError::TooDeep { .. } => {
+                        unreachable!("handled above")
                     }
                 };
                 ApiError::new(ApiCode::Duality, format!("{path}: {why}"))

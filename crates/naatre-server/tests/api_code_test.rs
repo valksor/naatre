@@ -49,9 +49,11 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
     (ApiCode::Internal, "internal", 500),
 ];
 
-/// Every variant, listed explicitly. The `matches!` below is exhaustive, so
-/// a newly added variant fails to compile until it lands here (and in
-/// TABLE) — the registry cannot silently grow.
+/// Every variant, listed explicitly. The `match` below is a real exhaustive
+/// match with NO wildcard arm, so a newly added variant fails to compile
+/// until it lands here (and in TABLE) — the registry cannot silently grow.
+/// (A `matches!` guard would not do this: its implicit `_ => false` arm
+/// swallows new variants at compile time.)
 fn all_variants() -> Vec<ApiCode> {
     use ApiCode::*;
     let all = vec![
@@ -90,33 +92,40 @@ fn all_variants() -> Vec<ApiCode> {
     ];
     for code in &all {
         // Exhaustiveness guard: adding a variant breaks this match.
-        let _exhaustive: bool = matches!(
-            code,
+        let _exhaustive: bool = match code {
             TokenInvalid
-                | TokenExpired
-                | TokenRevoked
-                | Forbidden
-                | NotFound
-                | RepoNotFound
-                | RepoExists
-                | ObjectNotFound
-                | RefConflict
-                | IdempotencyKeySettled
-                | DirtyWorkingCopy
-                | GitHistoryDiverged
-                | ConflictMarkersPresent
-                | Malformed
-                | Validation
-                | PathNotNormalized
-                | EmptyChangeset
-                | TooLarge
-                | SnapshotExpired
-                | ObjectCollected
-                | ObjectRedacted
-                | WriterBusy
-                | DerivationPending
-                | Internal
-        );
+            | TokenExpired
+            | TokenRevoked
+            | Forbidden
+            | NotFound
+            | RepoNotFound
+            | RepoExists
+            | ObjectNotFound
+            | RefConflict
+            | IdempotencyKeySettled
+            | DirtyWorkingCopy
+            | GitHistoryDiverged
+            | ConflictMarkersPresent
+            | Malformed
+            | Validation
+            | PathNotNormalized
+            | EmptyChangeset
+            | NotFastForward
+            | UnknownParent
+            | Duality
+            | UnsortedChanges
+            | DuplicatePath
+            | TooLarge
+            | SnapshotExpired
+            | ObjectCollected
+            | ObjectRedacted
+            | WriterBusy
+            | DerivationPending
+            | BlameTooLarge
+            | RequestTimeout
+            | ServerBusy
+            | Internal => true,
+        };
     }
     all
 }

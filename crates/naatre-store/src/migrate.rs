@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 6;
+pub const MAX_SUPPORTED: i64 = 7;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -122,6 +122,18 @@ CREATE TABLE path_history(repo_id INTEGER NOT NULL, path TEXT NOT NULL, gen INTE
         r#"
 ALTER TABLE derive_state ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE derive_state ADD COLUMN poison_cs BLOB;
+"#,
+    ),
+    // M6 fix rounds: the boot backfill's batch cursor seeks the changesets
+    // table in (generation, rowid) order — without this index every batch
+    // pays a full scan + sort to find its range (the cursor's whole point
+    // is to start where the last batch stopped). SQLite single-column
+    // indexes are internally (column, rowid), so the index serves the
+    // row-value range seek and the ORDER BY generation, rowid directly.
+    (
+        7,
+        r#"
+CREATE INDEX idx_changesets_generation ON changesets(generation);
 "#,
     ),
 ];

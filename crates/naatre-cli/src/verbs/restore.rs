@@ -128,6 +128,7 @@ fn try_run(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<(), Ver
                  use --force to discard them"
             ),
             details: None,
+            retry_after: None,
         }));
     }
 

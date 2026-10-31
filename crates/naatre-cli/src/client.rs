@@ -18,6 +18,21 @@ use serde_json::{Value, json};
 
 pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:7400";
 
+/// The 503 envelope codes the CLI retries on idempotent verbs: the
+/// single-writer slot, the concurrent-request shed, and the per-request
+/// time budget — each `retryable: true` with a pinned `Retry-After` in the
+/// closed registry. `derivation_pending` and `blame_too_large` are 503s
+/// that must surface instead (a backlog is not a 5 s event; a structural
+/// cap is deterministic).
+const RETRY_CODES: [&str; 3] = ["writer_busy", "server_busy", "request_timeout"];
+/// Attempts per retried request (the first plus two retries).
+const RETRY_TRIES: u32 = 3;
+/// Total added waiting across one request's retries.
+const RETRY_BUDGET: Duration = Duration::from_secs(5);
+/// Wait between attempts when a retryable 503 arrived without a parseable
+/// `Retry-After` (the server always pins one; this is the fallback).
+const RETRY_BACKOFF_DEFAULT: Duration = Duration::from_millis(100);
+
 /// A failed server exchange: either the standard error envelope (with its
 /// stable code) or a transport failure (no response at all).
 #[derive(Debug)]
@@ -30,6 +45,9 @@ pub enum HttpError {
         /// The envelope's `details` object, when it carried one (e.g. a
         /// land 409 carries the conflict list + resolution recipe).
         details: Option<Value>,
+        /// The response's `Retry-After` header, in seconds, when present
+        /// (the server pins `Retry-After: 1` on every retryable 503).
+        retry_after: Option<u64>,
     },
     /// The request never completed (connection refused, timeout, …).
     Transport(String),
@@ -138,18 +156,25 @@ impl Client {
     }
 
     /// GET with query params; succeeds on any 2xx with the parsed JSON.
+    /// A read — routed through the idempotent-verb retry contract.
     pub fn get_json(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, HttpError> {
         self.check_version();
         let url = format!("{}{}", self.base, path);
-        let mut rb = self.with_bearer(self.agent.get(&url));
-        for (k, v) in query {
-            rb = rb.query(*k, *v);
-        }
-        let res = rb.call().map_err(|e| HttpError::transport(e, &url))?;
-        self.finish_json(res).map(|(_, v)| v)
+        self.retrying(move || {
+            let mut rb = self.with_bearer(self.agent.get(&url));
+            for (k, v) in query {
+                rb = rb.query(*k, *v);
+            }
+            let res = rb.call().map_err(|e| HttpError::transport(e, &url))?;
+            self.finish_json(res).map(|(_, v)| v)
+        })
     }
 
     /// POST a JSON body; succeeds on any 2xx, returning (status, body).
+    /// Deliberately NOT retried: the POSTs that matter here are keyed
+    /// writes (changeset create, land) whose duplicates are owned by their
+    /// own key semantics. Idempotent POSTs (repo create, snapshot POST,
+    /// the POST-shaped reads) go through [`Client::post_json_idempotent`].
     pub fn post_json(&self, path: &str, body: &Value) -> Result<(u16, Value), HttpError> {
         self.check_version();
         let url = format!("{}{}", self.base, path);
@@ -160,35 +185,104 @@ impl Client {
         self.finish_json(res)
     }
 
+    /// POST a JSON body under the idempotent-verb retry contract (see
+    /// [`Client::retrying`]): repo create, snapshot POST, and the
+    /// POST-shaped reads (`objects/present`, `objects/get`).
+    pub fn post_json_idempotent(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<(u16, Value), HttpError> {
+        self.check_version();
+        let url = format!("{}{}", self.base, path);
+        let body = body.clone();
+        self.retrying(move || {
+            let res = self
+                .with_bearer(self.agent.post(&url))
+                .send_json(&body)
+                .map_err(|e| HttpError::transport(e, &url))?;
+            self.finish_json(res)
+        })
+    }
+
     /// Raw PUT of bytes (the large-blob path); succeeds on any 2xx.
+    /// Hash-addressed content at a content-addressed URL — idempotent, so
+    /// routed through the retry contract.
     pub fn put_bytes(&self, path: &str, bytes: &[u8]) -> Result<(u16, Value), HttpError> {
         self.check_version();
         let url = format!("{}{}", self.base, path);
-        let res = self
-            .with_bearer(self.agent.put(&url))
-            .send(bytes)
-            .map_err(|e| HttpError::transport(e, &url))?;
-        self.finish_json(res)
+        self.retrying(move || {
+            let res = self
+                .with_bearer(self.agent.put(&url))
+                .send(bytes)
+                .map_err(|e| HttpError::transport(e, &url))?;
+            self.finish_json(res)
+        })
     }
 
     /// Raw GET of bytes (blob fetch). A non-2xx answer is parsed as the
-    /// error envelope when possible.
+    /// error envelope when possible. A read — routed through the
+    /// idempotent-verb retry contract.
     pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, HttpError> {
         self.check_version();
         let url = format!("{}{}", self.base, path);
-        let res = self
-            .with_bearer(self.agent.get(&url))
-            .call()
-            .map_err(|e| HttpError::transport(e, &url))?;
-        let status = res.status().as_u16();
-        let mut body = res.into_body();
-        let bytes = body
-            .read_to_vec()
-            .map_err(|e| HttpError::Transport(format!("reading response body failed: {e}")))?;
-        if !(200..300).contains(&status) {
-            return Err(bytes_as_envelope(&bytes, status));
+        self.retrying(move || {
+            let res = self
+                .with_bearer(self.agent.get(&url))
+                .call()
+                .map_err(|e| HttpError::transport(e, &url))?;
+            let status = res.status().as_u16();
+            let retry_after = retry_after_of(res.headers());
+            let mut body = res.into_body();
+            let bytes = body
+                .read_to_vec()
+                .map_err(|e| HttpError::Transport(format!("reading response body failed: {e}")))?;
+            if !(200..300).contains(&status) {
+                return Err(bytes_as_envelope(&bytes, status, retry_after));
+            }
+            Ok(bytes)
+        })
+    }
+
+    /// The idempotent-verb retry contract: the client honors the server's
+    /// own backpressure on verbs where a repeat is safe. A 503 envelope
+    /// whose code is one of [`RETRY_CODES`] — the contention/transport
+    /// sheds, each `retryable: true` + `Retry-After: 1` — is retried up to
+    /// [`RETRY_TRIES`] attempts within [`RETRY_BUDGET`] of total waiting,
+    /// each wait the server's `Retry-After` ([`RETRY_BACKOFF_DEFAULT`]
+    /// when the header is missing, always capped at the remaining budget).
+    /// Everything else returns as-is: `derivation_pending` (a derive
+    /// backlog drains on the server's schedule, not inside 5 s) and the
+    /// non-retryable `blame_too_large` are 503s that must surface
+    /// immediately, and the keyed writes (changeset create, land) never
+    /// route through here at all.
+    fn retrying<T>(&self, mut f: impl FnMut() -> Result<T, HttpError>) -> Result<T, HttpError> {
+        let mut remaining = RETRY_BUDGET;
+        for attempt in 1..=RETRY_TRIES {
+            let err = match f() {
+                Ok(v) => return Ok(v),
+                Err(e) => e,
+            };
+            let retry_after = match &err {
+                HttpError::Envelope {
+                    status: 503,
+                    code,
+                    retry_after,
+                    ..
+                } if RETRY_CODES.contains(&code.as_str()) => *retry_after,
+                _ => return Err(err),
+            };
+            if attempt == RETRY_TRIES {
+                return Err(err);
+            }
+            let wait = retry_after
+                .map(Duration::from_secs)
+                .unwrap_or(RETRY_BACKOFF_DEFAULT)
+                .min(remaining);
+            remaining -= wait;
+            std::thread::sleep(wait);
         }
-        Ok(bytes)
+        unreachable!("every loop arm returns")
     }
 
     fn finish_json(
@@ -196,12 +290,13 @@ impl Client {
         res: ureq::http::Response<ureq::Body>,
     ) -> Result<(u16, Value), HttpError> {
         let status = res.status().as_u16();
+        let retry_after = retry_after_of(res.headers());
         let mut body = res.into_body();
         let value: Value = body
             .read_json()
             .map_err(|e| HttpError::Transport(format!("server sent a non-JSON response: {e}")))?;
         if !(200..300).contains(&status) {
-            return Err(envelope_from(&value, status));
+            return Err(envelope_from(&value, status, retry_after));
         }
         Ok((status, value))
     }
@@ -210,7 +305,7 @@ impl Client {
 /// Extracts the envelope `error.code` / `error.message` (and `details`,
 /// when present), with a fallback for responses that are not the standard
 /// envelope.
-fn envelope_from(value: &Value, status: u16) -> HttpError {
+fn envelope_from(value: &Value, status: u16, retry_after: Option<u64>) -> HttpError {
     let code = value["error"]["code"].as_str().unwrap_or("internal");
     let message = value["error"]["message"].as_str().unwrap_or_else(|| {
         if value.is_null() {
@@ -227,14 +322,27 @@ fn envelope_from(value: &Value, status: u16) -> HttpError {
         code: code.to_string(),
         message: message.to_string(),
         details,
+        retry_after,
     }
 }
 
-fn bytes_as_envelope(bytes: &[u8], status: u16) -> HttpError {
+fn bytes_as_envelope(bytes: &[u8], status: u16, retry_after: Option<u64>) -> HttpError {
     match serde_json::from_slice::<Value>(bytes) {
-        Ok(v) if v["error"]["code"].is_string() => envelope_from(&v, status),
-        _ => envelope_from(&Value::Null, status),
+        Ok(v) if v["error"]["code"].is_string() => envelope_from(&v, status, retry_after),
+        _ => envelope_from(&Value::Null, status, retry_after),
     }
+}
+
+/// The response's `Retry-After` header, in whole seconds, when present and
+/// parseable.
+fn retry_after_of(headers: &ureq::http::HeaderMap) -> Option<u64> {
+    headers
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// The integer before the first `.`, if it parses.
@@ -284,11 +392,13 @@ pub fn uri_segment(segment: &str) -> String {
     out
 }
 
-/// `naatre repo create <name>` (admin).
+/// `naatre repo create <name>` (admin). Idempotent POST: routed through
+/// the retry contract (the README quickstart's first write races the boot
+/// backfill for the single-writer slot).
 pub fn repo_create(name: &str) -> i32 {
     let client = Client::from_env();
     let body = json!({ "name": name });
-    match client.post_json("/v1/repos", &body) {
+    match client.post_json_idempotent("/v1/repos", &body) {
         Ok((_, value)) => {
             println!("created repo {} (id {})", value["name"], value["id"]);
             0

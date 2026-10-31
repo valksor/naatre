@@ -7,6 +7,11 @@ use unicode_normalization::UnicodeNormalization;
 pub const MAX_COMPONENT_LEN: usize = 255;
 /// Maximum UTF-8 byte length of a whole path.
 pub const MAX_PATH_LEN: usize = 4096;
+/// Maximum number of `/`-separated components in a whole path (git's
+/// 256-leading-directory ceiling). Tree structures recurse per component —
+/// derivation, load, and drop all walk the depth — so the grammar bounds
+/// the depth the same way it bounds the byte length.
+pub const MAX_PATH_COMPONENTS: usize = 256;
 /// Reserved first components: the client metadata namespace and git's.
 pub const RESERVED_PREFIXES: &[&str] = &[".naatre", ".git"];
 
@@ -34,6 +39,8 @@ pub enum PathError {
     ComponentTooLong { index: usize, len: usize },
     #[error("component {index} is empty (\"//\")")]
     EmptyComponent { index: usize },
+    #[error("path has {count} components (max 256)")]
+    TooManyComponents { count: usize },
     #[error("path is {len} bytes long (max 4096)")]
     TooLong { len: usize },
     #[error("first component is reserved: {prefix}")]
@@ -48,8 +55,9 @@ pub enum PathError {
 ///
 /// Rules, in check order: non-empty; relative; no `\`; no NUL; no Unicode
 /// category Cc or Cf character anywhere; NFC-normalized; every component
-/// not `.`/`..`, at most 255 bytes, and non-empty; total at most 4096 bytes;
-/// first component not reserved ([`.naatre`]/[`.git`]).
+/// not `.`/`..`, at most 255 bytes, and non-empty; at most 256 components;
+/// total at most 4096 bytes; first component not reserved
+/// ([`.naatre`]/[`.git`]).
 pub fn validate(path: &str) -> Result<(), PathError> {
     if path.is_empty() {
         return Err(PathError::Empty);
@@ -71,6 +79,7 @@ pub fn validate(path: &str) -> Result<(), PathError> {
     if path.nfc().collect::<String>() != path {
         return Err(PathError::NotNormalized);
     }
+    let mut components = 0usize;
     for (index, component) in path.split('/').enumerate() {
         if component == "." || component == ".." {
             return Err(PathError::ComponentInvalid { index });
@@ -84,6 +93,10 @@ pub fn validate(path: &str) -> Result<(), PathError> {
         if component.is_empty() {
             return Err(PathError::EmptyComponent { index });
         }
+        components += 1;
+    }
+    if components > MAX_PATH_COMPONENTS {
+        return Err(PathError::TooManyComponents { count: components });
     }
     if path.len() > MAX_PATH_LEN {
         return Err(PathError::TooLong { len: path.len() });

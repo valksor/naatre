@@ -356,6 +356,50 @@ async fn reject_non_nfc_path_without_rows() {
 }
 
 #[tokio::test]
+async fn reject_paths_past_the_component_cap_and_serve_the_cap_boundary() {
+    let f = fixture();
+    let b1 = put_blob(&f, b"alpha").await;
+
+    // 1000 components — the depth that used to overflow the derivation
+    // stack before the grammar bounded it — is a clean 422 validation
+    // naming the rule, never an abort, and nothing rows.
+    let deep = std::iter::repeat_n("d", 1000).collect::<Vec<_>>().join("/");
+    let resp = post_json(
+        &f.t.app,
+        "/v1/repos/m2a/changesets",
+        &f.writer,
+        &cs_body(json!([]), json!([add(&deep, &b1, 5, false)])),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(code_of(&resp), "validation");
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM changesets"), 0);
+
+    // AT the cap (256 components): creates, derives, and reads back in
+    // full — the boundary's legal side has no artificial stop.
+    let at_cap = std::iter::repeat_n("d", naatre_core::path::MAX_PATH_COMPONENTS)
+        .collect::<Vec<_>>()
+        .join("/");
+    let resp = post_json(
+        &f.t.app,
+        "/v1/repos/m2a/changesets",
+        &f.writer,
+        &cs_body(json!([]), json!([add(&at_cap, &b1, 5, false)])),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let id = resp.body["id"].as_str().unwrap().to_string();
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/m2a/file?at={id}&path={at_cap}"),
+        &f.reader,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["size"], 5);
+}
+
+#[tokio::test]
 async fn reject_control_char_in_path_and_format_char_in_author() {
     let f = fixture();
     let b1 = put_blob(&f, b"alpha").await;

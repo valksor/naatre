@@ -794,12 +794,14 @@ where
 // ---- blame -----------------------------------------------------------------
 
 /// The blame read's walked-chain cap: past this many chain nodes the read
-/// degrades instead of walking unbounded history on the read pool.
+/// errors with 503 `blame_too_large` instead of walking unbounded history
+/// on the read pool.
 const BLAME_MAX_CHAIN_NODES: usize = 10_000;
 
 /// The blame read's streamed-blob-bytes cap, enforced across the assembly's
-/// layer loads (see the streaming task in [`blame`]).
-const BLAME_MAX_BLOB_BYTES: usize = 256 * 1024 * 1024;
+/// layer loads (see the streaming task in [`blame`]); the default of
+/// [`ServerState::blame_max_blob_bytes`].
+pub(crate) const BLAME_MAX_BLOB_BYTES: usize = 256 * 1024 * 1024;
 
 /// The blame read's serialized-response cap. The JSON body is encoded in
 /// memory before it goes on the wire, so its encoded size is capped too:
@@ -861,12 +863,15 @@ pub struct BlameResponse {
     pub binary: bool,
     /// `blame_binary` when `binary`; else null.
     pub binary_code: Option<String>,
-    /// Part of the walked chain was quarantined: lines below the boundary
-    /// are attributed to the boundary changeset itself — the quarantined
-    /// node (listed in `poisoned_cs`) — attribution bounded below by the
-    /// quarantine, never silently presented as exact.
+    /// Part of the walked chain could not be resolved exactly: a quarantined
+    /// node, or the walk reaching a row-less ancestor of root (the
+    /// root-boundary leg — degraded without any quarantine). Lines below
+    /// the boundary are attributed to the boundary changeset itself (named
+    /// in `poisoned_cs`) — attribution bounded below by the boundary,
+    /// never silently presented as exact.
     pub degraded: bool,
-    /// The quarantined changesets on the walked chain (64-hex ids).
+    /// The changesets the read degraded at: quarantined nodes on the walked
+    /// chain, or the boundary node of the root leg (64-hex ids).
     pub poisoned_cs: Vec<String>,
     pub lines: Vec<BlameLine>,
 }
@@ -979,9 +984,9 @@ pub async fn blame(
             let mut tainted_poison_cs: Vec<Id> = Vec::new();
             let mut current = at;
             // The chain cap: the walk is one point query per node, but the
-            // chain itself is unbounded — past the cap the read degrades
-            // (`blame_too_large`, retryable false — the same chain trips it
-            // every time) instead of monopolizing the read pool.
+            // chain itself is unbounded — past the cap the read errors with
+            // 503 `blame_too_large` (retryable false — the same chain trips
+            // it every time) instead of monopolizing the read pool.
             let mut chain_nodes = 0usize;
             loop {
                 chain_nodes += 1;
@@ -1161,13 +1166,14 @@ pub async fn blame(
     // assembler before its per-line allocation).
     let cas = Arc::clone(&state.cas);
     let final_blob = walk.final_blob;
+    let max_blob_bytes = state.blame_max_blob_bytes;
     let assembled = state
         .blocking(move || {
             let mut total_blob_bytes = 0usize;
             let mut load = |id: &Id| -> Result<Vec<u8>, ApiError> {
                 let raw = cas.get(id).map_err(ApiError::log_internal)?;
                 total_blob_bytes += raw.len();
-                if total_blob_bytes > BLAME_MAX_BLOB_BYTES {
+                if total_blob_bytes > max_blob_bytes {
                     return Err(blame_too_large());
                 }
                 Ok(raw)

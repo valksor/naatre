@@ -70,6 +70,11 @@ pub enum ApplyError {
     ModNotFile { path: String },
     /// `del` target is not an existing file (absent, or a directory).
     DelNotFile { path: String },
+    /// The path has more than [`naatre_core::path::MAX_PATH_COMPONENTS`]
+    /// components. Unreachable for validated input (the grammar rejects
+    /// deeper paths at the route and on import) — the check here is tree
+    /// derivation's own enforcement of the same cap.
+    TooDeep { path: String },
 }
 
 impl MemNode {
@@ -92,6 +97,14 @@ impl MemNode {
     /// (the route rejects unsorted requests before deriving).
     pub fn apply(&mut self, changes: &[FileChange]) -> Result<(), ApplyError> {
         for c in changes {
+            // The depth cap (grammar rule, enforced here too): every walk
+            // below — insert, remove, and the drop of the built chain —
+            // recurses per component.
+            if c.path.split('/').count() > naatre_core::path::MAX_PATH_COMPONENTS {
+                return Err(ApplyError::TooDeep {
+                    path: c.path.clone(),
+                });
+            }
             match c.op {
                 Op::Add | Op::Mod => {
                     let (blob, size, exec) = match (c.blob, c.size, c.exec) {
@@ -161,63 +174,118 @@ impl MemNode {
 
     /// Canonically encodes every directory of this subtree and returns the
     /// writes in child-first order plus the root's id and recursive size.
-    /// Pure: no SQL — rows go through [`db::trees_write`].
+    /// Pure: no SQL — rows go through [`db::trees_write`]. Iterative (an
+    /// explicit frame stack, children encoded before parents): the
+    /// recursion this replaced overflows the stack on deep trees.
     pub fn collect(&self) -> Result<(Id, u64, Vec<TreeWrite>), DeriveError> {
         let mut writes = Vec::new();
-        let (root_id, total) = self.collect_node(&mut writes)?;
-        Ok((root_id, total, writes))
-    }
-
-    fn collect_node(&self, writes: &mut Vec<TreeWrite>) -> Result<(Id, u64), DeriveError> {
-        let mut entries = Vec::with_capacity(self.entries.len());
-        let mut total = 0u64;
-        for (name, entry) in &self.entries {
-            match entry {
-                MemEntry::File { blob, size, exec } => {
-                    total += size;
-                    entries.push(TreeEntry {
-                        name: name.clone(),
-                        kind: EntryKind::File,
-                        object: *blob,
-                        size: *size,
-                        exec: *exec,
-                    });
-                }
-                MemEntry::Dir(child) => {
-                    let (child_id, child_total) = child.collect_node(writes)?;
-                    total += child_total;
-                    entries.push(TreeEntry {
-                        name: name.clone(),
-                        kind: EntryKind::Dir,
-                        object: child_id,
-                        size: child_total,
-                        exec: false,
-                    });
+        // One frame per directory on the current path: its name in the
+        // parent, the not-yet-encoded entries, and the entries/total
+        // accumulated so far.
+        struct Frame<'a> {
+            name_in_parent: String,
+            remaining: Vec<(&'a String, &'a MemEntry)>,
+            entries: Vec<TreeEntry>,
+            total: u64,
+        }
+        enum Action<'a> {
+            File(String, Id, u64, bool),
+            Dir(String, &'a MemNode),
+            Done,
+        }
+        let (root_id, root_total) = {
+            // Frames drain `remaining` from the back (pop), so each frame's
+            // list is stored reversed: entries encode in BTreeMap order.
+            let mut stack: Vec<Frame<'_>> = vec![Frame {
+                name_in_parent: String::new(),
+                remaining: {
+                    let mut v: Vec<_> = self.entries.iter().collect();
+                    v.reverse();
+                    v
+                },
+                entries: Vec::new(),
+                total: 0,
+            }];
+            loop {
+                let action = {
+                    let frame = stack
+                        .last_mut()
+                        .expect("the root frame only leaves the stack when finished");
+                    match frame.remaining.pop() {
+                        Some((name, MemEntry::File { blob, size, exec })) => {
+                            Action::File(name.clone(), *blob, *size, *exec)
+                        }
+                        Some((name, MemEntry::Dir(child))) => {
+                            Action::Dir(name.clone(), child.as_ref())
+                        }
+                        None => Action::Done,
+                    }
+                };
+                match action {
+                    Action::File(name, blob, size, exec) => {
+                        let frame = stack.last_mut().expect("frame just checked");
+                        frame.total += size;
+                        frame.entries.push(TreeEntry {
+                            name,
+                            kind: EntryKind::File,
+                            object: blob,
+                            size,
+                            exec,
+                        });
+                    }
+                    Action::Dir(name, child) => stack.push(Frame {
+                        name_in_parent: name,
+                        remaining: {
+                            let mut v: Vec<_> = child.entries.iter().collect();
+                            v.reverse();
+                            v
+                        },
+                        entries: Vec::new(),
+                        total: 0,
+                    }),
+                    Action::Done => {
+                        let frame = stack.pop().expect("frame just checked");
+                        let tree = Tree {
+                            entries: frame.entries,
+                        };
+                        let canonical = naatre_core::tree::encode(&tree)?;
+                        let id = tree_id(&tree)?;
+                        writes.push(TreeWrite {
+                            id,
+                            canonical,
+                            entries: tree
+                                .entries
+                                .iter()
+                                .map(|e| TreeEntryRow {
+                                    name: e.name.clone(),
+                                    kind: match e.kind {
+                                        EntryKind::File => 0,
+                                        EntryKind::Dir => 1,
+                                    },
+                                    object_id: e.object.0.to_vec(),
+                                    size: e.size as i64,
+                                    exec: e.exec,
+                                })
+                                .collect(),
+                        });
+                        match stack.last_mut() {
+                            Some(parent) => {
+                                parent.total += frame.total;
+                                parent.entries.push(TreeEntry {
+                                    name: frame.name_in_parent,
+                                    kind: EntryKind::Dir,
+                                    object: id,
+                                    size: frame.total,
+                                    exec: false,
+                                });
+                            }
+                            None => break (id, frame.total),
+                        }
+                    }
                 }
             }
-        }
-        let tree = Tree { entries };
-        let canonical = naatre_core::tree::encode(&tree)?;
-        let id = tree_id(&tree)?;
-        writes.push(TreeWrite {
-            id,
-            canonical,
-            entries: tree
-                .entries
-                .iter()
-                .map(|e| TreeEntryRow {
-                    name: e.name.clone(),
-                    kind: match e.kind {
-                        EntryKind::File => 0,
-                        EntryKind::Dir => 1,
-                    },
-                    object_id: e.object.0.to_vec(),
-                    size: e.size as i64,
-                    exec: e.exec,
-                })
-                .collect(),
-        });
-        Ok((id, total))
+        };
+        Ok((root_id, root_total, writes))
     }
 }
 
@@ -261,7 +329,10 @@ fn insert_in(
 }
 
 /// Recursive remove; prunes empty ancestor dirs on the way back up.
-/// Returns `true` when the leaf was removed.
+/// Returns `true` when the leaf was removed. Deliberately recursive (the
+/// bottom-up prune reads naturally here) and bounded: `apply` rejects paths
+/// deeper than [`naatre_core::path::MAX_PATH_COMPONENTS`], so the recursion
+/// can never outgrow the stack.
 fn remove_in(node: &mut MemNode, path: &(Vec<&str>, &str)) -> bool {
     let (dirs, leaf) = path;
     if dirs.is_empty() {
@@ -277,38 +348,130 @@ fn remove_in(node: &mut MemNode, path: &(Vec<&str>, &str)) -> bool {
     removed
 }
 
-/// Recursion for [`MemNode::load`]: rows of one node, descending into dirs.
+/// Loads one stored tree into memory. Iterative, in two passes (the
+/// recursion this replaced overflowed the stack on trees deeper than the
+/// grammar now admits — data written before the depth cap): discovery
+/// loads every directory's rows exactly once (content-addressed ids
+/// memoize), then the build assembles bottom-up with an explicit stack —
+/// a directory's children are always built before it. Subtrees shared
+/// under several parents rebuild per occurrence, as the recursion did.
 /// A claimed id without a `trees` row (root or sub-tree) is corruption —
 /// an empty entry set would silently truncate history, so it errors.
 fn load_node(conn: &Connection, tree_id: &Id) -> Result<MemNode, DeriveError> {
-    if db::tree_repo(conn, tree_id)?.is_none() {
-        return Err(DeriveError::MissingTreeRow(tree_id.to_hex()));
+    // Discovery: iterative DFS over dir entries; `loaded` memoizes by id.
+    let mut loaded: std::collections::HashMap<Id, Vec<TreeEntryRow>> =
+        std::collections::HashMap::new();
+    let mut discover = vec![*tree_id];
+    while let Some(id) = discover.pop() {
+        if loaded.contains_key(&id) {
+            continue;
+        }
+        if db::tree_repo(conn, &id)?.is_none() {
+            return Err(DeriveError::MissingTreeRow(id.to_hex()));
+        }
+        let rows = db::tree_entries_load(conn, &id)?;
+        for row in &rows {
+            if row.kind == 1 {
+                discover.push(Id(row
+                    .object_id
+                    .clone()
+                    .try_into()
+                    .expect("object id is 32 bytes")));
+            }
+        }
+        loaded.insert(id, rows);
     }
-    let rows = db::tree_entries_load(conn, tree_id)?;
-    let mut node = MemNode::default();
-    for row in rows {
-        let object = Id(row.object_id.try_into().expect("object id is 32 bytes"));
-        let entry = match row.kind {
-            0 => MemEntry::File {
-                blob: object,
-                size: row.size as u64,
-                exec: row.exec,
-            },
-            1 => MemEntry::Dir(Box::new(load_node(conn, &object)?)),
-            other => {
-                // A corrupt derived row is store corruption, not client
-                // input: surface as a SQL-layer failure. `other` names the
-                // stored kind byte.
-                return Err(DeriveError::Sql(rusqlite::Error::InvalidColumnType(
-                    1,
-                    format!("kind ({other})"),
-                    rusqlite::types::Type::Integer,
-                )));
+    // Build: one frame per (occurrence of a) directory on the current
+    // path; children complete before their parent's entry is appended.
+    struct Frame {
+        name_in_parent: String,
+        remaining: std::vec::IntoIter<TreeEntryRow>,
+        entries: std::collections::BTreeMap<String, MemEntry>,
+    }
+    enum Action {
+        Build(Id, String),
+        Row(TreeEntryRow),
+        Done,
+    }
+    let mut stack: Vec<Frame> = vec![Frame {
+        name_in_parent: String::new(),
+        remaining: loaded
+            .get(tree_id)
+            .expect("the root is discovered first")
+            .clone()
+            .into_iter(),
+        entries: std::collections::BTreeMap::new(),
+    }];
+    loop {
+        let action = {
+            let frame = stack
+                .last_mut()
+                .expect("the root frame only leaves the stack when finished");
+            match frame.remaining.next() {
+                Some(row) if row.kind == 1 => {
+                    let id = Id(row
+                        .object_id
+                        .clone()
+                        .try_into()
+                        .expect("object id is 32 bytes"));
+                    Action::Build(id, row.name.clone())
+                }
+                Some(row) => Action::Row(row),
+                None => Action::Done,
             }
         };
-        node.entries.insert(row.name, entry);
+        match action {
+            Action::Build(id, name) => {
+                stack.push(Frame {
+                    name_in_parent: name,
+                    remaining: loaded
+                        .get(&id)
+                        .expect("discovery saw every dir")
+                        .clone()
+                        .into_iter(),
+                    entries: std::collections::BTreeMap::new(),
+                });
+            }
+            Action::Row(row) => {
+                let frame = stack.last_mut().expect("frame just checked");
+                let object = Id(row.object_id.try_into().expect("object id is 32 bytes"));
+                let entry = match row.kind {
+                    0 => MemEntry::File {
+                        blob: object,
+                        size: row.size as u64,
+                        exec: row.exec,
+                    },
+                    // Unreachable: dir rows became Action::Build above.
+                    1 => unreachable!("dir rows build as their own frame"),
+                    other => {
+                        // A corrupt derived row is store corruption, not
+                        // client input: surface as a SQL-layer failure.
+                        // `other` names the stored kind byte.
+                        return Err(DeriveError::Sql(rusqlite::Error::InvalidColumnType(
+                            1,
+                            format!("kind ({other})"),
+                            rusqlite::types::Type::Integer,
+                        )));
+                    }
+                };
+                frame.entries.insert(row.name, entry);
+            }
+            Action::Done => {
+                let frame = stack.pop().expect("frame just checked");
+                let node = MemNode {
+                    entries: frame.entries,
+                };
+                match stack.last_mut() {
+                    Some(parent) => {
+                        parent
+                            .entries
+                            .insert(frame.name_in_parent, MemEntry::Dir(Box::new(node)));
+                    }
+                    None => return Ok(node),
+                }
+            }
+        }
     }
-    Ok(node)
 }
 
 #[cfg(test)]
@@ -507,5 +670,81 @@ mod tests {
         );
         // None root → empty node (the legitimate empty tree).
         assert_eq!(MemNode::load(&conn, None).unwrap(), MemNode::empty());
+    }
+
+    /// A stored tree DEEPER than the grammar now admits (data written
+    /// before the 256-component cap) still loads and re-encodes without
+    /// aborting: `load` and `collect` are iterative, so depth costs heap,
+    /// never stack.
+    #[test]
+    fn deep_legacy_tree_loads_and_collects_without_abort() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE trees(id BLOB PRIMARY KEY, repo_id INTEGER NOT NULL, canonical BLOB NOT NULL);
+             CREATE TABLE tree_entries(tree_id BLOB NOT NULL, name TEXT NOT NULL, kind INTEGER NOT NULL, \
+              object_id BLOB NOT NULL, size INTEGER NOT NULL, exec INTEGER NOT NULL DEFAULT 0, \
+              PRIMARY KEY(tree_id, name));
+             CREATE TABLE repo_trees(repo_id INTEGER NOT NULL, tree_id BLOB NOT NULL, \
+              PRIMARY KEY(repo_id, tree_id));",
+        )
+        .unwrap();
+
+        fn level(n: u16) -> Id {
+            let mut b = [0u8; 32];
+            b[..2].copy_from_slice(&n.to_be_bytes());
+            Id(b)
+        }
+        // A 1500-deep chain: tree_n holds one dir entry "d" pointing at
+        // tree_{n-1}; the innermost tree holds one file. (1500 components
+        // of one byte each fit the legacy 4096-byte path cap, so this shape
+        // was writable by the pre-cap grammar — and it overflowed the
+        // recursive load in debug builds.)
+        const DEPTH: u16 = 1500;
+        conn.execute(
+            "INSERT INTO trees(id, repo_id, canonical) VALUES (?1, 7, X'00')",
+            rusqlite::params![level(0).0.as_slice()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tree_entries(tree_id, name, kind, object_id, size) \
+             VALUES (?1, 'f', 0, ?2, 1)",
+            rusqlite::params![level(0).0.as_slice(), id(1).0.as_slice()],
+        )
+        .unwrap();
+        for n in 1..=DEPTH {
+            conn.execute(
+                "INSERT INTO trees(id, repo_id, canonical) VALUES (?1, 7, X'00')",
+                rusqlite::params![level(n).0.as_slice()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tree_entries(tree_id, name, kind, object_id, size) \
+                 VALUES (?1, 'd', 1, ?2, 1)",
+                rusqlite::params![level(n).0.as_slice(), level(n - 1).0.as_slice()],
+            )
+            .unwrap();
+        }
+
+        let node = MemNode::load(&conn, Some(level(DEPTH))).unwrap();
+        let (_, total, writes) = node.collect().unwrap();
+        // The re-encode reproduces the same shape: DEPTH dir nodes + the
+        // file's tree, total size 1. (The ids recompute from canonical
+        // bytes; the crafted level ids were arbitrary.)
+        assert_eq!(writes.len(), DEPTH as usize + 1);
+        assert_eq!(total, 1);
+    }
+
+    /// apply enforces the grammar's depth cap itself: a 257-component path
+    /// is a typed TooDeep error (never a stack walk past the bound).
+    #[test]
+    fn apply_rejects_paths_past_the_component_cap() {
+        let deep = std::iter::repeat_n("d", naatre_core::path::MAX_PATH_COMPONENTS + 1)
+            .collect::<Vec<_>>()
+            .join("/");
+        let mut node = MemNode::empty();
+        assert_eq!(
+            node.apply(&[add(&deep, 1, 1, false)]),
+            Err(ApplyError::TooDeep { path: deep })
+        );
     }
 }

@@ -65,6 +65,32 @@ fn rejects_overlong_paths() {
 }
 
 #[test]
+fn component_depth_cap_is_pinned_both_directions() {
+    // Exactly 256 components: legal.
+    let at_cap = std::iter::repeat_n("d", path::MAX_PATH_COMPONENTS)
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(path::validate(&at_cap), Ok(()));
+    // 257: rejected, naming the count. A 1000-deep path (the shape that
+    // used to overflow the derivation stack before this cap existed) fails
+    // HERE — a clean typed error, never an abort.
+    let over = std::iter::repeat_n("d", path::MAX_PATH_COMPONENTS + 1)
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(
+        path::validate(&over),
+        Err(PathError::TooManyComponents {
+            count: path::MAX_PATH_COMPONENTS + 1
+        })
+    );
+    let deep = std::iter::repeat_n("d", 1000).collect::<Vec<_>>().join("/");
+    assert_eq!(
+        path::validate(&deep),
+        Err(PathError::TooManyComponents { count: 1000 })
+    );
+}
+
+#[test]
 fn case_fold_duplicates() {
     assert!(path::check_case_fold_duplicates(&owned(&["README.md", "readme.md"])).is_err());
     assert!(path::check_case_fold_duplicates(&owned(&["a/cafes", "a/cafés"])).is_ok());

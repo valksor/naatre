@@ -211,7 +211,14 @@ a generic message + `request_id` only.
 | `server_busy` | 503 | at the concurrent-request cap; retry |
 | `internal` | 500 | internal error; specifics stay in server logs |
 
-Retryable 503s carry `Retry-After: 1`; back off and retry.
+Retryable 503s carry `Retry-After: 1`; back off and retry. The bundled CLI
+does exactly that on idempotent verbs (reads, `repo create`, object PUT,
+snapshot POST, the POST-shaped batch reads): it retries
+`writer_busy`/`server_busy`/`request_timeout` honoring `Retry-After`,
+bounded at 3 tries / 5 s of total waiting. `derivation_pending` and
+`blame_too_large` surface immediately (a derive backlog is not a 5 s
+event; a structural cap is deterministic), and keyed writes (`land`,
+changeset create) are never retried — their key semantics own duplicates.
 
 ## Path grammar
 
@@ -230,8 +237,9 @@ rules: `docs/format.md` §2–3.
 | 7 | no component `.` or `..` |
 | 8 | each component ≤ 255 UTF-8 bytes |
 | 9 | no empty component (no `//`) |
-| 10 | total ≤ 4096 UTF-8 bytes |
-| 11 | first component not `.naatre` or `.git` |
+| 10 | at most 256 components |
+| 11 | total ≤ 4096 UTF-8 bytes |
+| 12 | first component not `.naatre` or `.git` |
 
 Additionally rejected at create: case-folded duplicates of an existing
 sibling in the same directory (macOS/Windows safety), and file/dir duality

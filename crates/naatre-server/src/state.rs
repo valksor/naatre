@@ -207,6 +207,15 @@ pub struct ServerState {
     /// so pins that read right after boot can be A/B-tested against a
     /// slow backfill.
     pub derive_backfill_delay: Duration,
+    /// The blame read's streamed-blob-bytes cap ([`crate::routes::history`]'s
+    /// assembly). Injectable so tests can pin the cap's both directions with
+    /// tiny values instead of 256 MiB of blob loads. Default:
+    /// [`crate::routes::history::BLAME_MAX_BLOB_BYTES`].
+    pub blame_max_blob_bytes: usize,
+    /// Rows per boot-backfill batch ([`crate::derive::backfill`]).
+    /// Injectable so tests can force the multi-batch path with a handful of
+    /// changesets. Default: [`crate::derive::BACKFILL_BATCH`].
+    pub derive_backfill_batch_size: i64,
     /// Test-only ONE-SHOT writer_busy injection at the derive queue's
     /// mid-derivation write ([`crate::derive`]'s drain step): when armed to
     /// `Some(BusyAbort::Derive(cs))`, the queue's next write FOR that
@@ -272,6 +281,8 @@ impl ServerState {
             derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
             derive_backfill_enabled: true,
             derive_backfill_delay: Duration::ZERO,
+            derive_backfill_batch_size: crate::derive::BACKFILL_BATCH,
+            blame_max_blob_bytes: crate::routes::history::BLAME_MAX_BLOB_BYTES,
             derive_test_busy_abort: Arc::new(Mutex::new(None)),
         })
     }

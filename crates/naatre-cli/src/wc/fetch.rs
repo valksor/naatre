@@ -206,7 +206,10 @@ pub fn fetch_blobs_verified(
     let mut out = HashMap::new();
     for chunk in ids.chunks(256) {
         let body = json!({ "ids": chunk.iter().map(Id::to_hex).collect::<Vec<_>>() });
-        let (_status, v) = client.post_json(&format!("/v1/repos/{repo}/objects/get"), &body)?;
+        // A POST-shaped read (batch object fetch) — the retry contract
+        // applies.
+        let (_status, v) =
+            client.post_json_idempotent(&format!("/v1/repos/{repo}/objects/get"), &body)?;
         for obj in v["objects"].as_array().map_or(&[][..], Vec::as_slice) {
             let Some(hex) = obj["id"].as_str().and_then(Id::from_hex) else {
                 return Err(FetchError::Local(

@@ -45,8 +45,10 @@ a fixed order and the first failure wins:
 7. no component is `.` or `..`;
 8. no component longer than 255 UTF-8 bytes;
 9. no empty component (no `//`);
-10. total length at most 4096 UTF-8 bytes;
-11. the first component is not exactly `.naatre` (client metadata namespace)
+10. at most 256 components (tree structures recurse per component, so the
+    grammar bounds the depth the same way it bounds the byte length);
+11. total length at most 4096 UTF-8 bytes;
+12. the first component is not exactly `.naatre` (client metadata namespace)
     or `.git`.
 
 ## 3. Author and message character rule

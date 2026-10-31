@@ -170,6 +170,7 @@ fn add(
                  use --force to discard them"
             ),
             details: None,
+            retry_after: None,
         }));
     }
 

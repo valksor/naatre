@@ -388,6 +388,9 @@ pub fn merge_trees(
         let path = match &e {
             ApplyError::FileInPath { path } => path.clone(),
             ApplyError::ModNotFile { path } | ApplyError::DelNotFile { path } => path.clone(),
+            // Unreachable for merged paths: every merged path passed the
+            // grammar's depth cap on the way in.
+            ApplyError::TooDeep { path } => path.clone(),
         };
         return Err(vec![PathConflict {
             reason: "merged result is not a consistent tree (file/directory duality)".into(),

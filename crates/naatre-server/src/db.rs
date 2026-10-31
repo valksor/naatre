@@ -321,6 +321,7 @@ pub struct FileChangeRow {
 }
 
 /// One row of `tree_entries`; `kind` 0 = file, 1 = dir.
+#[derive(Clone)]
 pub struct TreeEntryRow {
     pub name: String,
     pub kind: i64,
@@ -1585,36 +1586,108 @@ pub fn derive_expired_leases(
     rows.collect()
 }
 
+/// The boot-backfill batch cursor: the (generation, changesets.rowid)
+/// position the last batch scanned through. Row values compare
+/// lexicographically, and (generation, rowid) is unique, so an exclusive
+/// `>` seek never skips or revisits an unrowed changeset — including when
+/// the LIMIT cuts inside a generation group (siblings share a generation;
+/// a generation-only cursor would skip the rest of the group).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackfillCursor {
+    pub generation: i64,
+    pub rowid: i64,
+}
+
+impl BackfillCursor {
+    /// The scan's start: strictly before every real (generation ≥ 0,
+    /// rowid ≥ 1) row.
+    pub fn start() -> Self {
+        BackfillCursor {
+            generation: -1,
+            rowid: 0,
+        }
+    }
+}
+
 /// Backfills ONE BATCH of kind `kind_id`'s queue: enqueues up to `limit`
 /// changesets that have no `derive_state` row for the kind (an M6b kind
 /// registered after its changesets existed — bulk import through a
 /// registry-less process, or an in-place upgrade of a pre-derive
-/// database), oldest generation first. Insertion order follows
-/// `generation ASC`, so the queue's `rowid`-ordered pick derives parents
-/// before children with no extra sequencing — including across batch
-/// boundaries (a parent's generation is always below its child's). The
-/// `NOT EXISTS` predicate is the batch cursor: each call takes the first
-/// not-yet-rowed changesets in that order, so the caller simply loops
-/// until zero rows come back. `OR IGNORE`: a row that already exists
-/// (eager-derived, previously enqueued) is never clobbered. Returns the
-/// number of rows enqueued; 0 means the kind's backfill is complete. One
-/// batch per call is deliberate: the caller (async) yields the
-/// single-writer slot between batches — a whole-repo INSERT..SELECT would
-/// hold the slot, and 503 every concurrent write, for the whole backfill.
+/// database), in (generation, rowid) order after `cursor`. Insertion order
+/// follows `generation ASC`, so the queue's `rowid`-ordered pick derives
+/// parents before children with no extra sequencing — including across
+/// batch boundaries (a parent's generation is always below its child's).
+/// The cursor — not a NOT-EXISTS-over-everything scan — is the batch
+/// boundary: each call seeks into the generation index at the cursor and
+/// probes only the rows it actually scans, instead of probing every rowed
+/// changeset on every batch (O(N²/2B) indexed probes over a whole backfill
+/// — minutes of single-writer-slot holds at a million changesets).
+/// `OR IGNORE`: a row that already exists is never clobbered. Returns the
+/// number of rows enqueued (0 means the kind's backfill is complete) and
+/// the advanced cursor. One batch per call is deliberate: the caller
+/// (async) yields the single-writer slot between batches — a whole-repo
+/// INSERT..SELECT would hold the slot, and 503 every concurrent write, for
+/// the whole backfill. The two statements run on the caller's connection
+/// inside one write closure: the cursor reflects exactly what this batch
+/// committed.
 pub fn derive_backfill_batch(
     conn: &Connection,
     kind_id: i64,
+    cursor: BackfillCursor,
     limit: i64,
-) -> rusqlite::Result<usize> {
-    conn.execute(
+) -> rusqlite::Result<(usize, BackfillCursor)> {
+    if limit <= 0 {
+        return Ok((0, cursor));
+    }
+    // The batch's inserted rows are exactly those with a derive_state rowid
+    // past this mark (the INSERT is one atomic statement — no concurrent
+    // writer can interleave).
+    let pre_max_rowid: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(rowid), 0) FROM derive_state WHERE kind = ?1",
+        params![kind_id],
+        |r| r.get(0),
+    )?;
+    let inserted = conn.execute(
         "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
          SELECT ?1, c.repo_id, c.id, 'pending' FROM changesets c \
-         WHERE NOT EXISTS (\
+         WHERE (c.generation, c.rowid) > (?2, ?3) \
+           AND NOT EXISTS (\
              SELECT 1 FROM derive_state d \
              WHERE d.kind = ?1 AND d.repo_id = c.repo_id AND d.cs = c.id) \
          ORDER BY c.generation ASC, c.rowid ASC \
-         LIMIT ?2",
-        params![kind_id, limit],
+         LIMIT ?4",
+        params![kind_id, cursor.generation, cursor.rowid, limit],
+    )?;
+    if inserted == 0 {
+        return Ok((0, cursor));
+    }
+    // Advance to the last scanned changeset: the scan is ascending in both
+    // coordinates, so the last-inserted derive row's changeset IS it.
+    let (generation, rowid) = conn.query_row(
+        "SELECT c.generation, c.rowid \
+         FROM derive_state d \
+         JOIN changesets c ON c.repo_id = d.repo_id AND c.id = d.cs \
+         WHERE d.kind = ?1 AND d.rowid > ?2 \
+         ORDER BY d.rowid DESC LIMIT 1",
+        params![kind_id, pre_max_rowid],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((inserted, BackfillCursor { generation, rowid }))
+}
+
+/// True when at least one changeset still lacks its `derive_state` row for
+/// the kind — the anti-join the completion marker is honest only without
+/// ([`crate::derive::backfill`] sets the marker only when this returns
+/// false, so the marker PROVES the anti-join empty rather than inferring
+/// it from a zero-insert batch).
+pub fn derive_backfill_rowless_exists(conn: &Connection, kind_id: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM changesets c \
+         WHERE NOT EXISTS (\
+             SELECT 1 FROM derive_state d \
+             WHERE d.kind = ?1 AND d.repo_id = c.repo_id AND d.cs = c.id))",
+        params![kind_id],
+        |r| r.get(0),
     )
 }
 

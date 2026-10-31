@@ -91,12 +91,15 @@ pub async fn serve(
     // (registry-less, server down) may have added changesets with no
     // derive rows, and a marker left from the previous boot would let
     // reads skip the 503 `derivation_pending` contract and answer from
-    // the incomplete index. The backfill itself runs in the BACKGROUND
-    // (a large repo must not delay accepting connections) and sets the
-    // markers on completion; a FAILED backfill leaves them unset — reads
-    // stay 503 until a boot completes the backfill. Idempotent; a failure
-    // logs and leaves those regions pending — backfill is enqueueing, not
-    // schema authority, so it must not block boot. The off-switch
+    // the incomplete index. That marker-CLEAR step fails the boot outright
+    // (its error propagates below): booting with a stale marker is the
+    // exact lie the 503 contract exists to prevent. The backfill itself
+    // runs in the BACKGROUND (a large repo must not delay accepting
+    // connections) and sets the markers on completion; a FAILED backfill
+    // leaves them unset — reads stay 503 until a boot completes the
+    // backfill. Idempotent; a background failure logs and leaves those
+    // regions pending — backfill is enqueueing, not schema authority, so
+    // it must not block boot. The off-switch
     // (`derive_backfill_enabled`) is for tests that hold the backfill to
     // build the unrowed window, same pattern as `derive_queue_enabled`.
     crate::derive::backfill_clear_markers(&cfg.state)

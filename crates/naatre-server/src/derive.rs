@@ -213,14 +213,18 @@ impl DeriveCtx {
 
     /// Charges `n` visits; `Err` once the budget is exhausted OR the call
     /// has run past [`DERIVE_WALK_DEADLINE_NS`] (the call is then
-    /// quarantined with the walk-budget reason). Charging zero is a
-    /// no-op that never fails.
+    /// quarantined with the walk-budget reason). Charging zero still checks
+    /// the deadline (a missed deadline fails any charge) but never fails on
+    /// count: charging nothing cannot exhaust anything.
     pub fn charge(&self, n: u64) -> Result<(), DeriveFailure> {
         // The wall-clock backstop first: with the deadline missed, budget
         // headroom no longer matters — the slot has been held long enough.
         if (self.clock)() >= self.deadline_ns {
             self.remaining.set(0);
             return Err(DeriveFailure::WalkBudget);
+        }
+        if n == 0 {
+            return Ok(());
         }
         let left = self.remaining.get();
         if n >= left {
@@ -523,9 +527,10 @@ pub async fn status(
 /// changesets a registry-less process wrote (offline import) or a
 /// pre-derive database carried (in-place upgrade). `serve` runs this as a
 /// background task beside the queue (a large repo must not delay accepting
-/// connections), in batches of [`BACKFILL_BATCH`] — each batch one write
-/// slot, the slot yielded between batches so requests interleave with the
-/// backfill. Every batch inserts in generation order
+/// connections), in batches ([`BACKFILL_BATCH`], or the state's injected
+/// `derive_backfill_batch_size`) — each batch one write slot, the slot
+/// yielded between batches so requests interleave with the backfill. Every
+/// batch scans forward from a (generation, rowid) cursor
 /// ([`crate::db::derive_backfill_batch`]), so a queue draining
 /// concurrently always sees parents rowed before children.
 ///
@@ -533,11 +538,15 @@ pub async fn status(
 /// ([`crate::db::derive_backfill_done_set`]): until the marker is set,
 /// derived reads stay on the 503 `derivation_pending` contract
 /// ([`crate::db::derive_any_pending`]) — a FAILED backfill never sets it,
-/// so those reads stay 503 until a boot completes the backfill. The
-/// markers are cleared before this task runs
-/// ([`backfill_clear_markers`], `serve`'s synchronous pre-accept step).
-/// Idempotent: a reboot with a drained queue re-enqueues nothing and
-/// re-sets the marker.
+/// so those reads stay 503 until a boot completes the backfill. The marker
+/// lands only when the anti-join is empty: one final
+/// [`crate::db::derive_backfill_rowless_exists`] probe proves every
+/// changeset has its row before the marker is written — a batch loop that
+/// exited early (or a dropped cursor) leaves the marker unset and the
+/// reads on the 503 contract, never answering over a hole. The markers are
+/// cleared before this task runs ([`backfill_clear_markers`], `serve`'s
+/// synchronous pre-accept step). Idempotent: a reboot with a drained queue
+/// re-enqueues nothing and re-sets the marker.
 pub async fn backfill(state: &AppState) -> Result<(), ApiError> {
     if state.derive.is_empty() {
         return Ok(());
@@ -548,6 +557,7 @@ pub async fn backfill(state: &AppState) -> Result<(), ApiError> {
     if !delay.is_zero() {
         tokio::time::sleep(delay).await;
     }
+    let batch_limit = state.derive_backfill_batch_size;
     let kinds: Vec<(i64, &'static str)> = state
         .derive
         .kinds()
@@ -555,22 +565,45 @@ pub async fn backfill(state: &AppState) -> Result<(), ApiError> {
         .map(|k| (k.id, k.name))
         .collect();
     for (kind_id, kind_name) in kinds {
+        let mut cursor = db::BackfillCursor::start();
         loop {
-            let inserted = backfill_step(|| async {
+            let (inserted, next) = backfill_step(|| async move {
                 state
                     .write(move |store| {
-                        db::derive_backfill_batch(store.conn(), kind_id, BACKFILL_BATCH)
+                        db::derive_backfill_batch(store.conn(), kind_id, cursor, batch_limit)
                             .map_err(ApiError::log_internal)
                     })
                     .await
             })
             .await?;
+            cursor = next;
             if inserted == 0 {
                 break;
             }
         }
-        // The loop ended on a zero scan: every changeset has a row for the
-        // kind — publish the marker the reads have been gating on.
+        // The marker's honesty check: the marker lands only when the
+        // anti-join is EMPTY. A zero-insert batch means the cursor range is
+        // exhausted; this probe proves no changeset anywhere lacks its row
+        // (it would catch a one-batch loop exit or a dropped cursor, which
+        // would otherwise set the marker over unrowed changesets and let
+        // reads answer 200 over a hole). Fail-safe direction: no marker,
+        // reads stay 503 until a boot completes the backfill.
+        let rowless = backfill_step(|| async move {
+            state
+                .read(move |conn| {
+                    db::derive_backfill_rowless_exists(conn, kind_id)
+                        .map_err(ApiError::log_internal)
+                })
+                .await
+        })
+        .await?;
+        if rowless {
+            return Err(ApiError::log_internal(format!(
+                "backfill for kind {kind_name:?} finished with unrowed changesets; \
+                 the completion marker is withheld"
+            )));
+        }
+        // The anti-join is empty: publish the marker the reads gate on.
         let completed_ns = state.now_ns() as i64;
         backfill_step(|| async {
             state

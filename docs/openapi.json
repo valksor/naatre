@@ -192,7 +192,7 @@
             ]
           },
           "degraded": {
-            "description": "Part of the walked chain was quarantined: lines below the boundary\nare attributed to the boundary changeset itself — the quarantined\nnode (listed in `poisoned_cs`) — attribution bounded below by the\nquarantine, never silently presented as exact.",
+            "description": "Part of the walked chain could not be resolved exactly: a quarantined\nnode, or the walk reaching a row-less ancestor of root (the\nroot-boundary leg — degraded without any quarantine). Lines below\nthe boundary are attributed to the boundary changeset itself (named\nin `poisoned_cs`) — attribution bounded below by the boundary,\nnever silently presented as exact.",
             "type": "boolean"
           },
           "lines": {
@@ -205,7 +205,7 @@
             "type": "string"
           },
           "poisoned_cs": {
-            "description": "The quarantined changesets on the walked chain (64-hex ids).",
+            "description": "The changesets the read degraded at: quarantined nodes on the walked\nchain, or the boundary node of the root leg (64-hex ids).",
             "items": {
               "type": "string"
             },

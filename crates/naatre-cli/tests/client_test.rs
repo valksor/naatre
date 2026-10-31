@@ -130,11 +130,25 @@ fn api(server: &TestServer, method: &str, path: &str, body: Option<Value>) -> (u
     api_as(server, &server.token, method, path, body)
 }
 
-/// Setup-call retry for the single-writer 503: the test config runs the
-/// derive queue at a 10 ms tick (default 5 s), so SETUP writes (repo create,
-/// blob puts, changeset seeds) collide with derive passes far more often
-/// than production ever will. Verbs UNDER TEST are never retried — their
-/// 503s are assertions. Bounded, fixed 20ms backoff.
+/// True when (status, envelope code) is the single-writer contention the
+/// setup retry loop exists for — the one thing it treats as retryable.
+/// Shared by [`api_setup_retry`] and [`put_blob`] so both loops check the
+/// envelope's CODE the same way (a bare status-503 check would also retry
+/// `server_busy`, `request_timeout`, `derivation_pending`, and
+/// `blame_too_large`, whose 503s mean different things).
+fn writer_busy_503(status: u16, code: &str) -> bool {
+    status == 503 && code == "writer_busy"
+}
+
+/// Setup-call retry for the single-writer 503: SETUP writes (repo create,
+/// blob puts, changeset seeds) collide with the boot derive-backfill's
+/// batches and the derive queue's FIRST pass racing for the single write
+/// slot right after `serve` starts — a shape production runs at every boot
+/// (the README quickstart's serve-then-repo-create), not a test artifact.
+/// The CLI's own client now retries these on idempotent verbs; the harness
+/// retries them here for the raw setup calls. Verbs UNDER TEST are never
+/// retried — their 503s are assertions. Bounded, fixed 20ms backoff,
+/// `writer_busy` envelopes only.
 fn api_setup_retry(
     server: &TestServer,
     method: &str,
@@ -144,7 +158,8 @@ fn api_setup_retry(
     let mut waited = 0u64;
     loop {
         let (status, body) = api(server, method, path, body.clone());
-        if status != 503 || body["error"]["code"] != "writer_busy" || waited >= 2000 {
+        let code = body["error"]["code"].as_str().unwrap_or("");
+        if !writer_busy_503(status, code) || waited >= 2000 {
             return (status, body);
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -192,27 +207,27 @@ fn blob_id(data: &[u8]) -> String {
 /// PUTs a blob (raw, hash-addressed) and asserts acceptance.
 fn put_blob(server: &TestServer, repo: &str, data: &[u8]) {
     let url = format!("{}/v1/repos/{repo}/objects/{}", server.base, blob_id(data));
-    // Same bounded writer_busy retry as api_setup_retry: raw ureq here, so
-    // inline the loop (setup write; the 503 is contention, not an assertion).
+    // Same bounded retry as api_setup_retry (shared predicate, raw ureq
+    // here so the loop is inline): only a 503 `writer_busy` envelope
+    // retries — the setup write lost the single-writer race. Any other 503
+    // (or body) is a failure, not contention.
     let mut waited = 0u64;
-    let res = loop {
+    let status = loop {
         let res = agent()
             .put(&url)
             .header("Authorization", format!("Bearer {}", server.token))
             .send(data)
             .expect("put blob");
-        let retry = res.status().as_u16() == 503 && waited < 2000;
-        if !retry {
-            break res;
+        let status = res.status().as_u16();
+        let body: Value = res.into_body().read_json().unwrap_or(Value::Null);
+        let code = body["error"]["code"].as_str().unwrap_or("");
+        if !writer_busy_503(status, code) || waited >= 2000 {
+            break status;
         }
         std::thread::sleep(Duration::from_millis(20));
         waited += 20;
     };
-    assert!(
-        (200..300).contains(&res.status().as_u16()),
-        "blob PUT failed: {}",
-        res.status()
-    );
+    assert!((200..300).contains(&status), "blob PUT failed: {status}");
 }
 
 /// One file change for [`changeset`].

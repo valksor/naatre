@@ -109,6 +109,7 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          DROP TABLE IF EXISTS derive_kinds;
          DROP TABLE IF EXISTS blame_state;
          DROP TABLE IF EXISTS path_history;
+         DROP INDEX IF EXISTS idx_changesets_generation;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
          -- One tree shared by both repos (content-addressed id), containing

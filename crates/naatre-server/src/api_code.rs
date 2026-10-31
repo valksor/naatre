@@ -85,9 +85,9 @@ pub enum ApiCode {
 
 impl ApiCode {
     /// Every variant, in registry order. `tests/api_code_test.rs`
-    /// cross-checks this list against the exhaustive variant list and the
-    /// wire-string table, so the published enum cannot silently drift from
-    /// the registry.
+    /// cross-checks this list against its compile-time-exhaustive variant
+    /// list (a `match` with no wildcard arm) and the wire-string table, so
+    /// the published enum cannot silently drift from the registry.
     pub const ALL: [ApiCode; 32] = [
         ApiCode::TokenInvalid,
         ApiCode::TokenExpired,
