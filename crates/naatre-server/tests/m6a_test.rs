@@ -85,7 +85,7 @@ impl Deriver for CountingDeriver {
     fn derive(
         &self,
         _ctx: &DeriveCtx,
-        conn: &rusqlite::Connection,
+        conn: &naatre_store::Db,
         repo_id: i64,
         cs: Id,
         parents_done: &[ParentOut],
@@ -100,15 +100,19 @@ impl Deriver for CountingDeriver {
         let sum: u64 = parents_done.iter().map(|p| out_count(&p.output)).sum();
         let n = sum + 1;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS derive_test_outputs(\
+            &naatre_store::Sql::plain(
+                "CREATE TABLE IF NOT EXISTS derive_test_outputs(\
              repo_id INTEGER NOT NULL, cs BLOB NOT NULL, n INTEGER NOT NULL, \
              PRIMARY KEY(repo_id, cs))",
-            [],
+            ),
+            &naatre_store::pv![],
         )
         .map_err(sql_poison)?;
         conn.execute(
-            "INSERT OR REPLACE INTO derive_test_outputs(repo_id, cs, n) VALUES (?1, ?2, ?3)",
-            rusqlite::params![repo_id, cs.0.as_slice(), n as i64],
+            &naatre_store::Sql::plain(
+                "INSERT OR REPLACE INTO derive_test_outputs(repo_id, cs, n) VALUES (?1, ?2, ?3)",
+            ),
+            &naatre_store::pv![repo_id, cs.0.as_slice(), n as i64],
         )
         .map_err(sql_poison)?;
         if self.calls.lock().unwrap().len() <= self.panic_on_attempt {
@@ -141,7 +145,7 @@ impl Deriver for BudgetHog {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        _conn: &rusqlite::Connection,
+        _conn: &naatre_store::Db,
         _repo_id: i64,
         cs: Id,
         parents_done: &[ParentOut],
@@ -159,7 +163,7 @@ impl Deriver for BudgetHog {
     }
 }
 
-fn sql_poison(e: rusqlite::Error) -> PoisonReason {
+fn sql_poison(e: naatre_store::DbError) -> PoisonReason {
     PoisonReason::new(e.to_string())
 }
 
@@ -183,7 +187,7 @@ impl Deriver for ArmedFailer {
     fn derive(
         &self,
         _ctx: &DeriveCtx,
-        _conn: &rusqlite::Connection,
+        _conn: &naatre_store::Db,
         _repo_id: i64,
         _cs: Id,
         _parents_done: &[ParentOut],
@@ -292,25 +296,29 @@ fn fixture_with(tweak: impl FnOnce(&mut ServerState)) -> Fixture {
 }
 
 impl TestApp {
-    fn db(&self) -> Connection {
+    fn db(&self) -> naatre_store::Db {
         let conn = Connection::open(&self.db_path).unwrap();
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
-        conn
+        naatre_store::Db::Sqlite(conn)
     }
 
     fn seed_token(&self, principal: &str, role: &str, scope_path: Option<&str>) -> String {
         let (token, hash) = naatre_server::auth::mint_token();
         let conn = self.db();
         conn.execute(
-            "INSERT INTO principals(name, role, created_ns) VALUES (?1, ?2, ?3) \
+            &naatre_store::Sql::plain(
+                "INSERT INTO principals(name, role, created_ns) VALUES (?1, ?2, ?3) \
              ON CONFLICT(name) DO UPDATE SET role = excluded.role",
-            rusqlite::params![principal, role, BASE_NS as i64],
+            ),
+            &naatre_store::pv![principal, role, BASE_NS as i64],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO tokens(principal, blake3, expires_ns, revoked, scope_path) \
+            &naatre_store::Sql::plain(
+                "INSERT INTO tokens(principal, blake3, expires_ns, revoked, scope_path) \
              VALUES (?1, ?2, NULL, 0, ?3)",
-            rusqlite::params![principal, hash, scope_path],
+            ),
+            &naatre_store::pv![principal, hash, scope_path],
         )
         .unwrap();
         token
@@ -318,27 +326,32 @@ impl TestApp {
 
     fn seed_repo(&self, name: &str) -> i64 {
         let conn = self.db();
-        conn.execute(
-            "INSERT INTO repos(name, created_ns) VALUES (?1, ?2)",
-            rusqlite::params![name, BASE_NS as i64],
+        conn.insert_id(
+            &naatre_store::Sql::plain("INSERT INTO repos(name, created_ns) VALUES (?1, ?2)"),
+            &naatre_store::pv![name, BASE_NS as i64],
         )
-        .unwrap();
-        conn.last_insert_rowid()
+        .unwrap()
     }
 
     fn count(&self, sql: &str) -> i64 {
         self.db()
-            .query_row(sql, [], |r| r.get(0))
+            .query_row_map(
+                &naatre_store::Sql::plain_owned(sql.to_string()),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
             .expect("count query")
     }
 
     fn attempts_of(&self, cs: Id) -> i64 {
         self.db()
-            .query_row(
-                "SELECT s.attempts FROM derive_state s \
+            .query_row_map(
+                &naatre_store::Sql::plain(
+                    "SELECT s.attempts FROM derive_state s \
                  JOIN derive_kinds k ON k.id = s.kind \
                  WHERE k.name = ?1 AND s.cs = ?2",
-                rusqlite::params![KIND, cs.0.as_slice()],
+                ),
+                &naatre_store::pv![KIND, cs.0.as_slice()],
                 |r| r.get(0),
             )
             .expect("derive_state row")
@@ -539,11 +552,13 @@ async fn wait_queue_done(f: &Fixture, expected: i64) {
             stalled < 300, // 300 × 100 ms without ANY state change
             "derive queue stalled: done={done} pending={pending} (states: {})",
             f.t.db()
-                .query_row(
-                    "SELECT COALESCE(group_concat(state || ':' || n, ' '), '<no rows>') \
-                     FROM (SELECT state, COUNT(*) AS n FROM derive_state GROUP BY state)",
-                    [],
-                    |r| r.get::<_, String>(0),
+                .query_row_map(
+                    &naatre_store::Sql::plain(
+                        "SELECT COALESCE(group_concat(state || ':' || n, ' '), '<no rows>') \
+                         FROM (SELECT state, COUNT(*) AS n FROM derive_state GROUP BY state)",
+                    ),
+                    &naatre_store::pv![],
+                    |r| r.get::<String>(0),
                 )
                 .unwrap_or_else(|_| "<query failed>".into()),
         );
@@ -570,9 +585,11 @@ async fn linear_chain_derives_to_the_end() {
     let repo_id = f.seed_repo(REPO);
     let kind_id: i64 = f
         .db()
-        .query_row("SELECT id FROM derive_kinds WHERE name = ?", [KIND], |r| {
-            r.get(0)
-        })
+        .query_row_map(
+            &naatre_store::Sql::plain("SELECT id FROM derive_kinds WHERE name = ?1"),
+            &naatre_store::pv![KIND],
+            |r| r.get(0),
+        )
         .unwrap();
 
     // Deterministic synthetic ids; d(0)..d(1100) chained first-parent.
@@ -660,9 +677,11 @@ async fn walk_budget_exhaustion_poisons_immediately() {
     );
     let (reason, count): (String, i64) =
         f.t.db()
-            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT reason, COUNT(*) FROM derive_reports"),
+                &naatre_store::pv![],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
     assert_eq!(count, 1, "one quarantine report");
     assert!(
@@ -697,7 +716,7 @@ impl Deriver for DeadlineHog {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        _conn: &rusqlite::Connection,
+        _conn: &naatre_store::Db,
         _repo_id: i64,
         cs: Id,
         _parents_done: &[ParentOut],
@@ -753,9 +772,11 @@ async fn wall_clock_deadline_trips_the_walk_budget_past_the_injected_deadline() 
     );
     let (reason, count): (String, i64) =
         f.t.db()
-            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT reason, COUNT(*) FROM derive_reports"),
+                &naatre_store::pv![],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
     assert_eq!(count, 1, "one quarantine report");
     assert!(
@@ -785,7 +806,7 @@ impl Deriver for RunawayHog {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        _conn: &rusqlite::Connection,
+        _conn: &naatre_store::Db,
         _repo_id: i64,
         cs: Id,
         _parents_done: &[ParentOut],
@@ -834,9 +855,11 @@ async fn wall_clock_deadline_stops_a_real_runaway_walk() {
     );
     let (reason, count): (String, i64) =
         f.t.db()
-            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT reason, COUNT(*) FROM derive_reports"),
+                &naatre_store::pv![],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
     assert_eq!(count, 1, "one quarantine report");
     assert!(
@@ -860,7 +883,7 @@ impl Deriver for HugeOutDeriver {
     fn derive(
         &self,
         _ctx: &DeriveCtx,
-        _conn: &rusqlite::Connection,
+        _conn: &naatre_store::Db,
         _repo_id: i64,
         cs: Id,
         parents_done: &[ParentOut],
@@ -877,29 +900,33 @@ impl Deriver for HugeOutDeriver {
 /// test derivers never read it) plus its pending `derive_state` row for the
 /// registered kind; `parent` becomes the single first parent (ord 0).
 fn seed_node(
-    conn: &Connection,
+    conn: &naatre_store::Db,
     repo_id: i64,
     kind_id: i64,
     id: Id,
     generation: i64,
     parent: Option<Id>,
 ) {
-    conn.execute(
-        "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
-         generation, principal, root_tree_id) VALUES (?1, ?2, x'00', 'seed', 'seed', 0, ?3, 'seed', NULL)",
-        rusqlite::params![repo_id, id.0.as_slice(), generation],
+    conn.execute(&naatre_store::Sql::plain(
+"INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
+         generation, principal, root_tree_id) VALUES (?1, ?2, x'00', 'seed', 'seed', 0, ?3, 'seed', NULL)"),
+        &naatre_store::pv![repo_id, id.0.as_slice(), generation],
     )
     .unwrap();
     if let Some(p) = parent {
         conn.execute(
-            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
-            rusqlite::params![repo_id, id.0.as_slice(), p.0.as_slice()],
+            &naatre_store::Sql::plain(
+                "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
+            ),
+            &naatre_store::pv![repo_id, id.0.as_slice(), p.0.as_slice()],
         )
         .unwrap();
     }
     conn.execute(
-        "INSERT INTO derive_state(kind, repo_id, cs, state) VALUES (?1, ?2, ?3, 'pending')",
-        rusqlite::params![kind_id, repo_id, id.0.as_slice()],
+        &naatre_store::Sql::plain(
+            "INSERT INTO derive_state(kind, repo_id, cs, state) VALUES (?1, ?2, ?3, 'pending')",
+        ),
+        &naatre_store::pv![kind_id, repo_id, id.0.as_slice()],
     )
     .unwrap();
 }
@@ -954,9 +981,11 @@ async fn size_cap_poisons_oversized_outputs() {
     );
     let (reason, count): (String, i64) =
         f.t.db()
-            .query_row("SELECT reason, COUNT(*) FROM derive_reports", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT reason, COUNT(*) FROM derive_reports"),
+                &naatre_store::pv![],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
     assert_eq!(count, 1, "one quarantine report");
     assert!(
@@ -1331,9 +1360,11 @@ async fn poison_quarantines_but_children_still_derive() {
     );
     let (reason, ts): (String, i64) =
         f.t.db()
-            .query_row("SELECT reason, ts_ns FROM derive_reports", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT reason, ts_ns FROM derive_reports"),
+                &naatre_store::pv![],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
     assert!(
         reason.contains("boom"),
@@ -1378,7 +1409,11 @@ async fn crash_between_output_and_state_write_is_idempotent() {
     assert!(res.is_err(), "the crashed pass must surface as an error");
     let out_rows: i64 =
         f.t.db()
-            .query_row("SELECT COUNT(*) FROM derive_test_outputs", [], |r| r.get(0))
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT COUNT(*) FROM derive_test_outputs"),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
             .unwrap();
     assert_eq!(out_rows, 1, "the deriver's output write survived the crash");
     assert_eq!(st(&f, &r1).await, Some(DeriveStatus::Deriving));
@@ -1397,9 +1432,9 @@ async fn crash_between_output_and_state_write_is_idempotent() {
 
     let (out_rows, n): (i64, i64) =
         f.t.db()
-            .query_row(
-                "SELECT COUNT(*), MAX(n) FROM derive_test_outputs",
-                [],
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT COUNT(*), MAX(n) FROM derive_test_outputs"),
+                &naatre_store::pv![],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
@@ -1499,11 +1534,13 @@ async fn eager_fail_is_a_failed_attempt_not_a_create_failure() {
 
     let row = || -> String {
         f.t.db()
-            .query_row(
-                "SELECT state || '/' || attempts FROM derive_kinds k \
+            .query_row_map(
+                &naatre_store::Sql::plain(
+                    "SELECT state || '/' || attempts FROM derive_kinds k \
                  JOIN derive_state s ON s.kind = k.id WHERE k.name = 'eager-fail'",
-                [],
-                |r| r.get::<_, String>(0),
+                ),
+                &naatre_store::pv![],
+                |r| r.get::<String>(0),
             )
             .unwrap()
     };
@@ -1621,9 +1658,11 @@ async fn land_enqueues_the_rebased_changeset() {
         f.t.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
     f.t.db()
         .execute(
-            "INSERT INTO refs(repo_id, name, target, version, last_principal) \
+            &naatre_store::Sql::plain(
+                "INSERT INTO refs(repo_id, name, target, version, last_principal) \
          VALUES (?1, 'main', ?2, 1, 'm6a-test')",
-            rusqlite::params![repo_id, id_of_hex(&r1).0.as_slice()],
+            ),
+            &naatre_store::pv![repo_id, id_of_hex(&r1).0.as_slice()],
         )
         .unwrap();
 

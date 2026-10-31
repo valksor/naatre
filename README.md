@@ -124,6 +124,57 @@ loopback). Two proxy-relevant facts, both deliberate:
   (30 s request budget, 256 concurrent requests, size caps) shed overload
   with retryable 503s; per-client admission control is not built in.
 
+## Backends: Postgres metadata, S3 blobs (M9)
+
+The zero-config default needs nothing: SQLite metadata + filesystem blob
+CAS, all inside the data dir. Larger deployments select backends with a
+`backend.toml` file in the data dir (**0600** — it carries credentials;
+naatre refuses to read a looser one):
+
+```toml
+[backend]
+meta = "postgres"        # or "sqlite" (default when the file is absent)
+blob = "fs"              # "s3" arrives in M9b
+dsn = "postgres://db.internal:5432/naatre?sslmode=verify-full"
+user = "naatre"          # or NAATRE_PG_USER
+password = "…"           # or NAATRE_PG_PASSWORD — never in the URL
+allow_plaintext = false  # the explicit plaintext opt-in (see below)
+```
+
+- **Postgres 16+** uses the same schema via its own migration set (applied
+  at boot, same version guard). Migration parity is a tested property.
+- **TLS by default.** The DSN's `sslmode` defaults to `require`;
+  `verify-ca` and `verify-full` are supported; `sslmode=disable` is
+  refused unless `allow_plaintext = true` is set (the LAN-dev opt-in).
+  `allow`/`prefer` are not supported — pick one posture.
+- **Inline credentials are rejected**: `postgres://user:password@host/db`
+  fails at parse. The password goes in the `password` key or
+  `NAATRE_PG_PASSWORD` (the file wins over the environment; env vars:
+  `NAATRE_PG_DSN`, `NAATRE_PG_USER`, `NAATRE_PG_PASSWORD`).
+- **Credentials never surface**: the startup banner, request logs, and
+  error strings carry the backend *kind* name only ("metadata backend:
+  postgres"). Driver errors are redacted by construction — a Postgres
+  connect/query failure prints a classified, parameter-free message, so
+  no DSN/endpoint/user can leak through the driver's error text.
+- **A data dir never switches backends in place**: an existing
+  `naatre.db` under `meta = "postgres"` (or a missing one under
+  `meta = "sqlite"`) is refused, naming both sides.
+- **Single-writer scope**: the in-process slot serializes writers per
+  server, and land's write section takes a fixed Postgres advisory lock
+  (5 s timeout) — `BEGIN IMMEDIATE` semantics across processes: a second
+  land blocks, then answers the same retryable `writer_busy`-shaped 503
+  as SQLite lock contention. The data-dir flock keeps same-dir processes
+  fully exclusive.
+- `naatre init`/`token`/`import` honor the same file, so admin verbs work
+  unchanged against a Postgres-backed dir (there is no `naatre.db` in it).
+
+**Erasure on external-metadata deployments**: with `meta = "postgres"`,
+the metadata — including every personal-data carrier enumerated below —
+lives in the Postgres database, OUTSIDE the data dir. Destroying the data
+dir erases only the blobs and config; the metadata erasure story is the
+Postgres deployment's (drop the database, and its backups). The S3 CAS
+(M9b) extends this to blob contents.
+
 ## Backup
 
 The data dir is `naatre.db` (SQLite, WAL) + `objects/` (immutable
@@ -378,6 +429,14 @@ Until M10 (GC + redaction + principal deletion), per-subject erasure on a
 shared instance is out-of-band database surgery — same framing as backward
 ref moves. On a single-person instance, deleting the data dir is complete
 erasure.
+
+**External metadata changes the erasure surface**: with
+`meta = "postgres"` the rows above (and the append-only `audit_log`) live
+in the Postgres database, not the data dir — destroying the data dir
+erases only blobs and config, and the metadata's erasure is the Postgres
+deployment's own story (its backups included). When `blob = "s3"` lands
+(M9b), bucket contents also outlive the data dir — that enumeration gains
+its clause in M9b.
 
 ## Distribution note (conditional)
 

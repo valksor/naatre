@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use gix::bstr::{BStr, ByteSlice};
 use gix::hash::ObjectId;
 use gix::prelude::ObjectIdExt;
-use rusqlite::Connection;
+use naatre_store::{Db, DbError, Sql, pv};
 
 use naatre_core::changeset::{self, Changeset, FileChange, Op};
 use naatre_core::error::CoreError;
@@ -165,7 +165,7 @@ pub enum ImportError {
     #[error("{0}")]
     Config(String),
     #[error(transparent)]
-    Sql(#[from] rusqlite::Error),
+    Sql(#[from] DbError),
     #[error(transparent)]
     Core(#[from] CoreError),
     /// An internal invariant broke (never client input); names the breach.
@@ -185,6 +185,18 @@ pub fn run(
     opts: &ImportOptions,
     derive: &crate::derive::DeriveRegistry,
 ) -> Result<Report, ImportError> {
+    run_backend(data, &naatre_store::backend::load(data)?, opts, derive)
+}
+
+/// [`run`] for the CONFIGURED backend: `naatre import` is offline but
+/// writes metadata, so it honors `backend.toml` exactly like `serve` —
+/// same open guard, same mismatch refusal, same migrations.
+pub fn run_backend(
+    data: &Path,
+    cfg: &naatre_store::BackendConfig,
+    opts: &ImportOptions,
+    derive: &crate::derive::DeriveRegistry,
+) -> Result<Report, ImportError> {
     reject_url(&opts.git_path)?;
     let repo_name = match &opts.into {
         Some(name) => {
@@ -198,7 +210,9 @@ pub fn run(
         None => derived_repo_name(&opts.git_path)?,
     };
 
-    let data_dir = DataDir::open(data)?;
+    let data_dir = DataDir::open_any(data);
+    naatre_store::backend::check_data_dir_backend(data_dir.path(), cfg)
+        .map_err(ImportError::DataDir)?;
     let _lock = match data_dir.lock() {
         Ok(lock) => lock,
         Err(StoreError::LockHeld(path)) => return Err(ImportError::LockHeld(path)),
@@ -212,7 +226,7 @@ pub fn run(
     let git_head_hex = head_oid.to_string();
 
     let cas = Cas::new(&data_dir)?;
-    let store = Store::open(data_dir)?;
+    let store = Store::open_backend(data_dir, cfg)?;
     let conn = store.conn();
 
     // Target repo, created (and audited) when absent.
@@ -221,7 +235,7 @@ pub fn run(
         Some(id) => (id, false),
         None => {
             let now = now_ns();
-            let tx = conn.unchecked_transaction()?;
+            let tx = conn.transaction()?;
             let id = db::repos_create(&tx, &repo_name, now)?;
             db::audit_append(
                 &tx,
@@ -384,12 +398,12 @@ pub fn run(
 /// "nothing written" for aborts refers to import state (changesets, trees,
 /// blobs, refs, git_map), not the ops journal.
 fn finish(
-    conn: &Connection,
+    conn: &Db,
     repo_name: &str,
     git_head_hex: &str,
     report: &Report,
 ) -> Result<(), ImportError> {
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction()?;
     db::audit_append(
         &tx,
         now_ns(),
@@ -1118,6 +1132,9 @@ fn map_derive(e: tree_derive::DeriveError) -> ImportError {
     match e {
         tree_derive::DeriveError::Sql(err) => ImportError::Sql(err),
         tree_derive::DeriveError::Core(err) => ImportError::Core(err),
+        tree_derive::DeriveError::CorruptRow(kind) => ImportError::Internal(format!(
+            "corrupt derived row: kind byte {kind} is not a file/dir tag"
+        )),
         tree_derive::DeriveError::MissingTreeRow(hex) => ImportError::Internal(format!(
             "corrupt tree store: no trees row for claimed id {hex}"
         )),
@@ -1191,7 +1208,7 @@ fn replace_with_replacement_char(s: &mut String, index: usize) {
 fn import_commit(
     git: &gix::Repository,
     cas: &Cas,
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     repo_name: &str,
     derive: &crate::derive::DeriveRegistry,
@@ -1221,7 +1238,7 @@ fn import_commit(
     let (root_tree_id, _, trees) = node.collect().map_err(map_derive)?;
 
     let canonical = changeset::encode(&p.cs)?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction()?;
     db::changeset_insert_rows(
         &tx,
         db::ChangesetInsert {
@@ -1310,7 +1327,7 @@ fn build_tree_node(
 /// Moves `main` per the graft rules. Only runs after ≥1 new commit.
 #[allow(clippy::too_many_arguments)]
 fn graft_main(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     repo_name: &str,
     main_row: Option<&db::RefRow>,
@@ -1346,9 +1363,9 @@ fn graft_main(
         .get(&old_oid)
         .copied()
         .ok_or_else(|| ImportError::Internal("main's git oid lost from git_map".into()))?;
-    let version: i64 = conn.query_row(
-        "SELECT version FROM refs WHERE repo_id = ?1 AND name = 'main'",
-        rusqlite::params![repo_id],
+    let version: i64 = conn.query_row_map(
+        &Sql::plain("SELECT version FROM refs WHERE repo_id = ?1 AND name = 'main'"),
+        &pv![repo_id],
         |r| r.get(0),
     )?;
     match chain_descending_from(conn, repo_id, importable, previous_tip, head_oid)? {
@@ -1378,7 +1395,7 @@ fn longest_chain_head(importable: &[PreparedCommit], head_oid: &ObjectId) -> Id 
 /// The maximal-generation importable commit whose naatre ancestry contains
 /// `previous_tip` (`None` when nothing importable descends from it).
 fn chain_descending_from(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     importable: &[PreparedCommit],
     previous_tip: Id,
@@ -1404,7 +1421,7 @@ fn chain_descending_from(
 /// links? Ancestors inside this batch resolve in memory; already-imported
 /// ones resolve through the store.
 fn descends_from(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     p: &PreparedCommit,
     target: Id,
@@ -1436,7 +1453,7 @@ fn descends_from(
 /// Under the import flock the CAS cannot lose: import checked it is the
 /// sole writer, so any non-success outcome is a broken invariant.
 fn ref_move(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     repo_name: &str,
     expected_version: Option<i64>,
@@ -1484,15 +1501,15 @@ fn now_ns() -> i64 {
 /// The import state for one repo: git oid → changeset id, and back.
 type GitMap = (HashMap<ObjectId, Id>, HashMap<Id, ObjectId>);
 
-fn load_git_map(conn: &Connection, repo_id: i64) -> Result<GitMap, ImportError> {
-    let mut stmt = conn.prepare("SELECT git_oid, cs_id FROM git_map WHERE repo_id = ?1")?;
-    let rows = stmt.query_map(rusqlite::params![repo_id], |row| {
-        Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-    })?;
+fn load_git_map(conn: &Db, repo_id: i64) -> Result<GitMap, ImportError> {
+    let rows = conn.query_all_map(
+        &Sql::plain("SELECT git_oid, cs_id FROM git_map WHERE repo_id = ?1"),
+        &pv![repo_id],
+        |row| Ok((row.get::<Vec<u8>>(0)?, row.get::<Vec<u8>>(1)?)),
+    )?;
     let mut forward = HashMap::new();
     let mut reverse = HashMap::new();
-    for row in rows {
-        let (git_oid, cs_id) = row?;
+    for (git_oid, cs_id) in rows {
         let git_oid = ObjectId::try_from(&git_oid[..])
             .map_err(|e| ImportError::Internal(format!("corrupt git_map oid: {e}")))?;
         let cs_id = Id(cs_id.try_into().map_err(|_| {

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_store::{BLOB_LIMIT, Cas, StoreError};
+use naatre_store::{BLOB_LIMIT, BlobStore, StoreError};
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
@@ -193,7 +193,7 @@ pub async fn put_raw(
     let data_dir = state.data_dir_display.clone();
     let payload_owned = payload.clone();
     let csize = state
-        .blocking(move || put_and_size(&cas, &data_dir, &id, &payload_owned))
+        .blocking(move || put_and_size(cas.as_ref(), &data_dir, &id, &payload_owned))
         .await?;
 
     let existed = state
@@ -266,7 +266,7 @@ pub async fn create_batch(
         .blocking(move || {
             let mut rows = Vec::with_capacity(verified.len());
             for (id, payload) in &verified {
-                let csize = put_and_size(&cas, &data_dir, id, payload)?;
+                let csize = put_and_size(cas.as_ref(), &data_dir, id, payload)?;
                 rows.push((*id, payload.len() as i64, csize));
             }
             Ok(rows)
@@ -492,7 +492,12 @@ fn decode_entry(entry: &BatchPutEntry) -> Result<(Id, Vec<u8>), &'static str> {
 /// the documented data-dir contract (see the `naatre_store` crate docs);
 /// reading the stored size here keeps `naatre-store` untouched by this
 /// slice. A successful put with no file behind it is a broken invariant.
-fn put_and_size(cas: &Cas, data_dir: &FsPath, id: &Id, payload: &[u8]) -> Result<i64, ApiError> {
+fn put_and_size(
+    cas: &dyn BlobStore,
+    data_dir: &FsPath,
+    id: &Id,
+    payload: &[u8],
+) -> Result<i64, ApiError> {
     let stored = cas.put(payload).map_err(ApiError::log_internal)?;
     debug_assert_eq!(stored, *id, "cas.put must address the verified payload");
     let path = shard_file(data_dir, id);

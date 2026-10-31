@@ -2,6 +2,7 @@
 //! All any-authenticated, repo-scoped; unknown repo → 404 `repo_not_found`,
 //! unknown ids → 404 `not_found`.
 
+use naatre_store::Db;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -464,17 +465,14 @@ pub async fn diff(
 
 /// Recursively flattens a tree into `full path → (blob, exec)`. Dir sizes
 /// and tree ids are not part of a path-level diff.
-fn list_files(
-    conn: &rusqlite::Connection,
-    root: &Id,
-) -> Result<BTreeMap<String, (Id, bool)>, ApiError> {
+fn list_files(conn: &Db, root: &Id) -> Result<BTreeMap<String, (Id, bool)>, ApiError> {
     let mut out = BTreeMap::new();
     walk_files(conn, root, String::new(), &mut out)?;
     Ok(out)
 }
 
 fn walk_files(
-    conn: &rusqlite::Connection,
+    conn: &Db,
     tree: &Id,
     prefix: String,
     out: &mut BTreeMap<String, (Id, bool)>,
@@ -1034,6 +1032,7 @@ pub async fn blame(
                         if let Some((blob_new, blob_parent)) =
                             db::blame_state_get(conn, repo_id, &current, &path)
                                 .map_err(ApiError::log_internal)?
+                                .map(|row| (row.blob_id, row.parent_blob_id))
                         {
                             let blob_new = blob_new.ok_or_else(|| {
                                 ApiError::log_internal(

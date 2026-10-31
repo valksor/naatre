@@ -1291,6 +1291,244 @@ fn nfs_kernel_mount_walk_parity_bytes_sizes_exec_and_erofs() {
     assert!(status.success(), "graceful SIGTERM exits 0: {status}");
 }
 
+// ---- raw-RPC LOOKUP/READDIR/READ parity walk --------------------------------
+
+const NFS3_LOOKUP: u32 = 3;
+const NFS3_READ: u32 = 6;
+const NFS3_READDIR: u32 = 16;
+/// fattr3 offsets in the reply body (after the 28-byte RPC head): type
+/// u32, mode u32, nlink u32, uid u32, gid u32, size u64.
+const ATTR_MODE_AT: usize = 28 + 4;
+const ATTR_SIZE_AT: usize = 28 + 20;
+
+fn xdr_u64(v: u64) -> Vec<u8> {
+    v.to_be_bytes().to_vec()
+}
+
+/// NFSv3 LOOKUP → the child's file handle.
+fn nfs_lookup(port: u16, dir: &[u8], name: &str) -> Vec<u8> {
+    let mut payload = xdr_opaque(dir);
+    payload.extend(xdr_opaque(name.as_bytes()));
+    let reply = raw_rpc(port, NFS_PROGRAM, 3, NFS3_LOOKUP, &payload);
+    assert_eq!(nfs_status(&reply), NFS3_OK, "LOOKUP {name}");
+    let fh_len = u32::from_be_bytes(reply[28..32].try_into().expect("fh len")) as usize;
+    reply[32..32 + fh_len].to_vec()
+}
+
+/// NFSv3 GETATTR → (is_dir, size, exec-bits).
+fn nfs_getattr(port: u16, fh: &[u8]) -> (bool, u64, bool) {
+    let reply = raw_rpc(port, NFS_PROGRAM, 3, 1, &xdr_opaque(fh));
+    assert_eq!(nfs_status(&reply), NFS3_OK, "GETATTR");
+    let ftype = u32::from_be_bytes(reply[28..32].try_into().expect("type"));
+    let mode = u32::from_be_bytes(
+        reply[ATTR_MODE_AT..ATTR_MODE_AT + 4]
+            .try_into()
+            .expect("mode"),
+    );
+    let size = u64::from_be_bytes(
+        reply[ATTR_SIZE_AT..ATTR_SIZE_AT + 8]
+            .try_into()
+            .expect("size"),
+    );
+    (ftype == 2, size, mode & 0o111 != 0)
+}
+
+/// NFSv3 READDIR → the directory's entries. One call with a generous
+/// count; the eof flag is asserted so pagination cannot hide entries.
+fn nfs_readdir(port: u16, dir: &[u8]) -> Vec<String> {
+    let mut payload = xdr_opaque(dir);
+    payload.extend(xdr_u64(0)); // cookie
+    payload.extend_from_slice(&[0u8; 8]); // cookieverf (first call)
+    payload.extend((8192u32).to_be_bytes()); // count
+    let reply = raw_rpc(port, NFS_PROGRAM, 3, NFS3_READDIR, &payload);
+    assert_eq!(nfs_status(&reply), NFS3_OK, "READDIR");
+    let mut at = 28 + 88; // dir attrs
+    at += 8; // cookieverf
+    let mut names = Vec::new();
+    loop {
+        let follows = u32::from_be_bytes(reply[at..at + 4].try_into().expect("follows"));
+        at += 4;
+        if follows == 0 {
+            break;
+        }
+        let _fileid = u64::from_be_bytes(reply[at..at + 8].try_into().expect("fileid"));
+        at += 8;
+        let name_len = u32::from_be_bytes(reply[at..at + 4].try_into().expect("name len")) as usize;
+        at += 4;
+        names.push(String::from_utf8(reply[at..at + name_len].to_vec()).expect("utf8 name"));
+        at += name_len.div_ceil(4) * 4;
+        let _cookie = u64::from_be_bytes(reply[at..at + 8].try_into().expect("cookie"));
+        at += 8;
+    }
+    let eof = u32::from_be_bytes(reply[at..at + 4].try_into().expect("eof"));
+    assert_eq!(eof, 1, "READDIR single call returned the whole directory");
+    names
+}
+
+/// NFSv3 READ (offset loop until eof) → the file bytes.
+fn nfs_read_all(port: u16, fh: &[u8], size: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let mut payload = xdr_opaque(fh);
+        payload.extend(xdr_u64(offset));
+        payload.extend((65536u32).to_be_bytes());
+        let reply = raw_rpc(port, NFS_PROGRAM, 3, NFS3_READ, &payload);
+        assert_eq!(nfs_status(&reply), NFS3_OK, "READ at {offset}");
+        let at = 28 + 88; // attrs
+        let count = u32::from_be_bytes(reply[at..at + 4].try_into().expect("count")) as usize;
+        let eof = u32::from_be_bytes(reply[at + 4..at + 8].try_into().expect("eof"));
+        let data_len =
+            u32::from_be_bytes(reply[at + 8..at + 12].try_into().expect("data len")) as usize;
+        assert_eq!(data_len, count, "READ count matches the opaque length");
+        out.extend_from_slice(&reply[at + 12..at + 12 + data_len]);
+        offset += count as u64;
+        if eof == 1 || offset >= size {
+            break;
+        }
+    }
+    out
+}
+
+/// The raw-RPC parity walk the M8b commit message claims: LOOKUP down the
+/// export from the mountd root handle, READDIR every directory, READ every
+/// file byte-for-byte through the wire protocol, and compare paths, bytes,
+/// and exec bits against a real `naatre clone`. GETATTR supplies sizes and
+/// exec bits; no kernel mount needed (runs on every platform).
+#[test]
+fn raw_rpc_readdir_read_parity_with_materialized_clone() {
+    let server = start_server();
+    let files = demo_files();
+    let refs: Vec<(&str, &[u8], bool)> = files
+        .iter()
+        .map(|(p, d, e)| (*p, d.as_slice(), *e))
+        .collect();
+    seed_repo(&server, "rawparity", &refs);
+
+    // The materialized side: a real `naatre clone`.
+    let out = tempfile::tempdir().expect("tempdir");
+    let dest = out.path().join("wc");
+    verbs::clone::value(
+        &format!("{}/rawparity", server.base),
+        &[],
+        Some(dest.to_str().expect("utf8")),
+        &net(&server),
+    )
+    .expect("clone");
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let (mut child, _reader, port, export_path) =
+        spawn_mount_daemon(&server, "rawparity", cache.path(), &[]);
+
+    let root = mnt_real_handle(port, &export_path);
+
+    // The clone side: (relative path → bytes, exec) + dir paths, walked on
+    // disk.
+    use std::os::unix::fs::PermissionsExt as _;
+    fn collect_clone(
+        dir: &Path,
+        prefix: &str,
+        files: &mut Vec<(String, Vec<u8>, bool)>,
+        dirs: &mut Vec<String>,
+    ) {
+        for e in std::fs::read_dir(dir).expect("read_dir") {
+            let e = e.expect("dir entry");
+            let name = e.file_name().to_string_lossy().to_string();
+            // The working copy's own metadata namespace is client-local —
+            // never part of the ref tree the export serves.
+            if prefix.is_empty() && name == ".naatre" {
+                continue;
+            }
+            let path = e.path();
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if path.is_dir() {
+                dirs.push(rel.clone());
+                collect_clone(&path, &rel, files, dirs);
+            } else {
+                let bytes = std::fs::read(&path).expect("read file");
+                let exec =
+                    std::fs::metadata(&path).expect("stat").permissions().mode() & 0o111 != 0;
+                files.push((rel, bytes, exec));
+            }
+        }
+    }
+    let mut clone_files = Vec::new();
+    let mut clone_dirs = Vec::new();
+    collect_clone(&dest, "", &mut clone_files, &mut clone_dirs);
+    clone_files.sort_by(|a, b| a.0.cmp(&b.0));
+    clone_dirs.sort();
+
+    // The wire side: LOOKUP/READDIR walk from the root handle.
+    fn walk(
+        port: u16,
+        dir_fh: &[u8],
+        prefix: &str,
+        files: &mut Vec<(String, Vec<u8>, bool)>,
+        dirs: &mut Vec<String>,
+    ) {
+        for name in nfs_readdir(port, dir_fh) {
+            if name == "." || name == ".." {
+                continue;
+            }
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let fh = nfs_lookup(port, dir_fh, &name);
+            let (is_dir, size, exec) = nfs_getattr(port, &fh);
+            if is_dir {
+                dirs.push(rel.clone());
+                walk(port, &fh, &rel, files, dirs);
+            } else {
+                let bytes = nfs_read_all(port, &fh, size);
+                assert_eq!(
+                    bytes.len() as u64,
+                    size,
+                    "{rel}: READ assembled the advertised size"
+                );
+                files.push((rel, bytes, exec));
+            }
+        }
+    }
+    let mut wire_files = Vec::new();
+    let mut wire_dirs = Vec::new();
+    walk(port, &root, "", &mut wire_files, &mut wire_dirs);
+    wire_files.sort_by(|a, b| a.0.cmp(&b.0));
+    wire_dirs.sort();
+
+    // Parity: identical path sets, identical bytes, identical exec bits.
+    assert_eq!(
+        clone_files.iter().map(|f| &f.0).collect::<Vec<_>>(),
+        wire_files.iter().map(|f| &f.0).collect::<Vec<_>>(),
+        "identical file path sets"
+    );
+    assert_eq!(clone_dirs, wire_dirs, "identical directory path sets");
+    for ((cp, cbytes, cexec), (wp, wbytes, wexec)) in clone_files.iter().zip(wire_files.iter()) {
+        assert_eq!(cp, wp);
+        assert_eq!(cbytes, wbytes, "{cp}: byte-exact over raw READ");
+        assert_eq!(cexec, wexec, "{cp}: exec bits match the clone's mode");
+    }
+    // The fixture actually exercised nesting and the exec bit.
+    assert!(wire_files.iter().any(|(p, _, _)| p == "a/b/c/deep.txt"));
+    assert!(
+        wire_files
+            .iter()
+            .any(|(p, _, e)| p == "scripts/run.sh" && *e),
+        "the exec file's exec bit came through the wire"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let status = child.wait().expect("wait daemon");
+    assert!(status.success(), "graceful SIGTERM exits 0: {status}");
+}
+
 // ---- M8b item 4: cold cargo build against the real mount -------------------
 
 #[cfg(target_os = "macos")]
@@ -1808,11 +2046,21 @@ fn raw_rpc(port: u16, prog: u32, vers: u32, proc_num: u32, payload: &[u8]) -> Ve
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("read timeout");
-    let mut hdr = [0u8; 4];
-    stream.read_exact(&mut hdr).expect("reply header");
-    let len = u32::from_be_bytes(hdr) & 0x7fff_ffff;
-    let mut reply = vec![0u8; len as usize];
-    stream.read_exact(&mut reply).expect("reply body");
+    // Replies may arrive as MULTIPLE record-marked fragments (long READ /
+    // READDIR bodies): reassemble until the last-fragment bit.
+    let mut reply = Vec::new();
+    loop {
+        let mut hdr = [0u8; 4];
+        stream.read_exact(&mut hdr).expect("reply header");
+        let marked = u32::from_be_bytes(hdr);
+        let len = (marked & 0x7fff_ffff) as usize;
+        let start = reply.len();
+        reply.resize(start + len, 0);
+        stream.read_exact(&mut reply[start..]).expect("reply body");
+        if marked & 0x8000_0000 != 0 {
+            break;
+        }
+    }
     reply
 }
 

@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::Connection;
+use naatre_store::{Db, DbError};
 
 use naatre_core::changeset::{FileChange, Op};
 use naatre_core::error::CoreError;
@@ -26,7 +26,12 @@ use crate::db::{self, TreeEntryRow, TreeWrite};
 pub enum DeriveError {
     /// A store failure while loading or (via the caller) writing rows.
     #[error(transparent)]
-    Sql(#[from] rusqlite::Error),
+    Sql(#[from] DbError),
+    /// A derived row names a kind byte the schema never stores — store
+    /// corruption, never a legitimate value (surfaces as an internal
+    /// error at the routes).
+    #[error("corrupt derived row: kind byte {0} is not a file/dir tag")]
+    CorruptRow(i64),
     /// Canonical encoding failed — in practice only the 16 MiB cap.
     #[error(transparent)]
     Core(#[from] CoreError),
@@ -86,7 +91,7 @@ impl MemNode {
     /// Recursively loads a stored tree into memory. `None` root = the
     /// legitimate empty tree (a parentless changeset); a CLAIMED id whose
     /// rows are missing is corruption — [`DeriveError::MissingTreeRow`].
-    pub fn load(conn: &Connection, root_tree_id: Option<Id>) -> Result<MemNode, DeriveError> {
+    pub fn load(conn: &Db, root_tree_id: Option<Id>) -> Result<MemNode, DeriveError> {
         let Some(root_tree_id) = root_tree_id else {
             return Ok(MemNode::empty());
         };
@@ -357,7 +362,7 @@ fn remove_in(node: &mut MemNode, path: &(Vec<&str>, &str)) -> bool {
 /// under several parents rebuild per occurrence, as the recursion did.
 /// A claimed id without a `trees` row (root or sub-tree) is corruption —
 /// an empty entry set would silently truncate history, so it errors.
-fn load_node(conn: &Connection, tree_id: &Id) -> Result<MemNode, DeriveError> {
+fn load_node(conn: &Db, tree_id: &Id) -> Result<MemNode, DeriveError> {
     // Discovery: iterative DFS over dir entries; `loaded` memoizes by id.
     let mut loaded: std::collections::HashMap<Id, Vec<TreeEntryRow>> =
         std::collections::HashMap::new();
@@ -445,13 +450,9 @@ fn load_node(conn: &Connection, tree_id: &Id) -> Result<MemNode, DeriveError> {
                     1 => unreachable!("dir rows build as their own frame"),
                     other => {
                         // A corrupt derived row is store corruption, not
-                        // client input: surface as a SQL-layer failure.
-                        // `other` names the stored kind byte.
-                        return Err(DeriveError::Sql(rusqlite::Error::InvalidColumnType(
-                            1,
-                            format!("kind ({other})"),
-                            rusqlite::types::Type::Integer,
-                        )));
+                        // client input: its own variant names the stored
+                        // kind byte.
+                        return Err(DeriveError::CorruptRow(other));
                     }
                 };
                 frame.entries.insert(row.name, entry);
@@ -478,6 +479,7 @@ fn load_node(conn: &Connection, tree_id: &Id) -> Result<MemNode, DeriveError> {
 mod tests {
     use super::*;
     use naatre_core::changeset::FileChange;
+    use rusqlite::Connection;
 
     fn id(n: u8) -> Id {
         let mut b = [0u8; 32];
@@ -639,8 +641,8 @@ mod tests {
     /// in-memory node (this is what the M2a oracle test replays on top of).
     #[test]
     fn persist_and_load_roundtrip() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let raw = Connection::open_in_memory().unwrap();
+        raw.execute_batch(
             "CREATE TABLE trees(id BLOB PRIMARY KEY, repo_id INTEGER NOT NULL, canonical BLOB NOT NULL);
              CREATE TABLE tree_entries(tree_id BLOB NOT NULL, name TEXT NOT NULL, kind INTEGER NOT NULL, \
               object_id BLOB NOT NULL, size INTEGER NOT NULL, exec INTEGER NOT NULL DEFAULT 0, \
@@ -655,6 +657,7 @@ mod tests {
             .unwrap();
         let (root, total, writes) = node.collect().unwrap();
         assert_eq!(total, 30);
+        let conn = Db::Sqlite(raw);
         db::trees_write(&conn, 7, &writes).unwrap();
 
         let loaded = MemNode::load(&conn, Some(root)).unwrap();
@@ -678,8 +681,8 @@ mod tests {
     /// never stack.
     #[test]
     fn deep_legacy_tree_loads_and_collects_without_abort() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let raw = Connection::open_in_memory().unwrap();
+        raw.execute_batch(
             "CREATE TABLE trees(id BLOB PRIMARY KEY, repo_id INTEGER NOT NULL, canonical BLOB NOT NULL);
              CREATE TABLE tree_entries(tree_id BLOB NOT NULL, name TEXT NOT NULL, kind INTEGER NOT NULL, \
               object_id BLOB NOT NULL, size INTEGER NOT NULL, exec INTEGER NOT NULL DEFAULT 0, \
@@ -700,24 +703,24 @@ mod tests {
         // was writable by the pre-cap grammar — and it overflowed the
         // recursive load in debug builds.)
         const DEPTH: u16 = 1500;
-        conn.execute(
+        raw.execute(
             "INSERT INTO trees(id, repo_id, canonical) VALUES (?1, 7, X'00')",
             rusqlite::params![level(0).0.as_slice()],
         )
         .unwrap();
-        conn.execute(
+        raw.execute(
             "INSERT INTO tree_entries(tree_id, name, kind, object_id, size) \
              VALUES (?1, 'f', 0, ?2, 1)",
             rusqlite::params![level(0).0.as_slice(), id(1).0.as_slice()],
         )
         .unwrap();
         for n in 1..=DEPTH {
-            conn.execute(
+            raw.execute(
                 "INSERT INTO trees(id, repo_id, canonical) VALUES (?1, 7, X'00')",
                 rusqlite::params![level(n).0.as_slice()],
             )
             .unwrap();
-            conn.execute(
+            raw.execute(
                 "INSERT INTO tree_entries(tree_id, name, kind, object_id, size) \
                  VALUES (?1, 'd', 1, ?2, 1)",
                 rusqlite::params![level(n).0.as_slice(), level(n - 1).0.as_slice()],
@@ -725,6 +728,7 @@ mod tests {
             .unwrap();
         }
 
+        let conn = Db::Sqlite(raw);
         let node = MemNode::load(&conn, Some(level(DEPTH))).unwrap();
         let (_, total, writes) = node.collect().unwrap();
         // The re-encode reproduces the same shape: DEPTH dir nodes + the

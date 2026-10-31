@@ -230,8 +230,8 @@ impl Env {
         Env { _dir: dir, data }
     }
 
-    fn conn(&self) -> Connection {
-        Connection::open(self.data.join("naatre.db")).unwrap()
+    fn conn(&self) -> naatre_store::Db {
+        naatre_store::Db::Sqlite(Connection::open(self.data.join("naatre.db")).unwrap())
     }
 
     fn cas(&self) -> Cas {
@@ -239,13 +239,17 @@ impl Env {
     }
 
     fn repo_id(&self, name: &str) -> i64 {
-        self.conn()
-            .query_row("SELECT id FROM repos WHERE name = ?1", [name], |r| r.get(0))
-            .unwrap()
+        db::repo_id_by_name(&self.conn(), name).unwrap().unwrap()
     }
 
     fn count(&self, sql: &str) -> i64 {
-        self.conn().query_row(sql, [], |r| r.get(0)).unwrap()
+        self.conn()
+            .query_row_map(
+                &naatre_store::Sql::plain_owned(sql.to_string()),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
+            .unwrap()
     }
 
     fn import(&self, f: &Fixture, into: &str, skip: bool) -> Report {
@@ -266,20 +270,18 @@ impl Env {
 
     /// git oid (40-hex, lowercase) → naatre changeset id.
     fn git_map(&self, repo_id: i64) -> BTreeMap<String, Id> {
-        let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT lower(hex(git_oid)), cs_id FROM git_map WHERE repo_id = ?1")
-            .unwrap();
-        let rows = stmt
-            .query_map([repo_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
-            })
-            .unwrap();
-        rows.map(|r| {
-            let (oid, cs) = r.unwrap();
-            (oid, Id(cs.try_into().unwrap()))
-        })
-        .collect()
+        self.conn()
+            .query_all_map(
+                &naatre_store::Sql::plain(
+                    "SELECT lower(hex(git_oid)), cs_id FROM git_map WHERE repo_id = ?1",
+                ),
+                &naatre_store::pv![repo_id],
+                |r| Ok((r.get::<String>(0)?, r.get::<Vec<u8>>(1)?)),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|(oid, cs)| (oid, Id(cs.try_into().unwrap())))
+            .collect()
     }
 }
 
@@ -371,14 +373,13 @@ fn clean_import_full_parity() {
 
     // Audit trail: repo_create, per-commit changeset_create, ref_move, import.
     let actions: Vec<String> = {
-        let conn = env.conn();
-        let mut stmt = conn
-            .prepare("SELECT action FROM audit_log ORDER BY id")
-            .unwrap();
-        stmt.query_map([], |r| r.get(0))
+        env.conn()
+            .query_all_map(
+                &naatre_store::Sql::plain("SELECT action FROM audit_log ORDER BY id"),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
             .unwrap()
-            .map(|r| r.unwrap())
-            .collect()
     };
     assert_eq!(actions.iter().filter(|a| *a == "repo_create").count(), 1);
     assert_eq!(
@@ -390,13 +391,18 @@ fn clean_import_full_parity() {
 }
 
 /// Recursively flattens the naatre tree under `root`: path → (exec, blob).
-fn naatre_tree_files(conn: &Connection, root: &Id) -> BTreeMap<String, (bool, Id)> {
+fn naatre_tree_files(conn: &naatre_store::Db, root: &Id) -> BTreeMap<String, (bool, Id)> {
     let mut out = BTreeMap::new();
     walk_tree(conn, root, "", &mut out);
     out
 }
 
-fn walk_tree(conn: &Connection, tree: &Id, prefix: &str, out: &mut BTreeMap<String, (bool, Id)>) {
+fn walk_tree(
+    conn: &naatre_store::Db,
+    tree: &Id,
+    prefix: &str,
+    out: &mut BTreeMap<String, (bool, Id)>,
+) {
     for e in db::tree_entries_load(conn, tree).unwrap() {
         let path = format!("{prefix}{}", e.name);
         match e.kind {
@@ -556,15 +562,13 @@ fn skip_mode_cascades_and_sets_main() {
     // Every naatre changeset's parents resolve — the parent walk passes.
     let repo_id = env.repo_id("imp");
     let conn = env.conn();
-    let all: Vec<Vec<u8>> = {
-        let mut stmt = conn
-            .prepare("SELECT id FROM changesets WHERE repo_id = ?1")
-            .unwrap();
-        stmt.query_map([repo_id], |r| r.get(0))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect()
-    };
+    let all: Vec<Vec<u8>> = conn
+        .query_all_map(
+            &naatre_store::Sql::plain("SELECT id FROM changesets WHERE repo_id = ?1"),
+            &naatre_store::pv![repo_id],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(all.len(), 7);
     for cs in all {
         let id = Id(cs.try_into().unwrap());
@@ -877,13 +881,17 @@ fn sanitize_replaces_cc_cf_with_replacement_char() {
 
 /// The audit details JSON of every row for one action, in id order.
 fn audit_details(env: &Env, action: &str) -> Vec<serde_json::Value> {
-    let conn = env.conn();
-    let mut stmt = conn
-        .prepare("SELECT details_json FROM audit_log WHERE action = ?1 ORDER BY id")
-        .unwrap();
-    stmt.query_map([action], |r| r.get::<_, String>(0))
+    env.conn()
+        .query_all_map(
+            &naatre_store::Sql::plain(
+                "SELECT details_json FROM audit_log WHERE action = ?1 ORDER BY id",
+            ),
+            &naatre_store::pv![action],
+            |r| r.get::<String>(0),
+        )
         .unwrap()
-        .map(|r| serde_json::from_str(&r.unwrap()).expect("details_json parses"))
+        .into_iter()
+        .map(|d| serde_json::from_str(&d).expect("details_json parses"))
         .collect()
 }
 
@@ -947,7 +955,7 @@ impl naatre_server::derive::Deriver for QueueProbe {
     fn derive(
         &self,
         _ctx: &naatre_server::derive::DeriveCtx,
-        _conn: &rusqlite::Connection,
+        _conn: &naatre_store::Db,
         _repo_id: i64,
         cs: Id,
         parents_done: &[naatre_server::derive::ParentOut],
@@ -1002,9 +1010,9 @@ fn import_enqueues_registered_derive_kinds() {
     // Both commits enqueued, pending, under the registered kind's id.
     let kind: i64 = env
         .conn()
-        .query_row(
-            "SELECT id FROM derive_kinds WHERE name = 'queue-probe'",
-            [],
+        .query_row_map(
+            &naatre_store::Sql::plain("SELECT id FROM derive_kinds WHERE name = 'queue-probe'"),
+            &naatre_store::pv![],
             |r| r.get(0),
         )
         .unwrap();
@@ -1023,14 +1031,16 @@ fn import_enqueues_registered_derive_kinds() {
         .block_on(async { naatre_server::derive::derive_pass(&state).await.unwrap() });
     assert_eq!(rep.derived, 2);
     let order = calls.lock().unwrap().clone();
-    let outs: Vec<Vec<u8>> = {
-        let conn = env.conn();
-        let mut stmt = conn
-            .prepare("SELECT output FROM derive_state WHERE kind = ?1 ORDER BY rowid ASC")
-            .unwrap();
-        let rows = stmt.query_map([kind], |r| r.get::<_, Vec<u8>>(0)).unwrap();
-        rows.map(|r| r.unwrap()).collect()
-    };
+    let outs: Vec<Vec<u8>> = env
+        .conn()
+        .query_all_map(
+            &naatre_store::Sql::plain(
+                "SELECT output FROM derive_state WHERE kind = ?1 ORDER BY rowid ASC",
+            ),
+            &naatre_store::pv![kind],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(outs.len(), 2);
     assert_eq!(outs[0], vec![1], "root derives with no parents");
     assert_eq!(outs[1], vec![2], "child derives FROM its parent's output");

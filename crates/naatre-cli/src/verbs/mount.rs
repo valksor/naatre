@@ -590,9 +590,14 @@ impl NFSFileSystem for NfsAdapter {
     }
 
     fn fh_to_id(&self, id: &nfs_fh3) -> Result<fileid3, nfsstat3> {
-        if id.data.len() != 24 || id.data[..16] != self.handle_secret.0 {
-            // Wrong length OR wrong secret — the forged-handle case — is a
-            // bad handle, not a distinguishable "wrong secret" (no oracle).
+        // Length is not secret (any handle carries it); the secret compare
+        // is CONSTANT-TIME so a remote prober cannot recover the secret
+        // byte-by-byte from response timing. Wrong length OR wrong secret —
+        // the forged-handle case — is a bad handle, not a distinguishable
+        // "wrong secret" (no oracle).
+        let secret_ok = id.data.len() == 24
+            && constant_time_eq::constant_time_eq(&id.data[..16], &self.handle_secret.0);
+        if !secret_ok {
             return Err(nfsstat3::NFS3ERR_BADHANDLE);
         }
         let bytes: [u8; 8] = id.data[16..24]

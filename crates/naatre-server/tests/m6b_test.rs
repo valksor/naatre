@@ -132,16 +132,20 @@ fn open_ctx_with(
                     .write(move |store| {
                         let conn = store.conn();
                         conn.execute(
-                            "INSERT INTO principals(name, role, created_ns) \
+                            &naatre_store::Sql::plain(
+                                "INSERT INTO principals(name, role, created_ns) \
                              VALUES ('writer', 'admin', 0) \
                              ON CONFLICT(name) DO NOTHING",
-                            [],
+                            ),
+                            &naatre_store::pv![],
                         )
                         .unwrap();
                         conn.execute(
-                            "INSERT INTO tokens(principal, blake3, expires_ns, revoked) \
+                            &naatre_store::Sql::plain(
+                                "INSERT INTO tokens(principal, blake3, expires_ns, revoked) \
                              VALUES ('writer', ?1, NULL, 0)",
-                            rusqlite::params![hash],
+                            ),
+                            &naatre_store::pv![hash],
                         )
                         .unwrap();
                         Ok(())
@@ -161,8 +165,10 @@ fn open_ctx_with(
                         store
                             .conn()
                             .execute(
-                                "INSERT OR IGNORE INTO repos(name, created_ns) VALUES (?1, 0)",
-                                [REPO],
+                                &naatre_store::Sql::ignore(
+                                    "INSERT OR IGNORE INTO repos(name, created_ns) VALUES (?1, 0)",
+                                ),
+                                &naatre_store::pv![REPO],
                             )
                             .unwrap();
                         Ok(())
@@ -183,15 +189,19 @@ fn open_ctx_with(
 }
 
 impl Ctx {
-    fn db(&self) -> Connection {
+    fn db(&self) -> naatre_store::Db {
         let conn = Connection::open(&self.db_path).unwrap();
         conn.busy_timeout(Duration::from_secs(5)).unwrap();
-        conn
+        naatre_store::Db::Sqlite(conn)
     }
 
     fn count(&self, sql: &str) -> i64 {
         self.db()
-            .query_row(sql, [], |r| r.get(0))
+            .query_row_map(
+                &naatre_store::Sql::plain_owned(sql.to_string()),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
             .expect("count query")
     }
 }
@@ -394,9 +404,11 @@ impl Ctx {
         ] {
             self.db()
                 .execute(
-                    "INSERT INTO meta(key, value) VALUES (?1, '0') \
+                    &naatre_store::Sql::plain(
+                        "INSERT INTO meta(key, value) VALUES (?1, '0') \
                      ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    rusqlite::params![format!("derive_backfill_done:{kind}")],
+                    ),
+                    &naatre_store::pv![format!("derive_backfill_done:{kind}")],
                 )
                 .unwrap();
         }
@@ -436,18 +448,17 @@ impl Ctx {
     /// The brute force: the full file_changes scan, newest first, straight
     /// from the store — the same rows the fallback route scans.
     fn brute_force_history(&self, path: &str) -> Vec<String> {
-        let conn = self.db();
-        let mut stmt = conn
-            .prepare(
-                "SELECT lower(hex(c.id)) FROM file_changes f \
-                 JOIN changesets c ON c.repo_id = f.repo_id AND c.id = f.cs \
-                 WHERE f.path = ?1 \
-                 ORDER BY c.generation DESC, c.id ASC",
+        self.db()
+            .query_all_map(
+                &naatre_store::Sql::plain(
+                    "SELECT lower(hex(c.id)) FROM file_changes f \
+                     JOIN changesets c ON c.repo_id = f.repo_id AND c.id = f.cs \
+                     WHERE f.path = ?1 \
+                     ORDER BY c.generation DESC, c.id ASC",
+                ),
+                &naatre_store::pv![path],
+                |r| r.get::<String>(0),
             )
-            .unwrap();
-        stmt.query_map([path], |r| r.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<String>>>()
             .unwrap()
     }
 
@@ -512,16 +523,18 @@ impl Ctx {
     fn force_poison(&self, kind: &str, cs_hex: &str, delete_rows: bool) {
         let conn = self.db();
         conn.execute(
-            "UPDATE derive_state SET state = 'poison', lease_expires_ns = NULL \
+            &naatre_store::Sql::plain(
+                "UPDATE derive_state SET state = 'poison', lease_expires_ns = NULL \
              WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?1) AND cs = ?2",
-            rusqlite::params![kind, id_of(cs_hex).0.as_slice()],
+            ),
+            &naatre_store::pv![kind, id_of(cs_hex).0.as_slice()],
         )
         .unwrap();
         if delete_rows {
             assert_eq!(kind, naatre_server::derived::KIND_PATH_HISTORY);
             conn.execute(
-                "DELETE FROM path_history WHERE cs = ?1",
-                rusqlite::params![id_of(cs_hex).0.as_slice()],
+                &naatre_store::Sql::plain("DELETE FROM path_history WHERE cs = ?1"),
+                &naatre_store::pv![id_of(cs_hex).0.as_slice()],
             )
             .unwrap();
         }
@@ -566,25 +579,31 @@ async fn wait_done(ctx: &Ctx, min_done: i64) {
             state
                 .read(move |conn| {
                     let done: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM derive_state WHERE state = 'done'",
-                            [],
+                        .query_row_map(
+                            &naatre_store::Sql::plain(
+                                "SELECT COUNT(*) FROM derive_state WHERE state = 'done'",
+                            ),
+                            &naatre_store::pv![],
                             |r| r.get(0),
                         )
                         .unwrap();
                     let pending: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM derive_state \
+                        .query_row_map(
+                            &naatre_store::Sql::plain(
+                                "SELECT COUNT(*) FROM derive_state \
                              WHERE state IN ('pending','deriving')",
-                            [],
+                            ),
+                            &naatre_store::pv![],
                             |r| r.get(0),
                         )
                         .unwrap();
                     let markers: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM meta \
+                        .query_row_map(
+                            &naatre_store::Sql::plain(
+                                "SELECT COUNT(*) FROM meta \
                              WHERE key LIKE 'derive_backfill_done:%'",
-                            [],
+                            ),
+                            &naatre_store::pv![],
                             |r| r.get(0),
                         )
                         .unwrap();
@@ -616,24 +635,22 @@ async fn wait_done(ctx: &Ctx, min_done: i64) {
                 let state = Arc::clone(state);
                 state
                     .read(move |conn| {
-                        let mut stmt = conn
-                            .prepare(
+                        conn.query_all_map(
+                            &naatre_store::Sql::plain(
                                 "SELECT lower(hex(cs)), state, lease_expires_ns \
                                  FROM derive_state \
                                  WHERE state IN ('pending','deriving')",
-                            )
-                            .unwrap();
-                        Ok(stmt
-                            .query_map([], |r| {
+                            ),
+                            &naatre_store::pv![],
+                            |r| {
                                 Ok((
-                                    r.get::<_, String>(0)?,
-                                    r.get::<_, String>(1)?,
-                                    r.get::<_, Option<i64>>(2)?,
+                                    r.get::<String>(0)?,
+                                    r.get::<String>(1)?,
+                                    r.get::<Option<i64>>(2)?,
                                 ))
-                            })
-                            .unwrap()
-                            .collect::<rusqlite::Result<Vec<_>>>()
-                            .unwrap())
+                            },
+                        )
+                        .map_err(|_| naatre_server::api_error::ApiError::internal())
                     })
                     .await
                     .unwrap()
@@ -1191,8 +1208,12 @@ proptest! {
             // Serve with the production kinds: the boot-time backfill
             // derives the imported backlog through the SAME queue.
             let imported: i64 = {
-                let conn = Connection::open(data.join("naatre.db")).unwrap();
-                conn.query_row("SELECT COUNT(*) FROM changesets", [], |r| r.get(0))
+                naatre_store::Db::Sqlite(Connection::open(data.join("naatre.db")).unwrap())
+                    .query_row_map(
+                        &naatre_store::Sql::plain("SELECT COUNT(*) FROM changesets"),
+                        &naatre_store::pv![],
+                        |r| r.get(0),
+                    )
                     .unwrap()
             };
             let ctx = open_ctx(&data, true);
@@ -1203,12 +1224,18 @@ proptest! {
             let main_hex = {
                 let conn = ctx.db();
                 let repo_id: i64 = conn
-                    .query_row("SELECT id FROM repos WHERE name = ?", [REPO], |r| r.get(0))
+                    .query_row_map(
+                        &naatre_store::Sql::plain("SELECT id FROM repos WHERE name = ?1"),
+                        &naatre_store::pv![REPO],
+                        |r| r.get(0),
+                    )
                     .unwrap();
                 let main: Vec<u8> = conn
-                    .query_row(
-                        "SELECT target FROM refs WHERE repo_id = ?1 AND name = 'main'",
-                        [repo_id],
+                    .query_row_map(
+                        &naatre_store::Sql::plain(
+                            "SELECT target FROM refs WHERE repo_id = ?1 AND name = 'main'",
+                        ),
+                        &naatre_store::pv![repo_id],
                         |r| r.get(0),
                     )
                     .unwrap();
@@ -1246,15 +1273,14 @@ proptest! {
 
             // Merge-base parity for EVERY pair: the route (derived skip
             // lists) vs the brute-force ancestor sets.
-            let cs_ids: Vec<String> = {
-                let conn = ctx.db();
-                conn.prepare("SELECT lower(hex(id)) FROM changesets")
-                    .unwrap()
-                    .query_map([], |r| r.get::<_, String>(0))
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<String>>>()
-                    .unwrap()
-            };
+            let cs_ids: Vec<String> = ctx
+                .db()
+                .query_all_map(
+                    &naatre_store::Sql::plain("SELECT lower(hex(id)) FROM changesets"),
+                    &naatre_store::pv![],
+                    |r| r.get::<String>(0),
+                )
+                .unwrap();
             for i in 0..cs_ids.len() {
                 for j in 0..cs_ids.len() {
                     let resp = ctx
@@ -1301,12 +1327,12 @@ async fn serve_shutdown(state: AppState) {
     task.await.unwrap().expect("serve stopped cleanly");
 }
 
-fn cs_gen_db_from(conn: &Connection, cs_hex: &str) -> Option<i64> {
+fn cs_gen_db_from(conn: &naatre_store::Db, cs_hex: &str) -> Option<i64> {
     let mut bytes = [0u8; 32];
     hex_decode32(cs_hex, &mut bytes)?;
-    conn.query_row(
-        "SELECT generation FROM changesets WHERE id = ?1",
-        [&bytes],
+    conn.query_row_map(
+        &naatre_store::Sql::plain("SELECT generation FROM changesets WHERE id = ?1"),
+        &naatre_store::pv![&bytes],
         |r| r.get(0),
     )
     .ok()
@@ -1325,7 +1351,7 @@ fn hex_decode32(hex: &str, out: &mut [u8; 32]) -> Option<()> {
 /// The brute-force oracle: the HIGHEST generation in the ancestor-set
 /// intersection (a generation, not an id — several max-generation common
 /// ancestors may exist and the walks' tie-breaks legitimately differ).
-fn brute_force_merge_base_gen(conn: &Connection, a: &str, b: &str) -> Option<i64> {
+fn brute_force_merge_base_gen(conn: &naatre_store::Db, a: &str, b: &str) -> Option<i64> {
     let ancestors = |seed: &str| -> std::collections::HashSet<String> {
         let mut set = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::from([seed.to_string()]);
@@ -1337,15 +1363,15 @@ fn brute_force_merge_base_gen(conn: &Connection, a: &str, b: &str) -> Option<i64
             if hex_decode32(&id, &mut bytes).is_none() {
                 continue;
             }
-            let parents: Vec<String> = {
-                let mut stmt = conn
-                    .prepare("SELECT hex(parent) FROM changeset_parents WHERE cs = ?1")
-                    .unwrap();
-                stmt.query_map([&bytes], |r| r.get::<_, String>(0))
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<String>>>()
-                    .unwrap()
-            };
+            let parents: Vec<String> = conn
+                .query_all_map(
+                    &naatre_store::Sql::plain(
+                        "SELECT hex(parent) FROM changeset_parents WHERE cs = ?1",
+                    ),
+                    &naatre_store::pv![&bytes],
+                    |r| r.get::<String>(0),
+                )
+                .unwrap();
             for p in parents {
                 queue.push_back(p.to_lowercase());
             }
@@ -1495,16 +1521,18 @@ async fn poison_degrades_blame_reads() {
     // sibling and the root clean.
     let taint_of = |cs: &str| -> (i64, Option<String>) {
         let conn = ctx.db();
-        conn.query_row(
-            "SELECT s.tainted, CASE WHEN s.poison_cs IS NULL THEN NULL \
+        conn.query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT s.tainted, CASE WHEN s.poison_cs IS NULL THEN NULL \
              ELSE lower(hex(s.poison_cs)) END FROM derive_state s \
              JOIN derive_kinds k ON k.id = s.kind \
              WHERE k.name = 'blame' AND s.cs = ?1",
-            rusqlite::params![id_of(cs).0.as_slice()],
+            ),
+            &naatre_store::pv![id_of(cs).0.as_slice()],
             |r| {
                 Ok((
-                    r.get::<_, i64>(0).unwrap(),
-                    r.get::<_, Option<String>>(1).unwrap(),
+                    r.get::<i64>(0).unwrap(),
+                    r.get::<Option<String>>(1).unwrap(),
                 ))
             },
         )
@@ -1692,15 +1720,17 @@ async fn merge_base_ignores_tainted_commit_graph_skips() {
     ctx.drain().await;
     let graph_row = |cs: &str| -> (String, i64) {
         ctx.db()
-            .query_row(
-                "SELECT s.state, s.tainted FROM derive_state s \
+            .query_row_map(
+                &naatre_store::Sql::plain(
+                    "SELECT s.state, s.tainted FROM derive_state s \
                  JOIN derive_kinds k ON k.id = s.kind \
                  WHERE k.name = ?1 AND s.cs = ?2",
-                rusqlite::params![
+                ),
+                &naatre_store::pv![
                     naatre_server::derived::KIND_COMMIT_GRAPH,
                     id_of(cs).0.as_slice()
                 ],
-                |r| Ok((r.get::<_, String>(0).unwrap(), r.get::<_, i64>(1).unwrap())),
+                |r| Ok((r.get::<String>(0).unwrap(), r.get::<i64>(1).unwrap())),
             )
             .unwrap()
     };
@@ -1736,9 +1766,11 @@ async fn merge_base_ignores_tainted_commit_graph_skips() {
     }]);
     ctx.db()
         .execute(
-            "UPDATE derive_state SET output = ?1 \
+            &naatre_store::Sql::plain(
+                "UPDATE derive_state SET output = ?1 \
              WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?2) AND cs = ?3",
-            rusqlite::params![
+            ),
+            &naatre_store::pv![
                 bogus,
                 naatre_server::derived::KIND_COMMIT_GRAPH,
                 id_of(&c19).0.as_slice()
@@ -1763,9 +1795,11 @@ async fn merge_base_ignores_tainted_commit_graph_skips() {
     // fix reads.)
     ctx.db()
         .execute(
-            "UPDATE derive_state SET tainted = 0 \
+            &naatre_store::Sql::plain(
+                "UPDATE derive_state SET tainted = 0 \
              WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?1) AND cs = ?2",
-            rusqlite::params![
+            ),
+            &naatre_store::pv![
                 naatre_server::derived::KIND_COMMIT_GRAPH,
                 id_of(&c19).0.as_slice()
             ],
@@ -1850,12 +1884,13 @@ impl Deriver for DepthWalkProbe {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        conn: &Connection,
+        conn: &naatre_store::Db,
         repo_id: i64,
         cs: Id,
         _parents_done: &[ParentOut],
     ) -> Result<DerivedOut, DeriveFailure> {
-        let sql_fail = |e: rusqlite::Error| DeriveFailure::Fail(PoisonReason::new(e.to_string()));
+        let sql_fail =
+            |e: naatre_store::DbError| DeriveFailure::Fail(PoisonReason::new(e.to_string()));
         let parent_root = match naatre_server::db::changeset_graph(conn, repo_id, &cs)
             .map_err(sql_fail)?
         {
@@ -1924,12 +1959,14 @@ async fn deep_path_changeset_poisons_on_the_charged_walk_budget() {
 
     let probe_state = |cs: &str| {
         ctx.db()
-            .query_row(
-                "SELECT s.state FROM derive_state s \
+            .query_row_map(
+                &naatre_store::Sql::plain(
+                    "SELECT s.state FROM derive_state s \
                  JOIN derive_kinds k ON k.id = s.kind \
                  WHERE k.name = 'deep-walk-probe' AND s.cs = ?1",
-                rusqlite::params![id_of(cs).0.as_slice()],
-                |r| r.get::<_, String>(0),
+                ),
+                &naatre_store::pv![id_of(cs).0.as_slice()],
+                |r| r.get::<String>(0),
             )
             .unwrap()
     };
@@ -1941,11 +1978,13 @@ async fn deep_path_changeset_poisons_on_the_charged_walk_budget() {
     );
     let (reports, reason): (i64, String) = ctx
         .db()
-        .query_row(
-            "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
-             JOIN derive_kinds k ON k.id = r.kind \
-             WHERE k.name = 'deep-walk-probe'",
-            [],
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
+                 JOIN derive_kinds k ON k.id = r.kind \
+                 WHERE k.name = 'deep-walk-probe'",
+            ),
+            &naatre_store::pv![],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
@@ -1956,11 +1995,13 @@ async fn deep_path_changeset_poisons_on_the_charged_walk_budget() {
     // the probe's budget bound it, not the shape alone.
     let blame_state: String = ctx
         .db()
-        .query_row(
-            "SELECT s.state FROM derive_state s \
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT s.state FROM derive_state s \
              JOIN derive_kinds k ON k.id = s.kind \
              WHERE k.name = 'blame' AND s.cs = ?1",
-            rusqlite::params![id_of(&child).0.as_slice()],
+            ),
+            &naatre_store::pv![id_of(&child).0.as_slice()],
             |r| r.get(0),
         )
         .unwrap();
@@ -2012,12 +2053,14 @@ async fn blame_kind_own_budget_quarantines_a_priced_deep_shape() {
 
     let blame_state = |cs: &str| {
         ctx.db()
-            .query_row(
-                "SELECT s.state FROM derive_state s \
+            .query_row_map(
+                &naatre_store::Sql::plain(
+                    "SELECT s.state FROM derive_state s \
                  JOIN derive_kinds k ON k.id = s.kind \
                  WHERE k.name = 'blame' AND s.cs = ?1",
-                rusqlite::params![id_of(cs).0.as_slice()],
-                |r| r.get::<_, String>(0),
+                ),
+                &naatre_store::pv![id_of(cs).0.as_slice()],
+                |r| r.get::<String>(0),
             )
             .unwrap()
     };
@@ -2029,11 +2072,13 @@ async fn blame_kind_own_budget_quarantines_a_priced_deep_shape() {
     );
     let (_, reason): (i64, String) = ctx
         .db()
-        .query_row(
-            "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
-             JOIN derive_kinds k ON k.id = r.kind \
-             WHERE k.name = 'blame'",
-            [],
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT COUNT(*), MAX(r.reason) FROM derive_reports r \
+                 JOIN derive_kinds k ON k.id = r.kind \
+                 WHERE k.name = 'blame'",
+            ),
+            &naatre_store::pv![],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
@@ -2071,11 +2116,13 @@ async fn wide_directory_touch_derives_done_under_component_pricing() {
 
     let blame_state: String = ctx
         .db()
-        .query_row(
-            "SELECT s.state FROM derive_state s \
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT s.state FROM derive_state s \
              JOIN derive_kinds k ON k.id = s.kind \
              WHERE k.name = 'blame' AND s.cs = ?1",
-            rusqlite::params![id_of(&child).0.as_slice()],
+            ),
+            &naatre_store::pv![id_of(&child).0.as_slice()],
             |r| r.get(0),
         )
         .unwrap();
@@ -2300,17 +2347,19 @@ async fn blame_chain_past_the_cap_degrades_not_hangs() {
     let repo_id: i64 = ctx.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
     let root_tree: Vec<u8> = ctx
         .db()
-        .query_row(
-            "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
-            rusqlite::params![repo_id, id_of(&c0).0.as_slice()],
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            ),
+            &naatre_store::pv![repo_id, id_of(&c0).0.as_slice()],
             |r| r.get(0),
         )
         .unwrap();
     let blame_kind: i64 = ctx
         .db()
-        .query_row(
-            "SELECT id FROM derive_kinds WHERE name = 'blame'",
-            [],
+        .query_row_map(
+            &naatre_store::Sql::plain("SELECT id FROM derive_kinds WHERE name = 'blame'"),
+            &naatre_store::pv![],
             |r| r.get(0),
         )
         .unwrap();
@@ -2324,21 +2373,27 @@ async fn blame_chain_past_the_cap_degrades_not_hangs() {
         let mut id = [0u8; 32];
         id[..8].copy_from_slice(&(0xC5u64 << 32 | i as u64).to_be_bytes());
         conn.execute(
-            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+            &naatre_store::Sql::plain(
+                "INSERT INTO changesets(repo_id, id, canonical, author, message, \
              timestamp_ns, generation, principal, root_tree_id) \
              VALUES (?1, ?2, ?3, 'Ann', 'bulk', 0, ?4, 'm6b-test', ?5)",
-            rusqlite::params![repo_id, id, b"bulk", i, root_tree],
+            ),
+            &naatre_store::pv![repo_id, id, b"bulk", i, &root_tree],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
-            rusqlite::params![repo_id, id, prev],
+            &naatre_store::Sql::plain(
+                "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
+            ),
+            &naatre_store::pv![repo_id, id, &prev],
         )
         .unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state, attempts, output) \
+            &naatre_store::Sql::plain(
+                "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state, attempts, output) \
              VALUES (?1, ?2, ?3, 'done', 0, ?4)",
-            rusqlite::params![blame_kind, repo_id, id, b""],
+            ),
+            &naatre_store::pv![blame_kind, repo_id, id, b""],
         )
         .unwrap();
         prev = id;
@@ -2382,17 +2437,19 @@ async fn blame_chain_under_the_cap_answers_in_full() {
     let repo_id: i64 = ctx.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
     let root_tree: Vec<u8> = ctx
         .db()
-        .query_row(
-            "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
-            rusqlite::params![repo_id, id_of(&c0).0.as_slice()],
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            ),
+            &naatre_store::pv![repo_id, id_of(&c0).0.as_slice()],
             |r| r.get(0),
         )
         .unwrap();
     let blame_kind: i64 = ctx
         .db()
-        .query_row(
-            "SELECT id FROM derive_kinds WHERE name = 'blame'",
-            [],
+        .query_row_map(
+            &naatre_store::Sql::plain("SELECT id FROM derive_kinds WHERE name = 'blame'"),
+            &naatre_store::pv![],
             |r| r.get(0),
         )
         .unwrap();
@@ -2406,21 +2463,27 @@ async fn blame_chain_under_the_cap_answers_in_full() {
         let mut id = [0u8; 32];
         id[..8].copy_from_slice(&(0xC6u64 << 32 | i as u64).to_be_bytes());
         conn.execute(
-            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+            &naatre_store::Sql::plain(
+                "INSERT INTO changesets(repo_id, id, canonical, author, message, \
              timestamp_ns, generation, principal, root_tree_id) \
              VALUES (?1, ?2, ?3, 'Ann', 'bulk', 0, ?4, 'm6b-test', ?5)",
-            rusqlite::params![repo_id, id, b"bulk", i, root_tree],
+            ),
+            &naatre_store::pv![repo_id, id, b"bulk", i, &root_tree],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
-            rusqlite::params![repo_id, id, prev],
+            &naatre_store::Sql::plain(
+                "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, 0)",
+            ),
+            &naatre_store::pv![repo_id, id, &prev],
         )
         .unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state, attempts, output) \
+            &naatre_store::Sql::plain(
+                "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state, attempts, output) \
              VALUES (?1, ?2, ?3, 'done', 0, ?4)",
-            rusqlite::params![blame_kind, repo_id, id, b""],
+            ),
+            &naatre_store::pv![blame_kind, repo_id, id, b""],
         )
         .unwrap();
         prev = id;
@@ -2475,9 +2538,11 @@ async fn merge_base_survives_a_self_referential_skip_row() {
     }]);
     ctx.db()
         .execute(
-            "UPDATE derive_state SET output = ?1 \
+            &naatre_store::Sql::plain(
+                "UPDATE derive_state SET output = ?1 \
              WHERE kind = (SELECT id FROM derive_kinds WHERE name = ?2) AND cs = ?3",
-            rusqlite::params![
+            ),
+            &naatre_store::pv![
                 bogus,
                 naatre_server::derived::KIND_COMMIT_GRAPH,
                 id_of(&tip).0.as_slice()
@@ -2519,9 +2584,11 @@ async fn backfill_marker_lands_only_over_a_full_anti_join() {
     let repo_id: i64 = ctx.count(&format!("SELECT id FROM repos WHERE name = '{REPO}'"));
     let root_tree: Vec<u8> = ctx
         .db()
-        .query_row(
-            "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
-            rusqlite::params![repo_id, id_of(&c0).0.as_slice()],
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            ),
+            &naatre_store::pv![repo_id, id_of(&c0).0.as_slice()],
             |r| r.get(0),
         )
         .unwrap();
@@ -2534,10 +2601,12 @@ async fn backfill_marker_lands_only_over_a_full_anti_join() {
             let mut id = [0u8; 32];
             id[..8].copy_from_slice(&(0xC7u64 << 32 | i as u64).to_be_bytes());
             conn.execute(
-                "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+                &naatre_store::Sql::plain(
+                    "INSERT INTO changesets(repo_id, id, canonical, author, message, \
                  timestamp_ns, generation, principal, root_tree_id) \
                  VALUES (?1, ?2, ?3, 'Ann', 'bulk', 0, ?4, 'm6b-test', ?5)",
-                rusqlite::params![repo_id, id, b"bulk", 1_000 + i, root_tree],
+                ),
+                &naatre_store::pv![repo_id, id, b"bulk", 1_000 + i, &root_tree],
             )
             .unwrap();
         }
@@ -2594,19 +2663,26 @@ async fn backfill_after_bulk_import() {
     let dir_holder = import_fixture(&git);
     let data = dir_holder.path().join("data");
     let imported: i64 = {
-        let conn = Connection::open(data.join("naatre.db")).unwrap();
-        conn.query_row("SELECT COUNT(*) FROM changesets", [], |r| r.get(0))
+        naatre_store::Db::Sqlite(Connection::open(data.join("naatre.db")).unwrap())
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT COUNT(*) FROM changesets"),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
             .unwrap()
     };
     assert!(imported >= 4, "root, main edit, side, merge: {imported}");
 
     // The M5-era shape on disk: changesets, and NOT ONE derive row.
     {
-        let conn = Connection::open(data.join("naatre.db")).unwrap();
+        let conn = naatre_store::Db::Sqlite(Connection::open(data.join("naatre.db")).unwrap());
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM derive_state", [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
+            conn.query_row_map(
+                &naatre_store::Sql::plain("SELECT COUNT(*) FROM derive_state"),
+                &naatre_store::pv![],
+                |r| r.get::<i64>(0),
+            )
+            .unwrap(),
             0
         );
     }
@@ -2619,31 +2695,44 @@ async fn backfill_after_bulk_import() {
 
     let conn = ctx.db();
     assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM derive_reports", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
+        conn.query_row_map(
+            &naatre_store::Sql::plain("SELECT COUNT(*) FROM derive_reports"),
+            &naatre_store::pv![],
+            |r| r.get::<i64>(0)
+        )
+        .unwrap(),
         0,
         "zero poison after backfill"
     );
     let blame_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM blame_state", [], |r| r.get(0))
+        .query_row_map(
+            &naatre_store::Sql::plain("SELECT COUNT(*) FROM blame_state"),
+            &naatre_store::pv![],
+            |r| r.get(0),
+        )
         .unwrap();
     assert!(
         blame_rows >= imported,
         "diff-state rows for the imports: {blame_rows}"
     );
     let history_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM path_history", [], |r| r.get(0))
+        .query_row_map(
+            &naatre_store::Sql::plain("SELECT COUNT(*) FROM path_history"),
+            &naatre_store::pv![],
+            |r| r.get(0),
+        )
         .unwrap();
     assert!(
         history_rows >= imported,
         "index rows for the imports: {history_rows}"
     );
     let graph_rows: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM derive_state s JOIN derive_kinds k ON k.id = s.kind \
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT COUNT(*) FROM derive_state s JOIN derive_kinds k ON k.id = s.kind \
              WHERE k.name = 'commit_graph' AND s.state = 'done'",
-            [],
+            ),
+            &naatre_store::pv![],
             |r| r.get(0),
         )
         .unwrap();
@@ -2652,19 +2741,16 @@ async fn backfill_after_bulk_import() {
     // The purity flags exist and are well-formed: every node's entry 0 is
     // the pure hop-1 first-parent entry; a node whose FIRST parent is the
     // merge carries an impure higher entry (its span contains the branch).
-    let mut stmt = conn
-        .prepare(
-            "SELECT s.cs, s.output FROM derive_state s \
-             JOIN derive_kinds k ON k.id = s.kind \
-             WHERE k.name = 'commit_graph' AND s.state = 'done' AND s.output IS NOT NULL",
+    let outputs: Vec<(Vec<u8>, Vec<u8>)> = conn
+        .query_all_map(
+            &naatre_store::Sql::plain(
+                "SELECT s.cs, s.output FROM derive_state s \
+                 JOIN derive_kinds k ON k.id = s.kind \
+                 WHERE k.name = 'commit_graph' AND s.state = 'done' AND s.output IS NOT NULL",
+            ),
+            &naatre_store::pv![],
+            |r| Ok((r.get::<Vec<u8>>(0)?, r.get::<Vec<u8>>(1)?)),
         )
-        .unwrap();
-    let outputs = stmt
-        .query_map([], |r| {
-            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
     let mut pure_entry0 = 0;
     let mut impure_any = 0;
@@ -2734,7 +2820,7 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
     // state exactly.
     let db_path = data.join("naatre.db");
     {
-        let conn = Connection::open(&db_path).unwrap();
+        let conn = naatre_store::Db::Sqlite(Connection::open(&db_path).unwrap());
         conn.execute_batch(
             "DROP TABLE derive_state; DROP TABLE derive_reports; DROP TABLE derive_kinds;
              DROP TABLE blame_state; DROP TABLE path_history;
@@ -2743,15 +2829,19 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
         )
         .unwrap();
         let version: String = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'schema_version'",
-                [],
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT value FROM meta WHERE key = 'schema_version'"),
+                &naatre_store::pv![],
                 |r| r.get(0),
             )
             .unwrap();
         assert_eq!(version, "3", "now an M5-era database");
         let cs: i64 = conn
-            .query_row("SELECT COUNT(*) FROM changesets", [], |r| r.get(0))
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT COUNT(*) FROM changesets"),
+                &naatre_store::pv![],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(cs, 4, "the changesets survived");
     }
@@ -2761,11 +2851,11 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
     // queue derives it.
     let ctx = open_ctx(&data, true);
     {
-        let conn = Connection::open(&db_path).unwrap();
+        let conn = naatre_store::Db::Sqlite(Connection::open(&db_path).unwrap());
         let version: String = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'schema_version'",
-                [],
+            .query_row_map(
+                &naatre_store::Sql::plain("SELECT value FROM meta WHERE key = 'schema_version'"),
+                &naatre_store::pv![],
                 |r| r.get(0),
             )
             .unwrap();
@@ -2823,17 +2913,21 @@ async fn wait_done_frozen_clock(state: &AppState, min_done: i64) {
             state
                 .read(move |conn| {
                     let done: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM derive_state WHERE state = 'done'",
-                            [],
+                        .query_row_map(
+                            &naatre_store::Sql::plain(
+                                "SELECT COUNT(*) FROM derive_state WHERE state = 'done'",
+                            ),
+                            &naatre_store::pv![],
                             |r| r.get(0),
                         )
                         .unwrap();
                     let pending: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM derive_state \
+                        .query_row_map(
+                            &naatre_store::Sql::plain(
+                                "SELECT COUNT(*) FROM derive_state \
                              WHERE state IN ('pending','deriving')",
-                            [],
+                            ),
+                            &naatre_store::pv![],
                             |r| r.get(0),
                         )
                         .unwrap();
@@ -3072,21 +3166,17 @@ async fn settled_pending_check_never_scans_changesets() {
     // 20k changesets inserted DIRECTLY (the offline-import shape: no
     // create-time enqueue, so no derive rows at all).
     {
-        let mut conn = ctx.db();
+        let conn = ctx.db();
         let tx = conn.transaction().unwrap();
-        {
-            let mut stmt = tx
-                .prepare(
-                    "INSERT INTO changesets(repo_id, id, canonical, author, message, \
-                     timestamp_ns, generation, principal, root_tree_id) \
-                     SELECT (SELECT id FROM repos WHERE name = ?1), ?2, x'', 'A', 'm', 0, ?3, 'A', NULL",
-                )
-                .unwrap();
-            for i in 0..20_000i64 {
-                let mut id = [0u8; 32];
-                id[..8].copy_from_slice(&i.to_be_bytes());
-                stmt.execute(rusqlite::params![REPO, id, i]).unwrap();
-            }
+        let insert = &naatre_store::Sql::plain(
+            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+             timestamp_ns, generation, principal, root_tree_id) \
+             SELECT (SELECT id FROM repos WHERE name = ?1), ?2, x'', 'A', 'm', 0, ?3, 'A', NULL",
+        );
+        for i in 0..20_000i64 {
+            let mut id = [0u8; 32];
+            id[..8].copy_from_slice(&i.to_be_bytes());
+            tx.execute(insert, &naatre_store::pv![REPO, id, i]).unwrap();
         }
         tx.commit().unwrap();
     }
@@ -3103,7 +3193,9 @@ async fn settled_pending_check_never_scans_changesets() {
     // NULL per parameter.)
     let plan_of = |sql: &str| -> Vec<String> {
         let conn = ctx.db();
-        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        // SQLite-only pin (EXPLAIN QUERY PLAN has no Postgres analog).
+        let raw = conn.sqlite_raw().expect("EXPLAIN pin runs on SQLite");
+        let mut stmt = raw.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
         let nulls = vec![None::<i64>; stmt.parameter_count()];
         stmt.query_map(rusqlite::params_from_iter(nulls.iter()), |r| {
             r.get::<_, String>(3)
@@ -3139,8 +3231,8 @@ async fn settled_pending_check_never_scans_changesets() {
     // with the queue fully drained.
     ctx.db()
         .execute(
-            "DELETE FROM meta WHERE key LIKE 'derive_backfill_done:%'",
-            [],
+            &naatre_store::Sql::plain("DELETE FROM meta WHERE key LIKE 'derive_backfill_done:%'"),
+            &naatre_store::pv![],
         )
         .unwrap();
     let resp = ctx.get(&format!("/v1/repos/{REPO}/log?path=f.txt")).await;
@@ -3185,26 +3277,32 @@ async fn stale_backfill_marker_cleared_at_boot() {
     let c2 = {
         let mut bytes = [0u8; 32];
         bytes[0] = 0xC2;
-        let conn = Connection::open(data_path.join("naatre.db")).unwrap();
+        let conn = naatre_store::Db::Sqlite(Connection::open(data_path.join("naatre.db")).unwrap());
         conn.execute(
-            "INSERT INTO changesets(repo_id, id, canonical, author, message, \
+            &naatre_store::Sql::plain(
+                "INSERT INTO changesets(repo_id, id, canonical, author, message, \
              timestamp_ns, generation, principal, root_tree_id) \
              SELECT id, ?2, x'', 'Bob', 'imported', 0, 1, 'Bob', NULL \
              FROM repos WHERE name = ?1",
-            rusqlite::params![REPO, bytes],
+            ),
+            &naatre_store::pv![REPO, bytes],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) \
+            &naatre_store::Sql::plain(
+                "INSERT INTO changeset_parents(repo_id, cs, parent, ord) \
              SELECT (SELECT id FROM repos WHERE name = ?1), ?2, ?3, 0",
-            rusqlite::params![REPO, bytes, id_of(&c1).0.as_slice()],
+            ),
+            &naatre_store::pv![REPO, bytes, id_of(&c1).0.as_slice()],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
+            &naatre_store::Sql::plain(
+                "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
              SELECT id, ?2, 'f.txt', 0, NULL, NULL, 0 \
              FROM repos WHERE name = ?1",
-            rusqlite::params![REPO, bytes],
+            ),
+            &naatre_store::pv![REPO, bytes],
         )
         .unwrap();
         Id(bytes).to_hex()
@@ -3224,9 +3322,11 @@ async fn stale_backfill_marker_cleared_at_boot() {
         serve_shutdown(Arc::clone(&ctx.state)).await;
         let markers: i64 = ctx
             .db()
-            .query_row(
-                "SELECT COUNT(*) FROM meta WHERE key LIKE 'derive_backfill_done:%'",
-                [],
+            .query_row_map(
+                &naatre_store::Sql::plain(
+                    "SELECT COUNT(*) FROM meta WHERE key LIKE 'derive_backfill_done:%'",
+                ),
+                &naatre_store::pv![],
                 |r| r.get(0),
             )
             .unwrap();
@@ -3253,18 +3353,22 @@ async fn stale_backfill_marker_cleared_at_boot() {
                 state
                     .read(move |conn| {
                         let markers: i64 = conn
-                            .query_row(
-                                "SELECT COUNT(*) FROM meta \
+                            .query_row_map(
+                                &naatre_store::Sql::plain(
+                                    "SELECT COUNT(*) FROM meta \
                                  WHERE key LIKE 'derive_backfill_done:%'",
-                                [],
+                                ),
+                                &naatre_store::pv![],
                                 |r| r.get(0),
                             )
                             .unwrap();
                         let pending: i64 = conn
-                            .query_row(
-                                "SELECT COUNT(*) FROM derive_state \
+                            .query_row_map(
+                                &naatre_store::Sql::plain(
+                                    "SELECT COUNT(*) FROM derive_state \
                                  WHERE state IN ('pending','deriving')",
-                                [],
+                                ),
+                                &naatre_store::pv![],
                                 |r| r.get(0),
                             )
                             .unwrap();

@@ -47,6 +47,7 @@ async-trait = "0.1"
 # Stale-mount-dir cleanup (`kill(pid, 0)` liveness) for the per-mount cache
 # dirs (already in the lockfile via getrandom).
 libc = "0.2"
+constant_time_eq = "0.3"
 
 # FUSE front-end for `naatre mount --fuse` (M8b, Linux-only target): the
 # adapter lives behind `#[cfg(target_os = "linux")]`, so this dep never

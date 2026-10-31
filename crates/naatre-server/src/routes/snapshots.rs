@@ -268,9 +268,7 @@ pub async fn create(
             // One transaction: tree rows, the presence check, and the
             // snapshot row commit together or not at all (the plan's "no
             // row" for rejected POSTs covers the tree rows too).
-            let tx = conn
-                .unchecked_transaction()
-                .map_err(ApiError::log_internal)?;
+            let tx = conn.transaction().map_err(ApiError::log_internal)?;
             let writes: Vec<TreeWrite> = trees
                 .iter()
                 .map(|(id, (canonical, tree))| TreeWrite {

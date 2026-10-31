@@ -4,6 +4,7 @@
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
+use naatre_store::Db;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -237,12 +238,7 @@ pub async fn cas_ref(
 /// True when `new` contains `old` in this repo's changeset graph
 /// (`merge_base(old, new) == old`). Both endpoints must be known changesets
 /// here — the caller refuses otherwise.
-fn ref_contains(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    old: &Id,
-    new: &Id,
-) -> Result<bool, ApiError> {
+fn ref_contains(conn: &Db, repo_id: i64, old: &Id, new: &Id) -> Result<bool, ApiError> {
     let fetch = |id: &Id| {
         db::changeset_graph(conn, repo_id, id)
             .map(|g| g.map(|g| (g.generation, g.parents)))

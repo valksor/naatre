@@ -24,11 +24,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
+use naatre_store::backend::{BackendConfig, MetaKind};
 use naatre_store::cas::Cas;
 use naatre_store::data_dir::DataDir;
 use naatre_store::ephemeral::Ephemeral;
 use naatre_store::error::StoreError;
 use naatre_store::store::Store;
+use naatre_store::{BlobStore, Db};
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
@@ -84,14 +86,17 @@ pub(crate) fn tick_auth_failure(inner: &mut AuthFailInner, key: &str, now_ns: u6
     true
 }
 
-/// Pool of read-only SQLite connections over the same DB file. WAL keeps
-/// readers lock-free beside the single writer, so GET handlers and auth
-/// lookups run without touching the write slot. Each connection sits behind
-/// its own std [`Mutex`]; [`ReadPool::checkout`] hands them out round-robin
-/// and the guard is locked/released entirely inside the `spawn_blocking`
-/// closure (never across an `.await`).
+/// Pool of read-only metadata connections over the same store. WAL keeps
+/// SQLite readers lock-free beside the single writer, so GET handlers and
+/// auth lookups run without touching the write slot; on Postgres each pool
+/// connection is a session set read-only (`SET
+/// default_transaction_read_only = on`), mirroring the SQLite
+/// `SQLITE_OPEN_READ_ONLY` guard. Each connection sits behind its own std
+/// [`Mutex`]; [`ReadPool::checkout`] hands them out round-robin and the
+/// guard is locked/released entirely inside the `spawn_blocking` closure
+/// (never across an `.await`).
 struct ReadPool {
-    conns: Vec<Arc<Mutex<rusqlite::Connection>>>,
+    conns: Vec<Arc<Mutex<Db>>>,
     next: AtomicUsize,
 }
 
@@ -104,17 +109,36 @@ impl ReadPool {
     /// run this AFTER [`Store::open`]: the schema must exist and the WAL
     /// must be recovered by the read-write connection before a read-only
     /// connection can open.
-    fn open(db_path: &Path, size: usize) -> rusqlite::Result<ReadPool> {
+    fn open(db_path: &Path, size: usize) -> Result<ReadPool, StoreError> {
         let conns = (0..size)
             .map(|_| {
                 let conn = rusqlite::Connection::open_with_flags(
                     db_path,
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-                )?;
-                conn.busy_timeout(Duration::from_millis(naatre_store::store::BUSY_TIMEOUT_MS))?;
-                Ok(Arc::new(Mutex::new(conn)))
+                )
+                .map_err(StoreError::Sqlite)?;
+                conn.busy_timeout(Duration::from_millis(naatre_store::store::BUSY_TIMEOUT_MS))
+                    .map_err(StoreError::Sqlite)?;
+                Ok(Arc::new(Mutex::new(Db::Sqlite(conn))))
             })
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(ReadPool {
+            conns,
+            next: AtomicUsize::new(0),
+        })
+    }
+
+    /// Opens `size` read-only Postgres connections from the parsed DSN.
+    /// Callers run this AFTER [`Store::open_backend`] (migrations must be
+    /// current before reads start).
+    fn open_postgres(cfg: &BackendConfig, size: usize) -> Result<ReadPool, StoreError> {
+        let pg = cfg
+            .pg
+            .as_ref()
+            .expect("open_postgres requires a parsed Postgres config");
+        let conns = (0..size)
+            .map(|_| Ok(Arc::new(Mutex::new(Db::connect_postgres(pg, true)?))))
+            .collect::<Result<Vec<_>, StoreError>>()?;
         Ok(ReadPool {
             conns,
             next: AtomicUsize::new(0),
@@ -122,7 +146,7 @@ impl ReadPool {
     }
 
     /// The next connection, round-robin.
-    fn checkout(&self) -> Arc<Mutex<rusqlite::Connection>> {
+    fn checkout(&self) -> Arc<Mutex<Db>> {
         let i = self.next.fetch_add(1, Ordering::Relaxed) % self.conns.len();
         Arc::clone(&self.conns[i])
     }
@@ -139,9 +163,11 @@ pub struct ServerState {
     // `Arc` so the spawn_blocking closures own their reference (they must be
     // 'static); the lock itself is a plain std Mutex.
     store: Arc<Mutex<Store>>,
-    /// History CAS handle over the same data dir (`ServerState::open`
-    /// creates it). Blocking CAS work goes through [`ServerState::blocking`].
-    pub cas: Arc<Cas>,
+    /// History blob store over the same data dir (`ServerState::open`
+    /// creates the filesystem CAS; `open_backend` swaps in the configured
+    /// backend behind the trait). Blocking CAS work goes through
+    /// [`ServerState::blocking`].
+    pub cas: Arc<dyn BlobStore>,
     /// Ephemeral snapshot store over the same data dir (`ephemeral/<snap>/`).
     /// Blocking filesystem work goes through [`ServerState::blocking`].
     pub ephemeral: Arc<Ephemeral>,
@@ -164,6 +190,9 @@ pub struct ServerState {
     /// rule is that none (DSNs, tokens, keys) may ever reach the banner,
     /// request logs, or error strings.
     pub data_dir_display: PathBuf,
+    /// Which metadata backend is open — a banner fact (the kind name only,
+    /// never the DSN/endpoint).
+    pub meta_backend: &'static str,
     /// How long graceful shutdown waits for in-flight requests before
     /// forcing return. Default 30 s.
     pub drain_timeout: Duration,
@@ -256,7 +285,7 @@ impl ServerState {
     pub fn open(data: DataDir) -> Result<Self, StoreError> {
         let data_dir_display = data.path().to_path_buf();
         let db_path = data.db_path();
-        let cas = Arc::new(Cas::new(&data)?);
+        let cas: Arc<dyn BlobStore> = Arc::new(Cas::new(&data)?);
         let ephemeral = Arc::new(Ephemeral::new(&data)?);
         // The write store opens first: migrations run there, and its
         // connection recovers the WAL before any read-only connection
@@ -264,6 +293,50 @@ impl ServerState {
         let store = Arc::new(Mutex::new(Store::open(data)?));
         let read_pool = ReadPool::open(&db_path, READ_POOL_SIZE)?;
         Ok(Self {
+            meta_backend: MetaKind::Sqlite.as_str(),
+            store,
+            read_pool,
+            cas,
+            ephemeral,
+            clock: Arc::new(system_now_ns),
+            auth_fail: Mutex::new(AuthFailInner::default()),
+            land_joins: LandJoins::default(),
+            data_dir_display,
+            drain_timeout: Duration::from_secs(30),
+            join_deadline: JOIN_DEADLINE,
+            snapshot_gc_enabled: true,
+            snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
+            derive: Arc::new(crate::derive::DeriveRegistry::default()),
+            derive_queue_enabled: true,
+            derive_queue_interval: crate::serve::DERIVE_QUEUE_INTERVAL,
+            derive_backfill_enabled: true,
+            derive_backfill_delay: Duration::ZERO,
+            derive_backfill_batch_size: crate::derive::BACKFILL_BATCH,
+            blame_max_blob_bytes: crate::routes::history::BLAME_MAX_BLOB_BYTES,
+            derive_test_busy_abort: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// [`ServerState::open`] for the CONFIGURED backend: the metadata
+    /// connection comes from `cfg` (SQLite default, or Postgres via the
+    /// parsed DSN), while the blob CAS and ephemeral namespace stay on the
+    /// data dir. The caller must have run
+    /// [`naatre_store::backend::check_data_dir_backend`] — the
+    /// config/data-dir agreement is refused upstream, not here.
+    pub fn open_backend(data: DataDir, cfg: &BackendConfig) -> Result<Self, StoreError> {
+        let data_dir_display = data.path().to_path_buf();
+        let db_path = data.db_path();
+        let cas: Arc<dyn BlobStore> = Arc::new(Cas::new(&data)?);
+        let ephemeral = Arc::new(Ephemeral::new(&data)?);
+        // The write store opens first: migrations run there (and SQLite's
+        // WAL is recovered) before any read-only connection opens.
+        let store = Arc::new(Mutex::new(Store::open_backend(data, cfg)?));
+        let read_pool = match cfg.meta {
+            MetaKind::Sqlite => ReadPool::open(&db_path, READ_POOL_SIZE)?,
+            MetaKind::Postgres => ReadPool::open_postgres(cfg, READ_POOL_SIZE)?,
+        };
+        Ok(Self {
+            meta_backend: cfg.meta.as_str(),
             store,
             read_pool,
             cas,
@@ -298,7 +371,7 @@ impl ServerState {
     ) -> Result<(), StoreError> {
         let name = deriver.kind();
         let store = lock_store(&self.store);
-        let id = crate::db::derive_kind_seed(store.conn(), name).map_err(StoreError::Sqlite)?;
+        let id = crate::db::derive_kind_seed(store.conn(), name)?;
         let registry = Arc::make_mut(&mut self.derive);
         registry.register(crate::derive::RegisteredKind { name, id, deriver });
         Ok(())
@@ -342,7 +415,7 @@ impl ServerState {
     /// WRITE contention, which this pool never enters.
     pub async fn read<T, F>(&self, f: F) -> Result<T, ApiError>
     where
-        F: FnOnce(&rusqlite::Connection) -> Result<T, ApiError> + Send + 'static,
+        F: FnOnce(&Db) -> Result<T, ApiError> + Send + 'static,
         T: Send + 'static,
     {
         let conn = self.read_pool.checkout();
@@ -400,15 +473,20 @@ impl ServerState {
 
     /// Test hook: holds a write transaction (`BEGIN IMMEDIATE`) on the store
     /// for `ms` milliseconds, simulating a slow writer. Panic on SQL failure
-    /// so tests never mistake a broken hook for a passing one.
+    /// so tests never mistake a broken hook for a passing one. Postgres has
+    /// no BEGIN IMMEDIATE — the in-process slot is what the test observes,
+    /// so a plain transaction holds it there.
     #[cfg(any(test, debug_assertions))]
     pub async fn hold_write_txn(&self, ms: u64) {
         let store = Arc::clone(&self.store);
         tokio::task::spawn_blocking(move || {
             let guard = lock_store(&store);
             let conn = guard.conn();
-            conn.execute_batch("BEGIN IMMEDIATE; SELECT 1;")
-                .expect("hold_write_txn: BEGIN IMMEDIATE");
+            let begin = match conn {
+                Db::Sqlite(_) => "BEGIN IMMEDIATE; SELECT 1;",
+                Db::Postgres(_) => "BEGIN; SELECT 1;",
+            };
+            conn.execute_batch(begin).expect("hold_write_txn: BEGIN");
             std::thread::sleep(Duration::from_millis(ms));
             conn.execute_batch("COMMIT;")
                 .expect("hold_write_txn: COMMIT");

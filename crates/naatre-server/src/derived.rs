@@ -36,7 +36,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::Connection;
+use naatre_store::{Db, DbError};
 
 use naatre_core::ids::Id;
 
@@ -65,7 +65,7 @@ pub fn production_kinds() -> Vec<Arc<dyn Deriver>> {
 /// A rusqlite failure is a deriver `Err` — a failed attempt (the queue
 /// retries, then quarantines). SQL failures are usually transient
 /// (busy-slot shapes), not structural.
-fn sql_fail(e: rusqlite::Error) -> DeriveFailure {
+fn sql_fail(e: DbError) -> DeriveFailure {
     DeriveFailure::Fail(PoisonReason::new(e.to_string()))
 }
 
@@ -107,7 +107,7 @@ impl Deriver for BlameDeriver {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        conn: &Connection,
+        conn: &Db,
         repo_id: i64,
         cs: Id,
         _parents_done: &[ParentOut],
@@ -182,7 +182,7 @@ impl Deriver for PathHistoryDeriver {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        conn: &Connection,
+        conn: &Db,
         repo_id: i64,
         cs: Id,
         _parents_done: &[ParentOut],
@@ -284,11 +284,7 @@ impl CommitGraphDeriver {
     /// (not registered — impossible for a registered kind past backfill),
     /// is not done (poisoned first parent — the child builds on fewer
     /// jumps), or its bytes do not decode.
-    fn skips_of(
-        conn: &Connection,
-        repo_id: i64,
-        cs: &Id,
-    ) -> Result<Option<Vec<SkipEntry>>, DeriveFailure> {
+    fn skips_of(conn: &Db, repo_id: i64, cs: &Id) -> Result<Option<Vec<SkipEntry>>, DeriveFailure> {
         let Some(kind_id) = db::derive_kind_id(conn, KIND_COMMIT_GRAPH).map_err(sql_fail)? else {
             return Ok(None);
         };
@@ -317,7 +313,7 @@ impl Deriver for CommitGraphDeriver {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        conn: &Connection,
+        conn: &Db,
         repo_id: i64,
         cs: Id,
         _parents_done: &[ParentOut],

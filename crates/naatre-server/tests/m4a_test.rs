@@ -156,8 +156,12 @@ impl TestApp {
         let canonical = changeset::encode(&cs).unwrap();
         let id = object_id(Kind::Changeset, &canonical);
         let base_tree = Id::from_hex(base_tree_hex).unwrap();
-        let mut node = MemNode::load(&self.db(), Some(base_tree)).unwrap();
-        node.apply(std::slice::from_ref(delta)).unwrap();
+        let node = {
+            let conn = self.db();
+            let mut node = MemNode::load(&naatre_store::Db::Sqlite(conn), Some(base_tree)).unwrap();
+            node.apply(std::slice::from_ref(delta)).unwrap();
+            node
+        };
         let (root, _, trees) = node.collect().unwrap();
 
         let conn = self.db();
@@ -211,7 +215,7 @@ impl TestApp {
             .unwrap();
             for e in &t.entries {
                 conn.execute(
-                    "INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
+"INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     rusqlite::params![
                         t.id.0.as_slice(),

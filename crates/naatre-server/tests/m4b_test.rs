@@ -150,7 +150,7 @@ async fn rebased_nodes_satisfy_the_root_tree_oracle() {
     // Per rebased node: replay its delta from its parent's root and compare
     // against both the recorded root_tree_id and the /trees materialization
     // of that root.
-    let conn = m4b_common::conn_at(&f.t.db_path);
+    let conn = naatre_store::Db::Sqlite(m4b_common::conn_at(&f.t.db_path));
     for (node, parent) in [(&n2, &c2p), (&n3, &n2)] {
         let (node_changes, parent_root, recorded_root) =
             tokio::join!(changes_of(&f, node), root_of(&f, parent), root_of(&f, node),);

@@ -3,6 +3,9 @@
 
 use std::path::PathBuf;
 
+use crate::backend::BackendError;
+use crate::meta::DbError;
+
 /// Errors produced by the data dir, migrations, CAS, and snapshot storage.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -11,6 +14,12 @@ pub enum StoreError {
 
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+
+    #[error("{0}")]
+    Db(#[from] DbError),
+
+    #[error("{0}")]
+    Backend(#[from] BackendError),
 
     #[error("zstd error: {0}")]
     Zstd(String),

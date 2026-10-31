@@ -35,13 +35,13 @@
 
 use std::sync::OnceLock;
 
-use rusqlite::Connection;
+use naatre_store::Db;
 
 use naatre_core::changeset::{self, Changeset, Op};
 use naatre_core::error::CoreError;
 use naatre_core::ids::{Id, Kind, object_id};
 
-use naatre_store::cas::Cas;
+use naatre_store::BlobStore;
 use naatre_store::store::Store;
 
 use crate::api_code::ApiCode;
@@ -117,20 +117,33 @@ pub(crate) struct LandDone {
 /// 2). Disarmed only after a successful COMMIT, so the post-commit crash
 /// point cannot roll back settled state.
 struct TxnGuard<'a> {
-    conn: &'a Connection,
+    /// The transaction guard: BEGIN has run on the connection; DROP (or
+    /// `commit`) ends it.
+    guard: Option<naatre_store::DbTx<'a>>,
     armed: bool,
 }
 
 impl<'a> TxnGuard<'a> {
-    fn begin(conn: &'a Connection) -> Result<TxnGuard<'a>, ApiError> {
-        conn.execute_batch("BEGIN IMMEDIATE")
+    fn begin(conn: &'a Db) -> Result<TxnGuard<'a>, ApiError> {
+        // BEGIN IMMEDIATE takes the SQLite write lock up front; Postgres
+        // has no immediate/deferred distinction and takes locks at first
+        // write — under the single-writer slot the two behave identically.
+        let guard = conn
+            .transaction_immediate()
             .map_err(ApiError::log_internal)?;
-        Ok(TxnGuard { conn, armed: true })
+        Ok(TxnGuard {
+            guard: Some(guard),
+            armed: true,
+        })
     }
 
     fn commit(mut self) -> Result<(), ApiError> {
-        self.conn
-            .execute_batch("COMMIT")
+        // The guard's COMMIT; the DbTx's own drop-rollback is disarmed by
+        // the successful commit inside.
+        self.guard
+            .take()
+            .expect("txn guard present until commit")
+            .commit()
             .map_err(ApiError::log_internal)?;
         self.armed = false;
         Ok(())
@@ -140,7 +153,9 @@ impl<'a> TxnGuard<'a> {
 impl Drop for TxnGuard<'_> {
     fn drop(&mut self) {
         if self.armed {
-            let _ = self.conn.execute_batch("ROLLBACK");
+            // DbTx's Drop issues the ROLLBACK (SQLite engine-level, or the
+            // Postgres statement).
+            self.guard.take();
         }
     }
 }
@@ -153,7 +168,7 @@ fn id_of(bytes: &[u8]) -> Option<Id> {
 /// Runs one land inside its single write transaction.
 pub(crate) fn execute(
     store: &mut Store,
-    cas: &Cas,
+    cas: &dyn BlobStore,
     derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
 ) -> Result<LandDone, ApiError> {
@@ -187,8 +202,8 @@ pub(crate) fn execute(
 }
 
 fn land_in_txn(
-    conn: &Connection,
-    cas: &Cas,
+    conn: &Db,
+    cas: &dyn BlobStore,
     derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
     repo_id: i64,
@@ -521,7 +536,7 @@ fn land_in_txn(
 /// the caller's transaction.
 #[allow(clippy::too_many_arguments)]
 fn settle(
-    conn: &Connection,
+    conn: &Db,
     cmd: &LandCommand,
     repo_id: i64,
     base: Id,
@@ -614,7 +629,7 @@ fn conflict_error(conflicts: Vec<PathConflict>) -> ApiError {
     .with_details(serde_json::json!({ "conflicts": list, "recipe": RESOLUTION_RECIPE }))
 }
 
-fn load_tree(conn: &Connection, root_tree_id: Option<Vec<u8>>) -> Result<MemNode, ApiError> {
+fn load_tree(conn: &Db, root_tree_id: Option<Vec<u8>>) -> Result<MemNode, ApiError> {
     let root = root_tree_id.as_deref().and_then(id_of);
     MemNode::load(conn, root).map_err(map_derive)
 }

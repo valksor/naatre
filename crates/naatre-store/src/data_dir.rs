@@ -10,7 +10,8 @@ use fs2::FileExt;
 use crate::error::StoreError;
 use crate::fs_util::{FILE_PERMS, ensure_dir, io_ctx};
 
-const DB_FILE: &str = "naatre.db";
+/// The SQLite database file name (present only when `meta = sqlite`).
+pub const DB_FILE: &str = "naatre.db";
 const LOCK_FILE: &str = "lockfile";
 
 /// Handle to an initialized naatre data directory (0700 — the host-local
@@ -59,6 +60,15 @@ impl DataDir {
             return Err(StoreError::DataDirUninitialized(path));
         }
         Ok(DataDir(path))
+    }
+
+    /// Opens a data dir WITHOUT requiring `naatre.db` — the backend-aware
+    /// entry point (with `meta = postgres` there is no db file; the
+    /// initialized check is the caller's backend-specific guard, and the
+    /// config/data-dir mismatch check runs via
+    /// [`crate::backend::check_data_dir_backend`]).
+    pub fn open_any(path: impl Into<PathBuf>) -> DataDir {
+        DataDir(path.into())
     }
 
     /// Path of the SQLite database file.

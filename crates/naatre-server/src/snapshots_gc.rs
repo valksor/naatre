@@ -178,9 +178,7 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
         state
             .write(move |store| {
                 let conn = store.conn();
-                let tx = conn
-                    .unchecked_transaction()
-                    .map_err(ApiError::log_internal)?;
+                let tx = conn.transaction().map_err(ApiError::log_internal)?;
                 let rows_purged =
                     db::snapshots_purge(&tx, &purgable).map_err(ApiError::log_internal)?;
                 let garbage = db::unprotected_trees(&tx, now_i).map_err(ApiError::log_internal)?;

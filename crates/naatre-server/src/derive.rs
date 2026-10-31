@@ -85,7 +85,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use naatre_store::{Db, DbError};
 
 use naatre_core::ids::Id;
 
@@ -324,7 +324,7 @@ pub trait Deriver: Send + Sync {
     fn derive(
         &self,
         ctx: &DeriveCtx,
-        conn: &Connection,
+        conn: &Db,
         repo_id: i64,
         cs: Id,
         parents_done: &[ParentOut],
@@ -411,14 +411,14 @@ impl DeriveRegistry {
 /// failed first attempt (back to pending for the queue), never a create
 /// failure — the plan's never-blocks rule holds for every kind.
 pub fn enqueue_changeset(
-    conn: &Connection,
+    conn: &Db,
     registry: &DeriveRegistry,
     repo_id: i64,
     cs: Id,
     parents: &[Id],
     now_ns: i64,
     clock: ClockFn,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     for kind in &registry.kinds {
         if kind.deriver.eager() {
             // The caps gate the eager path exactly as they gate the queue:
@@ -758,9 +758,7 @@ async fn sweep_expired(
     state
         .write(move |store| {
             let conn = store.conn();
-            let tx = conn
-                .unchecked_transaction()
-                .map_err(ApiError::log_internal)?;
+            let tx = conn.transaction().map_err(ApiError::log_internal)?;
             let expired =
                 db::derive_expired_leases(&tx, kind.id, now).map_err(ApiError::log_internal)?;
             let mut poisoned = 0usize;
@@ -998,9 +996,7 @@ async fn drain(
                         state
                             .write(move |store| {
                                 let conn = store.conn();
-                                let tx = conn
-                                    .unchecked_transaction()
-                                    .map_err(ApiError::log_internal)?;
+                                let tx = conn.transaction().map_err(ApiError::log_internal)?;
                                 db::derive_poison_now(
                                     &tx,
                                     kind_for_fail.id,
@@ -1020,9 +1016,7 @@ async fn drain(
                         state
                             .write(move |store| {
                                 let conn = store.conn();
-                                let tx = conn
-                                    .unchecked_transaction()
-                                    .map_err(ApiError::log_internal)?;
+                                let tx = conn.transaction().map_err(ApiError::log_internal)?;
                                 let poisoned = db::derive_fail_attempt(
                                     &tx,
                                     kind_for_fail.id,
@@ -1070,9 +1064,7 @@ async fn drain(
             match state
                 .write(move |store| {
                     let conn = store.conn();
-                    let tx = conn
-                        .unchecked_transaction()
-                        .map_err(ApiError::log_internal)?;
+                    let tx = conn.transaction().map_err(ApiError::log_internal)?;
                     db::derive_poison_now(&tx, kind_for_poison.id, repo_id, &cs, &reason, now)
                         .map_err(ApiError::log_internal)?;
                     tx.commit().map_err(ApiError::log_internal)?;

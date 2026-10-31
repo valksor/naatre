@@ -138,6 +138,87 @@ CREATE INDEX idx_changesets_generation ON changesets(generation);
     ),
 ];
 
+/// The Postgres migration set: one file per SQLite migration, 1–7, in
+/// order (see `migrations/postgres/001_init.sql` for the translation
+/// rules). Once shipped, a migration's SQL is immutable — fixes go in a
+/// new, higher version on BOTH backends.
+const PG_MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/postgres/001_init.sql"),
+    include_str!("../migrations/postgres/002_token_scope.sql"),
+    include_str!("../migrations/postgres/003_repo_tree_membership.sql"),
+    include_str!("../migrations/postgres/004_derive_framework.sql"),
+    include_str!("../migrations/postgres/005_blame_path_history.sql"),
+    include_str!("../migrations/postgres/006_poison_taint.sql"),
+    include_str!("../migrations/postgres/007_generation_index.sql"),
+];
+
+const _: () = assert!(
+    PG_MIGRATIONS.len() == MAX_SUPPORTED as usize,
+    "the Postgres migration set must mirror the SQLite set 1..=MAX_SUPPORTED"
+);
+
+/// Brings the Postgres database at `db` up to [`MAX_SUPPORTED`], with the
+/// same contract as [`migrate`]: refuses a future version, no-ops when
+/// current, and otherwise applies each missing migration inside its own
+/// transaction with the version bump in the same transaction. Runs in the
+/// connection's schema (the test-isolation `search_path`), so parallel
+/// test stores do not collide.
+pub fn migrate_postgres(db: &crate::meta::Db) -> Result<(), StoreError> {
+    db.execute_batch("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")?;
+
+    let current: Option<i64> = db
+        .query_opt(
+            &crate::meta::Sql::plain("SELECT value FROM meta WHERE key = 'schema_version'"),
+            &[],
+        )?
+        .map(|row| {
+            row.get::<String>(0)
+                .map_err(|_| {
+                    StoreError::Io(std::io::Error::other("meta.schema_version is not text"))
+                })?
+                .parse::<i64>()
+                .map_err(|_| {
+                    StoreError::Io(std::io::Error::other(
+                        "meta.schema_version is not an integer",
+                    ))
+                })
+        })
+        .transpose()?;
+
+    let Some(current) = current else {
+        return apply_postgres_from(db, 0);
+    };
+    if current > MAX_SUPPORTED {
+        return Err(StoreError::SchemaFuture {
+            found: current,
+            supported: MAX_SUPPORTED,
+        });
+    }
+    apply_postgres_from(db, current)
+}
+
+fn apply_postgres_from(db: &crate::meta::Db, current: i64) -> Result<(), StoreError> {
+    for (version, sql) in (1..)
+        .zip(PG_MIGRATIONS.iter())
+        .filter(|(v, _)| *v > current)
+    {
+        // Each migration is atomic together with its version bump: a crash
+        // mid-migration leaves the previous version recorded, and the next
+        // boot replays from there (same contract as the SQLite runner).
+        let tx = db.transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute(
+            &crate::meta::Sql::plain(
+                "INSERT INTO meta(key, value) VALUES ('schema_version', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
+            ),
+            &[crate::meta::P::S(version.to_string())],
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
 /// Brings the database at `conn` up to [`MAX_SUPPORTED`].
 ///
 /// Reads `meta.schema_version`; refuses a version newer than

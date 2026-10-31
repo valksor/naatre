@@ -1,16 +1,15 @@
-//! All server-side SQL, as plain synchronous functions over `&Connection`.
+//! All server-side SQL, as plain synchronous functions over `&Db`.
 //!
 //! Callers run these inside [`crate::state::ServerState::read`] /
 //! [`crate::state::ServerState::write`] closures (or compose several inside
 //! one transaction); no other module in the crate touches SQL. Multi-step
 //! mutations (mint + audit, ref CAS + audit) run in a single
-//! `unchecked_transaction` here so a failure rolls the whole step back.
+//! `transaction` here so a failure rolls the whole step back.
 
 use std::collections::HashSet;
 
-use rusqlite::{Connection, OptionalExtension, params};
-
 use naatre_core::ids::Id;
+use naatre_store::{Db, DbError, Row, Sql, pv};
 
 /// One row of `repos`.
 pub struct RepoRow {
@@ -73,62 +72,72 @@ pub enum RefCas {
     RefMissing,
 }
 
-/// True when `err` is a UNIQUE-constraint violation.
-pub fn is_unique_violation(err: &rusqlite::Error) -> bool {
-    matches!(
-        err,
-        rusqlite::Error::SqliteFailure(ffi, Some(_))
-            if ffi.code == rusqlite::ErrorCode::ConstraintViolation
-    )
+/// True when `err` is a UNIQUE-constraint violation (SQLite constraint
+/// failure, Postgres SQLSTATE 23505) — the caller maps it to its semantic
+/// error, e.g. `repo_exists`.
+pub fn is_unique_violation(err: &DbError) -> bool {
+    err.is_unique_violation()
+}
+
+/// True when the backend refused the statement because another writer
+/// holds conflicting state — SQLite lock busy, or the Postgres MVCC
+/// equivalents (serialization failure, deadlock, lock unavailable). The
+/// server answers these with the writer-busy-shaped retryable 503.
+pub fn is_retryable_contention(err: &DbError) -> bool {
+    err.is_retryable_contention()
 }
 
 // ---- repos ---------------------------------------------------------------
 
 /// Inserts a repo; the caller maps UNIQUE violations to `repo_exists`.
-pub fn repos_create(conn: &Connection, name: &str, created_ns: i64) -> rusqlite::Result<i64> {
-    conn.execute(
-        "INSERT INTO repos(name, created_ns) VALUES (?1, ?2)",
-        params![name, created_ns],
-    )?;
-    Ok(conn.last_insert_rowid())
+pub fn repos_create(conn: &Db, name: &str, created_ns: i64) -> Result<i64, DbError> {
+    conn.insert_id(
+        &Sql::plain("INSERT INTO repos(name, created_ns) VALUES (?1, ?2)"),
+        &pv![name, created_ns],
+    )
 }
 
 /// Lists repos with `id > after_id`, ascending, up to `limit` rows.
-pub fn repos_list(conn: &Connection, after_id: i64, limit: i64) -> rusqlite::Result<Vec<RepoRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT id, name, created_ns FROM repos WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![after_id, limit], |row| {
-        Ok(RepoRow {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            created_ns: row.get(2)?,
-        })
-    })?;
-    rows.collect()
+pub fn repos_list(conn: &Db, after_id: i64, limit: i64) -> Result<Vec<RepoRow>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT id, name, created_ns FROM repos WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
+        ),
+        &pv![after_id, limit],
+        |row| {
+            Ok(RepoRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_ns: row.get(2)?,
+            })
+        },
+    )
 }
 
 /// The id of repo `name`, or `None`.
-pub fn repo_id_by_name(conn: &Connection, name: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row("SELECT id FROM repos WHERE name = ?1", params![name], |r| {
-        r.get(0)
-    })
-    .optional()
+pub fn repo_id_by_name(conn: &Db, name: &str) -> Result<Option<i64>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain("SELECT id FROM repos WHERE name = ?1"),
+        &pv![name],
+        |r| r.get(0),
+    )
 }
 
 /// Repo-scoped counters for `GET /v1/repos/{r}/stats`.
 /// Returns `(changesets, objects, bytes, cbytes)`.
-pub fn repo_stats(conn: &Connection, repo_id: i64) -> rusqlite::Result<(i64, i64, i64, i64)> {
-    let changesets: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM changesets WHERE repo_id = ?1",
-        params![repo_id],
+pub fn repo_stats(conn: &Db, repo_id: i64) -> Result<(i64, i64, i64, i64), DbError> {
+    let changesets: i64 = conn.query_row_map(
+        &Sql::plain("SELECT COUNT(*) FROM changesets WHERE repo_id = ?1"),
+        &pv![repo_id],
         |r| r.get(0),
     )?;
-    let (objects, bytes, cbytes): (i64, i64, i64) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(o.size), 0), COALESCE(SUM(o.csize), 0) \
+    let (objects, bytes, cbytes): (i64, i64, i64) = conn.query_row_map(
+        &Sql::plain(
+            "SELECT COUNT(*), COALESCE(SUM(o.size), 0), COALESCE(SUM(o.csize), 0) \
          FROM repo_blobs rb JOIN objects o ON o.object_id = rb.object_id \
          WHERE rb.repo_id = ?1",
-        params![repo_id],
+        ),
+        &pv![repo_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     Ok((changesets, objects, bytes, cbytes))
@@ -137,18 +146,18 @@ pub fn repo_stats(conn: &Connection, repo_id: i64) -> rusqlite::Result<(i64, i64
 // ---- refs ----------------------------------------------------------------
 
 /// One ref lookup.
-pub fn ref_get(conn: &Connection, repo_id: i64, name: &str) -> rusqlite::Result<Option<RefRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT name, target, version FROM refs WHERE repo_id = ?1 AND name = ?2",
-    )?;
-    stmt.query_row(params![repo_id, name], |row| {
-        Ok(RefRow {
-            name: row.get(0)?,
-            target: row.get(1)?,
-            version: row.get(2)?,
-        })
-    })
-    .optional()
+pub fn ref_get(conn: &Db, repo_id: i64, name: &str) -> Result<Option<RefRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain("SELECT name, target, version FROM refs WHERE repo_id = ?1 AND name = ?2"),
+        &pv![repo_id, name],
+        |row| {
+            Ok(RefRow {
+                name: row.get(0)?,
+                target: row.get(1)?,
+                version: row.get(2)?,
+            })
+        },
+    )
 }
 
 /// The parameters of one ref move.
@@ -166,22 +175,18 @@ pub struct RefMove<'a> {
 
 /// Compare-and-swap ref move, atomic with its `ref_move` audit row
 /// (successes only; conflicts are answered, not audited).
-pub fn ref_cas(conn: &Connection, mv: RefMove<'_>) -> rusqlite::Result<RefCas> {
+pub fn ref_cas(conn: &Db, mv: RefMove<'_>) -> Result<RefCas, DbError> {
     ref_cas_inner(conn, mv, None)
 }
 
 /// [`ref_cas`] with provenance: the audit row carries `via` so an
 /// import-driven ref move stays distinguishable from a land or a manual
 /// move (the audit trail's whole point).
-pub fn ref_cas_via(conn: &Connection, mv: RefMove<'_>, via: &str) -> rusqlite::Result<RefCas> {
+pub fn ref_cas_via(conn: &Db, mv: RefMove<'_>, via: &str) -> Result<RefCas, DbError> {
     ref_cas_inner(conn, mv, Some(via))
 }
 
-fn ref_cas_inner(
-    conn: &Connection,
-    mv: RefMove<'_>,
-    via: Option<&str>,
-) -> rusqlite::Result<RefCas> {
+fn ref_cas_inner(conn: &Db, mv: RefMove<'_>, via: Option<&str>) -> Result<RefCas, DbError> {
     let RefMove {
         repo_id,
         repo_name,
@@ -191,14 +196,12 @@ fn ref_cas_inner(
         principal,
         now_ns,
     } = mv;
-    let tx = conn.unchecked_transaction()?;
-    let exists: Option<i64> = tx
-        .query_row(
-            "SELECT id FROM repos WHERE id = ?1",
-            params![repo_id],
-            |r| r.get(0),
-        )
-        .optional()?;
+    let tx = conn.transaction()?;
+    let exists: Option<i64> = tx.query_opt_map(
+        &Sql::plain("SELECT id FROM repos WHERE id = ?1"),
+        &pv![repo_id],
+        |r| r.get(0),
+    )?;
     if exists.is_none() {
         return Ok(RefCas::RepoMissing);
     }
@@ -207,9 +210,11 @@ fn ref_cas_inner(
     let outcome = match (expected, current) {
         (None, None) => {
             tx.execute(
-                "INSERT INTO refs(repo_id, name, target, version, last_principal) \
+                &Sql::plain(
+                    "INSERT INTO refs(repo_id, name, target, version, last_principal) \
                  VALUES (?1, ?2, ?3, 1, ?4)",
-                params![repo_id, name, target.0.as_slice(), principal],
+                ),
+                &pv![repo_id, name, target.0.as_slice(), principal],
             )?;
             RefCas::Created
         }
@@ -230,9 +235,11 @@ fn ref_cas_inner(
             } else {
                 let new_version = current.version + 1;
                 tx.execute(
-                    "UPDATE refs SET target = ?1, version = ?2, last_principal = ?3 \
+                    &Sql::plain(
+                        "UPDATE refs SET target = ?1, version = ?2, last_principal = ?3 \
                      WHERE repo_id = ?4 AND name = ?5",
-                    params![target.0.as_slice(), new_version, principal, repo_id, name],
+                    ),
+                    &pv![target.0.as_slice(), new_version, principal, repo_id, name],
                 )?;
                 RefCas::Updated {
                     version: new_version,
@@ -264,36 +271,34 @@ fn ref_cas_inner(
 /// Records (or refreshes) the `objects` row for a CAS blob that was already
 /// fsynced. Returns `true` when the row already existed (idempotent re-PUT).
 pub fn object_row_upsert(
-    conn: &Connection,
+    conn: &Db,
     object_id: &Id,
     size: i64,
     csize: i64,
-) -> rusqlite::Result<bool> {
-    let existed: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM objects WHERE object_id = ?1",
-            params![object_id.0.as_slice()],
-            |r| r.get(0),
-        )
-        .optional()?;
+) -> Result<bool, DbError> {
+    let existed: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM objects WHERE object_id = ?1"),
+        &pv![object_id.0.as_slice()],
+        |r| r.get(0),
+    )?;
     conn.execute(
-        "INSERT INTO objects(object_id, size, csize) VALUES (?1, ?2, ?3) \
+        &Sql::plain(
+            "INSERT INTO objects(object_id, size, csize) VALUES (?1, ?2, ?3) \
          ON CONFLICT(object_id) DO UPDATE SET size = excluded.size, csize = excluded.csize",
-        params![object_id.0.as_slice(), size, csize],
+        ),
+        &pv![object_id.0.as_slice(), size, csize],
     )?;
     Ok(existed.is_some())
 }
 
 /// Membership check: does repo `repo_id` reference `object_id` via
 /// `repo_blobs`? Every object read is gated on this.
-pub fn repo_blob_check(conn: &Connection, repo_id: i64, object_id: &Id) -> rusqlite::Result<bool> {
-    let hit: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM repo_blobs WHERE repo_id = ?1 AND object_id = ?2",
-            params![repo_id, object_id.0.as_slice()],
-            |r| r.get(0),
-        )
-        .optional()?;
+pub fn repo_blob_check(conn: &Db, repo_id: i64, object_id: &Id) -> Result<bool, DbError> {
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM repo_blobs WHERE repo_id = ?1 AND object_id = ?2"),
+        &pv![repo_id, object_id.0.as_slice()],
+        |r| r.get(0),
+    )?;
     Ok(hit.is_some())
 }
 
@@ -367,15 +372,13 @@ pub fn op_tag(op: naatre_core::changeset::Op) -> i64 {
 
 /// One changeset row (metadata only), or `None` when the id is not a
 /// changeset of this repo.
-pub fn changeset_get(
-    conn: &Connection,
-    repo_id: i64,
-    id: &Id,
-) -> rusqlite::Result<Option<ChangesetRow>> {
-    conn.query_row(
-        "SELECT canonical, author, message, timestamp_ns, generation, principal, root_tree_id \
+pub fn changeset_get(conn: &Db, repo_id: i64, id: &Id) -> Result<Option<ChangesetRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT canonical, author, message, timestamp_ns, generation, principal, root_tree_id \
          FROM changesets WHERE repo_id = ?1 AND id = ?2",
-        params![repo_id, id.0.as_slice()],
+        ),
+        &pv![repo_id, id.0.as_slice()],
         |row| {
             Ok(ChangesetRow {
                 canonical: row.get(0)?,
@@ -388,35 +391,31 @@ pub fn changeset_get(
             })
         },
     )
-    .optional()
 }
 
 /// A changeset's generation, parents (in `ord` order), and root tree, or
 /// `None`.
-pub fn changeset_graph(
-    conn: &Connection,
-    repo_id: i64,
-    id: &Id,
-) -> rusqlite::Result<Option<CsGraph>> {
-    let row: Option<(i64, Option<Vec<u8>>)> = conn
-        .query_row(
+pub fn changeset_graph(conn: &Db, repo_id: i64, id: &Id) -> Result<Option<CsGraph>, DbError> {
+    let row: Option<(i64, Option<Vec<u8>>)> = conn.query_opt_map(
+        &Sql::plain(
             "SELECT generation, root_tree_id FROM changesets WHERE repo_id = ?1 AND id = ?2",
-            params![repo_id, id.0.as_slice()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
+        ),
+        &pv![repo_id, id.0.as_slice()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     let Some((generation, root_tree_id)) = row else {
         return Ok(None);
     };
-    let mut stmt = conn.prepare(
-        "SELECT parent FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2 ORDER BY ord ASC",
-    )?;
-    let parents = stmt
-        .query_map(params![repo_id, id.0.as_slice()], |r| {
-            r.get::<_, Vec<u8>>(0)
+    let parents = conn.query_all_map(
+        &Sql::plain(
+            "SELECT parent FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2 ORDER BY ord ASC",
+        ),
+        &pv![repo_id, id.0.as_slice()],
+        |row| {
+            row.get::<Vec<u8>>(0)
                 .map(|b| Id(b.try_into().expect("parent id is 32 bytes")))
-        })?
-        .collect::<rusqlite::Result<Vec<Id>>>()?;
+        },
+    )?;
     Ok(Some(CsGraph {
         generation,
         parents,
@@ -425,38 +424,34 @@ pub fn changeset_graph(
 }
 
 /// All file changes of one changeset, ascending by path (the PK order).
-pub fn file_changes_list(
-    conn: &Connection,
-    repo_id: i64,
-    cs: &Id,
-) -> rusqlite::Result<Vec<FileChangeRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT path, op, blob_id, size, exec FROM file_changes \
+pub fn file_changes_list(conn: &Db, repo_id: i64, cs: &Id) -> Result<Vec<FileChangeRow>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT path, op, blob_id, size, exec FROM file_changes \
          WHERE repo_id = ?1 AND cs = ?2 ORDER BY path ASC",
-    )?;
-    let rows = stmt.query_map(params![repo_id, cs.0.as_slice()], |row| {
-        Ok(FileChangeRow {
-            path: row.get(0)?,
-            op: row.get(1)?,
-            blob_id: row.get(2)?,
-            size: row.get(3)?,
-            exec: row.get::<_, i64>(4)? != 0,
-        })
-    })?;
-    rows.collect()
+        ),
+        &pv![repo_id, cs.0.as_slice()],
+        |row| {
+            Ok(FileChangeRow {
+                path: row.get(0)?,
+                op: row.get(1)?,
+                blob_id: row.get(2)?,
+                size: row.get(3)?,
+                exec: row.get::<i64>(4)? != 0,
+            })
+        },
+    )
 }
 
 /// The ids among `ids` that have no `objects` row (blob-presence check).
-pub fn objects_missing(conn: &Connection, ids: &[Id]) -> rusqlite::Result<Vec<Id>> {
+pub fn objects_missing(conn: &Db, ids: &[Id]) -> Result<Vec<Id>, DbError> {
     let mut missing = Vec::new();
     for id in ids {
-        let hit: Option<i64> = conn
-            .query_row(
-                "SELECT 1 FROM objects WHERE object_id = ?1",
-                params![id.0.as_slice()],
-                |r| r.get(0),
-            )
-            .optional()?;
+        let hit: Option<i64> = conn.query_opt_map(
+            &Sql::plain("SELECT 1 FROM objects WHERE object_id = ?1"),
+            &pv![id.0.as_slice()],
+            |r| r.get(0),
+        )?;
         if hit.is_none() {
             missing.push(*id);
         }
@@ -465,34 +460,35 @@ pub fn objects_missing(conn: &Connection, ids: &[Id]) -> rusqlite::Result<Vec<Id
 }
 
 /// All entries of one tree node, ascending by name.
-pub fn tree_entries_load(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Vec<TreeEntryRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT name, kind, object_id, size, exec FROM tree_entries \
+pub fn tree_entries_load(conn: &Db, tree_id: &Id) -> Result<Vec<TreeEntryRow>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT name, kind, object_id, size, exec FROM tree_entries \
          WHERE tree_id = ?1 ORDER BY name ASC",
-    )?;
-    let rows = stmt.query_map(params![tree_id.0.as_slice()], |row| {
-        Ok(TreeEntryRow {
-            name: row.get(0)?,
-            kind: row.get(1)?,
-            object_id: row.get(2)?,
-            size: row.get(3)?,
-            exec: row.get::<_, i64>(4)? != 0,
-        })
-    })?;
-    rows.collect()
+        ),
+        &pv![tree_id.0.as_slice()],
+        |row| {
+            Ok(TreeEntryRow {
+                name: row.get(0)?,
+                kind: row.get(1)?,
+                object_id: row.get(2)?,
+                size: row.get(3)?,
+                exec: row.get::<i64>(4)? != 0,
+            })
+        },
+    )
 }
 
 /// The repo a `trees` row is attributed to (the first writer, since rows
 /// are `INSERT OR IGNORE`), or `None` (unknown tree id). Informational
 /// only — reads are gated on `repo_trees` membership (`repo_has_tree`),
 /// never on this column.
-pub fn tree_repo(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT repo_id FROM trees WHERE id = ?1",
-        params![tree_id.0.as_slice()],
+pub fn tree_repo(conn: &Db, tree_id: &Id) -> Result<Option<i64>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain("SELECT repo_id FROM trees WHERE id = ?1"),
+        &pv![tree_id.0.as_slice()],
         |r| r.get(0),
     )
-    .optional()
 }
 
 /// Persists HISTORY-derived trees (changeset create, land, import): one
@@ -502,12 +498,12 @@ pub fn tree_repo(conn: &Connection, tree_id: &Id) -> rusqlite::Result<Option<i64
 /// changeset are no-ops; identical id implies identical bytes). The
 /// membership row is what later gates bare-id tree reads. Snapshot trees
 /// must NOT go through here — use [`trees_write_snapshot`].
-pub fn trees_write(conn: &Connection, repo_id: i64, trees: &[TreeWrite]) -> rusqlite::Result<()> {
+pub fn trees_write(conn: &Db, repo_id: i64, trees: &[TreeWrite]) -> Result<(), DbError> {
     for tree in trees {
         write_tree_rows(conn, repo_id, tree)?;
         conn.execute(
-            "INSERT OR IGNORE INTO repo_trees(repo_id, tree_id) VALUES (?1, ?2)",
-            params![repo_id, tree.id.0.as_slice()],
+            &Sql::ignore("INSERT OR IGNORE INTO repo_trees(repo_id, tree_id) VALUES (?1, ?2)"),
+            &pv![repo_id, tree.id.0.as_slice()],
         )?;
     }
     Ok(())
@@ -520,7 +516,7 @@ pub fn trees_write(conn: &Connection, repo_id: i64, trees: &[TreeWrite]) -> rusq
 /// repo reader via the bare-id tree route, and those rows carry no TTL. GC
 /// purges snapshot-only tree rows once no live snapshot reaches them
 /// ([`purge_snapshot_only_trees`]).
-pub fn trees_write_snapshot(conn: &Connection, trees: &[TreeWrite]) -> rusqlite::Result<()> {
+pub fn trees_write_snapshot(conn: &Db, trees: &[TreeWrite]) -> Result<(), DbError> {
     for tree in trees {
         write_tree_rows(conn, 0, tree)?;
     }
@@ -529,20 +525,24 @@ pub fn trees_write_snapshot(conn: &Connection, trees: &[TreeWrite]) -> rusqlite:
 
 /// One `trees` row plus its flat `tree_entries` rows (`INSERT OR IGNORE` /
 /// `INSERT OR REPLACE`, idempotent repeats). `repo_id` is informational.
-fn write_tree_rows(conn: &Connection, repo_id: i64, tree: &TreeWrite) -> rusqlite::Result<()> {
+fn write_tree_rows(conn: &Db, repo_id: i64, tree: &TreeWrite) -> Result<(), DbError> {
     conn.execute(
-        "INSERT OR IGNORE INTO trees(id, repo_id, canonical) VALUES (?1, ?2, ?3)",
-        params![tree.id.0.as_slice(), repo_id, tree.canonical],
+        &Sql::ignore("INSERT OR IGNORE INTO trees(id, repo_id, canonical) VALUES (?1, ?2, ?3)"),
+        &pv![tree.id.0.as_slice(), repo_id, &tree.canonical],
     )?;
     for e in &tree.entries {
         conn.execute(
-            "INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
+            &Sql::replace(
+                "INSERT OR REPLACE INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
+                &["tree_id", "name"],
+                &["kind", "object_id", "size", "exec"],
+            ),
+            &pv![
                 tree.id.0.as_slice(),
-                e.name,
+                &e.name,
                 e.kind,
-                e.object_id,
+                &e.object_id,
                 e.size,
                 e.exec as i64,
             ],
@@ -556,14 +556,15 @@ fn write_tree_rows(conn: &Connection, repo_id: i64, tree: &TreeWrite) -> rusqlit
 /// snapshot-created to sweep, so the pass can skip the write slot entirely
 /// (a quiet server's periodic pass must never occupy the single-writer
 /// slot — that would 503 concurrent writes).
-pub fn any_junctionless_trees(conn: &Connection) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT 1 FROM trees t \
+pub fn any_junctionless_trees(conn: &Db) -> Result<bool, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT 1 FROM trees t \
          WHERE NOT EXISTS (SELECT 1 FROM repo_trees rt WHERE rt.tree_id = t.id) LIMIT 1",
-        [],
+        ),
+        &pv![],
         |_| Ok(()),
     )
-    .optional()
     .map(|hit| hit.is_some())
 }
 
@@ -595,9 +596,10 @@ pub fn any_junctionless_trees(conn: &Connection) -> rusqlite::Result<bool> {
 /// the expired-row purge, so a snapshot POST reusing a shared subtree
 /// cannot land between mark and delete (both go through the
 /// single-writer slot).
-pub fn unprotected_trees(conn: &Connection, now_ns: i64) -> rusqlite::Result<Vec<Id>> {
-    let mut stmt = conn.prepare_cached(
-        "WITH RECURSIVE
+pub fn unprotected_trees(conn: &Db, now_ns: i64) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "WITH RECURSIVE
          live(tree_id) AS (
              SELECT tree_id FROM snapshots WHERE expires_ns > ?1
              UNION
@@ -626,24 +628,28 @@ pub fn unprotected_trees(conn: &Connection, now_ns: i64) -> rusqlite::Result<Vec
          )
          SELECT c.id FROM candidates c
          WHERE c.id NOT IN (SELECT tree_id FROM protected)",
-    )?;
-    let rows = stmt.query_map(params![now_ns], |row| {
-        row.get::<_, Vec<u8>>(0)
-            .map(|b| Id(b.try_into().expect("tree id is 32 bytes")))
-    })?;
-    rows.collect()
+        ),
+        &pv![now_ns],
+        |row| {
+            row.get::<Vec<u8>>(0)
+                .map(|b| Id(b.try_into().expect("tree id is 32 bytes")))
+        },
+    )
 }
 
 /// Deletes the given `trees` rows and their `tree_entries` rows; returns
 /// the number of `trees` rows deleted. The write-side half of the sweep.
-pub fn delete_tree_rows(conn: &Connection, ids: &[Id]) -> rusqlite::Result<usize> {
+pub fn delete_tree_rows(conn: &Db, ids: &[Id]) -> Result<usize, DbError> {
     let mut n = 0;
     for id in ids {
         conn.execute(
-            "DELETE FROM tree_entries WHERE tree_id = ?1",
-            params![id.0.as_slice()],
+            &Sql::plain("DELETE FROM tree_entries WHERE tree_id = ?1"),
+            &pv![id.0.as_slice()],
         )?;
-        n += conn.execute("DELETE FROM trees WHERE id = ?1", params![id.0.as_slice()])?;
+        n += conn.execute(
+            &Sql::plain("DELETE FROM trees WHERE id = ?1"),
+            &pv![id.0.as_slice()],
+        )?;
     }
     Ok(n)
 }
@@ -652,14 +658,12 @@ pub fn delete_tree_rows(conn: &Connection, ids: &[Id]) -> rusqlite::Result<usize
 /// read gate for the bare-id tree route. A tree is readable from every repo
 /// that wrote it and from no other: content-addressing shares the row, the
 /// junction shares readability only with writers.
-pub fn repo_has_tree(conn: &Connection, repo_id: i64, tree_id: &Id) -> rusqlite::Result<bool> {
-    let hit: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM repo_trees WHERE repo_id = ?1 AND tree_id = ?2",
-            params![repo_id, tree_id.0.as_slice()],
-            |r| r.get(0),
-        )
-        .optional()?;
+pub fn repo_has_tree(conn: &Db, repo_id: i64, tree_id: &Id) -> Result<bool, DbError> {
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM repo_trees WHERE repo_id = ?1 AND tree_id = ?2"),
+        &pv![repo_id, tree_id.0.as_slice()],
+        |r| r.get(0),
+    )?;
     Ok(hit.is_some())
 }
 
@@ -668,7 +672,7 @@ pub fn repo_has_tree(conn: &Connection, repo_id: i64, tree_id: &Id) -> rusqlite:
 /// counts (a closure contains its root). Content-addressed trees cannot
 /// cycle (an entry's id covers the bytes that name it), and the seen-set
 /// keeps shared subtrees from being walked twice anyway.
-pub fn tree_in_closure(conn: &Connection, root: &Id, target: &Id) -> rusqlite::Result<bool> {
+pub fn tree_in_closure(conn: &Db, root: &Id, target: &Id) -> Result<bool, DbError> {
     if root == target {
         return Ok(true);
     }
@@ -715,8 +719,8 @@ pub struct ChangesetInsert<'a> {
     pub now_ns: i64,
 }
 
-pub fn changeset_insert(conn: &Connection, rec: ChangesetInsert<'_>) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
+pub fn changeset_insert(conn: &Db, rec: ChangesetInsert<'_>) -> Result<(), DbError> {
+    let tx = conn.transaction()?;
     changeset_insert_rows(&tx, rec, ChangesetExtras::NONE)?;
     tx.commit()?;
     Ok(())
@@ -749,14 +753,16 @@ impl ChangesetExtras<'_> {
 /// (nesting a second transaction would fail), and the importer calls it
 /// with [`ChangesetExtras`].
 pub fn changeset_insert_rows(
-    conn: &Connection,
+    conn: &Db,
     rec: ChangesetInsert<'_>,
     extras: ChangesetExtras<'_>,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
+        &Sql::plain(
+            "INSERT INTO changesets(repo_id, id, canonical, author, message, timestamp_ns, \
          generation, principal, root_tree_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![
+        ),
+        &pv![
             rec.repo_id,
             rec.id.0.as_slice(),
             rec.canonical,
@@ -770,8 +776,10 @@ pub fn changeset_insert_rows(
     )?;
     for (ord, parent) in rec.parents.iter().enumerate() {
         conn.execute(
-            "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, ?4)",
-            params![
+            &Sql::plain(
+                "INSERT INTO changeset_parents(repo_id, cs, parent, ord) VALUES (?1, ?2, ?3, ?4)",
+            ),
+            &pv![
                 rec.repo_id,
                 rec.id.0.as_slice(),
                 parent.0.as_slice(),
@@ -795,12 +803,14 @@ pub fn changeset_insert_rows(
             ) && c.exec == Some(true),
         );
         conn.execute(
-            "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
+            &Sql::plain(
+                "INSERT INTO file_changes(repo_id, cs, path, op, blob_id, size, exec) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
+            ),
+            &pv![
                 rec.repo_id,
                 rec.id.0.as_slice(),
-                c.path,
+                &c.path,
                 op_tag(c.op),
                 blob,
                 size,
@@ -810,14 +820,14 @@ pub fn changeset_insert_rows(
     }
     for blob in rec.blobs {
         conn.execute(
-            "INSERT OR IGNORE INTO repo_blobs(repo_id, object_id) VALUES (?1, ?2)",
-            params![rec.repo_id, blob.0.as_slice()],
+            &Sql::ignore("INSERT OR IGNORE INTO repo_blobs(repo_id, object_id) VALUES (?1, ?2)"),
+            &pv![rec.repo_id, blob.0.as_slice()],
         )?;
     }
     if let Some(git_oid) = extras.git_map_oid {
         conn.execute(
-            "INSERT INTO git_map(repo_id, git_oid, cs_id) VALUES (?1, ?2, ?3)",
-            params![rec.repo_id, git_oid, rec.id.0.as_slice()],
+            &Sql::plain("INSERT INTO git_map(repo_id, git_oid, cs_id) VALUES (?1, ?2, ?3)"),
+            &pv![rec.repo_id, git_oid, rec.id.0.as_slice()],
         )?;
     }
     trees_write(conn, rec.repo_id, rec.trees)?;
@@ -841,35 +851,30 @@ pub fn changeset_insert_rows(
 
 /// Walks the first-parent chain from `from`, newest first, up to `limit`
 /// rows. The chain itself is the deterministic order.
-pub fn log_chain(
-    conn: &Connection,
-    repo_id: i64,
-    from: &Id,
-    limit: i64,
-) -> rusqlite::Result<Vec<LogRow>> {
+pub fn log_chain(conn: &Db, repo_id: i64, from: &Id, limit: i64) -> Result<Vec<LogRow>, DbError> {
     let mut rows = Vec::new();
     let mut current = *from;
     loop {
         let Some(graph) = changeset_graph(conn, repo_id, &current)? else {
             break;
         };
-        let row = conn
-            .query_row(
+        let row = conn.query_opt_map(
+            &Sql::plain(
                 "SELECT author, message, timestamp_ns, generation, principal FROM changesets \
                  WHERE repo_id = ?1 AND id = ?2",
-                params![repo_id, current.0.as_slice()],
-                |r| {
-                    Ok(LogRow {
-                        id: current.0.to_vec(),
-                        author: r.get(0)?,
-                        message: r.get(1)?,
-                        timestamp_ns: r.get(2)?,
-                        generation: r.get(3)?,
-                        principal: r.get(4)?,
-                    })
-                },
-            )
-            .optional()?;
+            ),
+            &pv![repo_id, current.0.as_slice()],
+            |r| {
+                Ok(LogRow {
+                    id: current.0.to_vec(),
+                    author: r.get(0)?,
+                    message: r.get(1)?,
+                    timestamp_ns: r.get(2)?,
+                    generation: r.get(3)?,
+                    principal: r.get(4)?,
+                })
+            },
+        )?;
         let Some(row) = row else {
             break;
         };
@@ -897,15 +902,17 @@ pub struct LandRow {
 
 /// The land row for `(repo, principal, key)`, or `None`.
 pub fn land_get(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     principal: &str,
     key: &str,
-) -> rusqlite::Result<Option<LandRow>> {
-    conn.query_row(
-        "SELECT state, head, base, result_json FROM lands \
+) -> Result<Option<LandRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT state, head, base, result_json FROM lands \
          WHERE repo_id = ?1 AND principal = ?2 AND key = ?3",
-        params![repo_id, principal, key],
+        ),
+        &pv![repo_id, principal, key],
         |row| {
             Ok(LandRow {
                 state: row.get(0)?,
@@ -915,22 +922,20 @@ pub fn land_get(
             })
         },
     )
-    .optional()
 }
 
 /// The in-flight marker (state='pending'). It commits only together with
 /// the finished land (one transaction), so every failure path — including
 /// the crash points before COMMIT — leaves the key unsettled.
 pub fn land_insert_pending(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     principal: &str,
     key: &str,
     head: &Id,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO lands(repo_id, principal, key, state, head) VALUES (?1, ?2, ?3, 'pending', ?4)",
-        params![repo_id, principal, key, head.0.as_slice()],
+) -> Result<(), DbError> {
+    conn.execute(&Sql::plain("INSERT INTO lands(repo_id, principal, key, state, head) VALUES (?1, ?2, ?3, 'pending', ?4)"),
+        &pv![repo_id, principal, key, head.0.as_slice()],
     )?;
     Ok(())
 }
@@ -941,21 +946,23 @@ pub fn land_insert_pending(
 /// the pending row inside the same transaction is overwritten.
 #[allow(clippy::too_many_arguments)]
 pub fn land_settle(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     principal: &str,
     key: &str,
     head: &Id,
     base: &Id,
     result_json: &str,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO lands(repo_id, principal, key, state, head, base, result_json) \
+        &Sql::plain(
+            "INSERT INTO lands(repo_id, principal, key, state, head, base, result_json) \
          VALUES (?1, ?2, ?3, 'done', ?4, ?5, ?6) \
          ON CONFLICT(repo_id, principal, key) DO UPDATE SET \
            state = 'done', head = excluded.head, base = excluded.base, \
            result_json = excluded.result_json",
-        params![
+        ),
+        &pv![
             repo_id,
             principal,
             key,
@@ -972,16 +979,18 @@ pub fn land_settle(
 /// updated-row count — 0 means the target moved underneath (unreachable
 /// under the single-writer slot; the caller reports a ref conflict).
 pub fn main_cas_move(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     expected_target: &Id,
     new_target: &Id,
     principal: &str,
-) -> rusqlite::Result<usize> {
+) -> Result<usize, DbError> {
     conn.execute(
-        "UPDATE refs SET target = ?3, version = version + 1, last_principal = ?4 \
+        &Sql::plain(
+            "UPDATE refs SET target = ?3, version = version + 1, last_principal = ?4 \
          WHERE repo_id = ?1 AND name = 'main' AND target = ?2",
-        params![
+        ),
+        &pv![
             repo_id,
             expected_target.0.as_slice(),
             new_target.0.as_slice(),
@@ -1002,15 +1011,13 @@ pub struct SnapshotRow {
 
 /// The snapshot row for `(repo_id, id)`, or `None` (unknown id, or another
 /// repo's snapshot — ids are only meaningful within their repo).
-pub fn snapshot_get(
-    conn: &Connection,
-    repo_id: i64,
-    id: &Id,
-) -> rusqlite::Result<Option<SnapshotRow>> {
-    conn.query_row(
-        "SELECT tree_id, principal, created_ns, expires_ns FROM snapshots \
+pub fn snapshot_get(conn: &Db, repo_id: i64, id: &Id) -> Result<Option<SnapshotRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT tree_id, principal, created_ns, expires_ns FROM snapshots \
          WHERE repo_id = ?1 AND id = ?2",
-        params![repo_id, id.0.as_slice()],
+        ),
+        &pv![repo_id, id.0.as_slice()],
         |row| {
             Ok(SnapshotRow {
                 tree_id: row.get(0)?,
@@ -1020,24 +1027,25 @@ pub fn snapshot_get(
             })
         },
     )
-    .optional()
 }
 
 /// Inserts one snapshot row. Duplicate ids are rejected by the PRIMARY KEY;
 /// the route checks for an existing row first (idempotent re-POST).
 pub fn snapshot_insert(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     id: &Id,
     tree_id: &Id,
     principal: &str,
     created_ns: i64,
     expires_ns: i64,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO snapshots(id, repo_id, tree_id, principal, created_ns, expires_ns) \
+        &Sql::plain(
+            "INSERT INTO snapshots(id, repo_id, tree_id, principal, created_ns, expires_ns) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
+        ),
+        &pv![
             id.0.as_slice(),
             repo_id,
             tree_id.0.as_slice(),
@@ -1050,25 +1058,26 @@ pub fn snapshot_insert(
 }
 
 /// Ids of expired snapshot rows (`expires_ns <= now_ns`), ascending.
-pub fn snapshots_expired(conn: &Connection, now_ns: i64) -> rusqlite::Result<Vec<Id>> {
-    let mut stmt =
-        conn.prepare_cached("SELECT id FROM snapshots WHERE expires_ns <= ?1 ORDER BY id ASC")?;
-    let rows = stmt.query_map(params![now_ns], |row| {
-        row.get::<_, Vec<u8>>(0)
-            .map(|b| Id(b.try_into().expect("snapshot id is 32 bytes")))
-    })?;
-    rows.collect()
+pub fn snapshots_expired(conn: &Db, now_ns: i64) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain("SELECT id FROM snapshots WHERE expires_ns <= ?1 ORDER BY id ASC"),
+        &pv![now_ns],
+        |row| {
+            row.get::<Vec<u8>>(0)
+                .map(|b| Id(b.try_into().expect("snapshot id is 32 bytes")))
+        },
+    )
 }
 
 /// Deletes the given snapshot rows; returns how many existed. GC purges a
 /// row only after its ephemeral dir is gone, so a crash leaves an orphan
 /// row (never a dangling dir-less row that serves) that the next run purges.
-pub fn snapshots_purge(conn: &Connection, ids: &[Id]) -> rusqlite::Result<usize> {
+pub fn snapshots_purge(conn: &Db, ids: &[Id]) -> Result<usize, DbError> {
     let mut purged = 0;
     for id in ids {
         purged += conn.execute(
-            "DELETE FROM snapshots WHERE id = ?1",
-            params![id.0.as_slice()],
+            &Sql::plain("DELETE FROM snapshots WHERE id = ?1"),
+            &pv![id.0.as_slice()],
         )?;
     }
     Ok(purged)
@@ -1076,16 +1085,14 @@ pub fn snapshots_purge(conn: &Connection, ids: &[Id]) -> rusqlite::Result<usize>
 
 /// Which of `ids` have a snapshots row (the rowless-dir sweep's cross-check:
 /// a dir with a row is a live or expired snapshot, not garbage).
-pub fn snapshots_exist(conn: &Connection, ids: &[Id]) -> rusqlite::Result<Vec<bool>> {
+pub fn snapshots_exist(conn: &Db, ids: &[Id]) -> Result<Vec<bool>, DbError> {
     ids.iter()
         .map(|id| {
-            let hit: Option<i64> = conn
-                .query_row(
-                    "SELECT 1 FROM snapshots WHERE id = ?1",
-                    params![id.0.as_slice()],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let hit: Option<i64> = conn.query_opt_map(
+                &Sql::plain("SELECT 1 FROM snapshots WHERE id = ?1"),
+                &pv![id.0.as_slice()],
+                |r| r.get(0),
+            )?;
             Ok(hit.is_some())
         })
         .collect()
@@ -1094,47 +1101,45 @@ pub fn snapshots_exist(conn: &Connection, ids: &[Id]) -> rusqlite::Result<Vec<bo
 // ---- principals & tokens -------------------------------------------------
 
 /// Creates or re-roles a principal.
-pub fn principal_upsert(
-    conn: &Connection,
-    name: &str,
-    role: &str,
-    created_ns: i64,
-) -> rusqlite::Result<()> {
+pub fn principal_upsert(conn: &Db, name: &str, role: &str, created_ns: i64) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO principals(name, role, created_ns) VALUES (?1, ?2, ?3) \
+        &Sql::plain(
+            "INSERT INTO principals(name, role, created_ns) VALUES (?1, ?2, ?3) \
          ON CONFLICT(name) DO UPDATE SET role = excluded.role",
-        params![name, role, created_ns],
+        ),
+        &pv![name, role, created_ns],
     )?;
     Ok(())
 }
 
 /// Inserts a token row (hash only — token material never persists).
 pub fn token_insert(
-    conn: &Connection,
+    conn: &Db,
     principal: &str,
     blake3: &[u8; 32],
     expires_ns: Option<i64>,
     scope_path: Option<&str>,
-) -> rusqlite::Result<i64> {
-    conn.execute(
-        "INSERT INTO tokens(principal, blake3, expires_ns, scope_path) VALUES (?1, ?2, ?3, ?4)",
-        params![principal, blake3, expires_ns, scope_path],
-    )?;
-    Ok(conn.last_insert_rowid())
+) -> Result<i64, DbError> {
+    conn.insert_id(
+        &Sql::plain(
+            "INSERT INTO tokens(principal, blake3, expires_ns, scope_path) VALUES (?1, ?2, ?3, ?4)",
+        ),
+        &pv![principal, blake3, expires_ns, scope_path],
+    )
 }
 
 /// Mints a token row: principal upsert, token insert, and the `token_create`
 /// audit row land in one transaction. Returns the new token row id.
 pub fn token_create(
-    conn: &Connection,
+    conn: &Db,
     principal: &str,
     role: &str,
     blake3: &[u8; 32],
     expires_ns: Option<i64>,
     scope_path: Option<&str>,
     now_ns: i64,
-) -> rusqlite::Result<i64> {
-    let tx = conn.unchecked_transaction()?;
+) -> Result<i64, DbError> {
+    let tx = conn.transaction()?;
     principal_upsert(&tx, principal, role, now_ns)?;
     let token_id = token_insert(&tx, principal, blake3, expires_ns, scope_path)?;
     audit_append(
@@ -1154,42 +1159,42 @@ pub fn token_create(
 }
 
 /// Lists tokens joined with their principal's role, ascending by id.
-pub fn tokens_list(conn: &Connection) -> rusqlite::Result<Vec<TokenRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT t.id, t.principal, p.role, t.expires_ns, t.scope_path, t.revoked \
+pub fn tokens_list(conn: &Db) -> Result<Vec<TokenRow>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT t.id, t.principal, p.role, t.expires_ns, t.scope_path, t.revoked \
          FROM tokens t JOIN principals p ON p.name = t.principal ORDER BY t.id ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(TokenRow {
-            id: row.get(0)?,
-            principal: row.get(1)?,
-            role: row.get(2)?,
-            expires_ns: row.get(3)?,
-            scope_path: row.get(4)?,
-            revoked: row.get::<_, i64>(5)? != 0,
-        })
-    })?;
-    rows.collect()
+        ),
+        &pv![],
+        |row| {
+            Ok(TokenRow {
+                id: row.get(0)?,
+                principal: row.get(1)?,
+                role: row.get(2)?,
+                expires_ns: row.get(3)?,
+                scope_path: row.get(4)?,
+                revoked: row.get::<i64>(5)? != 0,
+            })
+        },
+    )
 }
 
 /// Revokes token `id`. Returns `None` when no such token exists, and
 /// `Some(first_revocation)` — `true` only on the 0→1 transition, so an
 /// idempotent re-revoke answers 200 without writing a second audit row.
-pub fn token_revoke(conn: &Connection, id: i64, now_ns: i64) -> rusqlite::Result<Option<bool>> {
-    let tx = conn.unchecked_transaction()?;
-    let exists: Option<String> = tx
-        .query_row(
-            "SELECT principal FROM tokens WHERE id = ?1",
-            params![id],
-            |r| r.get(0),
-        )
-        .optional()?;
+pub fn token_revoke(conn: &Db, id: i64, now_ns: i64) -> Result<Option<bool>, DbError> {
+    let tx = conn.transaction()?;
+    let exists: Option<String> = tx.query_opt_map(
+        &Sql::plain("SELECT principal FROM tokens WHERE id = ?1"),
+        &pv![id],
+        |r| r.get(0),
+    )?;
     let Some(principal) = exists else {
         return Ok(None);
     };
     let changed = tx.execute(
-        "UPDATE tokens SET revoked = 1 WHERE id = ?1 AND revoked = 0",
-        params![id],
+        &Sql::plain("UPDATE tokens SET revoked = 1 WHERE id = ?1 AND revoked = 0"),
+        &pv![id],
     )?;
     let first_revocation = changed == 1;
     if first_revocation {
@@ -1206,22 +1211,24 @@ pub fn token_revoke(conn: &Connection, id: i64, now_ns: i64) -> rusqlite::Result
 }
 
 /// Token lookup by stored BLAKE3 hash, joined with the principal's role.
-pub fn auth_lookup(conn: &Connection, blake3: &[u8; 32]) -> rusqlite::Result<Option<AuthRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT t.id, t.principal, p.role, t.expires_ns, t.revoked, t.scope_path \
+pub fn auth_lookup(conn: &Db, blake3: &[u8; 32]) -> Result<Option<AuthRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT t.id, t.principal, p.role, t.expires_ns, t.revoked, t.scope_path \
          FROM tokens t JOIN principals p ON p.name = t.principal WHERE t.blake3 = ?1",
-    )?;
-    stmt.query_row(params![blake3.as_slice()], |row| {
-        Ok(AuthRow {
-            token_id: row.get(0)?,
-            principal: row.get(1)?,
-            role: row.get(2)?,
-            expires_ns: row.get(3)?,
-            revoked: row.get::<_, i64>(4)? != 0,
-            scope_path: row.get(5)?,
-        })
-    })
-    .optional()
+        ),
+        &pv![blake3.as_slice()],
+        |row| {
+            Ok(AuthRow {
+                token_id: row.get(0)?,
+                principal: row.get(1)?,
+                role: row.get(2)?,
+                expires_ns: row.get(3)?,
+                revoked: row.get::<i64>(4)? != 0,
+                scope_path: row.get(5)?,
+            })
+        },
+    )
 }
 
 // ---- derived data (M6a) ----------------------------------------------------
@@ -1249,26 +1256,25 @@ pub struct DeriveStateRow {
 }
 
 /// The id of registered kind `name`, or `None`.
-pub fn derive_kind_id(conn: &Connection, name: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT id FROM derive_kinds WHERE name = ?1",
-        params![name],
+pub fn derive_kind_id(conn: &Db, name: &str) -> Result<Option<i64>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain("SELECT id FROM derive_kinds WHERE name = ?1"),
+        &pv![name],
         |r| r.get(0),
     )
-    .optional()
 }
 
 /// Seeds (or finds) the registry row for kind `name`; returns its id.
 /// `INSERT OR IGNORE` keeps the id stable across processes: the first
 /// registrant of a name owns its id forever.
-pub fn derive_kind_seed(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+pub fn derive_kind_seed(conn: &Db, name: &str) -> Result<i64, DbError> {
     conn.execute(
-        "INSERT OR IGNORE INTO derive_kinds(name) VALUES (?1)",
-        params![name],
+        &Sql::ignore("INSERT OR IGNORE INTO derive_kinds(name) VALUES (?1)"),
+        &pv![name],
     )?;
-    conn.query_row(
-        "SELECT id FROM derive_kinds WHERE name = ?1",
-        params![name],
+    conn.query_row_map(
+        &Sql::plain("SELECT id FROM derive_kinds WHERE name = ?1"),
+        &pv![name],
         |r| r.get(0),
     )
 }
@@ -1277,15 +1283,17 @@ pub fn derive_kind_seed(conn: &Connection, name: &str) -> rusqlite::Result<i64> 
 /// `OR IGNORE`: an existing row (done from an eager derive, or an earlier
 /// enqueue) is never clobbered.
 pub fn derive_enqueue_pending(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
+        &Sql::ignore(
+            "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
          VALUES (?1, ?2, ?3, 'pending')",
-        params![kind_id, repo_id, cs.0.as_slice()],
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice()],
     )?;
     Ok(())
 }
@@ -1295,18 +1303,17 @@ pub fn derive_enqueue_pending(
 /// lease to take and nothing can interleave). Taint comes from the
 /// parents the derivation consumed, exactly as in the queue's record step.
 pub fn derive_state_insert_done(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     output: &[u8],
     tainted: bool,
     poison_cs: Option<&Id>,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO derive_state(kind, repo_id, cs, state, attempts, output, tainted, poison_cs) \
-         VALUES (?1, ?2, ?3, 'done', 0, ?4, ?5, ?6)",
-        params![
+) -> Result<(), DbError> {
+    conn.execute(&Sql::plain("INSERT INTO derive_state(kind, repo_id, cs, state, attempts, output, tainted, poison_cs) \
+         VALUES (?1, ?2, ?3, 'done', 0, ?4, ?5, ?6)"),
+        &pv![
             kind_id,
             repo_id,
             cs.0.as_slice(),
@@ -1321,30 +1328,31 @@ pub fn derive_state_insert_done(
 /// One row of `derive_state`, or `None` (unknown kind/cs — the M6b read
 /// routes' "is derived / is pending" lookup goes through here).
 pub fn derive_get(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
-) -> rusqlite::Result<Option<DeriveStateRow>> {
-    conn.query_row(
-        "SELECT state, lease_expires_ns, attempts, output, tainted, poison_cs \
+) -> Result<Option<DeriveStateRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT state, lease_expires_ns, attempts, output, tainted, poison_cs \
          FROM derive_state \
          WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
-        params![kind_id, repo_id, cs.0.as_slice()],
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice()],
         |row| {
             Ok(DeriveStateRow {
                 state: row.get(0)?,
                 lease_expires_ns: row.get(1)?,
                 attempts: row.get(2)?,
                 output: row.get(3)?,
-                tainted: row.get::<_, i64>(4)? != 0,
+                tainted: row.get::<i64>(4)? != 0,
                 poison_cs: row
-                    .get::<_, Option<Vec<u8>>>(5)?
+                    .get::<Option<Vec<u8>>>(5)?
                     .map(|b| Id(b.try_into().expect("poison cs id is 32 bytes"))),
             })
         },
     )
-    .optional()
 }
 
 /// The oldest pending node of `kind_id` whose parents are all out of
@@ -1355,8 +1363,8 @@ pub fn derive_get(
 /// kind, so a missing row means a kind registered after the fact (M6b's
 /// backfill enqueues oldest-first, parents before children). Enqueue order
 /// (`rowid`) is the "oldest" order.
-pub fn derive_pick_next(conn: &Connection, kind_id: i64) -> rusqlite::Result<Option<(i64, Id)>> {
-    let mut stmt = conn.prepare_cached(
+pub fn derive_pick_next(conn: &Db, kind_id: i64) -> Result<Option<(i64, Id)>, DbError> {
+    let sql = Sql::plain_owned(format!(
         "SELECT s.repo_id, s.cs FROM derive_state s \
          WHERE s.kind = ?1 AND s.state = 'pending' \
          AND NOT EXISTS (\
@@ -1366,34 +1374,34 @@ pub fn derive_pick_next(conn: &Connection, kind_id: i64) -> rusqlite::Result<Opt
                            WHERE d.kind = s.kind AND d.repo_id = p.repo_id \
                              AND d.cs = p.parent \
                              AND d.state IN ('pending','deriving'))) \
-         ORDER BY s.rowid ASC LIMIT 1",
-    )?;
-    let row = stmt
-        .query_row(params![kind_id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)
-                    .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))?,
-            ))
-        })
-        .optional()?;
-    Ok(row)
+         ORDER BY {} ASC LIMIT 1",
+        conn.rowid("s")
+    ));
+    conn.query_opt_map(&sql, &pv![kind_id], |row| {
+        Ok((
+            row.get::<i64>(0)?,
+            row.get::<Vec<u8>>(1)
+                .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))?,
+        ))
+    })
 }
 
 /// Takes the lease on a pending node: state → 'deriving' with
 /// `lease_expires_ns` set. Returns `false` when the node was no longer
 /// pending (the pick was stale).
 pub fn derive_lease(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     lease_expires_ns: i64,
-) -> rusqlite::Result<bool> {
+) -> Result<bool, DbError> {
     let n = conn.execute(
-        "UPDATE derive_state SET state = 'deriving', lease_expires_ns = ?4 \
+        &Sql::plain(
+            "UPDATE derive_state SET state = 'deriving', lease_expires_ns = ?4 \
          WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 AND state = 'pending'",
-        params![kind_id, repo_id, cs.0.as_slice(), lease_expires_ns],
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice(), lease_expires_ns],
     )?;
     Ok(n == 1)
 }
@@ -1409,17 +1417,19 @@ pub fn derive_lease(
 /// sweep) or somehow re-leased by another holder is left alone. Returns
 /// `false` when no matching row existed.
 pub fn derive_release_lease(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     lease_expires_ns: i64,
-) -> rusqlite::Result<bool> {
+) -> Result<bool, DbError> {
     let n = conn.execute(
-        "UPDATE derive_state SET state = 'pending', lease_expires_ns = NULL \
+        &Sql::plain(
+            "UPDATE derive_state SET state = 'pending', lease_expires_ns = NULL \
          WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 \
            AND state = 'deriving' AND lease_expires_ns = ?4",
-        params![kind_id, repo_id, cs.0.as_slice(), lease_expires_ns],
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice(), lease_expires_ns],
     )?;
     Ok(n == 1)
 }
@@ -1429,29 +1439,29 @@ pub fn derive_release_lease(
 /// pending, or row-less parent), whether the parent row is ITSELF poison,
 /// and the parent's inherited taint (see [`DeriveStateRow::tainted`]).
 pub fn derive_parent_outputs(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     parents: &[Id],
-) -> rusqlite::Result<Vec<crate::derive::ParentOut>> {
+) -> Result<Vec<crate::derive::ParentOut>, DbError> {
     parents
         .iter()
         .map(|p| {
-            let row = conn
-                .query_row(
+            let row = conn.query_opt_map(
+                &Sql::plain(
                     "SELECT state, output, tainted, poison_cs FROM derive_state \
                      WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
-                    params![kind_id, repo_id, p.0.as_slice()],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, Option<Vec<u8>>>(1)?,
-                            row.get::<_, i64>(2)? != 0,
-                            row.get::<_, Option<Vec<u8>>>(3)?,
-                        ))
-                    },
-                )
-                .optional()?;
+                ),
+                &pv![kind_id, repo_id, p.0.as_slice()],
+                |row| {
+                    Ok((
+                        row.get::<String>(0)?,
+                        row.get::<Option<Vec<u8>>>(1)?,
+                        row.get::<i64>(2)? != 0,
+                        row.get::<Option<Vec<u8>>>(3)?,
+                    ))
+                },
+            )?;
             Ok(match row {
                 Some((state, output, tainted, poison_cs)) if state == "done" => {
                     crate::derive::ParentOut {
@@ -1490,19 +1500,21 @@ pub fn derive_parent_outputs(
 /// pending between derive and record is left to the next attempt (returns
 /// `false`).
 pub fn derive_record_done(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     output: &[u8],
     tainted: bool,
     poison_cs: Option<&Id>,
-) -> rusqlite::Result<bool> {
+) -> Result<bool, DbError> {
     let n = conn.execute(
-        "UPDATE derive_state SET state = 'done', output = ?4, lease_expires_ns = NULL, \
+        &Sql::plain(
+            "UPDATE derive_state SET state = 'done', output = ?4, lease_expires_ns = NULL, \
          tainted = ?5, poison_cs = ?6 \
          WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3 AND state = 'deriving'",
-        params![
+        ),
+        &pv![
             kind_id,
             repo_id,
             cs.0.as_slice(),
@@ -1523,41 +1535,44 @@ pub fn derive_record_done(
 /// it from there); an existing pending/deriving row is updated in place.
 /// Plain statements — see the module note on transactions.
 pub fn derive_fail_attempt(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     reason: &str,
     now_ns: i64,
-) -> rusqlite::Result<bool> {
-    let attempts: Option<i64> = conn
-        .query_row(
+) -> Result<bool, DbError> {
+    let attempts: Option<i64> = conn.query_opt_map(
+        &Sql::plain(
             "SELECT attempts FROM derive_state WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
-            params![kind_id, repo_id, cs.0.as_slice()],
-            |r| r.get(0),
-        )
-        .optional()?;
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice()],
+        |r| r.get(0),
+    )?;
     let attempts = attempts.unwrap_or(0) + 1;
     if attempts >= crate::derive::DERIVE_MAX_ATTEMPTS {
         conn.execute(
-            "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
+            &Sql::plain(
+                "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
              VALUES (?1, ?2, ?3, 'poison', ?4) \
              ON CONFLICT(kind, repo_id, cs) DO UPDATE SET \
                state = 'poison', lease_expires_ns = NULL, attempts = ?4",
-            params![kind_id, repo_id, cs.0.as_slice(), attempts],
+            ),
+            &pv![kind_id, repo_id, cs.0.as_slice(), attempts],
         )?;
-        conn.execute(
-            "INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
+        conn.execute(&Sql::plain("INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)"),
+            &pv![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
         )?;
         Ok(true)
     } else {
         conn.execute(
-            "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
+            &Sql::plain(
+                "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
              VALUES (?1, ?2, ?3, 'pending', ?4) \
              ON CONFLICT(kind, repo_id, cs) DO UPDATE SET \
                state = 'pending', lease_expires_ns = NULL, attempts = ?4",
-            params![kind_id, repo_id, cs.0.as_slice(), attempts],
+            ),
+            &pv![kind_id, repo_id, cs.0.as_slice(), attempts],
         )?;
         Ok(false)
     }
@@ -1567,23 +1582,25 @@ pub fn derive_fail_attempt(
 /// ran out — a crashed or hung derivation holder. The caller feeds each
 /// back through [`derive_fail_attempt`] inside one transaction.
 pub fn derive_expired_leases(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     now_ns: i64,
-) -> rusqlite::Result<Vec<(i64, Id)>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT repo_id, cs FROM derive_state \
+) -> Result<Vec<(i64, Id)>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT repo_id, cs FROM derive_state \
          WHERE kind = ?1 AND state = 'deriving' \
            AND lease_expires_ns IS NOT NULL AND lease_expires_ns < ?2",
-    )?;
-    let rows = stmt.query_map(params![kind_id, now_ns], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, Vec<u8>>(1)
-                .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))?,
-        ))
-    })?;
-    rows.collect()
+        ),
+        &pv![kind_id, now_ns],
+        |row| {
+            Ok((
+                row.get::<i64>(0)?,
+                row.get::<Vec<u8>>(1)
+                    .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))?,
+            ))
+        },
+    )
 }
 
 /// The boot-backfill batch cursor: the (generation, changesets.rowid)
@@ -1631,45 +1648,56 @@ impl BackfillCursor {
 /// inside one write closure: the cursor reflects exactly what this batch
 /// committed.
 pub fn derive_backfill_batch(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     cursor: BackfillCursor,
     limit: i64,
-) -> rusqlite::Result<(usize, BackfillCursor)> {
+) -> Result<(usize, BackfillCursor), DbError> {
     if limit <= 0 {
         return Ok((0, cursor));
     }
     // The batch's inserted rows are exactly those with a derive_state rowid
     // past this mark (the INSERT is one atomic statement — no concurrent
     // writer can interleave).
-    let pre_max_rowid: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(rowid), 0) FROM derive_state WHERE kind = ?1",
-        params![kind_id],
+    let c_rowid = conn.rowid("c");
+    let d_rowid = conn.rowid("d");
+    // The derive_state table is unaliased in this statement: qualify the
+    // rowid with the table name, not the pick query's `s` alias.
+    let pre_max_rowid: i64 = conn.query_row_map(
+        &Sql::plain_owned(format!(
+            "SELECT COALESCE(MAX({}), 0) FROM derive_state WHERE kind = ?1",
+            conn.rowid("derive_state")
+        )),
+        &pv![kind_id],
         |r| r.get(0),
     )?;
     let inserted = conn.execute(
-        "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
-         SELECT ?1, c.repo_id, c.id, 'pending' FROM changesets c \
-         WHERE (c.generation, c.rowid) > (?2, ?3) \
-           AND NOT EXISTS (\
-             SELECT 1 FROM derive_state d \
-             WHERE d.kind = ?1 AND d.repo_id = c.repo_id AND d.cs = c.id) \
-         ORDER BY c.generation ASC, c.rowid ASC \
-         LIMIT ?4",
-        params![kind_id, cursor.generation, cursor.rowid, limit],
+        &Sql::ignore_owned(format!(
+            "INSERT OR IGNORE INTO derive_state(kind, repo_id, cs, state) \
+             SELECT ?1, c.repo_id, c.id, 'pending' FROM changesets c \
+             WHERE (c.generation, {c_rowid}) > (?2, ?3) \
+               AND NOT EXISTS (\
+                 SELECT 1 FROM derive_state d \
+                 WHERE d.kind = ?1 AND d.repo_id = c.repo_id AND d.cs = c.id) \
+             ORDER BY c.generation ASC, {c_rowid} ASC \
+             LIMIT ?4"
+        )),
+        &pv![kind_id, cursor.generation, cursor.rowid, limit],
     )?;
     if inserted == 0 {
         return Ok((0, cursor));
     }
     // Advance to the last scanned changeset: the scan is ascending in both
     // coordinates, so the last-inserted derive row's changeset IS it.
-    let (generation, rowid) = conn.query_row(
-        "SELECT c.generation, c.rowid \
-         FROM derive_state d \
-         JOIN changesets c ON c.repo_id = d.repo_id AND c.id = d.cs \
-         WHERE d.kind = ?1 AND d.rowid > ?2 \
-         ORDER BY d.rowid DESC LIMIT 1",
-        params![kind_id, pre_max_rowid],
+    let (generation, rowid) = conn.query_row_map(
+        &Sql::plain_owned(format!(
+            "SELECT c.generation, {c_rowid} \
+             FROM derive_state d \
+             JOIN changesets c ON c.repo_id = d.repo_id AND c.id = d.cs \
+             WHERE d.kind = ?1 AND {d_rowid} > ?2 \
+             ORDER BY {d_rowid} DESC LIMIT 1"
+        )),
+        &pv![kind_id, pre_max_rowid],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     Ok((inserted, BackfillCursor { generation, rowid }))
@@ -1680,13 +1708,15 @@ pub fn derive_backfill_batch(
 /// ([`crate::derive::backfill`] sets the marker only when this returns
 /// false, so the marker PROVES the anti-join empty rather than inferring
 /// it from a zero-insert batch).
-pub fn derive_backfill_rowless_exists(conn: &Connection, kind_id: i64) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM changesets c \
+pub fn derive_backfill_rowless_exists(conn: &Db, kind_id: i64) -> Result<bool, DbError> {
+    conn.query_row_map(
+        &Sql::plain(
+            "SELECT EXISTS(SELECT 1 FROM changesets c \
          WHERE NOT EXISTS (\
              SELECT 1 FROM derive_state d \
              WHERE d.kind = ?1 AND d.repo_id = c.repo_id AND d.cs = c.id))",
-        params![kind_id],
+        ),
+        &pv![kind_id],
         |r| r.get(0),
     )
 }
@@ -1698,23 +1728,24 @@ pub fn derive_backfill_rowless_exists(conn: &Connection, kind_id: i64) -> rusqli
 /// row exists; an existing pending/deriving row is quarantined in place.
 /// Plain statements — see the module note on transactions.
 pub fn derive_poison_now(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     cs: &Id,
     reason: &str,
     now_ns: i64,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
+        &Sql::plain(
+            "INSERT INTO derive_state(kind, repo_id, cs, state, attempts) \
          VALUES (?1, ?2, ?3, 'poison', 0) \
          ON CONFLICT(kind, repo_id, cs) DO UPDATE SET \
            state = 'poison', lease_expires_ns = NULL",
-        params![kind_id, repo_id, cs.0.as_slice()],
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice()],
     )?;
-    conn.execute(
-        "INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
+    conn.execute(&Sql::plain("INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)"),
+        &pv![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
     )?;
     Ok(())
 }
@@ -1739,25 +1770,36 @@ pub struct BlameStateEntry {
 /// Writes one changeset's blame diff-state (a keyed `OR REPLACE` per path:
 /// a re-run after a lost lease replaces, never duplicates).
 pub fn blame_state_put(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     cs: &Id,
     entries: &[BlameStateEntry],
-) -> rusqlite::Result<()> {
-    let mut stmt = conn.prepare_cached(
-        "INSERT OR REPLACE INTO blame_state(repo_id, cs, path, blob_id, parent_blob_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+) -> Result<(), DbError> {
     for e in entries {
-        stmt.execute(params![
-            repo_id,
-            cs.0.as_slice(),
-            e.path,
-            e.blob_id.as_ref().map(|b| b.0.as_slice()),
-            e.parent_blob_id.as_ref().map(|b| b.0.as_slice()),
-        ])?;
+        conn.execute(
+            &Sql::replace(
+                "INSERT OR REPLACE INTO blame_state(repo_id, cs, path, blob_id, parent_blob_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                &["repo_id", "cs", "path"],
+                &["blob_id", "parent_blob_id"],
+            ),
+            &pv![
+                repo_id,
+                cs.0.as_slice(),
+                &e.path,
+                e.blob_id.as_ref().map(|b| b.0.as_slice()),
+                e.parent_blob_id.as_ref().map(|b| b.0.as_slice()),
+            ],
+        )?;
     }
     Ok(())
+}
+
+/// One path's blame diff-state row: `(blob_id, parent_blob_id)`, both
+/// optional (del / add).
+pub struct BlameDiffState {
+    pub blob_id: Option<Id>,
+    pub parent_blob_id: Option<Id>,
 }
 
 /// One path's blame diff-state row for a changeset:
@@ -1765,42 +1807,46 @@ pub fn blame_state_put(
 /// the changeset did not touch the path. The blame walk's per-node
 /// question — indexed point query, one per visited chain node.
 pub fn blame_state_get(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     cs: &Id,
     path: &str,
-) -> rusqlite::Result<Option<(Option<Id>, Option<Id>)>> {
-    conn.query_row(
-        "SELECT blob_id, parent_blob_id FROM blame_state \
+) -> Result<Option<BlameDiffState>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain(
+            "SELECT blob_id, parent_blob_id FROM blame_state \
          WHERE repo_id = ?1 AND cs = ?2 AND path = ?3",
-        params![repo_id, cs.0.as_slice(), path],
+        ),
+        &pv![repo_id, cs.0.as_slice(), path],
         |row| {
             let blob: Option<Vec<u8>> = row.get(0)?;
             let parent: Option<Vec<u8>> = row.get(1)?;
-            Ok((
-                blob.map(|b| Id(b.try_into().expect("blob id is 32 bytes"))),
-                parent.map(|b| Id(b.try_into().expect("parent blob id is 32 bytes"))),
-            ))
+            Ok(BlameDiffState {
+                blob_id: blob.map(|b| Id(b.try_into().expect("blob id is 32 bytes"))),
+                parent_blob_id: parent
+                    .map(|b| Id(b.try_into().expect("parent blob id is 32 bytes"))),
+            })
         },
     )
-    .optional()
 }
 
 /// Writes one changeset's path-history index rows (an `OR IGNORE` per
 /// path: the PK (repo_id, path, gen, cs) makes a re-run a no-op).
 pub fn path_history_put(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     generation: i64,
     cs: &Id,
     changes: &[FileChangeRow],
-) -> rusqlite::Result<()> {
-    let mut stmt = conn.prepare_cached(
-        "INSERT OR IGNORE INTO path_history(repo_id, path, gen, cs, op) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+) -> Result<(), DbError> {
     for c in changes {
-        stmt.execute(params![repo_id, c.path, generation, cs.0.as_slice(), c.op,])?;
+        conn.execute(
+            &Sql::ignore(
+                "INSERT OR IGNORE INTO path_history(repo_id, path, gen, cs, op) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            ),
+            &pv![repo_id, &c.path, generation, cs.0.as_slice(), c.op],
+        )?;
     }
     Ok(())
 }
@@ -1809,31 +1855,28 @@ pub fn path_history_put(
 /// (generation DESC, changeset id ASC), resuming after a cursor row.
 /// Joins `changesets` so the page carries the log-entry fields.
 pub fn path_history_page(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     path: &str,
     after: Option<(i64, Vec<u8>)>,
     limit: i64,
-) -> rusqlite::Result<Vec<LogRow>> {
+) -> Result<Vec<LogRow>, DbError> {
     let (after_gen, after_cs) = match after {
         Some((g, id)) => (Some(g), id),
         None => (None, Vec::new()),
     };
-    let mut stmt = conn.prepare_cached(
-        "SELECT c.id, c.author, c.message, c.timestamp_ns, c.generation, c.principal \
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT c.id, c.author, c.message, c.timestamp_ns, c.generation, c.principal \
          FROM path_history h \
          JOIN changesets c ON c.repo_id = h.repo_id AND c.id = h.cs \
          WHERE h.repo_id = ?1 AND h.path = ?2 \
            AND (?3 IS NULL OR h.gen < ?3 OR (h.gen = ?3 AND h.cs > ?4)) \
          ORDER BY h.gen DESC, h.cs ASC LIMIT ?5",
-    )?;
-    let rows = stmt
-        .query_map(
-            params![repo_id, path, after_gen, after_cs, limit],
-            log_row_from,
-        )?
-        .collect::<rusqlite::Result<Vec<LogRow>>>()?;
-    Ok(rows)
+        ),
+        &pv![repo_id, path, after_gen, after_cs, limit],
+        log_row_from,
+    )
 }
 
 /// The un-accelerated path history: a full `file_changes` scan by path —
@@ -1841,34 +1884,31 @@ pub fn path_history_page(
 /// fallback for a server on which the path_history kind is not registered,
 /// and the parity oracle's brute force.
 pub fn path_history_scan(
-    conn: &Connection,
+    conn: &Db,
     repo_id: i64,
     path: &str,
     after: Option<(i64, Vec<u8>)>,
     limit: i64,
-) -> rusqlite::Result<Vec<LogRow>> {
+) -> Result<Vec<LogRow>, DbError> {
     let (after_gen, after_cs) = match after {
         Some((g, id)) => (Some(g), id),
         None => (None, Vec::new()),
     };
-    let mut stmt = conn.prepare_cached(
-        "SELECT c.id, c.author, c.message, c.timestamp_ns, c.generation, c.principal \
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT c.id, c.author, c.message, c.timestamp_ns, c.generation, c.principal \
          FROM file_changes f \
          JOIN changesets c ON c.repo_id = f.repo_id AND c.id = f.cs \
          WHERE f.repo_id = ?1 AND f.path = ?2 \
            AND (?3 IS NULL OR c.generation < ?3 OR (c.generation = ?3 AND c.id > ?4)) \
          ORDER BY c.generation DESC, c.id ASC LIMIT ?5",
-    )?;
-    let rows = stmt
-        .query_map(
-            params![repo_id, path, after_gen, after_cs, limit],
-            log_row_from,
-        )?
-        .collect::<rusqlite::Result<Vec<LogRow>>>()?;
-    Ok(rows)
+        ),
+        &pv![repo_id, path, after_gen, after_cs, limit],
+        log_row_from,
+    )
 }
 
-fn log_row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogRow> {
+fn log_row_from(row: &Row) -> Result<LogRow, DbError> {
     Ok(LogRow {
         id: row.get(0)?,
         author: row.get(1)?,
@@ -1907,10 +1947,12 @@ pub const DERIVE_PENDING_PROBE_SQL: &str = "SELECT 1 FROM derive_state \
 ///    everything that predated it; every write path enqueues its own
 ///    changeset inside the writer's own transaction), so pending/deriving
 ///    rows are the only possible gap, and the indexed probe catches them.
-pub fn derive_any_pending(conn: &Connection, kind_id: i64, repo_id: i64) -> rusqlite::Result<bool> {
-    let kind_name: Option<String> = conn
-        .query_row(DERIVE_PENDING_KIND_NAME_SQL, params![kind_id], |r| r.get(0))
-        .optional()?;
+pub fn derive_any_pending(conn: &Db, kind_id: i64, repo_id: i64) -> Result<bool, DbError> {
+    let kind_name: Option<String> = conn.query_opt_map(
+        &Sql::plain(DERIVE_PENDING_KIND_NAME_SQL),
+        &pv![kind_id],
+        |r| r.get(0),
+    )?;
     let Some(kind_name) = kind_name else {
         // Unreachable from the routes (they resolve the id via
         // `derive_kind_id` first); unknown kind id stays on the safe side.
@@ -1919,11 +1961,11 @@ pub fn derive_any_pending(conn: &Connection, kind_id: i64, repo_id: i64) -> rusq
     if !derive_backfill_done_get(conn, &kind_name)? {
         return Ok(true);
     }
-    let hit: Option<i64> = conn
-        .query_row(DERIVE_PENDING_PROBE_SQL, params![kind_id, repo_id], |r| {
-            r.get(0)
-        })
-        .optional()?;
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain(DERIVE_PENDING_PROBE_SQL),
+        &pv![kind_id, repo_id],
+        |r| r.get(0),
+    )?;
     Ok(hit.is_some())
 }
 
@@ -1939,14 +1981,16 @@ fn derive_backfill_marker_key(kind_name: &str) -> String {
 /// this — which is why a FAILED backfill never sets it and every boot
 /// clears it before re-running ([`derive_backfill_done_clear`]).
 pub fn derive_backfill_done_set(
-    conn: &Connection,
+    conn: &Db,
     kind_name: &str,
     completed_ns: i64,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO meta(key, value) VALUES (?1, ?2) \
+        &Sql::plain(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![
+        ),
+        &pv![
             derive_backfill_marker_key(kind_name),
             completed_ns.to_string()
         ],
@@ -1959,23 +2003,21 @@ pub fn derive_backfill_done_set(
 /// in particular an offline import's — may have no derive row, and a
 /// marker left from the previous boot would let reads answer from the
 /// incomplete index.
-pub fn derive_backfill_done_clear(conn: &Connection, kind_name: &str) -> rusqlite::Result<()> {
+pub fn derive_backfill_done_clear(conn: &Db, kind_name: &str) -> Result<(), DbError> {
     conn.execute(
-        "DELETE FROM meta WHERE key = ?1",
-        params![derive_backfill_marker_key(kind_name)],
+        &Sql::plain("DELETE FROM meta WHERE key = ?1"),
+        &pv![derive_backfill_marker_key(kind_name)],
     )?;
     Ok(())
 }
 
 /// Whether kind `name`'s boot backfill completion marker is set.
-pub fn derive_backfill_done_get(conn: &Connection, kind_name: &str) -> rusqlite::Result<bool> {
-    let hit: Option<String> = conn
-        .query_row(
-            DERIVE_PENDING_BACKFILL_DONE_SQL,
-            params![derive_backfill_marker_key(kind_name)],
-            |r| r.get(0),
-        )
-        .optional()?;
+pub fn derive_backfill_done_get(conn: &Db, kind_name: &str) -> Result<bool, DbError> {
+    let hit: Option<String> = conn.query_opt_map(
+        &Sql::plain(DERIVE_PENDING_BACKFILL_DONE_SQL),
+        &pv![derive_backfill_marker_key(kind_name)],
+        |r| r.get(0),
+    )?;
     Ok(hit.is_some())
 }
 
@@ -1985,41 +2027,36 @@ pub fn derive_backfill_done_get(conn: &Connection, kind_name: &str) -> rusqlite:
 /// primary rows exist regardless of derivation, so this is checkable
 /// exactly.)
 pub fn derive_poison_touching_path(
-    conn: &Connection,
+    conn: &Db,
     kind_id: i64,
     repo_id: i64,
     path: &str,
-) -> rusqlite::Result<Vec<Id>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT d.cs FROM derive_state d \
+) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT d.cs FROM derive_state d \
          WHERE d.kind = ?1 AND d.repo_id = ?2 AND d.state = 'poison' \
            AND EXISTS (SELECT 1 FROM file_changes f \
                        WHERE f.repo_id = d.repo_id AND f.cs = d.cs AND f.path = ?3)",
-    )?;
-    let rows = stmt
-        .query_map(params![kind_id, repo_id, path], |row| {
-            row.get::<_, Vec<u8>>(0)
+        ),
+        &pv![kind_id, repo_id, path],
+        |row| {
+            row.get::<Vec<u8>>(0)
                 .map(|b| Id(b.try_into().expect("cs id is 32 bytes")))
-        })?
-        .collect::<rusqlite::Result<Vec<Id>>>()?;
-    Ok(rows)
+        },
+    )
 }
 
 /// One `(tree_id, name)` entry probe — the indexed point lookup under both
 /// path lookups. `tree_entries`' `PRIMARY KEY(tree_id, name)` makes this an
 /// O(1) B-tree descent per component, independent of the directory's entry
 /// count.
-fn tree_entry_lookup(
-    conn: &Connection,
-    tree: &Id,
-    name: &str,
-) -> rusqlite::Result<Option<(i64, Vec<u8>)>> {
-    conn.query_row(
-        "SELECT kind, object_id FROM tree_entries WHERE tree_id = ?1 AND name = ?2",
-        params![tree.0.as_slice(), name],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+fn tree_entry_lookup(conn: &Db, tree: &Id, name: &str) -> Result<Option<(i64, Vec<u8>)>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain("SELECT kind, object_id FROM tree_entries WHERE tree_id = ?1 AND name = ?2"),
+        &pv![tree.0.as_slice(), name],
+        |r| Ok((r.get::<i64>(0)?, r.get::<Vec<u8>>(1)?)),
     )
-    .optional()
 }
 
 /// Resolves one path in a tree to its blob id (`None` = absent, or the
@@ -2027,7 +2064,7 @@ fn tree_entry_lookup(
 /// existence pre-check. One [`tree_entry_lookup`] probe per path component
 /// — O(depth), independent of directory width. DERIVERS must not use this
 /// variant: it never charges — see [`tree_lookup_path_charged`].
-pub fn tree_lookup_path(conn: &Connection, root: &Id, path: &str) -> rusqlite::Result<Option<Id>> {
+pub fn tree_lookup_path(conn: &Db, root: &Id, path: &str) -> Result<Option<Id>, DbError> {
     let mut tree = *root;
     let components: Vec<&str> = path.split('/').collect();
     for (i, name) in components.iter().enumerate() {
@@ -2055,7 +2092,7 @@ pub fn tree_lookup_path(conn: &Connection, root: &Id, path: &str) -> rusqlite::R
 /// [`DeriveFailure::WalkBudget`] (immediate quarantine). Derivers walking
 /// trees MUST use this variant.
 pub fn tree_lookup_path_charged(
-    conn: &Connection,
+    conn: &Db,
     ctx: &crate::derive::DeriveCtx,
     root: &Id,
     path: &str,
@@ -2083,10 +2120,10 @@ pub fn tree_lookup_path_charged(
 
 /// A changeset's parent count (the commit-graph deriver's purity check: a
 /// skip over a span may not lose a spanned node's non-first parents).
-pub fn changeset_parent_count(conn: &Connection, repo_id: i64, cs: &Id) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2",
-        params![repo_id, cs.0.as_slice()],
+pub fn changeset_parent_count(conn: &Db, repo_id: i64, cs: &Id) -> Result<i64, DbError> {
+    conn.query_row_map(
+        &Sql::plain("SELECT COUNT(*) FROM changeset_parents WHERE repo_id = ?1 AND cs = ?2"),
+        &pv![repo_id, cs.0.as_slice()],
         |r| r.get(0),
     )
 }
@@ -2095,38 +2132,38 @@ pub fn changeset_parent_count(conn: &Connection, repo_id: i64, cs: &Id) -> rusql
 
 /// Appends one audit row.
 pub fn audit_append(
-    conn: &Connection,
+    conn: &Db,
     ts_ns: i64,
     principal: &str,
     action: &str,
     details_json: &str,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO audit_log(ts_ns, principal, action, details_json) VALUES (?1, ?2, ?3, ?4)",
-        params![ts_ns, principal, action, details_json],
+        &Sql::plain(
+            "INSERT INTO audit_log(ts_ns, principal, action, details_json) VALUES (?1, ?2, ?3, ?4)",
+        ),
+        &pv![ts_ns, principal, action, details_json],
     )?;
     Ok(())
 }
 
 /// Lists audit rows with `id < before_id`, descending (id order matches ts
 /// order — ids are assigned at insert), up to `limit` rows.
-pub fn audit_list(
-    conn: &Connection,
-    before_id: i64,
-    limit: i64,
-) -> rusqlite::Result<Vec<AuditRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT id, ts_ns, principal, action, details_json FROM audit_log \
+pub fn audit_list(conn: &Db, before_id: i64, limit: i64) -> Result<Vec<AuditRow>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT id, ts_ns, principal, action, details_json FROM audit_log \
          WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![before_id, limit], |row| {
-        Ok(AuditRow {
-            id: row.get(0)?,
-            ts_ns: row.get(1)?,
-            principal: row.get(2)?,
-            action: row.get(3)?,
-            details_json: row.get(4)?,
-        })
-    })?;
-    rows.collect()
+        ),
+        &pv![before_id, limit],
+        |row| {
+            Ok(AuditRow {
+                id: row.get(0)?,
+                ts_ns: row.get(1)?,
+                principal: row.get(2)?,
+                action: row.get(3)?,
+                details_json: row.get(4)?,
+            })
+        },
+    )
 }
