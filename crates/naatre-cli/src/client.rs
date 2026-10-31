@@ -10,8 +10,8 @@
 //! responses keep their JSON envelope (ureq's default drops the body of
 //! error statuses).
 
-use std::cell::Cell;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -97,7 +97,7 @@ pub struct Client {
     /// Server origin, no trailing slash (e.g. `http://127.0.0.1:7400`).
     pub base: String,
     token: Option<String>,
-    version_checked: Cell<bool>,
+    version_checked: AtomicBool,
 }
 
 impl Client {
@@ -114,7 +114,7 @@ impl Client {
             agent,
             base: base.trim_end_matches('/').to_string(),
             token,
-            version_checked: Cell::new(false),
+            version_checked: AtomicBool::new(false),
         }
     }
 
@@ -136,12 +136,16 @@ impl Client {
 
     /// GET /version once per process; warns on a major-version skew
     /// ("upgrade the server first"). Transport or shape problems are ignored
-    /// here — the real call surfaces them.
+    /// here — the real call surfaces them. (Atomic: the client is shared
+    /// across threads by the mount daemon.)
     fn check_version(&self) {
-        if self.version_checked.get() {
+        if self
+            .version_checked
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
             return;
         }
-        self.version_checked.set(true);
         let url = format!("{}/version", self.base);
         let Ok(res) = self.agent.get(&url).call() else {
             return;

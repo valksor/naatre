@@ -193,6 +193,48 @@ takes the same lock while it runs — a second writer refuses with an error
 naming the lock instead of racing on `.naatre/state.json`. A killed
 process releases the lock; nothing to clean up.
 
+## Virtual checkout: `naatre mount`
+
+`naatre mount <repo> [--at REF]` serves a ref as a lazily-hydrated
+filesystem over **NFSv3**: directories load on first list, files on first
+read, and every hydrated blob is hash-verified against its id. Sizes and
+exec bits come from tree entries, so stat never fetches content. The ref
+is **pinned at mount time** — the daemon resolves it once at startup and
+serves that tree for its whole life; advancing `main` afterwards is
+invisible to a running mount (a new mount picks up the new ref). Ctrl-C or
+SIGTERM stops the daemon. The same VFS layer runs in-process in the test
+suite (no kernel mount needed — that is how CI exercises it, including a
+byte-exact mount-vs-clone parity walk, a cold-mount cargo build of
+naatre's own sources, and corrupt-cache recovery). FUSE (Linux-only) is
+the follow-up platform front-end; this release ships NFSv3.
+
+Security/bind: the daemon binds **127.0.0.1 on an ephemeral port** with an
+unguessable per-mount export path (`/naatre/<32 random hex>`), and prints
+ready-to-paste `mount_nfs` (macOS) and `mount` (Linux) command lines. A
+non-loopback `--listen` is explicit opt-in and prints the same cleartext
+warning `serve` does. **AUTH_SYS authenticates nothing**: NFS grants by
+network identity alone, so anyone who can reach the port can read the
+export (and write to a writable one) — keep mounts on loopback or behind
+a network you control.
+
+Hydration failures name the object: a missing object or a hash mismatch
+prints the id on the daemon's stderr and surfaces a distinct errno
+(`EIO` for missing, `ESTALE` for mismatch — a client re-lookup re-hydrates).
+
+The hydrate cache lives under
+`$XDG_CACHE_HOME/naatre/mounts/<export>/` (default `~/.cache/…`), 0700,
+one 0600 file per blob, **LRU-evicted at 1024 blobs per mount**. A daemon
+killed with SIGKILL leaves its cache dir behind; the next mount evicts
+dirs whose owner is gone.
+
+`--writable` (UNSTABLE) enables file create + write: the default mount is
+read-only and every write op answers EROFS. With the flag, file-create
+enforces the path grammar and NFC at create (rejections name why) and
+writes buffer in a shadow dir; on exit the daemon **stages** them as a
+changeset on top of the pin and prints its id — **flush never lands
+anything** (no ref moves; re-flush re-stages). No mkdir, delete, or
+rename in this first cut.
+
 ## Error codes
 
 Every error is one envelope: `{"error":{"code","message","retryable",

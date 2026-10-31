@@ -1,9 +1,9 @@
 //! `naatre` — one binary, multi-call (plan "Client"): host-local admin verbs
 //! (`init`, `serve`, `token --new-admin`, `import`) that run directly
 //! against the 0700 data dir, thin HTTP client verbs (`repo`, `token`
-//! subcommands), and the working-copy verbs (`clone`, `status`, `sparse`,
+//! subcommands), the working-copy verbs (`clone`, `status`, `sparse`,
 //! `sync`, `commit`, `cat`, `ls`, `diff`, `doctor`, `login`, `snapshot`,
-//! `restore`).
+//! `restore`, `mcp`), and the mount daemon (`mount`, M8).
 //!
 //! Pinned exit codes across client verbs: 0 success, 1 generic error,
 //! 2 conflict-class (409 envelopes), 3 usage.
@@ -241,6 +241,27 @@ enum Cmd {
         #[arg(long)]
         read_only: bool,
     },
+    /// Serve a repo's ref as a lazily-hydrated filesystem over NFSv3 on
+    /// loopback (M8; AUTH_SYS authenticates nothing). The ref is pinned at
+    /// startup — later ref advances are invisible to this mount. Ctrl-C or
+    /// SIGTERM stops the daemon.
+    Mount {
+        /// Repo name on the server.
+        repo: String,
+        /// Changeset id or ref name to pin (default: main).
+        #[arg(long)]
+        at: Option<String>,
+        /// UNSTABLE: stage writes in a shadow dir; a changeset is staged
+        /// (never landed) on flush at shutdown. Read-only by default.
+        #[arg(long)]
+        writable: bool,
+        /// Listen address (default 127.0.0.1:0; non-loopback prints the
+        /// cleartext warning).
+        #[arg(long)]
+        listen: Option<String>,
+        #[command(flatten)]
+        net: NetOpts,
+    },
 }
 
 #[derive(Subcommand)]
@@ -452,6 +473,19 @@ fn main() {
             verbs::restore::run(cwd, &snap_id, force, &net.net())
         }),
         Cmd::Mcp { token, read_only } => verbs::mcp::run(cwd, read_only, token),
+        Cmd::Mount {
+            repo,
+            at,
+            writable,
+            listen,
+            net,
+        } => verbs::mount::run(
+            &repo,
+            at.as_deref(),
+            writable,
+            listen.as_deref(),
+            &net.net(),
+        ),
     };
     std::process::exit(code);
 }

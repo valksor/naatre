@@ -37,6 +37,16 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 # session, CLI working-copy verbs per invocation — the same crate and pin
 # naatre-store uses for the data-dir flock (already in the lockfile).
 fs2 = "0.4"
+# NFSv3 front-end for `naatre mount` (M8): userspace server, one loopback
+# port carrying the nfs + mount + portmap programs. BSD-3-Clause; GPL-3
+# compatible (license re-verified in the M8a dependency table).
+nfsserve = "0.11"
+# The nfsserve `NFSFileSystem` trait is async; the naatre adapter implements
+# it over the sync VFS (already in the lockfile via naatre-server's axum).
+async-trait = "0.1"
+# Stale-mount-dir cleanup (`kill(pid, 0)` liveness) for the per-mount cache
+# dirs (already in the lockfile via getrandom).
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

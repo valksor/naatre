@@ -1,10 +1,12 @@
 //! The working-copy verbs: clone, status, sparse, sync, commit, cat, ls,
-//! diff, doctor, login, snapshot, restore, mcp. Every verb prints its own
-//! output and returns the pinned exit code (0 success, 1 generic,
-//! 2 conflict-class, 3 usage). Each also exposes a value-returning core
-//! (`value`/`*_value`/`core`) the `mcp` server drives — the cores never
-//! print, so MCP tool results can carry the verbs' `--json` shapes while
-//! stdout stays the MCP protocol channel.
+//! diff, doctor, login, snapshot, restore, mcp — plus the mount daemon
+//! (M8), which serves a pinned ref over NFS from a repo name + server
+//! (no working copy). Every verb prints its own output and returns the
+//! pinned exit code (0 success, 1 generic, 2 conflict-class, 3 usage).
+//! Each also exposes a value-returning core (`value`/`*_value`/`core`)
+//! the `mcp` server drives — the cores never print, so MCP tool results
+//! can carry the verbs' `--json` shapes while stdout stays the MCP
+//! protocol channel.
 
 pub mod clone;
 pub mod commit;
@@ -12,6 +14,7 @@ pub mod doctor;
 pub mod land;
 pub mod login;
 pub mod mcp;
+pub mod mount;
 pub mod reads;
 pub mod restore;
 pub mod snapshot;
