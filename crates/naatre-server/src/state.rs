@@ -283,6 +283,13 @@ pub struct ServerState {
     /// timing race). Same aiming pattern as the test derivers' `fail_for`
     /// handles.
     pub derive_test_busy_abort: Arc<Mutex<Option<crate::derive::BusyAbort>>>,
+    /// The derive call's wall-clock deadline window ([`crate::derive`]'s
+    /// [`DeriveCtx`]): an overrun is a RETRYABLE failed attempt (lease
+    /// released, measured units/sec reason rowed, quarantine only at the
+    /// attempt cap). Injectable so tests can pin the overrun → retry →
+    /// eventual-done contract with tiny windows instead of the ~2 s
+    /// default [`crate::derive::DERIVE_WALK_DEADLINE_NS`].
+    pub derive_walk_deadline: Duration,
 }
 
 /// Shared handle to the server state.
@@ -345,6 +352,7 @@ impl ServerState {
             derive_backfill_batch_size: crate::derive::BACKFILL_BATCH,
             blame_max_blob_bytes: crate::routes::history::BLAME_MAX_BLOB_BYTES,
             derive_test_busy_abort: Arc::new(Mutex::new(None)),
+            derive_walk_deadline: Duration::from_nanos(crate::derive::DERIVE_WALK_DEADLINE_NS),
         })
     }
 
@@ -420,6 +428,7 @@ impl ServerState {
             derive_backfill_batch_size: crate::derive::BACKFILL_BATCH,
             blame_max_blob_bytes: crate::routes::history::BLAME_MAX_BLOB_BYTES,
             derive_test_busy_abort: Arc::new(Mutex::new(None)),
+            derive_walk_deadline: Duration::from_nanos(crate::derive::DERIVE_WALK_DEADLINE_NS),
         })
     }
 

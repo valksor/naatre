@@ -94,6 +94,12 @@ jobs:
       - run: cargo test -p naatre-server --test m9b_routes_s3_test --locked
         env:
           NAATRE_TEST_S3_REQUIRED: "1"
+      # M10a fix slice: the reachability GC's delete path against blob =
+      # "s3" (both gates + the re-reference race + the fsck drift note —
+      # the same required pinning as the m9_s3/m9b legs above).
+      - run: cargo test -p naatre-server --test m10a_s3_test --locked
+        env:
+          NAATRE_TEST_S3_REQUIRED: "1"
 
   deny:
     runs-on: ubuntu-latest

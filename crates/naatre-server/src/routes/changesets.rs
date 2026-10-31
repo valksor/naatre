@@ -373,6 +373,7 @@ async fn persist(
     let cas = Arc::clone(&state.cas);
     let derive = Arc::clone(&state.derive);
     let clock = Arc::clone(&state.clock);
+    let walk_deadline = state.derive_walk_deadline.as_nanos() as u64;
 
     state
         .write(move |store| {
@@ -458,8 +459,11 @@ async fn persist(
                 repo_id,
                 cs_id,
                 &cs.parents,
-                timestamp_ns as i64,
-                clock,
+                crate::derive::EagerEnv {
+                    now_ns: timestamp_ns as i64,
+                    clock,
+                    walk_deadline_ns: walk_deadline,
+                },
             )
             .map_err(ApiError::log_internal)?;
             Ok(root_tree_id)

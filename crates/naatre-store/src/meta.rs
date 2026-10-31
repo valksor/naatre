@@ -1130,10 +1130,13 @@ fn pg_row(row: &postgres::Row) -> Result<Row, DbError> {
 }
 
 /// A Postgres `numeric` read raw (binary `numeric_send`) and converted
-/// LOSSLESSLY to `i64`: base-10000 digits accumulated in i128, fractional
-/// digits must be zero (a rounding-free parse — a true fraction is a
-/// domain error, never rounded away), anything past i64 is an overflow
-/// error. Errors surface as the column's [`DbError::ColumnDomain`].
+/// LOSSLESSLY to `i64`: base-10000 digits accumulated in i128 — INCLUDING
+/// the scale factor for the trailing base-10000 zero groups PG strips from
+/// the wire form (40_000_000 ships as the single digit 4000 at weight 1;
+/// skipping the factor answered 4_000) — fractional digits must be zero (a
+/// rounding-free parse — a true fraction is a domain error, never rounded
+/// away), anything past i64 is an overflow error. Errors surface as the
+/// column's [`DbError::ColumnDomain`].
 struct PgNumericI64(i64);
 
 impl<'a> postgres::types::FromSql<'a> for PgNumericI64 {
@@ -1161,14 +1164,20 @@ impl<'a> postgres::types::FromSql<'a> for PgNumericI64 {
             0 => {}
             other => return Err(format!("unknown numeric sign {other:#06x}").into()),
         }
-        // Digits run contiguously from `weight` (most significant) down.
+        // Digits run contiguously from `weight` (most significant) down,
+        // but the LOWEST stored digit can sit ABOVE the units position:
+        // PG strips trailing base-10000 zero groups from the wire form, so
+        // 40_000_000 ships as one digit (4000) at weight 1 and the stored
+        // digits carry a 10000^(weight − ndigits + 1) scale factor the
+        // Horner pass never sees. The loop reads the integer digits
+        // (positions weight…0); the stripped tail is multiplied in after.
         let mut acc: i128 = 0;
         for i in 0..ndigits {
             let d = be_i16(raw, 4 + i)? as i64;
             if !(0..=9999).contains(&d) {
                 return Err("numeric digit out of range".into());
             }
-            if weight - (i as i16) < 0 {
+            if i as i16 > weight {
                 // Fractional digit: only zero survives a lossless i64 read.
                 if d != 0 {
                     return Err("numeric has a fractional part".into());
@@ -1179,6 +1188,11 @@ impl<'a> postgres::types::FromSql<'a> for PgNumericI64 {
                 .checked_mul(10_000)
                 .and_then(|a| a.checked_add(i128::from(d)))
                 .ok_or("numeric overflows i64")?;
+        }
+        // The stripped trailing zero groups: one 10000 per missing
+        // position below the lowest stored digit.
+        for _ in 0..(i64::from(weight) - ndigits as i64 + 1).max(0) {
+            acc = acc.checked_mul(10_000).ok_or("numeric overflows i64")?;
         }
         let signed = if sign == NEG { -acc } else { acc };
         Ok(PgNumericI64(
@@ -1401,5 +1415,99 @@ mod tests {
 
         let tx = db.transaction_immediate().unwrap();
         tx.commit().unwrap();
+    }
+
+    // ---- PgNumericI64 (numeric_send byte vectors) --------------------------
+
+    /// Encodes one `numeric_send` payload: the 4-word header (ndigits,
+    /// weight, sign, dscale) then the base-10000 digits, big-endian —
+    /// the exact wire bytes Postgres sends for a `numeric` column.
+    fn numeric_send(weight: i16, sign: u16, dscale: u16, digits: &[i16]) -> Vec<u8> {
+        let mut b = Vec::with_capacity(8 + 2 * digits.len());
+        b.extend_from_slice(&(digits.len() as i16).to_be_bytes());
+        b.extend_from_slice(&weight.to_be_bytes());
+        b.extend_from_slice(&sign.to_be_bytes());
+        b.extend_from_slice(&dscale.to_be_bytes());
+        for d in digits {
+            b.extend_from_slice(&d.to_be_bytes());
+        }
+        b
+    }
+
+    fn parse_numeric(raw: &[u8]) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+        use postgres::types::FromSql as _;
+        PgNumericI64::from_sql(&postgres::types::Type::NUMERIC, raw).map(|v| v.0)
+    }
+
+    const POS: u16 = 0;
+    const NEG: u16 = 0x4000;
+
+    #[test]
+    fn numeric_reads_unstripped_digits() {
+        // 1_234_567, the ordinary shape: digits [123, 4567] at weight 1.
+        assert_eq!(
+            parse_numeric(&numeric_send(1, POS, 0, &[123, 4567])).unwrap(),
+            1_234_567
+        );
+        // Zero: no digits at all.
+        assert_eq!(parse_numeric(&numeric_send(0, POS, 0, &[])).unwrap(), 0);
+        // Negative of the ordinary shape.
+        assert_eq!(
+            parse_numeric(&numeric_send(1, NEG, 0, &[123, 4567])).unwrap(),
+            -1_234_567
+        );
+    }
+
+    #[test]
+    fn numeric_reads_stripped_trailing_zero_groups() {
+        // The wire forms PG actually sends once it strips trailing
+        // base-10000 zero groups — each value's lowest digit sits ABOVE
+        // the units position, so the parsed total must carry the
+        // 10000^(weight − ndigits + 1) scale factor:
+        assert_eq!(
+            parse_numeric(&numeric_send(1, POS, 0, &[1])).unwrap(),
+            10_000
+        );
+        assert_eq!(
+            parse_numeric(&numeric_send(1, POS, 0, &[100])).unwrap(),
+            1_000_000
+        );
+        // The /stats misreport shape: 40_000_000 ships as [4000] @ 1.
+        assert_eq!(
+            parse_numeric(&numeric_send(1, POS, 0, &[4000])).unwrap(),
+            40_000_000
+        );
+        assert_eq!(
+            parse_numeric(&numeric_send(2, POS, 0, &[1000])).unwrap(),
+            100_000_000_000
+        );
+        // A partially-stripped total: 123_450_000 = [1, 2345] @ 2.
+        assert_eq!(
+            parse_numeric(&numeric_send(2, POS, 0, &[1, 2345])).unwrap(),
+            123_450_000
+        );
+        // Negatives strip the same way.
+        assert_eq!(
+            parse_numeric(&numeric_send(1, NEG, 0, &[4000])).unwrap(),
+            -40_000_000
+        );
+    }
+
+    #[test]
+    fn numeric_fractional_and_overflow_are_domain_errors() {
+        // 1.0000 is losslessly an integer (the zero fractional digit survives).
+        assert_eq!(parse_numeric(&numeric_send(0, POS, 4, &[1, 0])).unwrap(), 1);
+        // A true fraction is never rounded away.
+        let err = parse_numeric(&numeric_send(0, POS, 1, &[1, 5000])).unwrap_err();
+        assert!(err.to_string().contains("fractional"), "{err}");
+        // A digit value outside the base-10000 alphabet is a corrupt wire.
+        let err = parse_numeric(&numeric_send(1, POS, 0, &[10_000])).unwrap_err();
+        assert!(err.to_string().contains("out of range"), "{err}");
+        // Anything past i64 overflows (weight far above the i64 range).
+        let err = parse_numeric(&numeric_send(12, POS, 0, &[9999])).unwrap_err();
+        assert!(err.to_string().contains("overflow"), "{err}");
+        // NaN/Infinity never parse.
+        let err = parse_numeric(&numeric_send(0, 0xC000, 0, &[])).unwrap_err();
+        assert!(err.to_string().contains("NaN"), "{err}");
     }
 }

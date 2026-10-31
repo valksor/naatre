@@ -169,6 +169,7 @@ pub async fn land(
         base_hint,
         now_ns: state.now_ns() as i64,
         clock: Arc::clone(&state.clock),
+        walk_deadline: state.derive_walk_deadline.as_nanos() as u64,
     };
     let cas = Arc::clone(&state.cas);
     let derive = Arc::clone(&state.derive);

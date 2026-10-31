@@ -57,7 +57,13 @@
 //! quarantined IMMEDIATELY ([`DERIVE_MAX_ATTEMPTS`] does not apply — the
 //! caps are structural, so retrying cannot help), rows a `derive_reports`
 //! reason, and its children still derive on the empty marker (the
-//! never-head-of-line rule above).
+//! never-head-of-line rule above). The wall-clock deadline behind the
+//! budget ([`DERIVE_WALK_DEADLINE_NS`]) is deliberately NOT structural:
+//! an overrun releases the lease back to pending as a FAILED ATTEMPT
+//! (bounded by [`DERIVE_MAX_ATTEMPTS`], a distinct `derive_reports`
+//! reason recording the measured units/sec) — a budget mis-sized against
+//! real probe cost, or a slow store, must not permanently quarantine a
+//! legitimate node.
 //!
 //! **Poison taint.** A node that derived on an empty-marker parent
 //! (poisoned, or tainted itself) records `tainted = 1` with `poison_cs`
@@ -123,13 +129,17 @@ pub const DEFAULT_WALK_BUDGET: u64 = 200_000;
 
 /// The per-call wall-clock backstop behind the walk budget: a derive call
 /// still running this many ns past its [`DeriveCtx`]'s creation fails with
-/// [`DeriveFailure::WalkBudget`] on its next charge — the SAME structural
-/// quarantine — even with budget left. The budget bounds CHARGED work; the
-/// deadline bounds the wall clock those charges actually take, so a budget
-/// mis-sized against real probe cost (or a slow store) cannot hold the
-/// write slot indefinitely. Read through the state's injectable clock
-/// ([`crate::state::ServerState::clock`]), so expiry behavior stays
-/// deterministic under test.
+/// a [`DeriveFailure::WalkDeadline`] on its next charge — a RETRYABLE
+/// failure (the lease is released, the node re-queued as a FAILED ATTEMPT
+/// with a measured units/sec reason row, quarantined only at
+/// [`DERIVE_MAX_ATTEMPTS`]) — even with budget left. The budget bounds
+/// CHARGED work; the deadline bounds the wall clock those charges
+/// actually take, so a budget mis-sized against real probe cost (or a
+/// slow store) cannot hold the write slot indefinitely. Read through the
+/// state's injectable clock ([`crate::state::ServerState::clock`]), so
+/// expiry behavior stays deterministic under test; the window itself is
+/// injectable per state (`ServerState::derive_walk_deadline`) for the
+/// retry-not-poison pin.
 pub const DERIVE_WALK_DEADLINE_NS: u64 = 2_000_000_000;
 
 /// Size cap on the framework-carried output of one node, matching the
@@ -184,12 +194,19 @@ fn size_cap_reason(len: usize) -> String {
 /// visit through [`DeriveCtx::charge`] — a deriver issuing raw SQL past
 /// the ctx is not capped by it. An exhausted budget fails the call with
 /// [`DeriveFailure::WalkBudget`] — an immediate structural quarantine,
-/// since re-running the same node would walk the same graph. So does the
-/// wall clock: a call still running [`DERIVE_WALK_DEADLINE_NS`] ns past
-/// its creation fails the same way on the next charge, whatever the
-/// budget has left.
+/// since re-running the same node would walk the same graph. The wall
+/// clock fails it differently: a call still running its deadline window
+/// (default [`DERIVE_WALK_DEADLINE_NS`] ns past its creation) fails with
+/// [`DeriveFailure::WalkDeadline`] on the next charge — RETRYABLE, the
+/// measured units/sec riding on the error for the report row.
 pub struct DeriveCtx {
     remaining: Cell<u64>,
+    /// Units actually charged so far this call (the measurement the
+    /// deadline reason records — budget units per wall-clock second).
+    spent: Cell<u64>,
+    /// The ctx's creation instant on the injected clock (the elapsed
+    /// measurement's base).
+    created_ns: u64,
     /// Absolute deadline on the state's injectable clock; the next charge
     /// once `(clock)() >= deadline_ns` fails the call.
     deadline_ns: u64,
@@ -197,11 +214,13 @@ pub struct DeriveCtx {
 }
 
 impl DeriveCtx {
-    fn new(walk_budget: u64, clock: ClockFn) -> Self {
-        let deadline_ns = clock().saturating_add(DERIVE_WALK_DEADLINE_NS);
+    fn new(walk_budget: u64, clock: ClockFn, deadline_ns_window: u64) -> Self {
+        let created_ns = clock();
         DeriveCtx {
             remaining: Cell::new(walk_budget),
-            deadline_ns,
+            spent: Cell::new(0),
+            created_ns,
+            deadline_ns: created_ns.saturating_add(deadline_ns_window),
             clock,
         }
     }
@@ -211,17 +230,31 @@ impl DeriveCtx {
         self.remaining.get()
     }
 
-    /// Charges `n` visits; `Err` once the budget is exhausted OR the call
-    /// has run past [`DERIVE_WALK_DEADLINE_NS`] (the call is then
-    /// quarantined with the walk-budget reason). Charging zero still checks
-    /// the deadline (a missed deadline fails any charge) but never fails on
-    /// count: charging nothing cannot exhaust anything.
+    /// Units charged so far this call (the deadline overrun's measurement).
+    pub fn spent(&self) -> u64 {
+        self.spent.get()
+    }
+
+    /// Ns elapsed since the ctx's creation, on the injected clock.
+    pub fn elapsed_ns(&self) -> u64 {
+        (self.clock)().saturating_sub(self.created_ns)
+    }
+
+    /// Charges `n` visits; `Err` once the budget is exhausted (structural,
+    /// [`DeriveFailure::WalkBudget`]) OR the call has run past its deadline
+    /// window ([`DeriveFailure::WalkDeadline`], retryable — the failure
+    /// carries the units/sec measurement the report row records). Charging
+    /// zero still checks the deadline (a missed deadline fails any charge)
+    /// but never fails on count: charging nothing cannot exhaust anything.
     pub fn charge(&self, n: u64) -> Result<(), DeriveFailure> {
         // The wall-clock backstop first: with the deadline missed, budget
         // headroom no longer matters — the slot has been held long enough.
         if (self.clock)() >= self.deadline_ns {
             self.remaining.set(0);
-            return Err(DeriveFailure::WalkBudget);
+            return Err(DeriveFailure::WalkDeadline {
+                units: self.spent.get(),
+                elapsed_ns: self.elapsed_ns(),
+            });
         }
         if n == 0 {
             return Ok(());
@@ -232,13 +265,29 @@ impl DeriveCtx {
             return Err(DeriveFailure::WalkBudget);
         }
         self.remaining.set(left - n);
+        self.spent.set(self.spent.get() + n);
         Ok(())
     }
 }
 
+/// The deadline-overrun report reason: the MEASURED leg of the retry
+/// contract — units spent and wall-clock elapsed as units/sec, so a
+/// mis-sized budget is diagnosed from the report row instead of guessed.
+fn walk_deadline_reason(units: u64, elapsed_ns: u64) -> String {
+    let secs = elapsed_ns as f64 / 1e9;
+    let rate = if secs > 0.0 { units as f64 / secs } else { 0.0 };
+    format!(
+        "derive walk deadline exceeded: {units} units in {secs:.3}s \
+         ({rate:.0} units/s); the lease is released and the node re-queued \
+         (a deadline overrun retries, bounded — it is not the structural cap)"
+    )
+}
+
 /// Why a derivation failed. `Fail` counts toward
 /// [`DERIVE_MAX_ATTEMPTS`] (a transient deriver error may succeed on
-/// retry); `WalkBudget` is structural and quarantines immediately.
+/// retry) — and so does [`DeriveFailure::WalkDeadline`], the retryable
+/// deadline overrun; `WalkBudget` is structural and quarantines
+/// immediately.
 #[derive(Debug, Clone)]
 pub enum DeriveFailure {
     /// A deriver-reported failure — the reason rowed into
@@ -246,6 +295,14 @@ pub enum DeriveFailure {
     Fail(PoisonReason),
     /// The per-call walk budget ran out (see [`DeriveCtx`]).
     WalkBudget,
+    /// The wall-clock deadline overran with budget left — RETRYABLE
+    /// (bounded attempts), carrying the measurement for the report row.
+    WalkDeadline {
+        /// Units charged before the deadline tripped.
+        units: u64,
+        /// Ns the call had run when the deadline tripped.
+        elapsed_ns: u64,
+    },
 }
 
 impl From<PoisonReason> for DeriveFailure {
@@ -315,12 +372,13 @@ pub trait Deriver: Send + Sync {
     }
 
     /// Derives this node from its parents' contributions, in parent `ord`
-    /// order. A [`DeriveFailure::Fail`] poisons the node after
-    /// [`DERIVE_MAX_ATTEMPTS`] attempts; a [`DeriveFailure::WalkBudget`]
-    /// (the [`DeriveCtx`] budget ran out) quarantines immediately. The
-    /// framework reads the poison taint off the same contributions — a
-    /// node that derived on an empty-marker parent records done WITH
-    /// taint, never as silently-exact data.
+    /// order. A [`DeriveFailure::Fail`] or [`DeriveFailure::WalkDeadline`]
+    /// (the wall-clock backstop — retryable, measured) burns one attempt
+    /// and quarantines the node after [`DERIVE_MAX_ATTEMPTS`]; a
+    /// [`DeriveFailure::WalkBudget`] (the [`DeriveCtx`] budget ran out)
+    /// quarantines immediately. The framework reads the poison taint off
+    /// the same contributions — a node that derived on an empty-marker
+    /// parent records done WITH taint, never as silently-exact data.
     fn derive(
         &self,
         ctx: &DeriveCtx,
@@ -404,6 +462,16 @@ impl DeriveRegistry {
     }
 }
 
+/// The eager derive path's environment, threaded through
+/// [`enqueue_changeset`] as one bundle: the write's timestamp, the
+/// injected clock, and the wall-clock deadline window (ns) the eager
+/// [`DeriveCtx`] runs under.
+pub struct EagerEnv {
+    pub now_ns: i64,
+    pub clock: ClockFn,
+    pub walk_deadline_ns: u64,
+}
+
 /// Enqueues (and for eager kinds, derives) one freshly written changeset
 /// for every registered kind. Runs INSIDE the changeset's write
 /// transaction: a rollback takes the pending rows back with it, and eager
@@ -416,19 +484,25 @@ pub fn enqueue_changeset(
     repo_id: i64,
     cs: Id,
     parents: &[Id],
-    now_ns: i64,
-    clock: ClockFn,
+    env: EagerEnv,
 ) -> Result<(), DbError> {
     for kind in &registry.kinds {
         if kind.deriver.eager() {
             // The caps gate the eager path exactly as they gate the queue:
-            // an exhausted walk budget, a missed wall-clock deadline, or an
-            // over-cap output quarantines the node immediately instead of
-            // deriving (inside the create's transaction, so the quarantine
-            // is atomic with the write).
+            // an exhausted walk budget or an over-cap output quarantines
+            // the node immediately instead of deriving; a missed
+            // wall-clock deadline is a FAILED ATTEMPT (the queue retries
+            // it, bounded), and an eager `Err` likewise. All inside the
+            // create's transaction, so the record is atomic with the
+            // write.
             let outs = db::derive_parent_outputs(conn, kind.id, repo_id, parents)?;
             let (tainted, poison_cs) = collapse_taint(&outs);
-            let ctx = DeriveCtx::new(kind.deriver.walk_budget(), clock.clone());
+            let ctx = DeriveCtx::new(
+                kind.deriver.walk_budget(),
+                env.clock.clone(),
+                env.walk_deadline_ns,
+            );
+            let now_ns = env.now_ns;
             match kind.deriver.derive(&ctx, conn, repo_id, cs, &outs) {
                 Ok(out) if out.as_bytes().len() > DERIVE_MAX_OUTPUT_BYTES => {
                     db::derive_poison_now(
@@ -459,6 +533,17 @@ pub fn enqueue_changeset(
                         &walk_budget_reason(budget),
                         now_ns,
                     )?;
+                }
+                Err(DeriveFailure::WalkDeadline { units, elapsed_ns }) => {
+                    // Retryable: a failed attempt (bounded), and the measured
+                    // reason rowed — an eager overrun is a create-time fact
+                    // worth the report row even when it never quarantines.
+                    let reason = walk_deadline_reason(units, elapsed_ns);
+                    let poisoned =
+                        db::derive_fail_attempt(conn, kind.id, repo_id, &cs, &reason, now_ns)?;
+                    if !poisoned {
+                        db::derive_report(conn, kind.id, repo_id, &cs, &reason, now_ns)?;
+                    }
                 }
                 Err(DeriveFailure::Fail(reason)) => {
                     db::derive_fail_attempt(conn, kind.id, repo_id, &cs, &reason.0, now_ns)?;
@@ -697,6 +782,10 @@ pub struct PassReport {
     /// Nodes quarantined this pass (deriver `Err` at the cap, or a sweep
     /// expiry at the cap).
     pub poisoned: usize,
+    /// Deadline overruns this pass (the retryable walk-deadline failures;
+    /// each released its lease and burned one attempt, reason rowed with
+    /// the measured units/sec — quarantining only at the attempt cap).
+    pub deadline_overruns: usize,
 }
 
 impl std::ops::AddAssign for PassReport {
@@ -704,6 +793,7 @@ impl std::ops::AddAssign for PassReport {
         self.swept += rhs.swept;
         self.derived += rhs.derived;
         self.poisoned += rhs.poisoned;
+        self.deadline_overruns += rhs.deadline_overruns;
     }
 }
 
@@ -911,6 +1001,7 @@ async fn drain(
         let kind_for_derive = Arc::clone(kind);
         let busy_abort = Arc::clone(&state.derive_test_busy_abort);
         let clock_for_derive = Arc::clone(&state.clock);
+        let deadline_window = state.derive_walk_deadline.as_nanos() as u64;
         let derived = state
             .write(move |store| {
                 // Test-only one-shot writer_busy injection (see
@@ -952,6 +1043,7 @@ async fn drain(
                 let ctx = crate::derive::DeriveCtx::new(
                     kind_for_derive.deriver.walk_budget(),
                     clock_for_derive,
+                    deadline_window,
                 );
                 // Inner result on purpose: a deriver failure is a FAILED
                 // NODE (handled below), not an API error — the outer error
@@ -985,11 +1077,14 @@ async fn drain(
             Err(failure) => {
                 // Structural failure (walk budget): immediate quarantine —
                 // retrying the same node would walk the same graph. A
-                // plain `Fail` is a failed attempt: attempts+1, poison +
-                // report at the cap. Either way one transaction puts the
-                // row and (when poisoned) its report in together.
+                // plain `Fail`, or the retryable deadline overrun, is a
+                // failed attempt: attempts+1, poison + report at the cap
+                // (the deadline reason carries the measured units/sec).
+                // Either way one transaction puts the row and (when
+                // poisoned) its report in together.
                 let now = state.now_ns() as i64;
                 let kind_for_fail = Arc::clone(kind);
+                let is_deadline = matches!(failure, DeriveFailure::WalkDeadline { .. });
                 let outcome = match &failure {
                     DeriveFailure::WalkBudget => {
                         let reason = walk_budget_reason(kind_for_fail.deriver.walk_budget());
@@ -1011,8 +1106,15 @@ async fn drain(
                             })
                             .await
                     }
-                    DeriveFailure::Fail(reason) => {
-                        let reason = reason.0.clone();
+                    failure => {
+                        let reason = match failure {
+                            DeriveFailure::WalkDeadline { units, elapsed_ns } => {
+                                walk_deadline_reason(*units, *elapsed_ns)
+                            }
+                            DeriveFailure::Fail(reason) => reason.0.clone(),
+                            DeriveFailure::WalkBudget => unreachable!("matched above"),
+                        };
+                        let is_deadline_row = is_deadline;
                         state
                             .write(move |store| {
                                 let conn = store.conn();
@@ -1026,6 +1128,22 @@ async fn drain(
                                     now,
                                 )
                                 .map_err(ApiError::log_internal)?;
+                                if is_deadline_row && !poisoned {
+                                    // A non-terminal overrun rows its measured
+                                    // reason too (retryable, but the units/sec
+                                    // measurement must be readable without
+                                    // waiting for a quarantine); the cap arm
+                                    // of the fail-attempt rows its own.
+                                    db::derive_report(
+                                        &tx,
+                                        kind_for_fail.id,
+                                        repo_id,
+                                        &cs,
+                                        &reason,
+                                        now,
+                                    )
+                                    .map_err(ApiError::log_internal)?;
+                                }
                                 tx.commit().map_err(ApiError::log_internal)?;
                                 Ok(Some(poisoned))
                             })
@@ -1035,7 +1153,24 @@ async fn drain(
                 match outcome {
                     // `None` = the immediate WalkBudget quarantine; `Some`
                     // = a failed attempt that poisons only at the cap.
-                    Ok(quarantined) => report.poisoned += usize::from(quarantined.unwrap_or(true)),
+                    Ok(quarantined) => {
+                        let quarantined = quarantined.unwrap_or(true);
+                        report.poisoned += usize::from(quarantined);
+                        if is_deadline {
+                            report.deadline_overruns += 1;
+                            if !quarantined {
+                                // The failed attempt already released the
+                                // lease back to pending: END THE PASS. The
+                                // next tick re-picks the node (retries are
+                                // bounded by the attempt cap); staying in
+                                // the drain would re-lease the same slow
+                                // walk immediately and burn all three
+                                // attempts — three deadline windows of
+                                // write-slot hold — inside one pass.
+                                return Ok(());
+                            }
+                        }
+                    }
                     Err(e) if e.code() == ApiCode::WriterBusy => {
                         // The real failure could not be recorded yet:
                         // release to pending (no attempt burned) — the

@@ -166,11 +166,13 @@ fn main_hex_at(dir: &Path, repo_id: i64) -> Value {
     hex.map(Value::String).unwrap_or(Value::Null)
 }
 
-/// The child body: ages the pre-built state past the window and runs ONE
-/// pass, which dies at `NAATRE_CRASH_POINT` (the hook reads the env once
-/// per process, and this pass is the process's first — the parent already
-/// ran the ledger pass in its own process). Normal suite runs (env markers
-/// absent) pass trivially — the M4b pattern.
+/// The child body: runs ONE pass over the pre-built state — which already
+/// holds a CONDEMNED blob (the seed's phase A), so the phase-B batch has
+/// real bytes to delete — and dies at `NAATRE_CRASH_POINT` (the hook reads
+/// the env once per process; this pass is the process's first). The
+/// in-closure point (`gc_mid_blob_batch`) fires between the CAS unlink and
+/// the row transaction — the orphan-direction state. Normal suite runs
+/// (env markers absent) pass trivially — the M4b pattern.
 #[tokio::test]
 async fn m10a_crash_child() {
     let Ok(dir) = std::env::var(ENV_DIR) else {
@@ -179,7 +181,7 @@ async fn m10a_crash_child() {
     let dir = PathBuf::from(dir);
     let a = attach(&dir);
     a.clock.store(
-        BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 9,
+        BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 3,
         Ordering::Relaxed,
     );
     let result = gc_pass(&a.state).await;
@@ -239,7 +241,7 @@ async fn seed_live_and_orphan(dir: &Path) {
     let orphan_content = b"orphan-content".to_vec();
     let orphan_blob = put_blob(&a, &writer, &orphan_content).await;
     let main_hex = main_hex_at(dir, repo_id);
-    let _orphan = create_ok(
+    let orphan = create_ok(
         &a,
         &writer,
         &cs_body(
@@ -250,12 +252,60 @@ async fn seed_live_and_orphan(dir: &Path) {
     )
     .await;
 
+    // The derive queue is NON-EMPTY around the crash (the plan's M10 leg:
+    // "GC — incl. crash-mid-GC re-run — while the derive queue is
+    // non-empty"): a probe kind's row for the orphan, held under a LIVE
+    // LEASE (state 'deriving') so the crash-and-converge pass also proves
+    // the advisory queue row cannot block collection and cannot survive
+    // it as a dangling.
+    {
+        let conn = m4b_common::conn_at(&a.db_path);
+        conn.execute(
+            "INSERT OR IGNORE INTO derive_kinds(id, name) VALUES (77, 'm10a-crash-probe')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO derive_state(kind, repo_id, cs, state, lease_expires_ns) \
+             VALUES (77, ?1, ?2, 'deriving', ?3)",
+            rusqlite::params![
+                repo_id,
+                hex_of(&orphan).0.as_slice(),
+                (BASE_NS as i64) + 10 * 24 * 3600 * 1_000_000_000
+            ],
+        )
+        .unwrap();
+    }
+
     // The ledger pass: candidates at first_ns = BASE.
     gc_pass(&a.state).await.unwrap();
     assert_eq!(
         m4b_common::count_at(&a.db_path, "SELECT COUNT(*) FROM gc_pending"),
         3,
         "orphan cs + blob + root tree ledgered"
+    );
+
+    // Age past the window and run the pass that COLLECTS the changeset and
+    // its root tree (the blob stays — the blob phase runs before the trees
+    // phase of the same pass, while the dying tree's entries still
+    // reference it), then one more so phase A CONDEMNS the blob (bytes
+    // stay). The child's pass then crashes INSIDE phase B — bytes unlinked,
+    // row transaction rolled back — the orphan-direction state.
+    a.clock.store(
+        BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 1,
+        Ordering::Relaxed,
+    );
+    gc_pass(&a.state).await.unwrap();
+    a.clock.store(
+        BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 2,
+        Ordering::Relaxed,
+    );
+    let report = gc_pass(&a.state).await.unwrap();
+    assert_eq!(report.blobs_condemned, 1, "the seed's phase A stamps");
+    assert_eq!(
+        m4b_common::count_at(&a.db_path, "SELECT COUNT(*) FROM gc_pending"),
+        1,
+        "only the condemned blob remains ledgered"
     );
     // `a` drops: the store conns close before the child process opens them.
 }
@@ -287,33 +337,28 @@ async fn crash_points_converge_on_rerun() {
             collected.stderr
         );
 
-        // The parent reopens and converges (aged past the window). What
-        // the child got through before dying varies per point (the cs
-        // batch runs before the blob batch), so the pins are on the
-        // CONVERGED state, not the per-pass reports.
+        // The parent reopens and converges, advancing the clock between
+        // passes (the two-phase delete needs pass separation for
+        // `condemned_at < now`). What each pass collects varies per crash
+        // point (the cs batch runs before the blob phases; the mid-batch
+        // crash leaves rows claiming absent bytes), so the pins are on the
+        // CONVERGED state: across these passes the orphan blob collects
+        // EXACTLY ONCE, total.
         let a = attach(&dir);
-        a.clock.store(
-            BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 9,
-            Ordering::Relaxed,
-        );
         let writer = seed_token_at(&a.db_path, "writer-p", "writer", None);
-        gc_pass(&a.state).await.unwrap();
-        // The orphan blob is spared while its dying tree's entries still
-        // reference it (trees collect after blobs); it is then CONDEMNED
-        // (phase A) and deleted one pass later (phase B).
-        a.clock.store(
-            BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 10,
-            Ordering::Relaxed,
-        );
-        gc_pass(&a.state).await.unwrap();
-        a.clock.store(
-            BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 11,
-            Ordering::Relaxed,
-        );
-        let report = gc_pass(&a.state).await.unwrap();
+        let mut blobs_collected_total = 0usize;
+        for step in 1..=4usize {
+            a.clock.store(
+                BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 3 + step as u64,
+                Ordering::Relaxed,
+            );
+            let report = gc_pass(&a.state).await.unwrap();
+            blobs_collected_total += report.blobs_collected;
+        }
         assert_eq!(
-            report.blobs_collected, 1,
-            "crash point {point}: the orphan blob collects (mid-batch state included): {report:?}"
+            blobs_collected_total, 1,
+            "crash point {point}: the orphan blob collects exactly once \
+             across the converging passes (mid-batch state included)"
         );
 
         // Converged: no orphan remains, nothing else moved.
@@ -332,6 +377,15 @@ async fn crash_points_converge_on_rerun() {
             count_at_dir(&dir, "SELECT COUNT(*) FROM changesets"),
             1,
             "crash point {point}: only the live changeset remains"
+        );
+        // The non-empty derive queue converged too: the leased probe row
+        // went with the collected changeset — no resurrection, no dangling
+        // (fsck's clean() below asserts the same from the anti-joins).
+        assert_eq!(
+            count_at_dir(&dir, "SELECT COUNT(*) FROM derive_state"),
+            0,
+            "crash point {point}: the advisory queue row did not survive \
+             the collection"
         );
 
         // The live chain serves byte-identically.
@@ -380,4 +434,8 @@ fn repo_id_of(dir: &Path) -> i64 {
     m4b_common::conn_at(&dir.join("naatre.db"))
         .query_row("SELECT id FROM repos LIMIT 1", [], |r| r.get(0))
         .unwrap()
+}
+
+fn hex_of(hex: &str) -> naatre_core::ids::Id {
+    naatre_core::ids::Id::from_hex(hex).unwrap()
 }

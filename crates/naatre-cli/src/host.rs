@@ -339,6 +339,12 @@ pub fn gc(data: &Path, json: bool) -> i32 {
                     "gc: collected changesets {}, blobs {}, trees {}",
                     report.cs_collected, report.blobs_collected, report.trees_collected
                 );
+                if report.blobs_condemned > 0 {
+                    println!(
+                        "gc: condemned blobs {} (phase A; a later pass deletes the bytes)",
+                        report.blobs_condemned
+                    );
+                }
             }
             0
         }

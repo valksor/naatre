@@ -119,6 +119,11 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          DROP INDEX IF EXISTS idx_changesets_generation;
          DROP INDEX IF EXISTS idx_file_changes_blob;
          DROP TABLE IF EXISTS gc_pending;
+         DROP INDEX IF EXISTS idx_refs_target;
+         DROP INDEX IF EXISTS idx_lands_head;
+         DROP INDEX IF EXISTS idx_lands_base;
+         DROP INDEX IF EXISTS idx_git_map_cs;
+         DROP INDEX IF EXISTS idx_cs_parents_parent_id;
          ALTER TABLE objects DROP COLUMN touched_ns;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);

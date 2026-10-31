@@ -20,6 +20,14 @@ suite's pinned S3 server binary — test-only, fetched at test time from
 its pinned GitHub release, never linked into or distributed with naatre
 — so it deliberately has NO license entry here.
 
+**CDLA-Permissive-2.0** (the `webpki-roots` / `webpki-root-certs`
+entries — the Mozilla root-store DATA snapshot riding reqwest 0.13's
+rustls feature): license text and terms at
+<https://cdla.dev/permissive-2-0/> (the CDLA-Permissive-2.0 agreement,
+© the Linux Foundation; the covered content is the certificate trust
+data itself, not linked code). `deny.toml`'s `[licenses]` allow-list
+carries the same decision with its rationale.
+
 | Crate | Version | License (declared) |
 |---|---|---|
 | `aho-corasick` | 1.1.5 | Unlicense OR MIT |

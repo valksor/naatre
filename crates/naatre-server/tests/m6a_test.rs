@@ -40,8 +40,8 @@ use tower::ServiceExt;
 
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_server::derive::{
-    BusyAbort, DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DERIVE_WALK_DEADLINE_NS, DeriveCtx,
-    DeriveFailure, DeriveStatus, DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
+    BusyAbort, DERIVE_MAX_ATTEMPTS, DERIVE_MAX_OUTPUT_BYTES, DeriveCtx, DeriveFailure,
+    DeriveStatus, DerivedOut, Deriver, ParentOut, PoisonReason, derive_pass, status,
 };
 use naatre_server::serve::{ServeConfig, serve};
 use naatre_server::state::{AppState, ServerState};
@@ -697,8 +697,9 @@ async fn walk_budget_exhaustion_poisons_immediately() {
 }
 
 /// A deriver with an effectively unbounded budget that, once armed, jumps
-/// the ctx's clock past the call's creation deadline and keeps charging —
-/// only the wall-clock backstop can stop this call.
+/// the ctx's clock past the call's deadline window and keeps charging —
+/// only the wall-clock backstop can stop this call. Disarmed, it derives
+/// normally: the shape whose overrun must RETRY, not poison.
 struct DeadlineHog {
     armed_for: Arc<Mutex<Option<Id>>>,
     now_ns: Arc<AtomicU64>,
@@ -722,27 +723,31 @@ impl Deriver for DeadlineHog {
         _parents_done: &[ParentOut],
     ) -> Result<DerivedOut, DeriveFailure> {
         if *self.armed_for.lock().unwrap() == Some(cs) {
-            self.now_ns
-                .fetch_add(DERIVE_WALK_DEADLINE_NS + 60_000_000_000, Ordering::Relaxed);
+            self.now_ns.fetch_add(60_000_000_000, Ordering::Relaxed);
         }
         ctx.charge(1)?;
-        Ok(DerivedOut::empty())
+        Ok(DerivedOut(vec![1u8]))
     }
 }
 
-/// The wall-clock backstop, injected-clock half: a deriver whose budget is
-/// far from exhausted still loses the call once the state's clock passes
-/// [`DERIVE_WALK_DEADLINE_NS`] past the ctx's creation — the SAME
-/// WalkBudget structural quarantine, no attempt burned — so a mis-sized
-/// budget cannot hold the write slot past the deadline.
+/// The wall-clock backstop's RETRY contract (the deadline fix): an
+/// overrun is NOT the structural walk-budget poison — it fails the call,
+/// RELEASES THE LEASE back to pending as a FAILED ATTEMPT (attempts+1),
+/// and rows a DISTINCT reason carrying the measured units/sec; the next
+/// pass re-derives the node and records done. The deadline window is
+/// injected (60 s of fake clock in one step against a 1 ms window) so the
+/// whole retry runs deterministically on the fixed clock.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wall_clock_deadline_trips_the_walk_budget_past_the_injected_deadline() {
+async fn walk_deadline_overrun_releases_the_lease_and_retries_to_done() {
     let armed_for = Arc::new(Mutex::new(None::<Id>));
     let now_ns = Arc::new(AtomicU64::new(BASE_NS));
     let f = fixture_with(|state| {
         let n = Arc::clone(&now_ns);
         state.clock = Arc::new(move || n.load(Ordering::Relaxed));
         state.derive_queue_interval = Duration::from_millis(10);
+        // The injected (tiny) deadline window: one charge inside it fails
+        // as soon as the armed hog's 60 s clock jump lands.
+        state.derive_walk_deadline = Duration::from_millis(1);
         state
             .register_deriver(Arc::new(DeadlineHog {
                 armed_for: Arc::clone(&armed_for),
@@ -755,11 +760,14 @@ async fn wall_clock_deadline_trips_the_walk_budget_past_the_injected_deadline() 
     let target = create_cs(&f, None, "deadline", 1).await;
     *armed_for.lock().unwrap() = Some(id_of_hex(&target));
 
+    // Pass 1: the overrun — a failed attempt, NOT a quarantine.
     let report = derive_pass(&f.t.state).await.expect("pass");
-    assert_eq!(report.poisoned, 1, "the deadline stopped the call");
+    assert_eq!(report.poisoned, 0, "an overrun is retryable, not poison");
+    assert_eq!(report.deadline_overruns, 1, "the overrun is counted");
     assert_eq!(
         st_kind(&f, hog_kind, &target).await,
-        Some(DeriveStatus::Poison)
+        Some(DeriveStatus::Pending),
+        "the lease is released: back to pending"
     );
     assert_eq!(
         f.t.count(&format!(
@@ -767,8 +775,8 @@ async fn wall_clock_deadline_trips_the_walk_budget_past_the_injected_deadline() 
              WHERE k.name = '{hog_kind}' AND s.cs = x'{}'",
             target
         )),
-        0,
-        "immediate poison burns no attempt"
+        1,
+        "the overrun burns ONE attempt (bounded retries)"
     );
     let (reason, count): (String, i64) =
         f.t.db()
@@ -778,10 +786,21 @@ async fn wall_clock_deadline_trips_the_walk_budget_past_the_injected_deadline() 
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-    assert_eq!(count, 1, "one quarantine report");
+    assert_eq!(count, 1, "one report row");
     assert!(
-        reason.contains("walk budget"),
-        "report names the cap: {reason}"
+        reason.contains("walk deadline") && reason.contains("units/s"),
+        "the report carries the DISTINCT reason with the measured \
+         units/sec: {reason}"
+    );
+
+    // Pass 2 (disarmed): the retry re-derives and records done.
+    *armed_for.lock().unwrap() = None;
+    let report = derive_pass(&f.t.state).await.expect("second pass");
+    assert_eq!(report.derived, 1, "the retry completed the node");
+    assert_eq!(
+        st_kind(&f, hog_kind, &target).await,
+        Some(DeriveStatus::Done(DerivedOut(vec![1]))),
+        "eventually done — the overrun never poisoned"
     );
 }
 
@@ -824,9 +843,12 @@ impl Deriver for RunawayHog {
 
 /// The wall-clock backstop, real-clock half: a runaway walk with budget
 /// left is stopped by the ~2 s deadline on the production clock — the
-/// quarantine lands while the call is still spinning. (The fixture's
-/// default clock is frozen, so the production clock is installed
-/// explicitly.)
+/// call fails while it is still spinning, as a RETRYABLE overrun (the
+/// lease is released, one attempt burned, the measured reason rowed), so
+/// a mis-sized budget cannot hold the write slot past the deadline but a
+/// legitimate node is never structurally quarantined for slowness. (The
+/// fixture's default clock is frozen, so the production clock is
+/// installed explicitly.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wall_clock_deadline_stops_a_real_runaway_walk() {
     let armed_for = Arc::new(Mutex::new(None::<Id>));
@@ -846,12 +868,23 @@ async fn wall_clock_deadline_stops_a_real_runaway_walk() {
 
     let report = derive_pass(&f.t.state).await.expect("pass");
     assert_eq!(
-        report.poisoned, 1,
+        report.deadline_overruns, 1,
         "the deadline stopped the runaway walk on the real clock"
     );
+    assert_eq!(report.poisoned, 0, "an overrun retries, it does not poison");
     assert_eq!(
         st_kind(&f, hog_kind, &target).await,
-        Some(DeriveStatus::Poison)
+        Some(DeriveStatus::Pending),
+        "released back to pending for the retry"
+    );
+    assert_eq!(
+        f.t.count(&format!(
+            "SELECT s.attempts FROM derive_state s JOIN derive_kinds k ON k.id = s.kind \
+             WHERE k.name = '{hog_kind}' AND s.cs = x'{}'",
+            target
+        )),
+        1,
+        "one attempt burned"
     );
     let (reason, count): (String, i64) =
         f.t.db()
@@ -861,11 +894,15 @@ async fn wall_clock_deadline_stops_a_real_runaway_walk() {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-    assert_eq!(count, 1, "one quarantine report");
+    assert_eq!(count, 1, "one report row");
     assert!(
-        reason.contains("walk budget"),
-        "report names the cap: {reason}"
+        reason.contains("walk deadline") && reason.contains("units/s"),
+        "the measured reason: {reason}"
     );
+    // The measurement itself is the point of this pin: print the real
+    // clock's charged-walk rate (visible under --nocapture) so the budget
+    // values stay calibrated against actual probe cost.
+    println!("walk-deadline measurement: {reason}");
 }
 
 /// A minimal deriver for the size-cap pin: returns an over-cap output for

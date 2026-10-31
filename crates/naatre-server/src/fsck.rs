@@ -207,20 +207,34 @@ pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
     }
 
     // Cumulative gc audit totals (the append-only log is the record of
-    // what past passes collected).
-    let rows = state
-        .read(|conn| db::audit_list(conn, i64::MAX, 10_000).map_err(ApiError::log_internal))
-        .await?;
+    // what past passes collected). Paged by ACTION, not by a capped
+    // unfiltered read: a busy audit log would otherwise crowd the `gc`
+    // rows out of one 10k page and silently under-count every older pass.
+    // The JSON details parse in memory (JSON is not statement surface).
+    let page: i64 = 10_000;
     let (mut collected, mut gc_passes) = ((0usize, 0usize, 0usize), 0usize);
-    for row in rows {
-        if row.action != "gc" {
-            continue;
+    let mut cursor = i64::MAX;
+    loop {
+        let rows = {
+            let cursor = cursor;
+            state
+                .read(move |conn| {
+                    db::audit_page_action(conn, "gc", cursor, page).map_err(ApiError::log_internal)
+                })
+                .await?
+        };
+        let done = rows.len() < page as usize;
+        for (id, details_json) in rows {
+            cursor = cursor.min(id);
+            gc_passes += 1;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&details_json) {
+                collected.0 += v.get("cs").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                collected.1 += v.get("blobs").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                collected.2 += v.get("trees").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            }
         }
-        gc_passes += 1;
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&row.details_json) {
-            collected.0 += v.get("cs").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-            collected.1 += v.get("blobs").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-            collected.2 += v.get("trees").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+        if done {
+            break;
         }
     }
 

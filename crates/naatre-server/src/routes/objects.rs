@@ -208,18 +208,22 @@ pub async fn put_raw(
 /// time this record takes the single-writer slot, the sweep may have
 /// committed a batch that unlinked exactly these bytes (an old, still
 /// unreferenced re-PUT past its grace window). So the record VERIFIES the
-/// bytes are present first — inside the same slot-held transaction that
-/// would write the row — and answers a RETRYABLE 503 `blob_swept` when
-/// they are gone, instead of re-writing (a raw PUT may be up to 64 MiB;
-/// re-writing inside the write slot is a stall the retry avoids — the
-/// client re-PUTs, which is idempotent at a content-addressed URL, and the
-/// retry's own record sees the fresh bytes). The row is written ONLY after
-/// the check, so it can never name absent bytes. The per-upload presence
-/// check is a hot-path cost (one backend `has` per PUT inside the slot —
-/// a network HEAD on S3); it is the price of the ordering argument and
-/// runs on every upload, not only when the sweep raced. Returns whether
-/// the row already existed. `pub` for the M10a race pin (the fs and S3
-/// suites drive this step after a full sweep).
+/// bytes are present first — inside the same slot-held `BEGIN IMMEDIATE`
+/// transaction that writes the row (the presence check, the row upsert,
+/// and the condemnation-clear commit atomically, and on Postgres under the
+/// fixed advisory lock — the destructive-writer section the GC's phase B
+/// serializes against cross-process, never just in-process) — and answers
+/// a RETRYABLE 503 `blob_swept` when they are gone, instead of re-writing
+/// (a raw PUT may be up to 64 MiB; re-writing inside the write slot is a
+/// stall the retry avoids — the client re-PUTs, which is idempotent at a
+/// content-addressed URL, and the retry's own record sees the fresh
+/// bytes). The row is written ONLY after the check, so it can never name
+/// absent bytes. The per-upload presence check is a hot-path cost (one
+/// backend `has` per PUT inside the slot — a network HEAD on S3); it is
+/// the price of the ordering argument and runs on every upload, not only
+/// when the sweep raced. Returns whether the row already existed. `pub`
+/// for the M10a race pin (the fs and S3 suites drive this step after a
+/// full sweep).
 pub async fn record_object(
     state: &AppState,
     id: Id,
@@ -230,6 +234,10 @@ pub async fn record_object(
     let now_i = state.now_ns() as i64;
     state
         .write(move |store| {
+            let tx = store
+                .conn()
+                .transaction_immediate()
+                .map_err(ApiError::log_internal)?;
             if !BlobStore::has(cas.as_ref(), &[id]).map_err(ApiError::log_internal)?[0] {
                 return Err(ApiError::new(
                     ApiCode::BlobSwept,
@@ -237,8 +245,10 @@ pub async fn record_object(
                 )
                 .retryable(true));
             }
-            db::object_row_upsert(store.conn(), &id, size, csize, now_i)
-                .map_err(ApiError::log_internal)
+            let existed = db::object_row_upsert(&tx, &id, size, csize, now_i)
+                .map_err(ApiError::log_internal)?;
+            tx.commit().map_err(ApiError::log_internal)?;
+            Ok(existed)
         })
         .await
 }
@@ -315,7 +325,9 @@ pub async fn create_batch(
 }
 
 /// The batch form of [`record_object`]: verify EVERY entry's bytes first —
-/// in the same slot-held transaction that writes the rows — and answer one
+/// in the same slot-held `BEGIN IMMEDIATE` transaction that writes the
+/// rows (one transaction for the whole batch: the checks, every upsert,
+/// and their condemnation-clears commit atomically) — and answer one
 /// retryable 503 `blob_swept` naming the swept ids instead of recording
 /// any of them (the batch is all-or-nothing on the row side, so no entry's
 /// row can name absent bytes; the client re-PUTs the named ids). `pub` for
@@ -325,6 +337,10 @@ pub async fn record_batch(state: &AppState, rows: Vec<(Id, i64, i64)>) -> Result
     let now_i = state.now_ns() as i64;
     state
         .write(move |store| {
+            let tx = store
+                .conn()
+                .transaction_immediate()
+                .map_err(ApiError::log_internal)?;
             let present = BlobStore::has(
                 cas.as_ref(),
                 &rows.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
@@ -345,9 +361,10 @@ pub async fn record_batch(state: &AppState, rows: Vec<(Id, i64, i64)>) -> Result
                 .with_details(serde_json::json!({ "missing_blobs": swept })));
             }
             for (id, size, csize) in &rows {
-                db::object_row_upsert(store.conn(), id, *size, *csize, now_i)
+                db::object_row_upsert(&tx, id, *size, *csize, now_i)
                     .map_err(ApiError::log_internal)?;
             }
+            tx.commit().map_err(ApiError::log_internal)?;
             Ok(())
         })
         .await

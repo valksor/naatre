@@ -1266,14 +1266,21 @@ fn import_commit(
     )?;
     // Derived data (M6a): the imported commit enqueues (or eagerly
     // derives) for every registered kind, in the commit's own transaction.
+    // The import process carries no state to inject the deadline window
+    // into — the default (`DERIVE_WALK_DEADLINE_NS`) applies.
     crate::derive::enqueue_changeset(
         &tx,
         derive,
         repo_id,
         p.cs_id,
         &p.cs.parents,
-        now_ns(),
-        crate::state::system_clock(),
+        crate::derive::EagerEnv {
+            // The import process carries no state to inject the deadline
+            // window into — the default (`DERIVE_WALK_DEADLINE_NS`).
+            now_ns: now_ns(),
+            clock: crate::state::system_clock(),
+            walk_deadline_ns: crate::derive::DERIVE_WALK_DEADLINE_NS,
+        },
     )?;
     tx.commit()?;
     Ok(())

@@ -146,6 +146,8 @@ access_key_id = "…"          # S3: or NAATRE_S3_ACCESS_KEY_ID
 secret = "…"                 # S3: or NAATRE_S3_SECRET — never in a URL
 path_style = true            # S3: path-style URLs (minio); default virtual-host
 allow_plaintext = false  # the explicit plaintext opt-in (see below)
+gc_interval_secs = 3600   # reachability GC background-pass interval; 0 disables
+gc_grace_secs = 2592000   # collection grace window (the 30-day default)
 ```
 
 - **Postgres 16+** uses the same schema via its own migration set (applied
@@ -174,11 +176,20 @@ allow_plaintext = false  # the explicit plaintext opt-in (see below)
   `naatre.db` under `meta = "postgres"` (or a missing one under
   `meta = "sqlite"`) is refused, naming both sides.
 - **Single-writer scope**: the in-process slot serializes writers per
-  server, and land's write section takes a fixed Postgres advisory lock
-  (5 s timeout) — `BEGIN IMMEDIATE` semantics across processes: a second
-  land blocks, then answers the same retryable `writer_busy`-shaped 503
-  as SQLite lock contention. The data-dir flock keeps same-dir processes
-  fully exclusive.
+  server, and every DESTRUCTIVE write section — land's transaction, the
+  reachability GC's collection batches, and the blob-upload record step —
+  takes the same fixed Postgres advisory lock (5 s timeout) via `BEGIN
+  IMMEDIATE` semantics across processes: a second destructive writer
+  blocks, then answers the same retryable `writer_busy`-shaped 503 as
+  SQLite lock contention. The data-dir flock keeps same-dir processes
+  fully exclusive. What the advisory lock does NOT make safe is running
+  two live server instances against the SAME DSN or the SAME bucket:
+  the lock serializes individual write transactions, but the GC's
+  mark-then-sweep and grace-ledger reasoning assume one writer process —
+  two instances can silently lose data each other is still referencing
+  (cross-instance silent loss). One naatre instance per Postgres
+  database, and one per bucket (or bucket key prefix): exclusive, by
+  deployment, not by locking.
 - **S3-compatible blob CAS** (`blob = "s3"`, M9b): history blobs live at
   `objects/ab/cd/<62hex>` in the bucket and snapshot blobs at
   `ephemeral/<snap>/objects/…` — the same layout and zstd encoding as the
@@ -205,6 +216,38 @@ lives in the Postgres database, OUTSIDE the data dir. Destroying the data
 dir erases only the blobs and config; the metadata erasure story is the
 Postgres deployment's (drop the database, and its backups). The S3 CAS
 (M9b) extends this to blob contents.
+
+## Garbage collection and fsck
+
+`serve` runs a reachability GC pass hourly (off-switch/interval:
+`backend.toml` `gc_interval_secs`; `0` leaves collection to the manual
+verb). The mark reads the primary tables only — ref targets, the
+changeset graph, unexpired snapshots, lands, `git_map` — never the
+advisory indexes. Data that no seed reaches becomes a ledger candidate
+and collects only after the **grace window** (`gc_grace_secs`, default
+30 days), so in-flight client work is never overtaken. Blob deletion is
+two-phase (condemn in one pass, delete in a later one) and an upload
+that races the sweep answers a retryable 503 `blob_swept` — the client
+re-PUTs, idempotent at a content-addressed URL. Pre-rebase originals
+(the pre-rewrite heads a conflict leaves behind) are garbage from the
+moment no seed reaches them and collect after the window; GC writes one
+`gc` audit row per collecting pass, actor `system`.
+
+Two host-local verbs operate on a stopped data dir (same flock as
+`serve`/`import`):
+
+```sh
+naatre gc --data ./naatre-data [--json]     # one full pass, to convergence
+naatre fsck --data ./naatre-data [--json]   # consistency check; exit 0 clean, 1 findings
+```
+
+`fsck` is read-only: dangling-reference anti-joins (a nonzero count
+anywhere is dirt), reachability counts (total vs marked), CAS presence
+vs the DB inventory (missing bytes for a DB-known blob dirty the store),
+the pending-candidate ledger, and the cumulative GC audit totals. On the
+S3 backend it attaches the external-drift note: bucket-side lifecycle
+rules or versioning can delete or resurrect objects outside naatre's
+control — that is drift to investigate, never silently repaired.
 
 ## Backup
 
@@ -384,9 +427,10 @@ a generic message + `request_id` only.
 | `duplicate_path` | 422 | same path twice in one changeset |
 | `too_large` | 413 | body or blob over the size cap |
 | `snapshot_expired` | 410 | snapshot past its TTL |
-| `object_collected` | 410 | object collected by GC after the grace window (M10) |
+| `object_collected` | 410 | object collected by GC after the grace window |
 | `object_redacted` | 410 | object redacted (M10 tombstones) |
 | `writer_busy` | 503 | single-writer slot busy; retry with backoff |
+| `blob_swept` | 503 | GC removed the blob's bytes mid-upload; re-PUT (idempotent at a content-addressed URL) |
 | `derivation_pending` | 503 | derived data still computing (M6) |
 | `blame_too_large` | 503 | blame exceeded a structural read cap; not retryable |
 | `request_timeout` | 503 | request shed at the 30 s budget; retry |
@@ -395,8 +439,8 @@ a generic message + `request_id` only.
 
 Retryable 503s carry `Retry-After: 1`; back off and retry. The bundled CLI
 does exactly that on idempotent verbs (reads, object PUT): it retries
-`writer_busy`/`server_busy`/`request_timeout` honoring `Retry-After`,
-bounded at 3 tries / 5 s of total waiting. The idempotent POSTs (`repo
+`writer_busy`/`server_busy`/`request_timeout`/`blob_swept` honoring
+`Retry-After`, bounded at 3 tries / 5 s of total waiting. The idempotent POSTs (`repo
 create`, snapshot POST, the POST-shaped batch reads) retry only the
 **pre-execution** rejections `writer_busy`/`server_busy` — a
 `request_timeout` on a POST surfaces instead of replaying, because the
@@ -486,12 +530,12 @@ follow, and they are the price of the backend, not bugs:
   never-dangling invariant**: a bucket-side lifecycle rule (or a manual
   expiry) can delete object versions naatre's rows still reference, and
   object versioning can retain bytes after naatre deletes them — the
-  first breaks reads (dangling references), the second weakens M10's
-  physical purge (bytes survive that the DB believes erased). Configure
-  the bucket with NO lifecycle rules and NO versioning; naatre owns its
-  own expiry (the snapshot TTL) and its own GC (M10).
-- **External drift is visible, not corrected**: `fsck` / repo stats
-  (M10) walk every referenced id and report which are missing from the
+  first breaks reads (dangling references), the second weakens the
+  GC's physical purge (bytes survive that the DB believes erased).
+  Configure the bucket with NO lifecycle rules and NO versioning; naatre
+  owns its own expiry (the snapshot TTL) and its own GC.
+- **External drift is visible, not corrected**: `fsck` and the repo
+  stats walk every referenced id and report which are missing from the
   bucket (or unreferenced in it) — a presence scan over external state.
   Repairing drift caused outside naatre is the operator's action;
   naatre never guesses.

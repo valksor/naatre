@@ -1512,7 +1512,11 @@ pub fn derive_parent_outputs(
 /// Records a finished queue derivation: state → 'done' with the output
 /// bytes, lease released. Guarded on state='deriving' — a node swept to
 /// pending between derive and record is left to the next attempt (returns
-/// `false`).
+/// `false`) — and on the changeset still existing: the reachability GC
+/// collects a changeset's `derive_state` rows in its own single-writer
+/// transaction, and a record for a collected changeset must not resurrect
+/// a row over a dead node (the same-writer-slot serialization makes the
+/// re-check honest — see [`derive_fail_attempt`]).
 pub fn derive_record_done(
     conn: &Db,
     kind_id: i64,
@@ -1522,6 +1526,9 @@ pub fn derive_record_done(
     tainted: bool,
     poison_cs: Option<&Id>,
 ) -> Result<bool, DbError> {
+    if !changeset_exists(conn, cs)? {
+        return Ok(false);
+    }
     let n = conn.execute(
         &Sql::plain(
             "UPDATE derive_state SET state = 'done', output = ?4, lease_expires_ns = NULL, \
@@ -1540,14 +1547,56 @@ pub fn derive_record_done(
     Ok(n == 1)
 }
 
+/// Does the changeset row still exist? The GC-race guard for the derive
+/// record paths: a changeset the reachability GC collected has no queue
+/// row left to update — and a re-INSERT for it (the UPSERT arm of
+/// [`derive_fail_attempt`]) would create a permanent `fsck` dangling
+/// (`derive_state_cs_missing`). One indexed PK probe; runs inside the
+/// caller's slot-held transaction, so a collection that committed before
+/// this transaction took the single-writer slot is always seen.
+fn changeset_exists(conn: &Db, cs: &Id) -> Result<bool, DbError> {
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM changesets WHERE id = ?1"),
+        &pv![cs.0.as_slice()],
+        |r| r.get(0),
+    )?;
+    Ok(hit.is_some())
+}
+
+/// Rows one derive diagnostic report. The POISON quarantine rows its
+/// reason here ([`derive_fail_attempt`]'s cap arm); the walk-deadline
+/// overruns row their MEASURED reason here per attempt too — retryable
+/// events, logged so the units/sec measurement is readable without
+/// waiting for a quarantine.
+pub fn derive_report(
+    conn: &Db,
+    kind_id: i64,
+    repo_id: i64,
+    cs: &Id,
+    reason: &str,
+    ts_ns: i64,
+) -> Result<(), DbError> {
+    conn.execute(
+        &Sql::plain(
+            "INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)",
+        ),
+        &pv![kind_id, repo_id, cs.0.as_slice(), reason, ts_ns],
+    )?;
+    Ok(())
+}
+
 /// Records one failed attempt (a deriver `Err`, or the lease sweep's
 /// expiry): attempts+1; at the cap the node is QUARANTINED to 'poison' with
 /// a `derive_reports` row, otherwise it goes back to 'pending'. Returns
-/// `true` when the node was poisoned. UPSERT: the EAGER path calls this
-/// before any row exists (a first-attempt `Fail` inside the create's
-/// transaction — the row lands 'pending' at attempts=1 and the queue takes
-/// it from there); an existing pending/deriving row is updated in place.
-/// Plain statements — see the module note on transactions.
+/// `false` when nothing was recorded — including for a changeset the
+/// reachability GC already collected (the guard re-checks existence in the
+/// caller's slot-held transaction: the UPSERT arm below would re-INSERT a
+/// queue row for a dead changeset, a permanent fsck dangling). UPSERT: the
+/// EAGER path calls this before any row exists (a first-attempt `Fail`
+/// inside the create's transaction — the row lands 'pending' at attempts=1
+/// and the queue takes it from there); an existing pending/deriving row is
+/// updated in place. Plain statements — see the module note on
+/// transactions.
 pub fn derive_fail_attempt(
     conn: &Db,
     kind_id: i64,
@@ -1556,6 +1605,9 @@ pub fn derive_fail_attempt(
     reason: &str,
     now_ns: i64,
 ) -> Result<bool, DbError> {
+    if !changeset_exists(conn, cs)? {
+        return Ok(false);
+    }
     let attempts: Option<i64> = conn.query_opt_map(
         &Sql::plain(
             "SELECT attempts FROM derive_state WHERE kind = ?1 AND repo_id = ?2 AND cs = ?3",
@@ -1574,9 +1626,7 @@ pub fn derive_fail_attempt(
             ),
             &pv![kind_id, repo_id, cs.0.as_slice(), attempts],
         )?;
-        conn.execute(&Sql::plain("INSERT INTO derive_reports(kind, repo_id, cs, reason, ts_ns) VALUES (?1, ?2, ?3, ?4, ?5)"),
-            &pv![kind_id, repo_id, cs.0.as_slice(), reason, now_ns],
-        )?;
+        derive_report(conn, kind_id, repo_id, cs, reason, now_ns)?;
         Ok(true)
     } else {
         conn.execute(
@@ -2452,7 +2502,9 @@ pub fn gc_pending_ids(conn: &Db, scope: &str) -> Result<Vec<Id>, DbError> {
         &pv![scope],
         |r| {
             let b: Vec<u8> = r.get(0)?;
-            Ok(Id(b.try_into().expect("gc_pending id is 32 bytes")))
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
+            })?))
         },
     )
 }
@@ -2461,12 +2513,16 @@ pub fn gc_pending_ids(conn: &Db, scope: &str) -> Result<Vec<Id>, DbError> {
 
 /// The changeset candidates past the grace cut that are STILL unreferenced
 /// at read time: no ref target, no lands head/base, no git_map row, no
-/// changeset child — each an indexed probe (the JSON `landed` side is the
-/// caller's in-memory set; a landed id is main's tip and thereby also under
-/// a ref, but the caller filters it explicitly to honor the plan clause
-/// verbatim). Generation-ordered like the batched backfill (children collect
-/// after parents' chains, deterministic across crash re-runs). Runs inside
-/// the collecting transaction — selection and deletion are one atomic step.
+/// changeset child — each probe an indexed point lookup (migration 9's
+/// `idx_refs_target`, `idx_lands_head`, `idx_lands_base`, `idx_git_map_cs`,
+/// and the repo-less `idx_cs_parents_parent_id` — the probe is deliberately
+/// repo-scoped-off: `gc_pending` carries no repo_id, a collected changeset
+/// is gone from every repo). The JSON `landed` side is the caller's
+/// in-memory set; a landed id is main's tip and thereby also under a ref,
+/// but the caller filters it explicitly to honor the plan clause verbatim.
+/// Generation-ordered like the batched backfill (children collect after
+/// parents' chains, deterministic across crash re-runs). Runs inside the
+/// collecting transaction — selection and deletion are one atomic step.
 pub fn gc_collectible_cs(conn: &Db, cut_ns: i64, limit: usize) -> Result<Vec<Id>, DbError> {
     conn.query_all_map(
         &Sql::plain(
@@ -2615,7 +2671,9 @@ pub fn gc_condemned_blobs(
         &pv![cut_ns, now_ns, limit as i64],
         |r| {
             let b: Vec<u8> = r.get(0)?;
-            Ok(Id(b.try_into().expect("gc_pending id is 32 bytes")))
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
+            })?))
         },
     )
 }
@@ -2858,5 +2916,27 @@ pub fn audit_list(conn: &Db, before_id: i64, limit: i64) -> Result<Vec<AuditRow>
                 details_json: row.get(4)?,
             })
         },
+    )
+}
+
+/// One action-filtered page of `(id, details_json)` pairs, descending by
+/// id (id order matches ts order — ids are assigned at insert). fsck's
+/// cumulative gc totals page over THIS instead of the unfiltered
+/// [`audit_list`]: an action filter in the statement keeps a busy audit
+/// log from crowding the `gc` rows out of a bounded page (a 10k-row page
+/// of other actions used to silently under-count every older gc pass).
+pub fn audit_page_action(
+    conn: &Db,
+    action: &str,
+    before_id: i64,
+    limit: i64,
+) -> Result<Vec<(i64, String)>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT id, details_json FROM audit_log \
+         WHERE action = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
+        ),
+        &pv![action, before_id, limit],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
 }

@@ -108,6 +108,13 @@ struct Ctx {
 /// router is used; the registry is already closed (register happens on
 /// the pre-`Arc` state).
 fn open_ctx_blocking(register_kind: bool) -> (Ctx, i64) {
+    open_ctx_blocking_cfg(register_kind, |_| {})
+}
+
+fn open_ctx_blocking_cfg(
+    register_kind: bool,
+    configure: impl FnOnce(&mut ServerState) + Send + 'static,
+) -> (Ctx, i64) {
     static LOG: std::sync::Once = std::sync::Once::new();
     LOG.call_once(|| naatre_server::middleware::logging_setup("error"));
     let Some(target) = pg_target() else {
@@ -146,6 +153,7 @@ fn open_ctx_blocking(register_kind: bool) -> (Ctx, i64) {
                 }))
                 .expect("kind registers");
         }
+        configure(&mut state);
         let repo_id = db::repos_create(&conn, REPO, BASE_NS as i64).expect("repo");
         // main points at a REAL (rootless, empty) changeset: create-path
         // parent validation requires known changeset ids.
@@ -909,4 +917,143 @@ async fn stats_objects_and_refs_routes_on_postgres() {
     assert!(stats.body["objects"].as_u64().unwrap() >= 1);
     assert_eq!(stats.body["bytes"].as_u64(), Some(content.len() as u64));
     assert!(stats.body["cbytes"].as_u64().unwrap() >= 1);
+}
+
+// ---- 7. the reachability GC leg (M10a on Postgres) ---------------------------
+
+const DAY_NS: u64 = 24 * 3600 * 1_000_000_000;
+
+/// The reachability GC pass on Postgres (the M10a PG leg): mark + batched
+/// collection against the PG metadata backend — whose destructive
+/// collection transactions take the `BEGIN IMMEDIATE`/advisory-lock writer
+/// section on this backend too. Both gates: the landed chain survives
+/// byte-identical; the unlanded orphan collects across the phases —
+/// changeset + root tree, then the blob's phase-A condemnation, then phase
+/// B's delete — and fsck is clean afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gc_pass_collects_orphans_on_postgres() {
+    let Some(_) = pg_target() else {
+        return; // pg_provision already printed the skip notice
+    };
+    let (ctx, repo_id) = open_ctx_blocking_cfg(false, |state| {
+        state.gc_enabled = false;
+        // The grace window collapses to zero: candidates collect on the
+        // next pass, and the injected clock's ticks give the two-phase
+        // delete its pass separation.
+        state.gc_grace = std::time::Duration::ZERO;
+    });
+
+    // Live: a landed commit (main moves onto it). Orphan: an unlanded
+    // commit with a unique blob + unique root tree.
+    let main = main_head(&ctx).await;
+    let live = b"pg-gc-live\n";
+    let live_cs = add_cs(&ctx, json!([main.clone()]), "gc-live.txt", live).await;
+    let r = land(&ctx, &live_cs, "k-gc").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let orphan = add_cs(&ctx, json!([main]), "gc-orphan.txt", b"pg-gc-orphan\n").await;
+    let orphan_blob = object_id(Kind::Blob, b"pg-gc-orphan\n");
+    let orphan_id = Id::from_hex(&orphan).unwrap();
+
+    // Pass 1 (t0): the grace collapse means LEDGER + COLLECT are the same
+    // pass — first_ns == cut — so the changeset and its root tree collect
+    // immediately (the blob stays: the blob phase runs BEFORE the trees
+    // phase of the same pass, and the dying tree's entries still reference
+    // it).
+    let report = naatre_server::gc::gc_pass(&ctx.state).await.unwrap();
+    assert_eq!(report.cs_collected, 1, "{report:?}");
+    assert!(report.trees_collected >= 1, "{report:?}");
+    // Pass 2 (t1): the now-unreferenced blob is CONDEMNED (bytes stay).
+    ctx._clock.store(BASE_NS + DAY_NS, Ordering::Relaxed);
+    let report = naatre_server::gc::gc_pass(&ctx.state).await.unwrap();
+    assert_eq!(report.blobs_condemned, 1, "{report:?}");
+    // Pass 3 (t2): phase B deletes bytes + rows; the ledger drains.
+    ctx._clock.store(BASE_NS + 2 * DAY_NS, Ordering::Relaxed);
+    let report = naatre_server::gc::gc_pass(&ctx.state).await.unwrap();
+    assert_eq!(report.blobs_collected, 1, "{report:?}");
+
+    let orphan_gone = {
+        let cas = Arc::clone(&ctx.state.cas);
+        with_seed(&ctx, move |conn| {
+            db::changeset_get(conn, repo_id, &orphan_id)
+                .unwrap()
+                .is_none()
+                && !naatre_store::BlobStore::has(cas.as_ref(), &[orphan_blob]).unwrap()[0]
+        })
+        .await
+    };
+    assert!(orphan_gone, "the orphan collected fully");
+
+    // The landed chain survives byte-identical.
+    let (status, bytes) = send_bytes(
+        &ctx.app,
+        &format!(
+            "/v1/repos/{REPO}/objects/{}",
+            object_id(Kind::Blob, live).to_hex()
+        ),
+        &ctx.writer,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&bytes[..], live);
+
+    let report = naatre_server::fsck::fsck(&ctx.state).await.unwrap();
+    assert!(report.clean(), "{report:?}");
+    assert_eq!(report.bytes_missing, 0);
+}
+
+// ---- 8. the NUMERIC wire-format leg: large sums ------------------------------
+
+/// SUM(bigint) answers NUMERIC on Postgres, and PG strips trailing
+/// base-10000 zero groups from the numeric wire form — a total like
+/// 40_019_999 used to parse as 14_000 (the stripped scale factor dropped:
+/// 40_000_000 wired as the single digit 4000 parsed as 4_000). Rows seeded
+/// straight into `objects`/`repo_blobs` pin the exact total through
+/// [`db::repo_stats`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repo_stats_parses_large_numeric_sums_on_postgres() {
+    let Some(_) = pg_target() else {
+        return; // pg_provision already printed the skip notice
+    };
+    let (ctx, repo_id) = open_ctx_blocking(false);
+
+    let id = |tag: u8| {
+        let mut b = [0u8; 32];
+        b[0] = tag;
+        b
+    };
+    // 40_000_000 (the stripped shape), 10_000 (one trailing zero group),
+    // 9_999 (no stripping) — the sum asserts the factor survives.
+    let rows: Vec<([u8; 32], i64)> = vec![
+        (id(0xA1), 40_000_000),
+        (id(0xA2), 10_000),
+        (id(0xA3), 9_999),
+    ];
+    with_seed(&ctx, move |conn| {
+        for (oid, size) in &rows {
+            conn.execute(
+                &Sql::plain(
+                    "INSERT INTO objects(object_id, size, csize, touched_ns) \
+                     VALUES (?1, ?2, 1, 0)",
+                ),
+                &pv![oid.as_slice(), *size],
+            )
+            .unwrap();
+            conn.execute(
+                &Sql::plain("INSERT INTO repo_blobs(repo_id, object_id) VALUES (?1, ?2)"),
+                &pv![repo_id, oid.as_slice()],
+            )
+            .unwrap();
+        }
+    })
+    .await;
+
+    let (changesets, objects, bytes, _cbytes) =
+        with_seed(&ctx, move |conn| db::repo_stats(conn, repo_id).unwrap()).await;
+    assert_eq!(
+        bytes,
+        40_000_000 + 10_000 + 9_999,
+        "the scale factor survives the wire"
+    );
+    assert_eq!(objects, 3);
+    assert!(changesets >= 1, "the seeded root changeset");
 }

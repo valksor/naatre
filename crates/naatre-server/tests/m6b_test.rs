@@ -2825,6 +2825,11 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
             "DROP TABLE derive_state; DROP TABLE derive_reports; DROP TABLE derive_kinds;
              DROP TABLE blame_state; DROP TABLE path_history;
              DROP INDEX IF EXISTS idx_changesets_generation;
+             DROP INDEX IF EXISTS idx_refs_target;
+             DROP INDEX IF EXISTS idx_lands_head;
+             DROP INDEX IF EXISTS idx_lands_base;
+             DROP INDEX IF EXISTS idx_git_map_cs;
+             DROP INDEX IF EXISTS idx_cs_parents_parent_id;
              DROP TABLE IF EXISTS gc_pending;
              DROP INDEX IF EXISTS idx_file_changes_blob;
              ALTER TABLE objects DROP COLUMN touched_ns;
@@ -3003,6 +3008,11 @@ async fn upgrade_ab_ctx(dir: &Path) -> (Ctx, String, String, String) {
             "DROP TABLE derive_state; DROP TABLE derive_reports; DROP TABLE derive_kinds;
              DROP TABLE blame_state; DROP TABLE path_history;
              DROP INDEX IF EXISTS idx_changesets_generation;
+             DROP INDEX IF EXISTS idx_refs_target;
+             DROP INDEX IF EXISTS idx_lands_head;
+             DROP INDEX IF EXISTS idx_lands_base;
+             DROP INDEX IF EXISTS idx_git_map_cs;
+             DROP INDEX IF EXISTS idx_cs_parents_parent_id;
              DROP TABLE IF EXISTS gc_pending;
              DROP INDEX IF EXISTS idx_file_changes_blob;
              ALTER TABLE objects DROP COLUMN touched_ns;

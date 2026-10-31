@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 8;
+pub const MAX_SUPPORTED: i64 = 9;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -162,6 +162,25 @@ CREATE INDEX idx_file_changes_blob ON file_changes(blob_id);
 ALTER TABLE objects ADD COLUMN touched_ns INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
+    // M10a fix (dev-C1): the collectible selection's re-verification probes
+    // (`db::gc_collectible_cs`) — "is this ledger candidate still
+    // unreferenced?" per candidate against refs.target, lands.head/base,
+    // git_map.cs_id, changeset_parents.parent — were full scans per
+    // candidate row: none of those columns led an index. Index each probe
+    // column. The changeset_parents probe is repo-LESS by design
+    // (`gc_pending` carries no repo_id — a collected changeset is gone from
+    // every repo), so it gets a parent-only index instead of the
+    // (repo_id, parent) prefix the repo-scoped walks use.
+    (
+        9,
+        r#"
+CREATE INDEX idx_refs_target ON refs(target);
+CREATE INDEX idx_lands_head ON lands(head);
+CREATE INDEX idx_lands_base ON lands(base);
+CREATE INDEX idx_git_map_cs ON git_map(cs_id);
+CREATE INDEX idx_cs_parents_parent_id ON changeset_parents(parent);
+"#,
+    ),
 ];
 
 /// The Postgres migration set: one file per SQLite migration, 1–7, in
@@ -177,6 +196,7 @@ const PG_MIGRATIONS: &[&str] = &[
     include_str!("../migrations/postgres/006_poison_taint.sql"),
     include_str!("../migrations/postgres/007_generation_index.sql"),
     include_str!("../migrations/postgres/008_gc_pending.sql"),
+    include_str!("../migrations/postgres/009_gc_probe_indexes.sql"),
 ];
 
 const _: () = assert!(

@@ -1274,3 +1274,199 @@ async fn gc_batch_put_after_sweep_answers_blob_swept() {
     let report = fsck::fsck(&f.t.state).await.unwrap();
     assert!(report.clean(), "{report:?}");
 }
+
+// ---- 10. the phase-B protection pin (condemn → PUT → no collect) ------------
+
+/// The two-phase delete's protection gate, PINNED END TO END: phase A
+/// condemns in pass N; a full ROUTE PUT then lands (its record step's
+/// `UPDATE gc_pending SET condemned_at = NULL` is the ONLY thing that
+/// unmarks a condemned row); pass N+1 must NOT collect — no phase A
+/// re-stamp (the touch re-entered grace) and no phase B delete (the mark
+/// is cleared). Without the clear, this exact sequence deletes live
+/// bytes.
+#[tokio::test]
+async fn gc_route_put_between_condemn_and_phase_b_spares_the_blob() {
+    let f = fixture();
+    let content = b"condemn-then-put".to_vec();
+    let oid = blob_id(&content);
+    let _id = f.put_blob(&content).await; // row touched at BASE
+
+    // Pass 1 ledgers the orphan; the aged pass CONDEMNS it (bytes stay).
+    gc_pass(&f.t.state).await.unwrap();
+    f.tick_to(BASE_NS + GRACE_NS + 1_000);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(report.blobs_condemned, 1, "phase A stamps: {report:?}");
+    assert_eq!(
+        f.count(
+            "SELECT COUNT(*) FROM gc_pending WHERE scope = 'blob' \
+             AND condemned_at IS NOT NULL"
+        ),
+        1,
+        "the mark is set"
+    );
+
+    // The route PUT lands whole BETWEEN the phases (pass N's condemn vs a
+    // later pass's phase B): the record step clears the mark and refreshes
+    // the touch in one transaction.
+    let _ = f.put_blob(&content).await;
+    assert_eq!(
+        f.count(
+            "SELECT COUNT(*) FROM gc_pending WHERE scope = 'blob' \
+             AND condemned_at IS NULL"
+        ),
+        1,
+        "the PUT's condemned-clear UPDATE is the gate"
+    );
+
+    // Pass N+1 must NOT collect: no re-stamp (touched inside the window)
+    // and no delete (nothing is condemned anymore).
+    f.tick_to(BASE_NS + GRACE_NS + 2_000);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(
+        report.blobs_condemned + report.blobs_collected,
+        0,
+        "the cleared mark and the fresh touch spare B: {report:?}"
+    );
+    assert_eq!(
+        f.t.state.cas.has(&[oid]).unwrap(),
+        vec![true],
+        "the bytes survive"
+    );
+    let report = fsck::fsck(&f.t.state).await.unwrap();
+    assert!(report.clean(), "{report:?}");
+}
+
+// ---- 11. GC while the derive queue is non-empty (the plan's leg) -------------
+
+/// A do-nothing deferred kind: its pending row exists (queue non-empty)
+/// without any derivation changing the store.
+struct NullDeriver;
+
+impl naatre_server::derive::Deriver for NullDeriver {
+    fn kind(&self) -> &'static str {
+        "m10a-queue-probe"
+    }
+
+    fn derive(
+        &self,
+        _ctx: &naatre_server::derive::DeriveCtx,
+        _conn: &naatre_store::Db,
+        _repo_id: i64,
+        _cs: Id,
+        _parents: &[naatre_server::derive::ParentOut],
+    ) -> Result<naatre_server::derive::DerivedOut, naatre_server::derive::DeriveFailure> {
+        Ok(naatre_server::derive::DerivedOut::empty())
+    }
+}
+
+/// The plan's M10 check leg — "GC … while the derive queue is non-empty":
+/// a pending probe row AND a LIVE LEASE (state='deriving') on the changeset
+/// the pass collects. The lease is an advisory M6 row and protects nothing:
+/// the pass collects the changeset, its queue rows go with it, and the
+/// queue's LATE record steps ([`naatre_server::db::derive_record_done`] /
+/// [`naatre_server::db::derive_fail_attempt`]) must neither resurrect a
+/// queue row for the dead changeset nor leave an fsck dangling — each
+/// re-checks the changeset's existence in its own slot-held transaction.
+#[tokio::test]
+async fn gc_collects_while_derive_queue_holds_leases() {
+    let f = fixture_with(|s| {
+        s.register_deriver(std::sync::Arc::new(NullDeriver))
+            .unwrap();
+    });
+    let (root, _) = seed_base(&f).await;
+    let orphan = f.commit(json!([root]), "q.txt", b"queued-content").await;
+    // The create enqueued the probe kind's pending row for the orphan (and
+    // one for the root).
+    assert_eq!(
+        f.count_params(
+            "SELECT COUNT(*) FROM derive_state ds \
+             JOIN derive_kinds k ON k.id = ds.kind \
+             WHERE k.name = 'm10a-queue-probe' AND ds.state = 'pending' AND ds.cs = ?1",
+            &[&hex_id(&orphan).0.as_slice()]
+        ),
+        1,
+        "the queue is non-empty"
+    );
+    // A LIVE lease on the orphan (a derivation in flight): lease_expires
+    // far in the future, so no sweep would reclaim it during the pass.
+    m4b_common::conn_at(&f.t.db_path)
+        .execute(
+            "UPDATE derive_state SET state = 'deriving', lease_expires_ns = ?1 \
+             WHERE cs = ?2",
+            rusqlite::params![
+                (BASE_NS as i64) + (GRACE_NS * 10) as i64,
+                hex_id(&orphan).0.as_slice()
+            ],
+        )
+        .unwrap();
+
+    // The ledger pass runs at the base clock (first-seen = BASE); the
+    // collecting pass runs past the grace window.
+    gc_pass(&f.t.state).await.unwrap();
+    f.tick_to(BASE_NS + GRACE_NS);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(
+        report.cs_collected, 1,
+        "the lease is advisory and protects nothing: {report:?}"
+    );
+    assert_eq!(
+        f.count_params(
+            "SELECT COUNT(*) FROM derive_state WHERE cs = ?1",
+            &[&hex_id(&orphan).0.as_slice()]
+        ),
+        0,
+        "the queue row went with the changeset"
+    );
+
+    // The queue's late record steps, replayed against the collected node:
+    // each returns false (nothing recorded) and creates NO row.
+    let db = naatre_store::Db::Sqlite(m4b_common::conn_at(&f.t.db_path));
+    let kind_id: i64 = m4b_common::conn_at(&f.t.db_path)
+        .query_row(
+            "SELECT id FROM derive_kinds WHERE name = 'm10a-queue-probe'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        !naatre_server::db::derive_record_done(
+            &db,
+            kind_id,
+            f.repo_id,
+            &hex_id(&orphan),
+            b"out",
+            false,
+            None,
+        )
+        .unwrap(),
+        "no done-record over a collected changeset"
+    );
+    assert!(
+        !naatre_server::db::derive_fail_attempt(
+            &db,
+            kind_id,
+            f.repo_id,
+            &hex_id(&orphan),
+            "late attempt against a collected node",
+            BASE_NS as i64,
+        )
+        .unwrap(),
+        "no attempt recorded over a collected changeset"
+    );
+    assert_eq!(
+        f.count_params(
+            "SELECT COUNT(*) FROM derive_state WHERE cs = ?1",
+            &[&hex_id(&orphan).0.as_slice()]
+        ),
+        0,
+        "no resurrection"
+    );
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM derive_reports"),
+        0,
+        "no poison report"
+    );
+
+    let report = fsck::fsck(&f.t.state).await.unwrap();
+    assert!(report.clean(), "{report:?}");
+}

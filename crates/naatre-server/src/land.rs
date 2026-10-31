@@ -100,6 +100,9 @@ pub(crate) struct LandCommand {
     /// The state's injectable wall clock, carried for the eager-derive
     /// path's wall-clock deadline ([`crate::derive::DERIVE_WALK_DEADLINE_NS`]).
     pub clock: crate::state::ClockFn,
+    /// The state's injectable deadline WINDOW (ns) for the same path — an
+    /// overrun is a retryable failed attempt, not a structural quarantine.
+    pub walk_deadline: u64,
 }
 
 /// A settled land.
@@ -504,8 +507,11 @@ fn land_in_txn(
             repo_id,
             new_id,
             &cs.parents,
-            cmd.now_ns,
-            cmd.clock.clone(),
+            crate::derive::EagerEnv {
+                now_ns: cmd.now_ns,
+                clock: cmd.clock.clone(),
+                walk_deadline_ns: cmd.walk_deadline,
+            },
         )
         .map_err(ApiError::log_internal)?;
 

@@ -59,8 +59,22 @@
 //!
 //! A pass that collected anything writes ONE `gc` audit row — action, the
 //! report counts and the grace in `details`, actor `"system"` (no principal
-//! drives a background or host-local pass) — after its DB effects. An idle
-//! pass writes nothing: a quiet server must not spam the append-only log.
+//! drives a background or host-local pass) — committed INSIDE the final
+//! collecting batch's transaction (the snapshots_gc atomic pattern; the
+//! tree sweep is the pass's last collecting phase, and its loop-ending
+//! batch is the pass's last write). An idle pass writes nothing: a quiet
+//! server must not spam the append-only log.
+//!
+//! Every DESTRUCTIVE write transaction — the changeset, blob, and tree
+//! collection batches, both blob phases — opens `BEGIN IMMEDIATE`: on
+//! Postgres that is the fixed cross-process advisory lock
+//! (`PG_WRITER_ADVISORY_KEY`), the same writer section land's transaction
+//! takes, so destructive writers serialize UNIFORMLY (in-process by the
+//! single-writer slot, cross-process by the advisory lock) and a second
+//! serving instance sharing one DSN cannot interleave a collection with
+//! another instance's upload record. The ledger bookkeeping (candidate
+//! upserts/repairs) stays outside that class deliberately: it is
+//! idempotent, non-destructive, and re-converges on the next pass.
 
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
@@ -422,15 +436,15 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
             state
                 .write(move |store| {
                     let conn = store.conn();
-                    let tx = conn.transaction().map_err(ApiError::log_internal)?;
+                    let tx = conn
+                        .transaction_immediate()
+                        .map_err(ApiError::log_internal)?;
                     let batch = db::gc_collectible_cs(&tx, cut, GC_BATCH_ROWS)
                         .map_err(ApiError::log_internal)?;
                     let raw_len = batch.len();
                     // The lands result_json side is the in-memory filter
                     // (JSON is not statement surface): a batch entry that IS
-                    // a settled land's recorded result never collects. A
-                    // full batch that filters to nothing re-loops for the
-                    // next page.
+                    // a settled land's recorded result never collects.
                     let batch: Vec<Id> = batch
                         .into_iter()
                         .filter(|id| !landed.contains(id))
@@ -447,7 +461,18 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                 .await?
         };
         report.cs_collected += collected;
-        if collected == 0 && raw_len < GC_BATCH_ROWS {
+        if collected == 0 {
+            // Loop guard (the invariant: selection is deterministic and
+            // NOTHING was deleted). A zero-collect batch means every entry
+            // was a settled land's recorded result — or the page is simply
+            // short. Either way the next iteration's selection returns the
+            // SAME rows (the deletions that advance a paging cursor did not
+            // happen), so re-looping would spin forever. Defer the residue
+            // to the next pass; nothing collectible is skipped that that
+            // pass would not re-select.
+            break;
+        }
+        if raw_len < GC_BATCH_ROWS {
             break;
         }
     }
@@ -465,7 +490,9 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
         let batch = state
             .write(move |store| {
                 let conn = store.conn();
-                let tx = conn.transaction().map_err(ApiError::log_internal)?;
+                let tx = conn
+                    .transaction_immediate()
+                    .map_err(ApiError::log_internal)?;
                 let batch = db::gc_collectible_blobs(&tx, cut, GC_BATCH_BLOBS)
                     .map_err(ApiError::log_internal)?;
                 if batch.is_empty() {
@@ -483,13 +510,14 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
         }
     }
     loop {
-        crash_point("gc_mid_blob_batch");
         let batch = {
             let cas = Arc::clone(&state.cas);
             state
                 .write(move |store| {
                     let conn = store.conn();
-                    let tx = conn.transaction().map_err(ApiError::log_internal)?;
+                    let tx = conn
+                        .transaction_immediate()
+                        .map_err(ApiError::log_internal)?;
                     // Selection is the re-verification, still-condemned
                     // edition: unreferenced, past grace, and the mark still
                     // set from an EARLIER pass (`condemned_at < now` — this
@@ -506,6 +534,11 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                     // bytes for UNREACHABLE data, still condemned, and the
                     // re-run's phase B converges on them).
                     BlobStore::delete(cas.as_ref(), &batch).map_err(ApiError::log_internal)?;
+                    // The mid-batch crash point fires HERE — bytes unlinked,
+                    // row transaction not yet committed (the doc claim; the
+                    // hook lives inside the closure so the pin exercises the
+                    // orphan-direction state it describes).
+                    crash_point("gc_mid_blob_batch");
                     db::gc_collect_blobs(&tx, &batch).map_err(ApiError::log_internal)?;
                     tx.commit().map_err(ApiError::log_internal)?;
                     Ok(batch)
@@ -518,43 +551,56 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
         }
     }
 
+    // 5. The tree sweep is the pass's LAST collecting phase, so its
+    // loop-ending batch is the pass's final write transaction and carries
+    // the audit row (the snapshots_gc atomic pattern: one audit row per
+    // collecting pass, actor "system", committed with the deletes it
+    // reports). Nothing collected → no row — a quiet server must not spam
+    // the append-only log. A crash between an earlier collecting batch and
+    // this one loses the audit row for the already-committed deletes (the
+    // deletes stand; the next collecting pass writes its own row).
     loop {
-        let collected = state
-            .write(move |store| {
-                let conn = store.conn();
-                let tx = conn.transaction().map_err(ApiError::log_internal)?;
-                let batch = db::gc_collectible_trees(&tx, now_i, cut, GC_BATCH_ROWS)
-                    .map_err(ApiError::log_internal)?;
-                if batch.is_empty() {
-                    return Ok(0usize);
-                }
-                let n = db::gc_collect_trees(&tx, &batch).map_err(ApiError::log_internal)?;
-                tx.commit().map_err(ApiError::log_internal)?;
-                Ok(n)
-            })
-            .await?;
+        let collected = {
+            let cs = report.cs_collected;
+            let blobs = report.blobs_collected;
+            let trees_so_far = report.trees_collected;
+            let grace_secs = state.gc_grace.as_secs();
+            state
+                .write(move |store| {
+                    let conn = store.conn();
+                    let tx = conn
+                        .transaction_immediate()
+                        .map_err(ApiError::log_internal)?;
+                    let batch = db::gc_collectible_trees(&tx, now_i, cut, GC_BATCH_ROWS)
+                        .map_err(ApiError::log_internal)?;
+                    let n = if batch.is_empty() {
+                        0
+                    } else {
+                        db::gc_collect_trees(&tx, &batch).map_err(ApiError::log_internal)?
+                    };
+                    if batch.len() < GC_BATCH_ROWS && cs + blobs + trees_so_far + n > 0 {
+                        let details = json!({
+                            "cs": cs,
+                            "blobs": blobs,
+                            "trees": trees_so_far + n,
+                            "grace_secs": grace_secs,
+                        })
+                        .to_string();
+                        db::audit_append(&tx, now_i, "system", "gc", &details)
+                            .map_err(ApiError::log_internal)?;
+                    }
+                    tx.commit().map_err(ApiError::log_internal)?;
+                    Ok(n)
+                })
+                .await?
+        };
         report.trees_collected += collected;
         if collected < GC_BATCH_ROWS {
             break;
         }
     }
 
-    // 5. One audit row per collecting pass, actor "system" (the
-    // snapshot_gc pattern; nothing collected → nothing written).
     if report.collected_any() {
-        let details = json!({
-            "cs": report.cs_collected,
-            "blobs": report.blobs_collected,
-            "trees": report.trees_collected,
-            "grace_secs": state.gc_grace.as_secs(),
-        })
-        .to_string();
-        state
-            .write(move |store| {
-                db::audit_append(store.conn(), now_i, "system", "gc", &details)
-                    .map_err(ApiError::log_internal)
-            })
-            .await?;
         tracing::info!(
             cs = report.cs_collected,
             blobs = report.blobs_collected,
