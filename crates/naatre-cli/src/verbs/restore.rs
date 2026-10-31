@@ -26,6 +26,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use naatre_core::ids::Id;
+use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::wc::fetch::{materialize, walk_snapshot_tree};
@@ -33,13 +34,24 @@ use crate::wc::{Wc, remove_and_prune};
 
 /// Runs restore; prints the outcome and returns the exit code.
 pub fn run(root: &Path, snap_id: &str, force: bool, net: &Net) -> i32 {
-    match try_run(root, snap_id, force, net) {
-        Ok(()) => 0,
+    match value(root, snap_id, force, net) {
+        Ok(v) => {
+            println!(
+                "restored {} ({} file(s)); head unchanged at {}",
+                v["restored"].as_str().unwrap_or("?"),
+                v["files"].as_u64().unwrap_or(0),
+                v["head"].as_str().unwrap_or("?"),
+            );
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_run(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<(), VerbError> {
+/// The restore result: `{restored, files, head}` — the snapshot id, the
+/// materialized file count, and the unchanged head (no HTTP analog; the
+/// MCP `restore` tool returns the same value).
+pub fn value(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<Value, VerbError> {
     let sid = Id::from_hex(snap_id).ok_or_else(|| {
         VerbError::Usage(format!(
             "snapshot id {snap_id:?} is not 64 lowercase hex characters"
@@ -157,13 +169,11 @@ fn try_run(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<(), Ver
     }
     wc.save_index(&new_index)?;
 
-    println!(
-        "restored {} ({} file(s)); head unchanged at {}",
-        sid.to_hex(),
-        files.len(),
-        state.head,
-    );
-    Ok(())
+    Ok(json!({
+        "restored": sid.to_hex(),
+        "files": files.len(),
+        "head": state.head,
+    }))
 }
 
 /// Fetches blobs from the snapshot namespace (`GET …/snapshots/{sid}/

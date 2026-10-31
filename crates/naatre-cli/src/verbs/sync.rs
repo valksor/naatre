@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use naatre_core::ids::Id;
+use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree_allowing_missing_prefixes};
@@ -30,13 +31,33 @@ use crate::wc::{State, Wc, remove_and_prune, under_sparse};
 
 /// Runs sync; prints the outcome and returns the exit code.
 pub fn run(root: &Path, force: bool, net: &Net) -> i32 {
-    match try_run(root, force, net) {
-        Ok(()) => 0,
+    match value(root, force, net) {
+        Ok(v) => {
+            if v["up_to_date"].as_bool() == Some(true) {
+                println!("up to date");
+            } else {
+                println!("synced: {}", v["head"].as_str().unwrap_or("?"));
+                // Output honesty: only paths this sync actually applied
+                // (cone-included) print as A/D/M — the core already filters.
+                for entry in v["applied"].as_array().map_or(&[][..], Vec::as_slice) {
+                    let c = match entry["kind"].as_str().unwrap_or("?") {
+                        "add" => "A",
+                        "del" => "D",
+                        _ => "M",
+                    };
+                    println!("{c} {}", entry["path"].as_str().unwrap_or("?"));
+                }
+            }
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
+/// The sync result: `{up_to_date, head, applied: [{path, kind}]}` — `applied`
+/// lists only the cone-included paths this sync actually applied (no HTTP
+/// analog; the MCP `sync` tool returns the same value).
+pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     let wc = Wc::open(root)?;
     let state = wc.load_state()?;
     let mut index = wc.load_index()?;
@@ -56,8 +77,7 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
         .and_then(Id::from_hex)
         .ok_or_else(|| VerbError::Local("server main is unborn; nothing to sync to".into()))?;
     if target == head {
-        println!("up to date");
-        return Ok(());
+        return Ok(json!({ "up_to_date": true, "head": target.to_hex(), "applied": [] }));
     }
 
     // Incoming path-level diff.
@@ -211,20 +231,17 @@ fn try_run(root: &Path, force: bool, net: &Net) -> Result<(), VerbError> {
     wc.save_state(&new_state)?;
     wc.save_index(&index)?;
 
-    println!("synced: {}", target.to_hex());
     // Output honesty: only paths this sync actually applied (cone-included)
-    // print as A/D/M — an out-of-cone incoming path was NOT applied here
+    // count as applied — an out-of-cone incoming path was NOT applied here
     // and must not pose as one.
-    for (path, kind) in incoming
+    let applied: Vec<Value> = incoming
         .iter()
         .filter(|(p, _)| under_sparse(&new_state.sparse, p))
-    {
-        let c = match kind.as_str() {
-            "add" => "A",
-            "del" => "D",
-            _ => "M",
-        };
-        println!("{c} {path}");
-    }
-    Ok(())
+        .map(|(path, kind)| json!({ "path": path, "kind": kind }))
+        .collect();
+    Ok(json!({
+        "up_to_date": false,
+        "head": target.to_hex(),
+        "applied": applied,
+    }))
 }

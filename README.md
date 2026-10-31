@@ -167,6 +167,32 @@ Import discloses its two content mutations and its skip behavior:
   the commit **and all its descendants** (the `cascaded` list) — one
   offending early commit skips everything after it.
 
+## MCP server
+
+`naatre mcp` (run inside a working copy) serves the client verbs as MCP
+tools over stdio: one JSON-RPC 2.0 message per line on stdout; diagnostics
+go to stderr (`MCP_LOG=1` enables per-request lines). The session is bound
+to one checkout — the working copy it starts in, whose `.naatre/config.toml`
+supplies the server and token (no server override; no tool accepts one).
+Tools: `clone`, `sync`, `sparse`, `status`, `log`, `diff`, `cat`, `ls`,
+`commit`, `land`, `snapshot`, `restore`, `blame` — the read tools' inputs
+mirror the HTTP API's query parameters (`docs/openapi.json`).
+
+Auth: the session uses the working copy's stored token, or `--token` on the
+command line (**argv is visible in `ps` — prefer the token store**).
+**Use a least-privilege scoped token**: `naatre token create agent \
+--role writer --scope src/` mints a token that can only write under
+`src/` of that repo — an agent leaking or misusing it cannot touch other
+repos or paths. `--read-only` runs the allowlist mode: only the pure reads
+(`status`, `log`, `diff`, `cat`, `ls`, `blame`) answer; every other tool
+returns an error naming the flag.
+
+One writer per working copy: the session holds `.naatre/wc.lock` (an
+advisory flock) for its whole lifetime, and every CLI working-copy verb
+takes the same lock while it runs — a second writer refuses with an error
+naming the lock instead of racing on `.naatre/state.json`. A killed
+process releases the lock; nothing to clean up.
+
 ## Error codes
 
 Every error is one envelope: `{"error":{"code","message","retryable",

@@ -67,13 +67,24 @@ fn resolve_at(reader: &Reader, at: Option<&str>) -> Result<Id, VerbError> {
 /// Every fetched blob is hash-verified client-side before a byte reaches
 /// stdout (corrupt data is a clean error, never garbage output).
 pub fn cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> i32 {
-    match try_cat(root, path, at, net) {
-        Ok(()) => 0,
+    match cat_bytes(root, path, at, net) {
+        Ok((_blob, _size, _exec, bytes)) => match std::io::stdout().write_all(&bytes) {
+            Ok(()) => 0,
+            Err(e) => VerbError::Local(format!("writing to stdout: {e}")).report(),
+        },
         Err(e) => e.report(),
     }
 }
 
-fn try_cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> Result<(), VerbError> {
+/// The cat core: resolves `path` (NFC) at `at` (default head), hash-verifies
+/// the blob, and returns (blob id, size, exec, raw bytes). The CLI writes
+/// the bytes; the MCP `cat` tool renders them as text (binary flagged).
+pub fn cat_bytes(
+    root: &Path,
+    path: &str,
+    at: Option<&str>,
+    net: &Net,
+) -> Result<(Id, u64, bool, Vec<u8>), VerbError> {
     let reader = open_reader(root, net)?;
     let cs = resolve_at(&reader, at)?;
     let path = nfc(path);
@@ -94,10 +105,9 @@ fn try_cat(root: &Path, path: &str, at: Option<&str>, net: &Net) -> Result<(), V
         ))
         .map_err(VerbError::Http)?;
     crate::wc::fetch::verify(&blob, &bytes).map_err(VerbError::from)?;
-    std::io::stdout()
-        .write_all(&bytes)
-        .map_err(|e| VerbError::Local(format!("writing to stdout: {e}")))?;
-    Ok(())
+    let size = fv["size"].as_u64().unwrap_or(bytes.len() as u64);
+    let exec = fv["exec"].as_bool().unwrap_or(false);
+    Ok((blob, size, exec, bytes))
 }
 
 /// `naatre blame <path> [--at REF|CS]` — per-line attribution from the
@@ -118,19 +128,50 @@ pub(crate) fn degraded_blame_warning(poisoned: &[&str]) -> String {
 }
 
 pub fn blame(root: &Path, path: &str, at: Option<&str>, json_out: bool, net: &Net) -> i32 {
-    match try_blame(root, path, at, json_out, net) {
-        Ok(()) => 0,
+    match blame_value(root, path, at, net) {
+        Ok(result) => {
+            if result.binary {
+                eprintln!("blame: {path}: binary content (blame_binary)");
+            }
+            if let Some(warning) = &result.degraded_warning {
+                eprintln!("{warning}");
+            }
+            if json_out {
+                println!("{}", json!({ "lines": result.lines }));
+            } else {
+                for l in result.lines.as_array().map_or(&[][..], Vec::as_slice) {
+                    let cs8: String = l["cs"].as_str().unwrap_or("?").chars().take(8).collect();
+                    let author = l["author"].as_str().unwrap_or("?");
+                    let text = l["text"].as_str().unwrap_or("");
+                    println!("{cs8} {author} | {text}");
+                }
+            }
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_blame(
+/// The blame core's non-error payload: the attributed lines (the pinned
+/// `--json` shape's array) plus the stderr notes the CLI surfaces (a binary
+/// file blames as a structured EMPTY result; a degraded chain warns).
+pub struct BlameResult {
+    /// The `lines` array of the server's blame response.
+    pub lines: Value,
+    /// The file is not valid UTF-8: `lines` is empty.
+    pub binary: bool,
+    /// The degraded-blame warning text (names every quarantined changeset).
+    pub degraded_warning: Option<String>,
+}
+
+/// The blame core: resolves `path` (NFC) at `at` (default head) and returns
+/// the attributed lines with the binary/degraded notes.
+pub fn blame_value(
     root: &Path,
     path: &str,
     at: Option<&str>,
-    json_out: bool,
     net: &Net,
-) -> Result<(), VerbError> {
+) -> Result<BlameResult, VerbError> {
     let reader = open_reader(root, net)?;
     let cs = resolve_at(&reader, at)?;
     let path = nfc(path);
@@ -139,51 +180,64 @@ fn try_blame(
         &[("at", cs.to_hex().as_str()), ("path", path.as_str())],
     )?;
     let lines = v["lines"].as_array().cloned().unwrap_or_default();
-    if v["binary"].as_bool() == Some(true) {
-        eprintln!("blame: {path}: binary content (blame_binary)");
-        if json_out {
-            // The published shape: a binary blame is a structured EMPTY
-            // result, not an error — the same `{"lines":[]}` an empty file
-            // blames as.
-            println!("{}", json!({ "lines": [] }));
-        }
-        return Ok(());
+    let binary = v["binary"].as_bool() == Some(true);
+    if binary {
+        // The published shape: a binary blame is a structured EMPTY
+        // result, not an error — the same `{"lines":[]}` an empty file
+        // blames as.
+        return Ok(BlameResult {
+            lines: json!([]),
+            binary: true,
+            degraded_warning: None,
+        });
     }
-    if v["degraded"].as_bool() == Some(true) {
+    let degraded_warning = if v["degraded"].as_bool() == Some(true) {
         let poisoned: Vec<&str> = v["poisoned_cs"]
             .as_array()
             .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
             .unwrap_or_default();
-        eprintln!("{}", degraded_blame_warning(&poisoned));
-    }
-    if json_out {
-        println!("{}", json!({ "lines": lines }));
-        return Ok(());
-    }
-    for l in &lines {
-        let cs8: String = l["cs"].as_str().unwrap_or("?").chars().take(8).collect();
-        let author = l["author"].as_str().unwrap_or("?");
-        let text = l["text"].as_str().unwrap_or("");
-        println!("{cs8} {author} | {text}");
-    }
-    Ok(())
+        Some(degraded_blame_warning(&poisoned))
+    } else {
+        None
+    };
+    Ok(BlameResult {
+        lines: Value::Array(lines),
+        binary: false,
+        degraded_warning,
+    })
 }
 
 /// `naatre ls [path] [--at REF|CS]` — one tree node's entries.
 pub fn ls(root: &Path, path: Option<&str>, at: Option<&str>, json_out: bool, net: &Net) -> i32 {
-    match try_ls(root, path, at, json_out, net) {
-        Ok(()) => 0,
+    match ls_value(root, path, at, net) {
+        Ok(v) => {
+            if json_out {
+                println!("{v}");
+            } else {
+                for e in v["entries"].as_array().map_or(&[][..], Vec::as_slice) {
+                    let name = e["name"].as_str().unwrap_or("?");
+                    if e["kind"].as_str() == Some("dir") {
+                        println!("{name}/");
+                    } else {
+                        println!("{name}");
+                    }
+                }
+            }
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_ls(
+/// The ls core: resolves the tree node at `path` (default: the root) under
+/// `at` (default head) and returns `{"entries": [...]}` (the server's
+/// tree-entry shape, as `ls --json` prints).
+pub fn ls_value(
     root: &Path,
     path: Option<&str>,
     at: Option<&str>,
-    json_out: bool,
     net: &Net,
-) -> Result<(), VerbError> {
+) -> Result<Value, VerbError> {
     let reader = open_reader(root, net)?;
     let cs = resolve_at(&reader, at)?;
     let rootv = reader.client.get_json(
@@ -234,37 +288,39 @@ fn try_ls(
         ),
         &[],
     )?;
-    if json_out {
-        println!("{}", json!({ "entries": v["entries"] }));
-        return Ok(());
-    }
-    for e in v["entries"].as_array().map_or(&[][..], Vec::as_slice) {
-        let name = e["name"].as_str().unwrap_or("?");
-        if e["kind"].as_str() == Some("dir") {
-            println!("{name}/");
-        } else {
-            println!("{name}");
-        }
-    }
-    Ok(())
+    Ok(json!({ "entries": v["entries"] }))
 }
 
 /// `naatre diff [--at A B]` — server-side two-changeset diff, or (default)
 /// head vs disk: local modifications as path-level add/mod/del against the
 /// head root tree, restricted to the sparse prefixes.
 pub fn diff(root: &Path, at: Option<(&str, &str)>, json_out: bool, net: &Net) -> i32 {
-    match try_diff(root, at, json_out, net) {
-        Ok(()) => 0,
+    match diff_value(root, at, net) {
+        Ok(v) => {
+            if json_out {
+                println!("{v}");
+            } else {
+                for c in v["changes"].as_array().map_or(&[][..], Vec::as_slice) {
+                    let kind = c["kind"].as_str().unwrap_or("?");
+                    let path = c["path"].as_str().unwrap_or("?");
+                    let c = match kind {
+                        "add" => "A",
+                        "del" => "D",
+                        _ => "M",
+                    };
+                    println!("{c} {path}");
+                }
+            }
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_diff(
-    root: &Path,
-    at: Option<(&str, &str)>,
-    json_out: bool,
-    net: &Net,
-) -> Result<(), VerbError> {
+/// The diff core: `{"changes": [...]}` — the server's diff-entry shape for
+/// the two-changeset form (`--at A B`), or the local head-vs-disk diff.
+/// The same value `diff --json` prints; the MCP `diff` tool returns it.
+pub fn diff_value(root: &Path, at: Option<(&str, &str)>, net: &Net) -> Result<Value, VerbError> {
     let reader = open_reader(root, net)?;
     let changes = match at {
         Some((a, b)) => {
@@ -281,21 +337,7 @@ fn try_diff(
         }
         None => local_diff(root, &reader)?,
     };
-    if json_out {
-        println!("{}", json!({ "changes": changes }));
-        return Ok(());
-    }
-    for c in &changes {
-        let kind = c["kind"].as_str().unwrap_or("?");
-        let path = c["path"].as_str().unwrap_or("?");
-        let c = match kind {
-            "add" => "A",
-            "del" => "D",
-            _ => "M",
-        };
-        println!("{c} {path}");
-    }
-    Ok(())
+    Ok(json!({ "changes": changes }))
 }
 
 /// Head vs disk, computed client-side: head root tree (sparse-filtered)

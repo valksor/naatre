@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use naatre_cli::verbs::{self, Net};
+use naatre_cli::wc::lock as verbs_lock;
 use naatre_cli::{client, host};
 
 /// naatre: a self-hosted, single-binary Scion-style VCS.
@@ -227,6 +228,19 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
+    /// Run the stdio MCP server bound to this working copy (one checkout
+    /// per session; holds .naatre/wc.lock for its lifetime). Diagnostics go
+    /// to stderr; MCP_LOG=1 enables per-request lines.
+    Mcp {
+        /// Bearer token override for every tool call (argv is visible in
+        /// ps; prefer the token store — use a least-privilege scoped token).
+        #[arg(long)]
+        token: Option<String>,
+        /// Tool-allowlist mode: only the pure reads (status, log, diff, cat,
+        /// ls, blame); everything else answers a tool error naming the flag.
+        #[arg(long)]
+        read_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -364,7 +378,7 @@ fn main() {
             skip_unsupported,
             git_path,
         } => host::import(&data, into.as_deref(), skip_unsupported, &git_path),
-        Cmd::Login { server, token } => verbs::login::run(cwd, &server, &token),
+        Cmd::Login { server, token } => wc_locked(cwd, || verbs::login::run(cwd, &server, &token)),
         Cmd::Clone {
             url,
             sparse,
@@ -376,49 +390,87 @@ fn main() {
                 prefix,
                 force,
                 net: n,
-            } => verbs::sparse::run(cwd, verbs::sparse::Action::Add { prefix, force }, &n.net()),
-            SparseCmd::Remove { prefix, net: n } => {
+            } => wc_locked(cwd, || {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Add { prefix, force }, &n.net())
+            }),
+            SparseCmd::Remove { prefix, net: n } => wc_locked(cwd, || {
                 verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &n.net())
-            }
-            SparseCmd::List => verbs::sparse::run(cwd, verbs::sparse::Action::List, &net.net()),
+            }),
+            SparseCmd::List => wc_locked(cwd, || {
+                verbs::sparse::run(cwd, verbs::sparse::Action::List, &net.net())
+            }),
         },
-        Cmd::Status { json } => verbs::status::run(cwd, json),
-        Cmd::Sync { force, net } => verbs::sync::run(cwd, force, &net.net()),
+        Cmd::Status { json } => wc_locked(cwd, || verbs::status::run(cwd, json)),
+        Cmd::Sync { force, net } => wc_locked(cwd, || verbs::sync::run(cwd, force, &net.net())),
         Cmd::Commit {
             message,
             author,
             net,
-        } => verbs::commit::run(cwd, &message, author.as_deref(), &net.net()),
-        Cmd::Land { key, net } => verbs::land::run(cwd, key.as_deref(), &net.net()),
-        Cmd::Cat { path, at, net } => verbs::reads::cat(cwd, &path, at.as_deref(), &net.net()),
+        } => wc_locked(cwd, || {
+            verbs::commit::run(cwd, &message, author.as_deref(), &net.net())
+        }),
+        Cmd::Land { key, net } => {
+            wc_locked(cwd, || verbs::land::run(cwd, key.as_deref(), &net.net()))
+        }
+        Cmd::Cat { path, at, net } => wc_locked(cwd, || {
+            verbs::reads::cat(cwd, &path, at.as_deref(), &net.net())
+        }),
         Cmd::Blame {
             path,
             at,
             json,
             net,
-        } => verbs::reads::blame(cwd, &path, at.as_deref(), json, &net.net()),
+        } => wc_locked(cwd, || {
+            verbs::reads::blame(cwd, &path, at.as_deref(), json, &net.net())
+        }),
         Cmd::Ls {
             path,
             at,
             json,
             net,
-        } => verbs::reads::ls(cwd, path.as_deref(), at.as_deref(), json, &net.net()),
+        } => wc_locked(cwd, || {
+            verbs::reads::ls(cwd, path.as_deref(), at.as_deref(), json, &net.net())
+        }),
         Cmd::Diff { at, json, net } => {
             let at_pair = at.as_deref().and_then(|v| match v {
                 [a, b] => Some((a.as_str(), b.as_str())),
                 _ => None,
             });
-            verbs::reads::diff(cwd, at_pair, json, &net.net())
+            wc_locked(cwd, || verbs::reads::diff(cwd, at_pair, json, &net.net()))
         }
-        Cmd::Doctor { rebuild, net } => verbs::doctor::run(cwd, rebuild, &net.net()),
-        Cmd::Snapshot { ttl, net } => verbs::snapshot::run(cwd, ttl.as_deref(), &net.net()),
+        Cmd::Doctor { rebuild, net } => {
+            wc_locked(cwd, || verbs::doctor::run(cwd, rebuild, &net.net()))
+        }
+        Cmd::Snapshot { ttl, net } => wc_locked(cwd, || {
+            verbs::snapshot::run(cwd, ttl.as_deref(), &net.net())
+        }),
         Cmd::Restore {
             snap_id,
             force,
             net,
-        } => verbs::restore::run(cwd, &snap_id, force, &net.net()),
+        } => wc_locked(cwd, || {
+            verbs::restore::run(cwd, &snap_id, force, &net.net())
+        }),
+        Cmd::Mcp { token, read_only } => verbs::mcp::run(cwd, read_only, token),
     };
     std::process::exit(code);
+}
+
+/// Serializes working-copy use (plan M7): every verb that opens an existing
+/// working copy holds `.naatre/wc.lock` for its duration, so a concurrent
+/// `naatre mcp` session — which holds the same lock for its whole life — is
+/// detected and refused with an error naming the lock, and vice versa (the
+/// server refuses to start while a CLI verb holds it). `clone` is exempt:
+/// it creates a new tree, it does not open one.
+fn wc_locked(root: &std::path::Path, f: impl FnOnce() -> i32) -> i32 {
+    match verbs_lock::acquire(root) {
+        Ok(verbs_lock::Outcome::NoNaatreDir) => f(), // the verb reports "not a naatre working copy"
+        Ok(verbs_lock::Outcome::Locked(_guard)) => f(),
+        Err(message) => {
+            eprintln!("error: {message}");
+            1
+        }
+    }
 }
 
 fn usage(message: &str) -> i32 {

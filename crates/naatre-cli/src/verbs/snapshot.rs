@@ -20,7 +20,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::tree::{EntryKind, Tree, TreeEntry};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::wc::{Wc, under_sparse};
@@ -31,8 +31,11 @@ pub const SNAPSHOT_MIN_TTL_SECS: u64 = 60;
 /// Runs snapshot; prints the created snapshot as a JSON line and returns
 /// the exit code.
 pub fn run(root: &Path, ttl: Option<&str>, net: &Net) -> i32 {
-    match try_run(root, ttl, net) {
-        Ok(()) => 0,
+    match value(root, ttl, net) {
+        Ok(v) => {
+            println!("{v}");
+            0
+        }
         Err(e) => e.report(),
     }
 }
@@ -79,7 +82,10 @@ struct SnapFile {
     exec: bool,
 }
 
-fn try_run(root: &Path, ttl: Option<&str>, net: &Net) -> Result<(), VerbError> {
+/// The created snapshot: `{id, expires_ns}` (the POST response's snapshot
+/// fields; mirrors the snapshots API shape; the MCP `snapshot` tool returns
+/// the same value).
+pub fn value(root: &Path, ttl: Option<&str>, net: &Net) -> Result<Value, VerbError> {
     let ttl_secs = ttl.map(parse_ttl_secs).transpose()?;
     let wc = Wc::open(root)?;
     let state = wc.load_state()?;
@@ -177,14 +183,10 @@ fn try_run(root: &Path, ttl: Option<&str>, net: &Net) -> Result<(), VerbError> {
         &format!("/v1/repos/{}/snapshots", crate::client::uri_segment(repo)),
         &body,
     )?;
-    println!(
-        "{}",
-        json!({
-            "id": created["id"],
-            "expires_ns": created["expires_ns"],
-        })
-    );
-    Ok(())
+    Ok(json!({
+        "id": created["id"],
+        "expires_ns": created["expires_ns"],
+    }))
 }
 
 /// A 64-hex CSPRNG snapshot id (generated client-side per the plan).

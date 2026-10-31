@@ -7,7 +7,7 @@
 //! - [`wc`]: the client working copy — `.naatre/` layout, the binary stat
 //!   index, the disk scanner, and server tree/blob fetchers.
 //! - [`verbs`]: the working-copy verbs (clone, status, sparse, sync, commit,
-//!   cat, ls, diff, doctor, login).
+//!   cat, ls, diff, doctor, login, snapshot, restore, mcp).
 
 pub mod client;
 pub mod host;

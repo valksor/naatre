@@ -14,68 +14,41 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::Net;
+use super::{Net, VerbError};
 use crate::client::HttpError;
 use crate::wc::{State, Wc};
+
+/// A settled land: the key used (for retries) and the server's response
+/// fields. The MCP `land` tool returns `{key, landed, main, rebased}` built
+/// from this.
+pub struct LandOutcome {
+    pub key: String,
+    pub landed: String,
+    pub main: String,
+    pub rebased: u64,
+}
 
 /// Runs land; returns the pinned exit code (0 success, 2 conflict-class,
 /// 1 otherwise).
 pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
-    let wc = match Wc::open(root) {
-        Ok(wc) => wc,
-        Err(e) => return super::VerbError::Local(e).report(),
-    };
-    let state = match wc.load_state() {
-        Ok(s) => s,
-        Err(e) => return super::VerbError::Local(e).report(),
-    };
-    let client = match wc.client(net) {
-        Ok(c) => c,
-        Err(e) => return super::VerbError::Local(e).report(),
-    };
-    let key = key.map(str::to_string).unwrap_or_else(random_key);
-    // Printed before the request: a 503 or a crash must still show the key
-    // a retry needs.
-    println!("land key: {key}");
-
-    let repo = &state.server_repo;
-    let body = json!({ "head": state.head, "key": key });
-    match client.post_json(
-        &format!("/v1/repos/{}/land", crate::client::uri_segment(repo)),
-        &body,
-    ) {
-        Ok((_status, value)) => {
-            let landed = value["landed"].as_str().unwrap_or("?").to_string();
-            let main = value["main"].as_str().unwrap_or("?").to_string();
-            let rebased = value["rebased"].as_u64().unwrap_or(0);
-            // The rebase rewrote the client's head server-side; advance the
-            // working copy onto the landed history and record the base.
-            if landed != "?" {
-                let new_state = State {
-                    head: landed.clone(),
-                    base: Some(main.clone()),
-                    sparse: state.sparse,
-                    server_repo: state.server_repo,
-                };
-                if let Err(e) = wc.save_state(&new_state) {
-                    return super::VerbError::Local(format!(
-                        "land settled but updating .naatre/state.json failed: {e}"
-                    ))
-                    .report();
-                }
-            }
+    let mut printed_key = String::new();
+    match core(root, key, net, &mut |k| {
+        printed_key = k.to_string();
+        println!("land key: {k}");
+    }) {
+        Ok(o) => {
             println!(
                 "{}",
-                json!({ "landed": landed, "main": main, "rebased": rebased })
+                json!({ "landed": o.landed, "main": o.main, "rebased": o.rebased })
             );
             0
         }
-        Err(HttpError::Envelope {
+        Err(VerbError::Http(HttpError::Envelope {
             code,
             message,
             details,
             ..
-        }) => {
+        })) => {
             eprintln!("error: {code}: {message}");
             match code.as_str() {
                 // Conflict class: per-path conflicts + the resolution
@@ -103,7 +76,7 @@ pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
                 "writer_busy" => {
                     eprintln!(
                         "the land was NOT settled (writer slot busy, or another land with the \
-                         same key is in flight); retry with the same key: naatre land --key {key}"
+                         same key is in flight); retry with the same key: naatre land --key {printed_key}"
                     );
                     1
                 }
@@ -126,7 +99,62 @@ pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
                 _ => 1,
             }
         }
-        Err(e) => crate::client::report(&e),
+        Err(e) => e.report(),
+    }
+}
+
+/// The land core: resolves the working copy, generates (or takes) the
+/// idempotency key, POSTs the land, and advances the working copy onto the
+/// landed history on success. `on_key` fires BEFORE the request (the CLI
+/// prints the key there — a 503 or a crash must still show the key a retry
+/// needs); the MCP server passes a no-op.
+pub fn core(
+    root: &Path,
+    key: Option<&str>,
+    net: &Net,
+    on_key: &mut dyn FnMut(&str),
+) -> Result<LandOutcome, VerbError> {
+    let wc = Wc::open(root).map_err(VerbError::Local)?;
+    let state = wc.load_state().map_err(VerbError::Local)?;
+    let client = wc.client(net).map_err(VerbError::Local)?;
+    let key = key.map(str::to_string).unwrap_or_else(random_key);
+    // Printed before the request: a 503 or a crash must still show the key
+    // a retry needs.
+    on_key(&key);
+
+    let repo = &state.server_repo;
+    let body = json!({ "head": state.head, "key": key });
+    match client.post_json(
+        &format!("/v1/repos/{}/land", crate::client::uri_segment(repo)),
+        &body,
+    ) {
+        Ok((_status, value)) => {
+            let landed = value["landed"].as_str().unwrap_or("?").to_string();
+            let main = value["main"].as_str().unwrap_or("?").to_string();
+            let rebased = value["rebased"].as_u64().unwrap_or(0);
+            // The rebase rewrote the client's head server-side; advance the
+            // working copy onto the landed history and record the base.
+            if landed != "?" {
+                let new_state = State {
+                    head: landed.clone(),
+                    base: Some(main.clone()),
+                    sparse: state.sparse,
+                    server_repo: state.server_repo,
+                };
+                wc.save_state(&new_state).map_err(|e| {
+                    VerbError::Local(format!(
+                        "land settled but updating .naatre/state.json failed: {e}"
+                    ))
+                })?;
+            }
+            Ok(LandOutcome {
+                key,
+                landed,
+                main,
+                rebased,
+            })
+        }
+        Err(e) => Err(VerbError::Http(e)),
     }
 }
 

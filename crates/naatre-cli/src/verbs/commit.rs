@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use naatre_core::ids::{Id, Kind, object_id};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::wc::index::Row;
@@ -28,16 +28,39 @@ struct Pending {
     exec: Option<bool>,
 }
 
-/// Runs commit; prints the created changeset as a JSON line and returns the
-/// exit code.
+/// Runs commit; prints the created changeset as a JSON line (or "nothing to
+/// commit") and returns the exit code.
 pub fn run(root: &Path, message: &str, author: Option<&str>, net: &Net) -> i32 {
-    match try_run(root, message, author, net) {
-        Ok(()) => 0,
+    match value(root, message, author, net) {
+        Ok(v) => {
+            if v["committed"].as_bool() == Some(true) {
+                println!(
+                    "{}",
+                    json!({
+                        "id": v["id"],
+                        "root_tree_id": v["root_tree_id"],
+                        "generation": v["generation"],
+                    })
+                );
+            } else {
+                println!("nothing to commit");
+            }
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_run(root: &Path, message: &str, author: Option<&str>, net: &Net) -> Result<(), VerbError> {
+/// The commit result: `{"committed": false}` when the scan found nothing,
+/// else `{"committed": true, id, root_tree_id, generation}` (the created
+/// changeset; no HTTP analog — the MCP `commit` tool returns the same
+/// value).
+pub fn value(
+    root: &Path,
+    message: &str,
+    author: Option<&str>,
+    net: &Net,
+) -> Result<Value, VerbError> {
     let wc = Wc::open(root)?;
     let state = wc.load_state()?;
     let mut index = wc.load_index()?;
@@ -99,8 +122,7 @@ fn try_run(root: &Path, message: &str, author: Option<&str>, net: &Net) -> Resul
     pending.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
     pending.dedup_by(|a, b| a.path == b.path);
     if pending.is_empty() {
-        println!("nothing to commit");
-        return Ok(());
+        return Ok(json!({ "committed": false }));
     }
 
     let repo = &state.server_repo;
@@ -180,15 +202,12 @@ fn try_run(root: &Path, message: &str, author: Option<&str>, net: &Net) -> Resul
     wc.save_state(&new_state)?;
     wc.save_index(&index)?;
 
-    println!(
-        "{}",
-        json!({
-            "id": created["id"],
-            "root_tree_id": created["root_tree_id"],
-            "generation": created["generation"],
-        })
-    );
-    Ok(())
+    Ok(json!({
+        "committed": true,
+        "id": created["id"],
+        "root_tree_id": created["root_tree_id"],
+        "generation": created["generation"],
+    }))
 }
 
 /// Reads a pending file's bytes and derives (blob, size, exec).

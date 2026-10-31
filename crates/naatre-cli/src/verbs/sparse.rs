@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use naatre_core::path;
+use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree};
@@ -34,26 +35,58 @@ pub enum Action {
 
 /// Runs the sparse verb; returns the exit code.
 pub fn run(root: &Path, action: Action, net: &Net) -> i32 {
-    match try_run(root, action, net) {
-        Ok(()) => 0,
+    match value(root, action, net) {
+        Ok(v) => {
+            match v["action"].as_str().unwrap_or("") {
+                "list" => {
+                    let prefixes: Vec<&str> = v["prefixes"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|p| p.as_str()).collect())
+                        .unwrap_or_default();
+                    if prefixes.is_empty() {
+                        println!("(full checkout — no sparse prefixes)");
+                    } else {
+                        for p in prefixes {
+                            println!("{p}");
+                        }
+                    }
+                }
+                "add" => {
+                    if v["already_listed"].as_bool() == Some(true) {
+                        println!(
+                            "sparse: {} is already listed",
+                            v["prefix"].as_str().unwrap_or("?")
+                        );
+                    } else {
+                        println!(
+                            "sparse: added {} ({} file(s) materialized)",
+                            v["prefix"].as_str().unwrap_or("?"),
+                            v["materialized"].as_u64().unwrap_or(0),
+                        );
+                    }
+                }
+                "remove" => println!(
+                    "sparse: removed {} ({} file(s) dropped from disk and index)",
+                    v["prefix"].as_str().unwrap_or("?"),
+                    v["removed"].as_u64().unwrap_or(0),
+                ),
+                _ => unreachable!("value() emits only list/add/remove actions"),
+            }
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_run(root: &Path, action: Action, net: &Net) -> Result<(), VerbError> {
+/// The sparse result per action: `list` → `{action, prefixes}` (empty =
+/// full checkout), `add` → `{action, prefix, materialized, already_listed}`,
+/// `remove` → `{action, prefix, removed}`. No HTTP analog; the MCP `sparse`
+/// tool returns the same values.
+pub fn value(root: &Path, action: Action, net: &Net) -> Result<Value, VerbError> {
     let wc = Wc::open(root)?;
     let state = wc.load_state()?;
     match action {
-        Action::List => {
-            if state.sparse.is_empty() {
-                println!("(full checkout — no sparse prefixes)");
-            } else {
-                for p in &state.sparse {
-                    println!("{p}");
-                }
-            }
-            Ok(())
-        }
+        Action::List => Ok(json!({ "action": "list", "prefixes": state.sparse })),
         Action::Add { prefix, force } => add(root, &wc, state, &prefix, force, net),
         Action::Remove(prefix) => remove(root, &wc, state, &prefix),
     }
@@ -66,7 +99,7 @@ fn add(
     prefix: &str,
     force: bool,
     net: &Net,
-) -> Result<(), VerbError> {
+) -> Result<Value, VerbError> {
     path::validate(prefix)
         .map_err(|e| VerbError::Usage(format!("sparse prefix {prefix:?}: {e}")))?;
     if state.sparse.is_empty() {
@@ -76,8 +109,9 @@ fn add(
         ));
     }
     if state.sparse.iter().any(|p| p == prefix) {
-        println!("sparse: {prefix} is already listed");
-        return Ok(());
+        return Ok(json!({
+            "action": "add", "prefix": prefix, "materialized": 0, "already_listed": true,
+        }));
     }
     let client = wc.client(net)?;
     // The widen walks the working copy's HEAD: the index rows it writes
@@ -215,11 +249,12 @@ fn add(
     state.sparse.push(prefix.to_string());
     wc.save_state(&state)?;
     wc.save_index(&index)?;
-    println!("sparse: added {prefix} ({written} file(s) materialized)");
-    Ok(())
+    Ok(json!({
+        "action": "add", "prefix": prefix, "materialized": written, "already_listed": false,
+    }))
 }
 
-fn remove(root: &Path, wc: &Wc, mut state: State, prefix: &str) -> Result<(), VerbError> {
+fn remove(root: &Path, wc: &Wc, mut state: State, prefix: &str) -> Result<Value, VerbError> {
     if !state.sparse.iter().any(|p| p == prefix) {
         return Err(VerbError::Local(format!(
             "sparse prefix {prefix:?} is not in the list (see: naatre sparse list)"
@@ -248,6 +283,5 @@ fn remove(root: &Path, wc: &Wc, mut state: State, prefix: &str) -> Result<(), Ve
     state.sparse.retain(|p| p != prefix);
     wc.save_state(&state)?;
     wc.save_index(&index)?;
-    println!("sparse: removed {prefix} ({removed} file(s) dropped from disk and index)");
-    Ok(())
+    Ok(json!({ "action": "remove", "prefix": prefix, "removed": removed }))
 }

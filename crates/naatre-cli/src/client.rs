@@ -25,6 +25,13 @@ pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:7400";
 /// that must surface instead (a backlog is not a 5 s event; a structural
 /// cap is deterministic).
 const RETRY_CODES: [&str; 3] = ["writer_busy", "server_busy", "request_timeout"];
+/// POST verbs that are NOT safe to replay after a request_timeout: the shed
+/// drops the response but the blocking write may have committed (the server's
+/// spawn_blocking task survives the future drop). Retrying these on
+/// request_timeout can double-apply (a second snapshot) or surface a 409
+/// repo_exists after a successful first attempt. Only the pre-execution
+/// rejections (writer_busy/server_busy) are safe to retry for POSTs.
+const POST_SAFE_RETRY_CODES: [&str; 2] = ["writer_busy", "server_busy"];
 /// Attempts per retried request (the first plus two retries).
 const RETRY_TRIES: u32 = 3;
 /// Total added waiting across one request's retries.
@@ -196,7 +203,7 @@ impl Client {
         self.check_version();
         let url = format!("{}{}", self.base, path);
         let body = body.clone();
-        self.retrying(move || {
+        self.retrying_codes(&POST_SAFE_RETRY_CODES, move || {
             let res = self
                 .with_bearer(self.agent.post(&url))
                 .send_json(&body)
@@ -256,7 +263,17 @@ impl Client {
     /// non-retryable `blame_too_large` are 503s that must surface
     /// immediately, and the keyed writes (changeset create, land) never
     /// route through here at all.
-    fn retrying<T>(&self, mut f: impl FnMut() -> Result<T, HttpError>) -> Result<T, HttpError> {
+    fn retrying<T>(&self, f: impl FnMut() -> Result<T, HttpError>) -> Result<T, HttpError> {
+        self.retrying_codes(&RETRY_CODES, f)
+    }
+
+    /// [`retrying`] restricted to `codes` — POST callers pass
+    /// [`POST_SAFE_RETRY_CODES`].
+    fn retrying_codes<T>(
+        &self,
+        codes: &[&str],
+        mut f: impl FnMut() -> Result<T, HttpError>,
+    ) -> Result<T, HttpError> {
         let mut remaining = RETRY_BUDGET;
         for attempt in 1..=RETRY_TRIES {
             let err = match f() {
@@ -269,7 +286,7 @@ impl Client {
                     code,
                     retry_after,
                     ..
-                } if RETRY_CODES.contains(&code.as_str()) => *retry_after,
+                } if codes.contains(&code.as_str()) => *retry_after,
                 _ => return Err(err),
             };
             if attempt == RETRY_TRIES {

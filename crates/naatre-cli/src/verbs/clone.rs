@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use naatre_core::ids::Id;
+use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::client::{Client, DEFAULT_URL, uri_segment};
@@ -60,13 +61,38 @@ fn split_url(url: &str, net: &Net) -> Result<(String, String), VerbError> {
 
 /// Runs clone; prints the summary and returns the exit code.
 pub fn run(url: &str, sparse: &[String], into: Option<&str>, net: &Net) -> i32 {
-    match try_run(url, sparse, into, net) {
-        Ok(()) => 0,
+    match value(url, sparse, into, net) {
+        Ok(v) => {
+            let sparse_list: Vec<&str> = v["sparse"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|s| s.as_str()).collect())
+                .unwrap_or_default();
+            let sparse_note = if sparse_list.is_empty() {
+                String::new()
+            } else {
+                format!(" (sparse: {})", sparse_list.join(", "))
+            };
+            println!(
+                "cloned {} at {} into {} ({} file(s)){sparse_note}",
+                v["repo"].as_str().unwrap_or("?"),
+                v["head"].as_str().unwrap_or("?"),
+                v["dest"].as_str().unwrap_or("?"),
+                v["files"].as_u64().unwrap_or(0),
+            );
+            0
+        }
         Err(e) => e.report(),
     }
 }
 
-fn try_run(url: &str, sparse: &[String], into: Option<&str>, net: &Net) -> Result<(), VerbError> {
+/// The clone result in `--json`-style shape: `{repo, head, dest, files,
+/// sparse}` (no HTTP analog; the MCP `clone` tool returns the same value).
+pub fn value(
+    url: &str,
+    sparse: &[String],
+    into: Option<&str>,
+    net: &Net,
+) -> Result<Value, VerbError> {
     let (base, repo) = split_url(url, net)?;
     let dest = Path::new(into.unwrap_or(&repo));
     // Token precedence: --token flag > NAATRE_TOKEN env (no config yet —
@@ -137,16 +163,11 @@ fn try_run(url: &str, sparse: &[String], into: Option<&str>, net: &Net) -> Resul
         .commit(dest)
         .map_err(|e| VerbError::Local(format!("cannot move the clone into place: {e}")))?;
 
-    let materialized = files.len();
-    let sparse_note = if sparse.is_empty() {
-        String::new()
-    } else {
-        format!(" (sparse: {})", sparse.join(", "))
-    };
-    println!(
-        "cloned {repo} at {} into {} ({materialized} file(s)){sparse_note}",
-        head.to_hex(),
-        dest.display(),
-    );
-    Ok(())
+    Ok(json!({
+        "repo": repo,
+        "head": head.to_hex(),
+        "dest": dest.display().to_string(),
+        "files": files.len(),
+        "sparse": sparse,
+    }))
 }

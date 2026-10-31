@@ -8,11 +8,14 @@
 //!   prefix list (empty = full checkout), and the server repo name.
 //! - `index.nai` — the binary stat index (see [`index`]).
 //!
-//! Single-process assumption per working copy (documented plan limit; the
-//! M8 mount clients get their own coordination).
+//! Single-writer per working copy: since M7, [`lock`] serializes concurrent
+//! use (an `naatre mcp` session holds `.naatre/wc.lock` for its lifetime;
+//! CLI verbs take it per invocation). M8 mount clients get their own
+//! coordination on top.
 
 pub mod fetch;
 pub mod index;
+pub mod lock;
 pub mod scan;
 
 use std::fs::OpenOptions;
