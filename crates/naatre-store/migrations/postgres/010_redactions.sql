@@ -22,3 +22,9 @@ CREATE TABLE redactions(
     purged_ns BIGINT,
     PRIMARY KEY(repo_id, object_id)
 );
+
+-- The tombstone probe by object id alone (no repo prefix): the purge
+-- phase's per-id completion stamp (kind + object_id) and the reachability
+-- sweep's NOT EXISTS tombstone arms probe this way per candidate; without
+-- the index each probe scans every tombstone.
+CREATE INDEX redactions_object_id ON redactions(object_id);

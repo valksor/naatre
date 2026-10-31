@@ -387,16 +387,17 @@ pub struct DiffEntry {
     pub path: String,
     /// `add` | `mod` | `del`.
     pub kind: String,
-    /// Hex blob id on the `a` side; null for adds — and null with
-    /// `redacted: true` when the blob is tombstoned in this repo (M10b's
-    /// structured degradation: the path-level fact serves, the pointer to
-    /// redacted content does not).
+    /// Hex blob id on the `a` side; null for adds — and null when THIS
+    /// side's blob is tombstoned in this repo (M10b's structured
+    /// degradation: the path-level fact serves, the pointer to redacted
+    /// content does not — masked PER SIDE, never both sides for one
+    /// redacted side).
     pub a_blob: Option<String>,
-    /// Hex blob id on the `b` side; null for deletes — and null with
-    /// `redacted: true` when the blob is tombstoned in this repo.
+    /// Hex blob id on the `b` side; null for deletes — and null when THIS
+    /// side's blob is tombstoned in this repo.
     pub b_blob: Option<String>,
     /// True when either side's blob of this entry is tombstoned in this
-    /// repo and its pointer is withheld.
+    /// repo (only that side's pointer is withheld).
     pub redacted: bool,
 }
 
@@ -408,8 +409,9 @@ pub struct DiffResponse {
 
 /// Diffs two changesets' root trees (any authenticated principal): a
 /// blob/exec difference is a `mod`; the output is sorted by path. Either
-/// endpoint tombstoned → 410 `object_redacted`; entries whose blob is
-/// tombstoned serve with `redacted: true` and null blob pointers.
+/// endpoint tombstoned → 410 `object_redacted`; an entry whose blob is
+/// tombstoned serves with `redacted: true`, and only THAT side's blob
+/// pointer nulls (per-side masking).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/diff",
@@ -477,13 +479,17 @@ pub async fn diff(
                 match b_files.get(path) {
                     Some(b_meta) => {
                         if a_meta != b_meta {
-                            let hit = redacted.contains(&a_meta.0) || redacted.contains(&b_meta.0);
+                            // Per-side masking (the published per-field
+                            // contract): each side's pointer nulls only
+                            // when THAT side's blob is tombstoned.
+                            let a_hit = redacted.contains(&a_meta.0);
+                            let b_hit = redacted.contains(&b_meta.0);
                             changes.push(DiffEntry {
                                 path: path.clone(),
                                 kind: "mod".into(),
-                                a_blob: hex_of(&a_meta.0, hit),
-                                b_blob: hex_of(&b_meta.0, hit),
-                                redacted: hit,
+                                a_blob: hex_of(&a_meta.0, a_hit),
+                                b_blob: hex_of(&b_meta.0, b_hit),
+                                redacted: a_hit || b_hit,
                             });
                         }
                     }

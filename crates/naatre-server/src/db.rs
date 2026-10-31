@@ -1955,7 +1955,7 @@ pub fn path_history_page(
            AND (?3 IS NULL OR h.gen < ?3 OR (h.gen = ?3 AND h.cs > ?4)) \
            AND NOT EXISTS (SELECT 1 FROM redactions r \
                            WHERE r.repo_id = h.repo_id AND r.object_id = h.cs \
-                             AND r.kind = 'changeset' AND r.purged_ns IS NULL) \
+                             AND r.kind = 'changeset') \
          ORDER BY h.gen DESC, h.cs ASC LIMIT ?5",
         ),
         &pv![repo_id, path, after_gen, after_cs, limit],
@@ -1988,7 +1988,7 @@ pub fn path_history_scan(
            AND (?3 IS NULL OR c.generation < ?3 OR (c.generation = ?3 AND c.id > ?4)) \
            AND NOT EXISTS (SELECT 1 FROM redactions r \
                            WHERE r.repo_id = f.repo_id AND r.object_id = f.cs \
-                             AND r.kind = 'changeset' AND r.purged_ns IS NULL) \
+                             AND r.kind = 'changeset') \
          ORDER BY c.generation DESC, c.id ASC LIMIT ?5",
         ),
         &pv![repo_id, path, after_gen, after_cs, limit],
@@ -2930,6 +2930,7 @@ pub fn gc_repo_blobs(conn: &Db, repo_id: i64) -> Result<Vec<Id>, DbError> {
 // audit details names the redacted content's author.
 
 /// One row of `redactions`.
+#[derive(Debug)]
 pub struct RedactionRow {
     pub repo_id: i64,
     pub object_id: Id,
@@ -2946,20 +2947,47 @@ pub struct RedactionRow {
     pub purged_ns: Option<i64>,
 }
 
-/// Marks `(repo_id, object_id)` redacted. `INSERT OR IGNORE` keeps the
-/// EARLIEST `marked_ns` on a re-mark (the idempotent 200 re-POST
-/// contract), and returns the row as it now stands plus whether THIS call
-/// inserted it (the audit row — actor + reason — rides the 0→1 transition
-/// only, the token_revoke convention). The tombstone's `path` is derived
-/// here: the object's first file_changes path in this repo, NULL when it
-/// carries none.
+/// The outcome of [`redaction_mark`].
+#[derive(Debug)]
+pub enum RedactionMarkOutcome {
+    /// A new tombstone was inserted (the audit row — actor + reason —
+    /// rides this 0→1 transition, the token_revoke convention).
+    Inserted(RedactionRow),
+    /// An ACTIVE tombstone already stood (the idempotent 200 re-POST
+    /// contract: the earliest `marked_ns` stands, no second audit row).
+    Existing(RedactionRow),
+    /// A PURGED tombstone stood and was RE-ARMED: `marked_ns` moved to
+    /// this call's stamp and `purged_ns` cleared (the tombstone re-enters
+    /// the purge work list). The audit row IS written for a re-arm — it
+    /// was a real admin action on a purged record, never a silent no-op.
+    /// The recorded `path` stays (the tombstone's own record; the content
+    /// is gone, so a fresh derivation would answer NULL).
+    Rearmed(RedactionRow),
+    /// The tombstone stands with the OTHER kind — the re-POST is refused,
+    /// never answered 200 against a different kind than the row records.
+    KindMismatch { existing: RedactionRow },
+}
+
+/// Marks `(repo_id, object_id)` redacted. The tombstone's `path` is
+/// derived at insert: the object's first file_changes path in this repo,
+/// NULL when it carries none. Runs inside the caller's transaction (the
+/// mark route's immediate transaction — the write-lock class of the GC's
+/// destructive phases), and the check-then-insert is ATOMIC regardless of
+/// the caller's lock discipline: the insert carries the PK conflict clause
+/// ([`Sql::ignore`]), so a mark that raced a concurrent winner between the
+/// probe and the insert classifies against the row that beat it
+/// ([`RedactionMarkOutcome::Existing`] / `KindMismatch`) instead of
+/// surfacing a unique-violation — never two rows, never a 500.
 pub fn redaction_mark(
     conn: &Db,
     repo_id: i64,
     object_id: &Id,
     kind: &str,
     marked_ns: i64,
-) -> Result<(RedactionRow, bool), DbError> {
+) -> Result<RedactionMarkOutcome, DbError> {
+    if let Some(existing) = redaction_get(conn, repo_id, object_id)? {
+        return redaction_mark_classify(conn, repo_id, object_id, kind, marked_ns, existing);
+    }
     let path: Option<String> = if kind == "blob" {
         conn.query_opt_map(
             &Sql::plain(
@@ -2986,10 +3014,95 @@ pub fn redaction_mark(
         ),
         &pv![repo_id, object_id.0.as_slice(), kind, path, marked_ns],
     )? == 1;
+    if !inserted {
+        // A concurrent mark won the PK race between this transaction's
+        // probe and the insert (statement-level conflict handling — the
+        // atomicity pin): classify against the row that beat this one.
+        let existing = redaction_get(conn, repo_id, object_id)?.ok_or_else(|| {
+            DbError::from(std::io::Error::other(
+                "redaction insert ignored but no row stands",
+            ))
+        })?;
+        return redaction_mark_classify(conn, repo_id, object_id, kind, marked_ns, existing);
+    }
     let row = redaction_get(conn, repo_id, object_id)?.ok_or_else(|| {
         DbError::from(std::io::Error::other("redaction row vanished after insert"))
     })?;
-    Ok((row, inserted))
+    Ok(RedactionMarkOutcome::Inserted(row))
+}
+
+/// Classifies a mark against a tombstone row that already stands:
+/// kind-mismatch refused, purged re-armed, active stands.
+fn redaction_mark_classify(
+    conn: &Db,
+    repo_id: i64,
+    object_id: &Id,
+    kind: &str,
+    marked_ns: i64,
+    existing: RedactionRow,
+) -> Result<RedactionMarkOutcome, DbError> {
+    if existing.kind != kind {
+        return Ok(RedactionMarkOutcome::KindMismatch { existing });
+    }
+    if existing.purged_ns.is_some() {
+        conn.execute(
+            &Sql::plain(
+                "UPDATE redactions SET marked_ns = ?3, purged_ns = NULL \
+                 WHERE repo_id = ?1 AND object_id = ?2",
+            ),
+            &pv![repo_id, object_id.0.as_slice(), marked_ns],
+        )?;
+        let row = redaction_get(conn, repo_id, object_id)?.ok_or_else(|| {
+            DbError::from(std::io::Error::other("redaction row vanished after re-arm"))
+        })?;
+        return Ok(RedactionMarkOutcome::Rearmed(row));
+    }
+    Ok(RedactionMarkOutcome::Existing(existing))
+}
+
+/// The redact-mark surface's target-presence probe: is `id` a valid
+/// tombstone target of `kind` in this repo? For a blob the server must
+/// hold it in ANY form — an `objects` row (a PUT upload), `repo_blobs`
+/// membership or a `file_changes` row in THIS repo (an import writes
+/// membership without an objects row — the M10b SD blocker: imported
+/// personal data must be markable), a blob entry in any written tree
+/// (content-addressed trees are shared) — or a tombstone row already
+/// stands (the re-arm target: active or purged). For a changeset the row
+/// must exist, or a tombstone row already stands (a purged changeset's
+/// row is gone; the re-arm keeps the gate armed against recreation).
+pub fn redaction_target_present(
+    conn: &Db,
+    repo_id: i64,
+    id: &Id,
+    kind: &str,
+) -> Result<bool, DbError> {
+    let tombstoned: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM redactions WHERE repo_id = ?1 AND object_id = ?2"),
+        &pv![repo_id, id.0.as_slice()],
+        |r| r.get(0),
+    )?;
+    if tombstoned.is_some() {
+        return Ok(true);
+    }
+    if kind == "blob" {
+        let hit: Option<i64> = conn.query_opt_map(
+            &Sql::plain(
+                "SELECT 1 WHERE EXISTS \
+                 (SELECT 1 FROM objects WHERE object_id = ?1) \
+              OR EXISTS (SELECT 1 FROM repo_blobs \
+                         WHERE repo_id = ?2 AND object_id = ?1) \
+              OR EXISTS (SELECT 1 FROM file_changes \
+                         WHERE repo_id = ?2 AND blob_id = ?1) \
+              OR EXISTS (SELECT 1 FROM tree_entries \
+                         WHERE kind = 0 AND object_id = ?1)",
+            ),
+            &pv![id.0.as_slice(), repo_id],
+            |r| r.get(0),
+        )?;
+        Ok(hit.is_some())
+    } else {
+        changeset_get(conn, repo_id, id).map(|row| row.is_some())
+    }
 }
 
 /// The tombstone row for `(repo_id, object_id)`, or `None`.
@@ -3023,16 +3136,25 @@ fn redaction_row_from(row: &Row) -> Result<RedactionRow, DbError> {
     })
 }
 
-/// THE UNIVERSAL GATE probe: is `object_id` actively tombstoned in
-/// `repo_id` (a redaction row with no `purged_ns`)? One indexed PRIMARY KEY
+/// THE UNIVERSAL GATE probe: is `object_id` tombstoned in `repo_id` (a
+/// redactions row exists — ACTIVE or PURGED alike)? One indexed PRIMARY KEY
 /// point lookup; every serving path in the plan's gate list calls this.
 /// An id names exactly one object kind (blob and changeset ids live in
 /// disjoint hash domains), so no kind filter is needed at the gate.
+///
+/// The gate covers PURGED rows deliberately (the M10b lens blocker): a
+/// purge reclaims bytes/rows but the tombstone row stands, and same
+/// content re-uploads recreate the same id — the gate is what makes a
+/// re-PUT, a re-import, or a recreated changeset answer 410 on every
+/// serving path from the first request, not only after the next admin
+/// action. The PURGE work list keeps its own `purged_ns IS NULL`
+/// selection ([`redactions_active_all`], [`redact_purgeable_cs`],
+/// [`redact_purgeable_blobs`]).
 pub fn redaction_active(conn: &Db, repo_id: i64, object_id: &Id) -> Result<bool, DbError> {
     let hit: Option<i64> = conn.query_opt_map(
         &Sql::plain(
             "SELECT 1 FROM redactions \
-         WHERE repo_id = ?1 AND object_id = ?2 AND purged_ns IS NULL",
+         WHERE repo_id = ?1 AND object_id = ?2",
         ),
         &pv![repo_id, object_id.0.as_slice()],
         |r| r.get(0),
@@ -3040,8 +3162,9 @@ pub fn redaction_active(conn: &Db, repo_id: i64, object_id: &Id) -> Result<bool,
     Ok(hit.is_some())
 }
 
-/// The actively-tombstoned ids among `ids` (the batch gates: batch object
-/// fetch, diff masking). Chunked IN-lists on the PK prefix.
+/// The tombstoned ids among `ids` (the batch gates: batch object fetch,
+/// diff masking, tree-entry masking — purged tombstones included, the
+/// [`redaction_active`] rule). Chunked IN-lists on the PK prefix.
 pub fn redactions_active_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Vec<Id>, DbError> {
     let mut out = Vec::new();
     for chunk in ids.chunks(GC_IN_CHUNK) {
@@ -3055,7 +3178,7 @@ pub fn redactions_active_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Ve
         let rows: Vec<Vec<u8>> = conn.query_all_map(
             &Sql::plain_owned(format!(
                 "SELECT object_id FROM redactions \
-             WHERE repo_id = ?1 AND purged_ns IS NULL AND object_id IN ({list})"
+             WHERE repo_id = ?1 AND object_id IN ({list})"
             )),
             &params,
             |r| r.get(0),
@@ -3069,14 +3192,16 @@ pub fn redactions_active_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Ve
     Ok(out)
 }
 
-/// The repo's actively-tombstoned CHANGESET ids (the merge-base walk's
-/// exclusion set: a tombstoned node is never NAMED as the answer, while the
-/// walk still traverses through it — the ancestors above it stay reachable).
+/// The repo's tombstoned CHANGESET ids, purged included (the merge-base
+/// walk's exclusion set: a tombstoned node is never NAMED as the answer,
+/// while the walk still traverses through it — the ancestors above it stay
+/// reachable; a purged row's changeset row is gone, so the arm is
+/// defense-in-depth against a recreated id).
 pub fn redactions_active_changesets(conn: &Db, repo_id: i64) -> Result<Vec<Id>, DbError> {
     conn.query_all_map(
         &Sql::plain(
             "SELECT object_id FROM redactions \
-         WHERE repo_id = ?1 AND kind = 'changeset' AND purged_ns IS NULL",
+         WHERE repo_id = ?1 AND kind = 'changeset'",
         ),
         &pv![repo_id],
         |r| {
@@ -3205,7 +3330,12 @@ pub fn redact_purgeable_cs(conn: &Db, limit: usize) -> Result<Vec<Id>, DbError> 
 }
 
 /// The actively-tombstoned blobs with NO reference left anywhere and no
-/// upload touch inside the grace window: no `file_changes` row, no blob
+/// upload touch inside the grace window — GROUP BY object_id, one row per
+/// id (a blob tombstoned in several repos carries one row PER REPO, each
+/// with its own `marked_ns`; a DISTINCT on the `(object_id, marked_ns)`
+/// pair would NOT collapse them and the batch would attempt and count the
+/// reclaim twice): no `file_changes`
+/// row, no blob
 /// `tree_entries` row, and no `objects.touched_ns` past `cut_ns` (the same
 /// upload grace [`gc_collectible_blobs`] honors — a client between the blob
 /// PUT and its referencing changeset create is never overtaken; the record
@@ -3217,14 +3347,15 @@ pub fn redact_purgeable_cs(conn: &Db, limit: usize) -> Result<Vec<Id>, DbError> 
 pub fn redact_purgeable_blobs(conn: &Db, cut_ns: i64, limit: usize) -> Result<Vec<Id>, DbError> {
     conn.query_all_map(
         &Sql::plain(
-            "SELECT r.object_id FROM redactions r \
+            "SELECT r.object_id, MIN(r.marked_ns) FROM redactions r \
              WHERE r.kind = 'blob' AND r.purged_ns IS NULL \
                AND NOT EXISTS (SELECT 1 FROM objects o \
                                WHERE o.object_id = r.object_id AND o.touched_ns > ?1) \
                AND NOT EXISTS (SELECT 1 FROM file_changes f WHERE f.blob_id = r.object_id) \
                AND NOT EXISTS (SELECT 1 FROM tree_entries te \
                                WHERE te.kind = 0 AND te.object_id = r.object_id) \
-             ORDER BY r.marked_ns ASC, r.object_id ASC LIMIT ?2",
+             GROUP BY r.object_id \
+             ORDER BY MIN(r.marked_ns) ASC, r.object_id ASC LIMIT ?2",
         ),
         &pv![cut_ns, limit as i64],
         |r| {
@@ -3376,9 +3507,19 @@ pub fn redact_collect_blobs(conn: &Db, ids: &[Id]) -> Result<(), DbError> {
 
 /// The redaction-consistency counts for fsck: (active, purged,
 /// purged-but-still-referenced). Tombstoned-but-unpurged is a NORMAL state
-/// (counted, not drift); a PURGED tombstone whose object row still exists is
-/// DRIFT — the purge claimed the space but a reference survived (the
-/// never-dangling invariant violated from the purge side).
+/// (counted, not drift); a PURGED tombstone whose object row STILL EXISTS
+/// FROM BEFORE THE PURGE is DRIFT — the purge claimed the space but a
+/// reference survived (the never-dangling invariant violated from the purge
+/// side). The temporal arm matters for BLOBS: content is addressed by hash,
+/// the write boundary is per-repo, so a repo that never tombstoned the id
+/// legitimately re-uploads it after another repo's purge — its fresh
+/// `objects` row (`touched_ns` at or after the stamp) is the per-repo
+/// design working, not drift (a survived row's last touch predates the
+/// stamp STRICTLY: the purge selector required no touch past the grace
+/// cut, which is the stamp minus the grace window). A
+/// changeset row needs no temporal arm: changeset ids hash the repo id, so
+/// no other repo can ever recreate the row — its reappearance IS a failed
+/// purge.
 pub fn fsck_redactions(conn: &Db) -> Result<(i64, i64, i64), DbError> {
     let active: i64 = conn.query_row_map(
         &Sql::plain("SELECT COUNT(*) FROM redactions WHERE purged_ns IS NULL"),
@@ -3396,7 +3537,8 @@ pub fn fsck_redactions(conn: &Db) -> Result<(i64, i64, i64), DbError> {
              (r.kind = 'changeset' AND EXISTS \
                (SELECT 1 FROM changesets c WHERE c.id = r.object_id)) OR \
              (r.kind = 'blob' AND EXISTS \
-               (SELECT 1 FROM objects o WHERE o.object_id = r.object_id)))",
+               (SELECT 1 FROM objects o \
+                WHERE o.object_id = r.object_id AND o.touched_ns < r.purged_ns)))",
         ),
         &pv![],
         |r| r.get(0),
@@ -3414,11 +3556,21 @@ pub fn fsck_redactions(conn: &Db) -> Result<(i64, i64, i64), DbError> {
 // tombstoned).
 
 /// Deletes principal `name`: its token rows, its principals row, and its
-/// `audit_log` ACTOR pseudonymized to `deleted:<name>` — one transaction.
-/// `details_json` payloads are append-only history and stay untouched. The
-/// tombstones the principal marked keep their `principal` value: they are
-/// the audit trail of admin actions, retained on the same
-/// security-accountability basis as the log itself. Returns
+/// `audit_log` ACTOR pseudonymized to `deleted:<random-id>` — one
+/// immediate transaction (the destructive-writer lock class of the GC's
+/// phases and the redaction mark: the write lock is taken up front, so a
+/// concurrent writer serializes instead of mid-transaction upgrade
+/// failures). The pseudonym is a fresh random 16-hex-char token per
+/// deletion event, stable across every row rewritten in that event — the
+/// actor history stays linkable (one principal ↔ one token) while the
+/// name itself is gone (the M10b compliance fix: `deleted:<name>` kept
+/// the name it claimed to erase). `details_json` payloads are append-only
+/// history and stay untouched — the `principal_delete` row's own details
+/// name the deleted principal (the erasure receipt; the README states
+/// this), and admin-supplied free text (redaction reasons) is never
+/// scrubbed (also stated). The tombstones the principal marked keep their
+/// `principal` value: they are the audit trail of admin actions, retained
+/// on the same security-accountability basis as the log itself. Returns
 /// `None` when no such principal exists, else the deleted token count.
 pub fn principal_delete(
     conn: &Db,
@@ -3426,7 +3578,7 @@ pub fn principal_delete(
     now_ns: i64,
     actor: &str,
 ) -> Result<Option<usize>, DbError> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_immediate()?;
     let exists: Option<i64> = tx.query_opt_map(
         &Sql::plain("SELECT 1 FROM principals WHERE name = ?1"),
         &pv![name],
@@ -3443,7 +3595,9 @@ pub fn principal_delete(
         &Sql::plain("DELETE FROM principals WHERE name = ?1"),
         &pv![name],
     )?;
-    let pseudo = format!("deleted:{name}");
+    let mut raw = [0u8; 8];
+    getrandom::fill(&mut raw).expect("CSPRNG available");
+    let pseudo = format!("deleted:{:016x}", u64::from_be_bytes(raw));
     tx.execute(
         &Sql::plain("UPDATE audit_log SET principal = ?1 WHERE principal = ?2"),
         &pv![pseudo, name],

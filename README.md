@@ -247,11 +247,33 @@ object in one repo — every serving path then refuses it
 immediately (by-id fetches answer 410 `object_redacted`, `/log` and
 path-history drop the node, diff/file degrade structurally, blame
 degrades at the tombstone with the author withheld, a snapshot holding
-the blob becomes unrestorable inside its TTL, and a land whose base
+the blob becomes unrestorable inside its TTL, tree listings mask the
+redacted entry's pointer and size, and a land whose base
 chain crosses it answers 409 `redacted_base`) — while the GC's
 redaction phase reclaims the bytes/rows later, and only when NO repo
 still references the content (two repos sharing a subtree redact
-independently; the other repo keeps serving). Remote administration
+independently; the other repo keeps serving).
+
+**The tombstone outlives the purge, and the gate never lapses**: content
+once redacted in a repo never serves there again. Because content is
+addressed by hash, a same-content re-upload recreates the same id — so
+every write boundary refuses a tombstoned id (active or purged): blob
+PUTs (raw and batch), changeset creates naming the id or referencing the
+blob, snapshot blob uploads and snapshot POSTs carrying it in their tree
+closure, and git imports. The refusal is PER-REPO, like the gate: a
+tombstone binds only the repo that marked it, so a repo that never
+redacted the content keeps serving it and may re-upload it after another
+repo's purge reclaimed the bytes (changeset ids cannot collide this way —
+they hash the repo id). `POST /objects/present` reports a tombstoned id
+as `redacted`, never `missing` — sync clients are never invited to
+re-upload. A re-mark on a purged tombstone RE-ARMS it (a fresh
+`marked_ns`, the purge state cleared, and a new `redact` audit row —
+never a silent no-op); a re-mark naming the other kind is refused. The
+tombstone row itself — path + date only — is retained indefinitely as
+the redaction record; the purge stamps `purged_ns` but does not delete
+it.
+
+Remote administration
 goes through `POST/GET /v1/repos/{r}/redactions` (admin, audited):
 the tombstone ROW carries path + date only — never an author, no
 reason, no actor (free text can carry personal data; the actor and the
@@ -263,7 +285,9 @@ anywhere is dirt), reachability counts (total vs marked), CAS presence
 vs the DB inventory (missing bytes for a DB-known blob dirty the store),
 the pending-candidate ledger, the cumulative GC audit totals, and the
 redaction counts (tombstoned-but-unpurged is normal; a tombstone stamped
-purged whose object still exists is DRIFT and dirties the store). On the
+purged whose object still exists from before the stamp is DRIFT and dirties
+the store — an object row touched at or after the purge stamp is a
+never-redacted repo's legitimate re-upload, not drift). On the
 S3 backend it attaches the external-drift note: bucket-side lifecycle
 rules or versioning can delete or resurrect objects outside naatre's
 control — that is drift to investigate, never silently repaired.
@@ -296,7 +320,10 @@ After an import **naatre is the authoritative repo and git is a read-only
 source**. Incremental re-import only ever **fast-forwards** `main` (import
 must be the sole writer); a diverged or force-pushed source, or a repo
 with native lands, refuses with `git_history_diverged` — no merge, no
-rewrite.
+rewrite. An import into a repo that has redacted content the source still
+carries refuses too: a tombstoned blob or changeset id (active or purged)
+fails the import naming the id — redacted content never re-enters through
+the import door.
 
 Import discloses its two content mutations and its skip behavior:
 
@@ -520,12 +547,20 @@ Personal-data carriers, explicitly:
   366 days).
 - **The `principals` table** and **`tokens` rows** — deletable:
   `naatre principal delete <name>` (admin) deletes the principal and all
-  its token rows and pseudonymizes the audit actor to `deleted:<name>`.
+  its token rows and pseudonymizes the audit actor to
+  `deleted:<random-id>` — an opaque 16-hex-char token generated per
+  deletion event, stable across every row rewritten by that deletion
+  (the actor history stays linkable without keeping the name).
 - **`audit_log`** — `principal` plus the actor fields in `details_json`.
   The log is append-only and retained **indefinitely on a
-  security-accountability basis**; principal deletion pseudonymizes the
-  actor rather than deleting rows, and `details_json` payloads are history
-  and stay.
+  security-accountability basis**, with ONE sanctioned rewrite: principal
+  deletion pseudonymizes the deleted principal's actor rows (the
+  `deleted:<random-id>` above) in place — the only UPDATE the log ever
+  takes. `details_json` payloads are otherwise history and stay, two
+  limits included: the `principal_delete` row's own details name the
+  deleted principal (the erasure receipt — the record that erasure
+  happened), and admin-supplied free text (redaction reasons) is never
+  scrubbed.
 - **Snapshot blob content** expires at the TTL (rows go with it) — and a
   redacted blob id makes every snapshot holding it unrestorable
   immediately, ahead of the TTL.

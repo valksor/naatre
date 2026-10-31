@@ -129,6 +129,7 @@ pub struct ChangesetRootResponse {
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the writer role, or a path outside the token's scope (details.path names the first offender)"),
         (status = 404, description = "No such repo"),
+        (status = 410, description = "The changeset id — or a referenced blob — is redacted in this repo (`object_redacted`); recreation is refused"),
         (status = 413, description = "Canonical encoding exceeds the 16 MiB cap"),
         (status = 422, description = "Validation failure: unknown_parent / path_not_normalized / validation / empty_changeset / duplicate_path / unsorted_changes / missing blobs / duality")
     )
@@ -378,6 +379,37 @@ async fn persist(
     state
         .write(move |store| {
             let conn = store.conn();
+
+            // The tombstone boundary (inside the write slot, so a
+            // concurrent mark cannot slip between probe and insert): a
+            // changeset id that is tombstoned in this repo — active or
+            // PURGED, the resurrection arm — is refused (same content +
+            // parents hash to the same id), and so is a changeset whose
+            // Add/Mod blobs are tombstoned here (the tree entry would
+            // carry the redacted blob's name, size, and hash).
+            if db::redaction_active(conn, repo_id, &cs_id).map_err(ApiError::log_internal)? {
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!(
+                        "changeset {} is redacted in this repo; recreating it is refused",
+                        cs_id.to_hex()
+                    ),
+                ));
+            }
+            if !blobs.is_empty() {
+                let redacted_blobs = db::redactions_active_among(conn, repo_id, &blobs)
+                    .map_err(ApiError::log_internal)?;
+                if !redacted_blobs.is_empty() {
+                    let hexes: Vec<String> = redacted_blobs.iter().map(Id::to_hex).collect();
+                    return Err(ApiError::new(
+                        ApiCode::ObjectRedacted,
+                        format!(
+                            "blobs are redacted in this repo; referencing them is refused: {}",
+                            hexes.join(", ")
+                        ),
+                    ));
+                }
+            }
 
             // Blob presence: a CAS file AND an objects row, listing every
             // missing id in the details.

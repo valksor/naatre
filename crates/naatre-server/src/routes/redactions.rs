@@ -47,19 +47,25 @@ pub struct RedactionEntry {
     /// null when the object carries none — the tombstone's only descriptive
     /// metadata.
     pub path: Option<String>,
-    /// The tombstone date (ns since the epoch). A re-POST keeps the
-    /// EARLIEST mark.
+    /// The tombstone date (ns since the epoch). An idempotent re-POST
+    /// keeps the EARLIEST mark; re-arming a purged tombstone moves it to
+    /// the re-arm's stamp.
     pub marked_ns: u64,
     /// The reclaim date once the GC's redaction phase purged the object;
     /// null while it stands tombstoned-but-unpurged (a normal state).
     pub purged_ns: Option<u64>,
 }
 
-/// Mark response (201 on a new tombstone; an idempotent re-POST answers 200
-/// with the recorded row — the earliest `marked_ns` stands).
+/// Mark response (201 on a new tombstone; 200 on an idempotent re-POST —
+/// the recorded row, the earliest `marked_ns` stands — or on a RE-ARM of a
+/// purged tombstone, `rearmed: true`).
 #[derive(Serialize, ToSchema)]
 pub struct RedactionMarked {
     pub redaction: RedactionEntry,
+    /// True when this call re-armed a PURGED tombstone (new `marked_ns`,
+    /// `purged_ns` cleared, a new `redact` audit row). Never true on the
+    /// 201 insert.
+    pub rearmed: bool,
 }
 
 /// List body.
@@ -85,10 +91,14 @@ fn entry_of(row: db::RedactionRow) -> RedactionEntry {
 /// acting admin is the audit row's principal and the reason its details —
 /// the tombstone ROW itself carries path + date only, never author). 201
 /// on a new tombstone; an idempotent re-POST answers 200 keeping the
-/// earliest `marked_ns` (and writes no second audit row). The mark ALSO
-/// invalidates the target changeset's derived rows (every `derive_state`
-/// row goes to the poison terminal state, so re-derivations propagate the
-/// hole through the taint machinery) in the same transaction.
+/// earliest `marked_ns` (and writes no second audit row); a re-POST on a
+/// PURGED tombstone re-arms it — 200 `rearmed: true`, a fresh
+/// `marked_ns`, `purged_ns` cleared, and a NEW `redact` audit row (never
+/// a silent no-op). A re-POST naming the OTHER kind is refused (422). The
+/// mark ALSO invalidates the target changeset's derived rows (every
+/// `derive_state` row goes to the poison terminal state, so
+/// re-derivations propagate the hole through the taint machinery) in the
+/// same immediate transaction.
 #[utoipa::path(
     post,
     path = "/v1/repos/{r}/redactions",
@@ -96,12 +106,12 @@ fn entry_of(row: db::RedactionRow) -> RedactionEntry {
     request_body = CreateRedactionRequest,
     responses(
         (status = 201, description = "Tombstone marked", body = RedactionMarked),
-        (status = 200, description = "Already tombstoned (idempotent re-POST; the earliest marked_ns stands)", body = RedactionMarked),
+        (status = 200, description = "Already tombstoned (idempotent re-POST; the earliest marked_ns stands), or a purged tombstone re-armed (`rearmed: true`)", body = RedactionMarked),
         (status = 400, description = "The id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the admin role"),
         (status = 404, description = "No such repo; or the target id is not an object of this repo"),
-        (status = 422, description = "kind is not `blob`/`changeset`, or the reason is empty")
+        (status = 422, description = "kind is not `blob`/`changeset`, the reason is empty, or the id is already tombstoned with the other kind")
     )
 )]
 pub async fn create(
@@ -133,23 +143,20 @@ pub async fn create(
     })?;
     let repo_id = repo_id_or_404(&state, &repo).await?;
 
-    // The target must be a real object: a changeset of THIS repo, or a
-    // blob whose content the server holds (a repo-scoped blob tombstone
-    // may target content another repo also references — the shared-subtree
-    // pin — or a PUT-but-unreferenced upload, which carries no membership
-    // row yet; the GATE stays repo-scoped either way).
+    // The target must be a real object of this repo, or an already-
+    // tombstoned id (the re-arm target): a changeset row of THIS repo, or
+    // a blob the server holds in any form — an objects row, repo_blobs
+    // membership or a file_changes row of this repo (an import writes
+    // membership without an objects row), a blob entry in any written
+    // tree — or an existing tombstone row (active or purged). A repo-
+    // scoped blob tombstone may target content another repo also
+    // references (the shared-subtree pin) or a PUT-but-unreferenced
+    // upload; the GATE stays repo-scoped either way.
     let exists = {
         state
             .read(move |conn| {
-                if kind == "blob" {
-                    db::objects_missing(conn, &[id])
-                        .map(|missing| missing.is_empty())
-                        .map_err(ApiError::log_internal)
-                } else {
-                    db::changeset_get(conn, repo_id, &id)
-                        .map(|row| row.is_some())
-                        .map_err(ApiError::log_internal)
-                }
+                db::redaction_target_present(conn, repo_id, &id, kind)
+                    .map_err(ApiError::log_internal)
             })
             .await?
     };
@@ -163,51 +170,90 @@ pub async fn create(
     let now_ns = state.now_ns() as i64;
     let principal = auth.principal.clone();
     let reason = body.reason.clone();
-    let (marked, inserted) = state
+    let marked = state
         .write(move |store| {
             let conn = store.conn();
-            let tx = conn.transaction().map_err(ApiError::log_internal)?;
-            let (row, inserted) = db::redaction_mark(&tx, repo_id, &id, kind, now_ns)
+            // Immediate: the mark is a destructive write (it flips every
+            // serving gate and poisons derived rows) — the same write-lock
+            // class as the GC's purge phases, taken up front.
+            let tx = conn
+                .transaction_immediate()
                 .map_err(ApiError::log_internal)?;
-            if inserted {
-                // Mark-time invalidation of the tombstoned changeset's
-                // derived rows (a no-op for blobs): the read gates stop
-                // serving immediately, and re-derivations propagate the
-                // hole through the taint machinery.
-                db::redaction_invalidate_derived(&tx, repo_id, &id)
+            let outcome = db::redaction_mark(&tx, repo_id, &id, kind, now_ns)
+                .map_err(ApiError::log_internal)?;
+            match &outcome {
+                db::RedactionMarkOutcome::Inserted(_) => {
+                    // Mark-time invalidation of the tombstoned changeset's
+                    // derived rows (a no-op for blobs): the read gates stop
+                    // serving immediately, and re-derivations propagate the
+                    // hole through the taint machinery.
+                    db::redaction_invalidate_derived(&tx, repo_id, &id)
+                        .map_err(ApiError::log_internal)?;
+                    // The audit row rides the 0→1 transition only (the
+                    // token_revoke convention): an idempotent re-POST writes
+                    // nothing.
+                    db::audit_append(
+                        &tx,
+                        now_ns,
+                        &principal,
+                        "redact",
+                        &serde_json::json!({
+                            "repo": repo,
+                            "id": id.to_hex(),
+                            "kind": kind,
+                            "reason": reason,
+                        })
+                        .to_string(),
+                    )
                     .map_err(ApiError::log_internal)?;
-                // The audit row rides the 0→1 transition only (the
-                // token_revoke convention): an idempotent re-POST writes
-                // nothing.
-                db::audit_append(
-                    &tx,
-                    now_ns,
-                    &principal,
-                    "redact",
-                    &serde_json::json!({
-                        "repo": repo,
-                        "id": id.to_hex(),
-                        "kind": kind,
-                        "reason": reason,
-                    })
-                    .to_string(),
-                )
-                .map_err(ApiError::log_internal)?;
+                }
+                db::RedactionMarkOutcome::Rearmed(_) => {
+                    // A re-arm is a real admin action on a purged record —
+                    // it rows its own audit entry, never a silent no-op.
+                    db::audit_append(
+                        &tx,
+                        now_ns,
+                        &principal,
+                        "redact",
+                        &serde_json::json!({
+                            "repo": repo,
+                            "id": id.to_hex(),
+                            "kind": kind,
+                            "reason": reason,
+                            "rearmed": true,
+                        })
+                        .to_string(),
+                    )
+                    .map_err(ApiError::log_internal)?;
+                }
+                db::RedactionMarkOutcome::Existing(_)
+                | db::RedactionMarkOutcome::KindMismatch { .. } => {}
             }
             tx.commit().map_err(ApiError::log_internal)?;
-            Ok((row, inserted))
+            Ok(outcome)
         })
         .await?;
 
-    let status = if inserted {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
+    let (row, status, rearmed) = match marked {
+        db::RedactionMarkOutcome::Inserted(row) => (row, StatusCode::CREATED, false),
+        db::RedactionMarkOutcome::Existing(row) => (row, StatusCode::OK, false),
+        db::RedactionMarkOutcome::Rearmed(row) => (row, StatusCode::OK, true),
+        db::RedactionMarkOutcome::KindMismatch { existing } => {
+            return Err(ApiError::new(
+                ApiCode::Validation,
+                format!(
+                    "{} is already tombstoned with kind {:?}; the re-POST named {kind:?}",
+                    existing.object_id.to_hex(),
+                    existing.kind
+                ),
+            ));
+        }
     };
     Ok((
         status,
         Json(RedactionMarked {
-            redaction: entry_of(marked),
+            redaction: entry_of(row),
+            rearmed,
         }),
     )
         .into_response())

@@ -163,6 +163,12 @@ pub enum ImportError {
     /// unborn default branch.
     #[error("{0}")]
     Config(String),
+    /// The import would write content tombstoned in the target repo — a
+    /// blob the commit carries, or a changeset id equal to a purged
+    /// tombstone (same content hashes to the same id). Refused: an import
+    /// is a write boundary, and the tombstone outlives the purge.
+    #[error("{0}")]
+    Redacted(String),
     #[error(transparent)]
     Sql(#[from] DbError),
     #[error(transparent)]
@@ -1215,12 +1221,29 @@ fn import_commit(
     derive: &crate::derive::DeriveRegistry,
     p: &PreparedCommit,
 ) -> Result<(), ImportError> {
+    // The tombstone boundary: this repo's tombstones — active or purged —
+    // refuse the import (a write boundary; same content hashes to the same
+    // id, so an import would resurrect redacted content the purge already
+    // reclaimed).
+    if db::redaction_active(conn, repo_id, &p.cs_id)? {
+        return Err(ImportError::Redacted(format!(
+            "changeset {} is redacted in {repo_name:?}; import refused",
+            p.cs_id.to_hex()
+        )));
+    }
     // Blobs first (durability invariant 1): the diff's Add/Mod blobs.
     let mut blobs: Vec<Id> = Vec::new();
     for e in &p.entries {
         if let (Op::Add | Op::Mod, Some(git_blob), Some(id)) = (e.op, e.git_blob, e.blob)
             && !blobs.contains(&id)
         {
+            if db::redaction_active(conn, repo_id, &id)? {
+                return Err(ImportError::Redacted(format!(
+                    "blob {} (path {:?}) is redacted in {repo_name:?}; import refused",
+                    id.to_hex(),
+                    e.path
+                )));
+            }
             let content = read_blob(git, git_blob)?;
             let put = cas.put(&content)?.id;
             if put != id {
@@ -1234,8 +1257,9 @@ fn import_commit(
     }
 
     // Full root tree, built directly from the git tree (never by replaying
-    // deltas), reusing the MemNode persist/collect machinery.
-    let node = build_tree_node(git, cas, p.git_tree, "")?;
+    // deltas), reusing the MemNode persist/collect machinery. Its blob
+    // puts pass the same tombstone boundary.
+    let node = build_tree_node(git, cas, conn, repo_id, repo_name, p.git_tree, "")?;
     let (root_tree_id, _, trees) = node.collect().map_err(map_derive)?;
 
     let canonical = changeset::encode(&p.cs)?;
@@ -1287,10 +1311,14 @@ fn import_commit(
 }
 
 /// Recursively turns a git tree into a [`MemNode`], putting every blob it
-/// references.
+/// references. Each blob passes the tombstone boundary before its CAS put
+/// (the naatre id is content-derived: compute, probe, then put).
 fn build_tree_node(
     git: &gix::Repository,
     cas: &dyn naatre_store::BlobStore,
+    conn: &Db,
+    repo_id: i64,
+    repo_name: &str,
     tree_oid: ObjectId,
     prefix: &str,
 ) -> Result<MemNode, ImportError> {
@@ -1300,12 +1328,34 @@ fn build_tree_node(
         let path = format!("{prefix}{name}");
         match entry.mode.value() {
             TREE_MODE => {
-                let sub = build_tree_node(git, cas, entry.oid, &format!("{path}/"))?;
+                let sub = build_tree_node(
+                    git,
+                    cas,
+                    conn,
+                    repo_id,
+                    repo_name,
+                    entry.oid,
+                    &format!("{path}/"),
+                )?;
                 node.entries.insert(name, MemEntry::Dir(Box::new(sub)));
             }
             mode @ (EXEC_MODE | REGULAR_MODE) => {
                 let content = read_blob(git, entry.oid)?;
-                let blob = cas.put(&content)?.id;
+                let blob = object_id(Kind::Blob, &content);
+                if db::redaction_active(conn, repo_id, &blob)? {
+                    return Err(ImportError::Redacted(format!(
+                        "blob {} (tree path {path:?}) is redacted in {repo_name:?}; import refused",
+                        blob.to_hex()
+                    )));
+                }
+                let put = cas.put(&content)?.id;
+                if put != blob {
+                    return Err(ImportError::Internal(format!(
+                        "blob id mismatch for tree path {path:?}: computed {}, CAS put {}",
+                        blob.to_hex(),
+                        put
+                    )));
+                }
                 node.entries.insert(
                     name,
                     MemEntry::File {

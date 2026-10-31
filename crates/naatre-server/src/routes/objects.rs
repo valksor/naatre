@@ -46,10 +46,16 @@ pub struct PresentRequest {
 
 /// Presence-check result: ids whose object file is absent from the CAS.
 /// Membership is NOT consulted — `present` answers "is the content on
-/// disk", not "may this repo read it".
+/// disk", not "may this repo read it". Tombstoned ids (active or purged)
+/// are NEVER reported `missing` (the sync re-upload invitation would
+/// resurrect same-content ids): they are reported in `redacted`, whatever
+/// the CAS holds.
 #[derive(Serialize, ToSchema)]
 pub struct PresentResponse {
     pub missing: Vec<String>,
+    /// Ids redacted in this repo (the tombstone wins over the CAS answer;
+    /// re-uploading them is refused at the PUT boundary).
+    pub redacted: Vec<String>,
 }
 
 /// One entry of the batch PUT.
@@ -101,8 +107,8 @@ pub struct BatchGetRequest {
 /// `repo_blobs(repo, id)` row lands in `missing` even when the CAS holds
 /// the file (cross-repo isolation). A missing or unreadable file after a
 /// membership hit is also reported in `missing` (logged server-side).
-/// Actively-tombstoned ids land in `redacted` (M10b): the tombstone wins
-/// over membership, and the bytes never serve.
+/// Tombstoned ids land in `redacted` (M10b — active or purged: the
+/// tombstone wins over membership, and the bytes never serve).
 #[derive(Serialize, ToSchema)]
 pub struct BatchGetResponse {
     pub objects: Vec<StoredObject>,
@@ -126,7 +132,7 @@ pub struct StoredObjectId {
     params(("r" = String, Path, description = "Repo name")),
     request_body = PresentRequest,
     responses(
-        (status = 200, description = "Ids absent from the CAS", body = PresentResponse),
+        (status = 200, description = "Ids absent from the CAS; tombstoned ids are reported in `redacted`, never `missing`", body = PresentResponse),
         (status = 400, description = "An id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo"),
@@ -140,21 +146,36 @@ pub async fn present(
     body: AppJson<PresentRequest>,
 ) -> Result<Json<PresentResponse>, ApiError> {
     let ids = parse_id_batch(&body.0.ids)?;
-    repo_id_or_404(&state, &repo).await?;
+    let repo_id = repo_id_or_404(&state, &repo).await?;
+    let tombstoned: std::collections::HashSet<Id> = {
+        let ids = ids.clone();
+        state
+            .read(move |conn| {
+                db::redactions_active_among(conn, repo_id, &ids).map_err(ApiError::log_internal)
+            })
+            .await?
+            .into_iter()
+            .collect()
+    };
     let cas = Arc::clone(&state.cas);
-    let missing = state
+    let (missing, redacted) = state
         .blocking(move || {
             let has = cas.has(&ids).map_err(ApiError::log_internal)?;
-            let missing: Vec<String> = ids
-                .iter()
-                .zip(has)
-                .filter(|(_, present)| !*present)
-                .map(|(id, _)| id.to_hex())
-                .collect();
-            Ok(missing)
+            let mut missing = Vec::new();
+            let mut redacted = Vec::new();
+            for (id, present) in ids.iter().zip(has) {
+                if tombstoned.contains(id) {
+                    // The tombstone wins over the CAS answer: never an
+                    // invitation to re-upload.
+                    redacted.push(id.to_hex());
+                } else if !present {
+                    missing.push(id.to_hex());
+                }
+            }
+            Ok((missing, redacted))
         })
         .await?;
-    Ok(Json(PresentResponse { missing }))
+    Ok(Json(PresentResponse { missing, redacted }))
 }
 
 /// Raw PUT (writer and above, repo-level): body bytes are hash-verified
@@ -186,10 +207,25 @@ pub async fn put_raw(
 ) -> Result<Response, ApiError> {
     require_role(&auth, Role::Writer)?;
     let id = parse_single_id(&id_hex)?;
-    repo_id_or_404(&state, &repo).await?;
+    let repo_id = repo_id_or_404(&state, &repo).await?;
     verify_addressed(&id, &payload)?;
     if payload.len() > BLOB_LIMIT {
         return Err(too_large(payload.len()));
+    }
+
+    // The tombstone boundary probe (before ANY CAS write): a redacted id
+    // — active or purged — is refused; same content hashes to the same id,
+    // so a re-PUT would resurrect purged content's bytes. The authoritative
+    // check re-runs inside the record step's immediate transaction.
+    {
+        let redacted = state
+            .read(move |conn| {
+                db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)
+            })
+            .await?;
+        if redacted {
+            return Err(object_redacted(&id_hex, &repo));
+        }
     }
 
     let cas = Arc::clone(&state.cas);
@@ -198,13 +234,23 @@ pub async fn put_raw(
         .blocking(move || put_and_size(cas.as_ref(), &id, &payload_owned))
         .await?;
 
-    let existed = record_object(&state, id, payload.len() as i64, csize).await?;
+    let existed = record_object(&state, repo_id, id, payload.len() as i64, csize).await?;
     let status = if existed {
         StatusCode::OK
     } else {
         StatusCode::CREATED
     };
     Ok((status, Json(StoredObjectId { id: id.to_hex() })).into_response())
+}
+
+/// The 410 of the tombstone write boundary (`object_redacted`): a redacted
+/// id is refused at every write that would recreate its content or point
+/// at it.
+fn object_redacted(id_hex: &str, repo: &str) -> ApiError {
+    ApiError::new(
+        ApiCode::ObjectRedacted,
+        format!("object {id_hex} is redacted in {repo:?}; re-upload refused"),
+    )
 }
 
 /// The upload RECORD step — bytes-then-row on both sides of the race with
@@ -225,11 +271,16 @@ pub async fn put_raw(
 /// absent bytes. The per-upload presence check is a hot-path cost (one
 /// backend `has` per PUT inside the slot — a network HEAD on S3); it is
 /// the price of the ordering argument and runs on every upload, not only
-/// when the sweep raced. Returns whether the row already existed. `pub`
-/// for the M10a race pin (the fs and S3 suites drive this step after a
-/// full sweep).
+/// when the sweep raced. The tombstone boundary re-checks in the same
+/// transaction (`repo_id`-scoped, purged tombstones included): a redacted
+/// id answers 410 `object_redacted` and its row is never written — the
+/// authoritative half of put_raw's early probe, closing the probe-to-
+/// record race against a concurrent mark. Returns whether the row already
+/// existed. `pub` for the M10a race pin (the fs and S3 suites drive this
+/// step after a full sweep).
 pub async fn record_object(
     state: &AppState,
+    repo_id: i64,
     id: Id,
     size: i64,
     csize: i64,
@@ -242,6 +293,9 @@ pub async fn record_object(
                 .conn()
                 .transaction_immediate()
                 .map_err(ApiError::log_internal)?;
+            if db::redaction_active(&tx, repo_id, &id).map_err(ApiError::log_internal)? {
+                return Err(object_redacted(&id.to_hex(), "this repo"));
+            }
             if !BlobStore::has(cas.as_ref(), &[id]).map_err(ApiError::log_internal)?[0] {
                 return Err(ApiError::new(
                     ApiCode::BlobSwept,
@@ -287,7 +341,7 @@ pub async fn create_batch(
             format!("objects batch is capped at {BATCH_CAP} entries"),
         ));
     }
-    repo_id_or_404(&state, &repo).await?;
+    let repo_id = repo_id_or_404(&state, &repo).await?;
 
     // Verify every entry first: rejected entries never touch the CAS.
     let mut verified: Vec<(Id, Vec<u8>)> = Vec::with_capacity(entries.len());
@@ -299,6 +353,30 @@ pub async fn create_batch(
                 id: entry.id.clone(),
                 code: code.to_string(),
             }),
+        }
+    }
+
+    // The tombstone boundary probe (before ANY CAS write): a redacted id —
+    // active or purged — is rejected per entry, the batch's other entries
+    // proceed. The authoritative re-check runs in [`record_batch`]'s
+    // transaction.
+    {
+        let ids: Vec<Id> = verified.iter().map(|(id, _)| *id).collect();
+        let tombstoned: std::collections::HashSet<Id> = state
+            .read(move |conn| {
+                db::redactions_active_among(conn, repo_id, &ids).map_err(ApiError::log_internal)
+            })
+            .await?
+            .into_iter()
+            .collect();
+        if !tombstoned.is_empty() {
+            verified.retain(|(id, _)| !tombstoned.contains(id));
+            for id in &tombstoned {
+                rejected.push(RejectedEntry {
+                    id: id.to_hex(),
+                    code: "redacted".to_string(),
+                });
+            }
         }
     }
 
@@ -322,7 +400,7 @@ pub async fn create_batch(
     // …then the rows, in one single-writer transaction — the batch form of
     // [`record_object`]'s contract ([`record_batch`]).
     if !rows.is_empty() {
-        record_batch(&state, rows).await?;
+        record_batch(&state, repo_id, rows).await?;
     }
 
     Ok(Json(BatchPutResponse { stored, rejected }))
@@ -334,9 +412,17 @@ pub async fn create_batch(
 /// and their condemnation-clears commit atomically) — and answer one
 /// retryable 503 `blob_swept` naming the swept ids instead of recording
 /// any of them (the batch is all-or-nothing on the row side, so no entry's
-/// row can name absent bytes; the client re-PUTs the named ids). `pub` for
-/// the M10a race pin.
-pub async fn record_batch(state: &AppState, rows: Vec<(Id, i64, i64)>) -> Result<(), ApiError> {
+/// row can name absent bytes; the client re-PUTs the named ids). The
+/// tombstone boundary re-checks in the same transaction (`repo_id`-scoped,
+/// purged included): any redacted id fails the whole record with 410
+/// `object_redacted` naming them — the authoritative half of the route's
+/// per-entry probe, closing the probe-to-record race against a concurrent
+/// mark. `pub` for the M10a race pin.
+pub async fn record_batch(
+    state: &AppState,
+    repo_id: i64,
+    rows: Vec<(Id, i64, i64)>,
+) -> Result<(), ApiError> {
     let cas = Arc::clone(&state.cas);
     let now_i = state.now_ns() as i64;
     state
@@ -345,11 +431,14 @@ pub async fn record_batch(state: &AppState, rows: Vec<(Id, i64, i64)>) -> Result
                 .conn()
                 .transaction_immediate()
                 .map_err(ApiError::log_internal)?;
-            let present = BlobStore::has(
-                cas.as_ref(),
-                &rows.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
-            )
-            .map_err(ApiError::log_internal)?;
+            let ids: Vec<Id> = rows.iter().map(|(id, _, _)| *id).collect();
+            let redacted =
+                db::redactions_active_among(&tx, repo_id, &ids).map_err(ApiError::log_internal)?;
+            if !redacted.is_empty() {
+                let hexes: Vec<String> = redacted.iter().map(Id::to_hex).collect();
+                return Err(object_redacted(&hexes.join(", "), "this repo"));
+            }
+            let present = BlobStore::has(cas.as_ref(), &ids).map_err(ApiError::log_internal)?;
             let swept: Vec<String> = rows
                 .iter()
                 .zip(&present)

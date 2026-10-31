@@ -1052,3 +1052,99 @@ fn import_enqueues_registered_derive_kinds() {
         2
     );
 }
+
+// ---- 8. the redaction boundary (M10b SD-B1) ---------------------------------
+
+/// An imported blob carries `repo_blobs` membership but NO `objects` row
+/// (the import writes CAS bytes + membership only) — the mark surface must
+/// still accept it as a tombstone target, and a re-import whose tree
+/// carries the redacted blob refuses: the import is a write boundary, and
+/// a tombstone outlives the purge.
+#[test]
+fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
+    if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
+        return;
+    }
+    let mut f = Fixture::new("redact-import");
+    f.write("personal.txt", b"personal-data\n");
+    f.commit("root");
+    let e = Env::new();
+    let report = e.import(&f, "imp", false);
+    assert_eq!(report.imported, 1, "{report:?}");
+    let repo_id = e.repo_id("imp");
+    let conn = e.conn();
+
+    // The SD-B1 premise: membership WITHOUT an objects row.
+    let blob_raw: Vec<u8> = conn
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT blob_id FROM file_changes \
+                 WHERE repo_id = ?1 AND path = 'personal.txt'",
+            ),
+            &naatre_store::pv![repo_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let blob = Id(blob_raw.try_into().unwrap());
+    assert_eq!(
+        e.count(&format!(
+            "SELECT COUNT(*) FROM objects WHERE object_id = x'{}'",
+            blob.to_hex()
+        )),
+        0,
+        "import writes no objects row (the SD blocker's premise)"
+    );
+    assert_eq!(
+        e.count(&format!(
+            "SELECT COUNT(*) FROM repo_blobs WHERE repo_id = {repo_id} \
+             AND object_id = x'{}'",
+            blob.to_hex()
+        )),
+        1,
+        "import writes the membership row"
+    );
+
+    // The mark surface accepts the imported blob (the membership arm), and
+    // an unknown id is still refused.
+    assert!(
+        db::redaction_target_present(&conn, repo_id, &blob, "blob").unwrap(),
+        "an imported blob is a valid tombstone target"
+    );
+    let unknown = Id([0xEE; 32]);
+    assert!(!db::redaction_target_present(&conn, repo_id, &unknown, "blob").unwrap());
+
+    // Mark exactly the way the mark surface does (immediate transaction,
+    // audited).
+    {
+        let tx = conn.transaction_immediate().unwrap();
+        match db::redaction_mark(&tx, repo_id, &blob, "blob", 1_000).unwrap() {
+            db::RedactionMarkOutcome::Inserted(_) => {}
+            other => panic!("expected an insert, got {other:?}"),
+        }
+        db::audit_append(&tx, 1_000, "admin", "redact", "{\"reason\":\"import pin\"}").unwrap();
+        tx.commit().unwrap();
+    }
+
+    // A new commit whose TREE still carries the redacted blob: the
+    // re-import refuses naming the id.
+    f.write("other.txt", b"other\n");
+    f.commit("second");
+    let opts = ImportOptions {
+        git_path: f.path.clone(),
+        into: Some("imp".into()),
+        skip_unsupported: false,
+    };
+    let err = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap_err();
+    match &err {
+        ImportError::Redacted(msg) => {
+            assert!(msg.contains(&blob.to_hex()), "{msg}");
+        }
+        other => panic!("expected the redaction refusal, got {other}"),
+    }
+    // The refused import wrote nothing.
+    assert_eq!(
+        e.count("SELECT COUNT(*) FROM changesets WHERE repo_id = 1"),
+        1
+    );
+}

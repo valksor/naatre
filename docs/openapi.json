@@ -76,7 +76,7 @@
         "type": "object"
       },
       "BatchGetResponse": {
-        "description": "Batch fetch result. Membership-enforced: an id without a\n`repo_blobs(repo, id)` row lands in `missing` even when the CAS holds\nthe file (cross-repo isolation). A missing or unreadable file after a\nmembership hit is also reported in `missing` (logged server-side).\nActively-tombstoned ids land in `redacted` (M10b): the tombstone wins\nover membership, and the bytes never serve.",
+        "description": "Batch fetch result. Membership-enforced: an id without a\n`repo_blobs(repo, id)` row lands in `missing` even when the CAS holds\nthe file (cross-repo isolation). A missing or unreadable file after a\nmembership hit is also reported in `missing` (logged server-side).\nTombstoned ids land in `redacted` (M10b — active or purged: the\ntombstone wins over membership, and the bytes never serve).",
         "properties": {
           "missing": {
             "items": {
@@ -574,14 +574,14 @@
         "description": "One path-level diff entry.",
         "properties": {
           "a_blob": {
-            "description": "Hex blob id on the `a` side; null for adds — and null with\n`redacted: true` when the blob is tombstoned in this repo (M10b's\nstructured degradation: the path-level fact serves, the pointer to\nredacted content does not).",
+            "description": "Hex blob id on the `a` side; null for adds — and null when THIS\nside's blob is tombstoned in this repo (M10b's structured\ndegradation: the path-level fact serves, the pointer to redacted\ncontent does not — masked PER SIDE, never both sides for one\nredacted side).",
             "type": [
               "string",
               "null"
             ]
           },
           "b_blob": {
-            "description": "Hex blob id on the `b` side; null for deletes — and null with\n`redacted: true` when the blob is tombstoned in this repo.",
+            "description": "Hex blob id on the `b` side; null for deletes — and null when THIS\nside's blob is tombstoned in this repo.",
             "type": [
               "string",
               "null"
@@ -595,7 +595,7 @@
             "type": "string"
           },
           "redacted": {
-            "description": "True when either side's blob of this entry is tombstoned in this\nrepo and its pointer is withheld.",
+            "description": "True when either side's blob of this entry is tombstoned in this\nrepo (only that side's pointer is withheld).",
             "type": "boolean"
           }
         },
@@ -986,9 +986,16 @@
         "type": "object"
       },
       "PresentResponse": {
-        "description": "Presence-check result: ids whose object file is absent from the CAS.\nMembership is NOT consulted — `present` answers \"is the content on\ndisk\", not \"may this repo read it\".",
+        "description": "Presence-check result: ids whose object file is absent from the CAS.\nMembership is NOT consulted — `present` answers \"is the content on\ndisk\", not \"may this repo read it\". Tombstoned ids (active or purged)\nare NEVER reported `missing` (the sync re-upload invitation would\nresurrect same-content ids): they are reported in `redacted`, whatever\nthe CAS holds.",
         "properties": {
           "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "redacted": {
+            "description": "Ids redacted in this repo (the tombstone wins over the CAS answer;\nre-uploading them is refused at the PUT boundary).",
             "items": {
               "type": "string"
             },
@@ -996,7 +1003,8 @@
           }
         },
         "required": [
-          "missing"
+          "missing",
+          "redacted"
         ],
         "type": "object"
       },
@@ -1029,7 +1037,7 @@
             "type": "string"
           },
           "marked_ns": {
-            "description": "The tombstone date (ns since the epoch). A re-POST keeps the\nEARLIEST mark.",
+            "description": "The tombstone date (ns since the epoch). An idempotent re-POST\nkeeps the EARLIEST mark; re-arming a purged tombstone moves it to\nthe re-arm's stamp.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -1085,14 +1093,19 @@
         "type": "object"
       },
       "RedactionMarked": {
-        "description": "Mark response (201 on a new tombstone; an idempotent re-POST answers 200\nwith the recorded row — the earliest `marked_ns` stands).",
+        "description": "Mark response (201 on a new tombstone; 200 on an idempotent re-POST —\nthe recorded row, the earliest `marked_ns` stands — or on a RE-ARM of a\npurged tombstone, `rearmed: true`).",
         "properties": {
+          "rearmed": {
+            "description": "True when this call re-armed a PURGED tombstone (new `marked_ns`,\n`purged_ns` cleared, a new `redact` audit row). Never true on the\n201 insert.",
+            "type": "boolean"
+          },
           "redaction": {
             "$ref": "#/components/schemas/RedactionEntry"
           }
         },
         "required": [
-          "redaction"
+          "redaction",
+          "rearmed"
         ],
         "type": "object"
       },
@@ -1440,22 +1453,31 @@
             "type": "string"
           },
           "object_id": {
-            "description": "Blob id for files, child tree id for dirs.",
-            "type": "string"
+            "description": "Blob id for files, child tree id for dirs — null with\n`redacted: true` when the entry's blob is tombstoned in this repo\n(M10b SEC gate: the name serves, the pointer to redacted content,\nits size, and its hash do not).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redacted": {
+            "description": "True when this entry's blob is tombstoned in this repo and its\npointer/size are withheld.",
+            "type": "boolean"
           },
           "size": {
-            "description": "File: content bytes. Dir: recursive total.",
+            "description": "File: content bytes. Dir: recursive total. Null on a redacted\nentry (the size of redacted content does not serve).",
             "format": "int64",
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
           "name",
           "kind",
-          "object_id",
-          "size",
-          "exec"
+          "exec",
+          "redacted"
         ],
         "type": "object"
       },
@@ -1879,6 +1901,9 @@
           "404": {
             "description": "No such repo"
           },
+          "410": {
+            "description": "The changeset id — or a referenced blob — is redacted in this repo (`object_redacted`); recreation is refused"
+          },
           "413": {
             "description": "Canonical encoding exceeds the 16 MiB cap"
           },
@@ -2054,7 +2079,7 @@
             "description": "a or b is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Diffs two changesets' root trees (any authenticated principal): a\nblob/exec difference is a `mod`; the output is sorted by path. Either\nendpoint tombstoned → 410 `object_redacted`; entries whose blob is\ntombstoned serve with `redacted: true` and null blob pointers.",
+        "summary": "Diffs two changesets' root trees (any authenticated principal): a\nblob/exec difference is a `mod`; the output is sorted by path. Either\nendpoint tombstoned → 410 `object_redacted`; an entry whose blob is\ntombstoned serves with `redacted: true`, and only THAT side's blob\npointer nulls (per-side masking).",
         "tags": [
           "routes::history"
         ]
@@ -2531,7 +2556,7 @@
                 }
               }
             },
-            "description": "Ids absent from the CAS"
+            "description": "Ids absent from the CAS; tombstoned ids are reported in `redacted`, never `missing`"
           },
           "400": {
             "description": "An id is not 64 lowercase hex"
@@ -2772,7 +2797,7 @@
                 }
               }
             },
-            "description": "Already tombstoned (idempotent re-POST; the earliest marked_ns stands)"
+            "description": "Already tombstoned (idempotent re-POST; the earliest marked_ns stands), or a purged tombstone re-armed (`rearmed: true`)"
           },
           "201": {
             "content": {
@@ -2797,10 +2822,10 @@
             "description": "No such repo; or the target id is not an object of this repo"
           },
           "422": {
-            "description": "kind is not `blob`/`changeset`, or the reason is empty"
+            "description": "kind is not `blob`/`changeset`, the reason is empty, or the id is already tombstoned with the other kind"
           }
         },
-        "summary": "Marks an object redacted in this repo (admin, audited `redact`: the\nacting admin is the audit row's principal and the reason its details —\nthe tombstone ROW itself carries path + date only, never author). 201\non a new tombstone; an idempotent re-POST answers 200 keeping the\nearliest `marked_ns` (and writes no second audit row). The mark ALSO\ninvalidates the target changeset's derived rows (every `derive_state`\nrow goes to the poison terminal state, so re-derivations propagate the\nhole through the taint machinery) in the same transaction.",
+        "summary": "Marks an object redacted in this repo (admin, audited `redact`: the\nacting admin is the audit row's principal and the reason its details —\nthe tombstone ROW itself carries path + date only, never author). 201\non a new tombstone; an idempotent re-POST answers 200 keeping the\nearliest `marked_ns` (and writes no second audit row); a re-POST on a\nPURGED tombstone re-arms it — 200 `rearmed: true`, a fresh\n`marked_ns`, `purged_ns` cleared, and a NEW `redact` audit row (never\na silent no-op). A re-POST naming the OTHER kind is refused (422). The\nmark ALSO invalidates the target changeset's derived rows (every\n`derive_state` row goes to the poison terminal state, so\nre-derivations propagate the hole through the taint machinery) in the\nsame immediate transaction.",
         "tags": [
           "routes::redactions"
         ]
@@ -2979,7 +3004,7 @@
             "description": "No such repo"
           },
           "410": {
-            "description": "The snap id already exists here and is past its TTL (`snapshot_expired`) — a re-POST never resurrects it"
+            "description": "The snap id already exists here and is past its TTL (`snapshot_expired`) — a re-POST never resurrects it; or a closure blob is redacted in this repo (`object_redacted`, details-free message names the ids)"
           },
           "413": {
             "description": "A canonical tree exceeds the 16 MiB cap"
@@ -3177,6 +3202,9 @@
           "404": {
             "description": "No such repo"
           },
+          "410": {
+            "description": "The blob is redacted in this repo (`object_redacted`); upload refused"
+          },
           "413": {
             "description": "Payload over the 64 MiB blob cap"
           }
@@ -3322,7 +3350,7 @@
                 }
               }
             },
-            "description": "The tree's entries; this repo has membership for it"
+            "description": "The tree's entries; this repo has membership for it. Entries whose blob is redacted in this repo serve with `redacted: true` and null object_id/size"
           },
           "400": {
             "description": "Id is not 64 lowercase hex"
@@ -3334,7 +3362,7 @@
             "description": "No such repo, or no tree membership for this repo"
           }
         },
-        "summary": "Reads one tree node's entries (any authenticated principal with repo\naccess). Tree ids are content-addressed, so identical subtrees share one\nrow across repos; the read is gated on `repo_trees` membership — 200 iff\n*this* repo wrote the tree (directly or as part of its derivation), 404\nfor any repo that never wrote it, even though the id exists elsewhere.\nShared subtrees are readable by every repo that wrote them (see\n`docs/design.md`, honest-scope section).",
+        "summary": "Reads one tree node's entries (any authenticated principal with repo\naccess). Tree ids are content-addressed, so identical subtrees share one\nrow across repos; the read is gated on `repo_trees` membership — 200 iff\n*this* repo wrote the tree (directly or as part of its derivation), 404\nfor any repo that never wrote it, even though the id exists elsewhere.\nShared subtrees are readable by every repo that wrote them (see\n`docs/design.md`, honest-scope section). Entries whose blob is\ntombstoned in this repo — active or purged — serve masked (M10b SEC\ngate, the diff route's per-entry shape: file names/sizes/hashes of\nredacted objects never serve, including via a live root tree).",
         "tags": [
           "routes::trees"
         ]

@@ -821,8 +821,8 @@ async fn derivation_oracle_chain_and_tree_reads() {
     assert_eq!(
         entries,
         json!([
-            { "name": "b.txt", "kind": "file", "object_id": b1, "size": 5, "exec": false },
-            { "name": "c", "kind": "dir", "object_id": entries[1]["object_id"], "size": 4, "exec": false },
+            { "name": "b.txt", "kind": "file", "object_id": b1, "size": 5, "exec": false, "redacted": false },
+            { "name": "c", "kind": "dir", "object_id": entries[1]["object_id"], "size": 4, "exec": false, "redacted": false },
         ])
     );
 

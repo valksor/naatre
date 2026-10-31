@@ -1128,18 +1128,21 @@ async fn purge_is_reference_aware_and_idempotent() {
 }
 
 /// fsck's drift direction: a tombstone stamped purged whose object row
-/// still exists IS drift (fabricated here by hand-stamping, the only way a
-/// correct purge could leave one).
+/// still exists FROM BEFORE the stamp IS drift (fabricated here by
+/// hand-stamping, the only way a correct purge could leave one — a row
+/// whose touch postdates the stamp is a never-redacted repo's legitimate
+/// re-upload, not drift).
 #[tokio::test]
 async fn fsck_reports_purged_but_still_referenced_as_drift() {
     let f = fixture();
     seed_base(&f).await;
     let b_hex = blob_hex(b"live-content-A");
     f.redact("blob", &b_hex, "drift seed").await;
-    // Hand-stamp purged_ns while the objects row still exists.
+    // Hand-stamp purged_ns AFTER the objects row's last touch while the
+    // row still exists (the drift state the temporal arm hunts).
     m4b_common::conn_at(&f.t.db_path)
         .execute(
-            "UPDATE redactions SET purged_ns = 1 WHERE kind = 'blob'",
+            "UPDATE redactions SET purged_ns = 9223372036854775807 WHERE kind = 'blob'",
             [],
         )
         .unwrap();
@@ -1208,13 +1211,37 @@ async fn principal_deletion_pseudonymizes_the_actor_and_keeps_history() {
         0
     );
 
-    // The audit ACTOR is pseudonymized; the deletion is audited.
+    // The audit ACTOR is pseudonymized to an OPAQUE token (never
+    // `deleted:<name>` — the name would survive the erasure); the token is
+    // stable across every row of this deletion (linkage preserved) and
+    // matches the `deleted:<16 hex>` shape; the deletion is audited.
     assert_eq!(
         f.count("SELECT COUNT(*) FROM audit_log WHERE principal = 'alice'"),
         0
     );
+    let pseudonyms: Vec<String> = m4b_common::conn_at(&f.t.db_path)
+        .query_row(
+            "SELECT group_concat(DISTINCT principal) FROM audit_log \
+             WHERE principal LIKE 'deleted:%'",
+            [],
+            |r| {
+                r.get::<_, String>(0)
+                    .map(|s| s.split(',').map(str::to_string).collect())
+            },
+        )
+        .unwrap();
+    assert_eq!(pseudonyms.len(), 1, "one token per deletion event");
+    let pseudo = &pseudonyms[0];
+    let token = pseudo.strip_prefix("deleted:").unwrap();
+    assert_eq!(token.len(), 16, "opaque token shape: {pseudo}");
     assert!(
-        f.count("SELECT COUNT(*) FROM audit_log WHERE principal = 'deleted:alice'") > 0,
+        token.bytes().all(|b| b.is_ascii_hexdigit()),
+        "opaque token is hex, not the name: {pseudo}"
+    );
+    assert!(
+        f.count(&format!(
+            "SELECT COUNT(*) FROM audit_log WHERE principal = '{pseudo}'"
+        )) > 0,
         "the pseudonymized rows carry the actor history"
     );
     assert_eq!(
@@ -1250,4 +1277,658 @@ async fn principal_deletion_pseudonymizes_the_actor_and_keeps_history() {
         .unwrap();
     let res = f.t.app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ---- 6. the tombstone write boundary (the M10b lens blocker) ------------------
+
+/// Redacted content never resurrects: after a full purge, a same-content
+/// re-PUT is 410 (bytes never re-enter the CAS), the batch PUT rejects the
+/// entry, present reports the id `redacted` (never `missing` — no
+/// re-upload invitation), a changeset referencing the blob is refused, the
+/// identical purged changeset id cannot be recreated, a re-mark on the
+/// purged tombstone RE-ARMS it with a new audit row, and a kind-mismatch
+/// re-mark is refused. While a tombstone is ACTIVE the same refusals hold
+/// (QA C4).
+#[tokio::test]
+async fn redacted_content_never_resurrects_and_remark_rearms() {
+    let f = fixture();
+    let root = seed_base(&f).await;
+
+    // An orphan changeset + its blob, both tombstoned, purged to the end.
+    let secret = b"resurrect-me".to_vec();
+    let secret_hex = blob_hex(&secret);
+    let orphan = f.commit(json!([root.clone()]), "s.txt", &secret).await;
+    f.redact("changeset", &orphan, "orphan takedown").await;
+    f.redact("blob", &secret_hex, "same content").await;
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(report.redactions_purged_cs, 1, "{report:?}");
+    f.tick_to(BASE_NS + 31 * 24 * 3600 * 1_000_000_000);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(report.redactions_purged_blobs, 1, "{report:?}");
+    assert_eq!(
+        f.t.state.cas.has(&[blob_id(&secret)]).unwrap(),
+        vec![false],
+        "the purge reclaimed the bytes"
+    );
+
+    // Raw re-PUT of the purged content: 410, and the bytes stay gone.
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/repos/{REPO}/objects/{secret_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", f.writer),
+        )
+        .body(axum::body::Body::from(secret.clone()))
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::GONE,);
+    assert_eq!(
+        f.t.state.cas.has(&[blob_id(&secret)]).unwrap(),
+        vec![false],
+        "the refused re-PUT wrote no bytes"
+    );
+
+    // An ACTIVE tombstone refuses the re-PUT the same way (QA C4).
+    let live_hex = blob_hex(b"live-content-A");
+    f.redact("blob", &live_hex, "active tombstone").await;
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/repos/{REPO}/objects/{live_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", f.writer),
+        )
+        .body(axum::body::Body::from(b"live-content-A".to_vec()))
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::GONE);
+
+    // present: tombstoned ids are `redacted`, NEVER `missing` (the purged
+    // id's bytes are gone — without the gate it would be invited back).
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/objects/present"),
+        &f.writer,
+        &json!({ "ids": [secret_hex, live_hex] }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["missing"], json!([]), "{}", resp.body);
+    assert_eq!(
+        resp.body["redacted"],
+        json!([secret_hex, live_hex]),
+        "{}",
+        resp.body
+    );
+
+    // Batch PUT: the tombstoned entry is rejected per entry.
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/objects"),
+        &f.writer,
+        &json!({ "objects": [ { "id": secret_hex, "data_b64": STANDARD.encode(&secret) } ] }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["stored"], json!([]), "{}", resp.body);
+    assert_eq!(
+        resp.body["rejected"][0]["code"],
+        json!("redacted"),
+        "{}",
+        resp.body
+    );
+
+    // A changeset referencing the tombstoned blob: refused at create.
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &f.writer,
+        &cs_body(
+            json!([root.clone()]),
+            json!([m4b_common::add("s.txt", &secret_hex, secret.len())]),
+            "reference the redacted blob",
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::GONE, "{}", resp.body);
+    assert_eq!(resp.body["error"]["code"], "object_redacted");
+
+    // The identical purged changeset id cannot be recreated (same parents +
+    // same content hash to the same id).
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &f.writer,
+        &cs_body(
+            json!([root.clone()]),
+            json!([m4b_common::add("s.txt", &secret_hex, secret.len())]),
+            "commit",
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::GONE, "{}", resp.body);
+    assert_eq!(resp.body["error"]["code"], "object_redacted");
+
+    // Re-mark the purged blob tombstone: 200 `rearmed`, fresh marked_ns,
+    // purged cleared, and a NEW audit row (never a silent no-op).
+    let audits_before = f.count("SELECT COUNT(*) FROM audit_log WHERE action = 'redact'");
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/redactions"),
+        &f.admin,
+        &json!({ "id": secret_hex, "kind": "blob", "reason": "re-arm after purge" }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["rearmed"], true, "{}", resp.body);
+    assert_eq!(resp.body["redaction"]["purged_ns"], Value::Null);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM audit_log WHERE action = 'redact'"),
+        audits_before + 1,
+        "the re-arm rows its own audit entry"
+    );
+    assert_eq!(
+        f.count_params(
+            "SELECT COUNT(*) FROM redactions WHERE object_id = ?1 AND purged_ns IS NULL",
+            &[&blob_id(&secret).0.as_slice()]
+        ),
+        1,
+        "the re-armed tombstone stands active"
+    );
+
+    // A kind-mismatch re-mark is refused (the row stands as a blob).
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/redactions"),
+        &f.admin,
+        &json!({ "id": secret_hex, "kind": "changeset", "reason": "wrong kind" }),
+    )
+    .await;
+    assert_eq!(
+        resp.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        resp.body
+    );
+
+    // The re-armed tombstone re-enters the purge work list and re-purges
+    // (nothing left to reclaim — the stamp converges), and fsck stays clean.
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(report.redactions_purged_blobs, 1, "{report:?}");
+    let fs = fsck::fsck(&f.t.state).await.unwrap();
+    assert!(fs.clean(), "{fs:?}");
+}
+
+/// The mark's check-then-insert is ATOMIC (the M10b closure advisory): two
+/// CONCURRENT POSTs racing the same fresh id yield exactly one 201, ONE
+/// tombstone row, and ONE audit row — never a duplicate, never a
+/// unique-violation 500. The loser either reached the freed write slot and
+/// stood idempotent (200) or hit the busy slot's retryable `writer_busy`
+/// (503, the designed contention answer); the statement-level conflict
+/// clause ([`Sql::ignore`] in `redaction_mark`) closes the probe-to-insert
+/// race for any caller outside the slot regardless.
+#[tokio::test]
+async fn concurrent_marks_yield_one_row_and_one_audit() {
+    let f = fixture();
+    let _root = seed_base(&f).await;
+    let content = b"concurrent-mark-target".to_vec();
+    let hex = m4b_common::put_blob_on(&f.t.app, &f.writer, &content).await;
+
+    let mark = |hex: String, admin: String| {
+        let app = f.t.app.clone();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/v1/repos/{REPO}/redactions"))
+                .header(axum::http::header::AUTHORIZATION, format!("Bearer {admin}"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    json!({ "id": hex, "kind": "blob", "reason": "race" }).to_string(),
+                ))
+                .unwrap();
+            app.oneshot(req).await.expect("in-memory request").status()
+        }
+    };
+    let (a, b) = tokio::join!(
+        mark(hex.clone(), f.admin.clone()),
+        mark(hex.clone(), f.admin.clone())
+    );
+    let statuses = [a, b];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::CREATED)
+            .count(),
+        1,
+        "exactly one mark inserts: {statuses:?}"
+    );
+    for s in statuses {
+        assert!(
+            [
+                StatusCode::CREATED,
+                StatusCode::OK,
+                StatusCode::SERVICE_UNAVAILABLE
+            ]
+            .contains(&s),
+            "each mark inserts, stands idempotent, or retries busy: {statuses:?}"
+        );
+    }
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM redactions"),
+        1,
+        "exactly one tombstone row"
+    );
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM audit_log WHERE action = 'redact'"),
+        1,
+        "the audit row rides the 0→1 transition only"
+    );
+}
+
+/// `/trees/{id}` masks a redacted entry (M10b SEC gate): the file name
+/// serves, the blob pointer, size, and hash do not — including via a live
+/// landed root tree. The untouched sibling subtree serves intact.
+#[tokio::test]
+async fn trees_route_masks_redacted_entries() {
+    let f = fixture();
+    let root = seed_base(&f).await;
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/changesets/{root}/root"))
+        .await;
+    let root_tree = resp.body["root_tree_id"].as_str().unwrap().to_string();
+
+    f.redact("blob", &blob_hex(b"live-content-A"), "mask in trees")
+        .await;
+
+    // The live root tree: a.txt masked, dir intact.
+    let resp = f.get(&format!("/v1/repos/{REPO}/trees/{root_tree}")).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let entries = resp.body["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{}", resp.body);
+    let a = entries
+        .iter()
+        .find(|e| e["name"] == "a.txt")
+        .expect("a.txt entry");
+    assert_eq!(a["object_id"], Value::Null, "{}", resp.body);
+    assert_eq!(a["size"], Value::Null, "{}", resp.body);
+    assert_eq!(a["redacted"], true);
+    let dir = entries
+        .iter()
+        .find(|e| e["name"] == "dir")
+        .expect("dir entry");
+    assert_eq!(dir["redacted"], false);
+    let dir_id = dir["object_id"].as_str().unwrap().to_string();
+
+    // The subtree below it never carried the redacted blob: intact.
+    let resp = f.get(&format!("/v1/repos/{REPO}/trees/{dir_id}")).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let x = &resp.body["entries"].as_array().unwrap()[0];
+    assert_eq!(x["name"], "x.txt");
+    assert_eq!(x["redacted"], false);
+    assert!(x["object_id"].is_string(), "{}", resp.body);
+    assert!(x["size"].is_u64(), "{}", resp.body);
+}
+
+/// The diff masks PER SIDE (the published per-field contract): a redacted
+/// `a`-side blob nulls `a_blob` only; the `b` side keeps serving its
+/// pointer. Both sides redacted → both null, one `redacted` flag.
+#[tokio::test]
+async fn diff_masks_only_the_redacted_side() {
+    let f = fixture();
+    let root = seed_base(&f).await;
+    let v1 = blob_hex(b"live-content-A");
+    let v2_content = b"second-version".to_vec();
+    let v2 = blob_hex(&v2_content);
+    let c2 = f.commit(json!([root.clone()]), "a.txt", &v2_content).await;
+
+    // No tombstone: both pointers serve, not redacted.
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/diff?a={root}&b={c2}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let e = &resp.body["changes"].as_array().unwrap()[0];
+    assert_eq!(e["a_blob"], json!(v1));
+    assert_eq!(e["b_blob"], json!(v2));
+    assert_eq!(e["redacted"], false);
+
+    // Redact the a-side only: a_blob nulls, b_blob serves.
+    f.redact("blob", &v1, "a-side takedown").await;
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/diff?a={root}&b={c2}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let e = &resp.body["changes"].as_array().unwrap()[0];
+    assert_eq!(e["a_blob"], Value::Null, "{}", resp.body);
+    assert_eq!(e["b_blob"], json!(v2), "{}", resp.body);
+    assert_eq!(e["redacted"], true);
+
+    // Redact the b-side too: both pointers withheld.
+    f.redact("blob", &v2, "b-side takedown").await;
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/diff?a={root}&b={c2}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let e = &resp.body["changes"].as_array().unwrap()[0];
+    assert_eq!(e["a_blob"], Value::Null);
+    assert_eq!(e["b_blob"], Value::Null);
+    assert_eq!(e["redacted"], true);
+}
+
+/// Cross-repo purge refcount, gc_pass DRIVEN (QA C1): a blob tombstoned in
+/// repo A stays while repo B still references it (B serves byte-identically,
+/// the CAS keeps the bytes, no stamp); once every repo's references are
+/// gone the purge reclaims it — the exclusive-blob arm stamps the
+/// self-tombstoned blob in the SAME pass, counted in the blob unit. The
+/// write boundary is PER-REPO (the pinned decision): B re-PUTs the shared
+/// content while A's tombstone stands ACTIVE, and a repo that never
+/// tombstoned the id re-PUTs it after the purge reclaimed the bytes — while
+/// A keeps refusing both the PUT and the GET, its purged tombstone gating.
+#[tokio::test]
+async fn cross_repo_purge_needs_every_reference_gone() {
+    let f = fixture();
+    let _root = seed_base(&f).await;
+    m4b_common::seed_repo_at(&f.t.db_path, "other");
+    let other_token = m4b_common::seed_token_at(&f.t.db_path, "other-p", "writer", None);
+    let shared = b"cross-repo-shared".to_vec();
+    let shared_hex = blob_hex(&shared);
+    let _ = m4b_common::put_blob_on(&f.t.app, &other_token, &shared).await;
+    let _ = m4b_common::put_blob_on(&f.t.app, &f.writer, &shared).await;
+    // Repo A: an unlanded orphan carrying the shared blob.
+    let a_orphan = f.commit(json!([]), "s.txt", &shared).await;
+    // Repo B: a root commit carrying the same bytes.
+    let resp = post_json_on(
+        &f.t.app,
+        "/v1/repos/other/changesets",
+        &other_token,
+        &cs_body(
+            json!([]),
+            json!([m4b_common::add("s.txt", &shared_hex, shared.len())]),
+            "root",
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let b_root = resp.body["id"].as_str().unwrap().to_string();
+
+    // Redact in A only (the changeset AND the blob).
+    f.redact("changeset", &a_orphan, "a-side takedown").await;
+    f.redact("blob", &shared_hex, "a-side takedown").await;
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert_eq!(report.redactions_purged_cs, 1, "{report:?}");
+    assert_eq!(
+        report.redactions_purged_blobs, 0,
+        "repo B still references the blob: {report:?}"
+    );
+    let stamp: Option<i64> = m4b_common::conn_at(&f.t.db_path)
+        .query_row(
+            "SELECT purged_ns FROM redactions WHERE kind = 'blob' AND object_id = ?1",
+            [&blob_id(&shared).0[..]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(stamp.is_none(), "the blob tombstone stays active");
+    assert_eq!(
+        f.t.state.cas.has(&[blob_id(&shared)]).unwrap(),
+        vec![true],
+        "the bytes stay for repo B"
+    );
+    // Repo B's reads keep working.
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/v1/repos/other/objects/{shared_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {other_token}"),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // The write boundary is PER-REPO: A's ACTIVE blob tombstone does not
+    // bind B — B (no tombstone of its own) re-PUTs the same content and it
+    // succeeds, never a 410.
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/repos/other/objects/{shared_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {other_token}"),
+        )
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .body(axum::body::Body::from(shared.clone()))
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert!(
+        res.status().is_success(),
+        "B's re-PUT is not bound by A's tombstone: {}",
+        res.status()
+    );
+
+    // Redact in B too — B's tombstones go through B's own admin surface
+    // (the gate is repo-scoped) — then drive the purge past the upload
+    // grace (the dying tree's collection may hold the blob one pass — the
+    // same never-dangling lag the single-repo purge pin documents).
+    for (kind, id) in [("changeset", b_root.clone()), ("blob", shared_hex.clone())] {
+        let resp = post_json_on(
+            &f.t.app,
+            "/v1/repos/other/redactions",
+            &f.admin,
+            &json!({ "id": id, "kind": kind, "reason": "b-side takedown" }),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    }
+    let mut blob_purged_total = 0;
+    for _ in 0..4 {
+        f.tick_to(f.t.clock.load(Ordering::Relaxed) + 31 * 24 * 3600 * 1_000_000_000);
+        let report = gc_pass(&f.t.state).await.unwrap();
+        blob_purged_total += report.redactions_purged_blobs;
+        if blob_purged_total >= 1 {
+            break;
+        }
+    }
+    assert_eq!(
+        blob_purged_total, 1,
+        "the blob reclaims exactly once, in the BLOB unit"
+    );
+    assert_eq!(
+        f.t.state.cas.has(&[blob_id(&shared)]).unwrap(),
+        vec![false],
+        "the bytes are reclaimed"
+    );
+    // Repo B's read of the purged id: 410 (the gate covers purged rows).
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/v1/repos/other/objects/{shared_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {other_token}"),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::GONE);
+
+    // A repo that NEVER tombstoned the id re-PUTs the purged content (the
+    // per-repo boundary again, now against PURGED tombstones): repo C's PUT
+    // succeeds and the bytes serve there — while A still refuses both the
+    // PUT and the GET, and A's present reports the id redacted, never
+    // missing.
+    m4b_common::seed_repo_at(&f.t.db_path, "third");
+    let third_token = m4b_common::seed_token_at(&f.t.db_path, "third-p", "writer", None);
+    let req = axum::http::Request::builder()
+        .method("PUT")
+        .uri(format!("/v1/repos/third/objects/{shared_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {third_token}"),
+        )
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .body(axum::body::Body::from(shared.clone()))
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::CREATED,
+        "C's re-PUT of purged content succeeds: {}",
+        res.status()
+    );
+    // C even builds history on it — the changeset boundary is per-repo too:
+    // a root commit carrying the reclaimed content is CREATED in C.
+    let resp = post_json_on(
+        &f.t.app,
+        "/v1/repos/third/changesets",
+        &third_token,
+        &cs_body(
+            json!([]),
+            json!([m4b_common::add("s.txt", &shared_hex, shared.len())]),
+            "root",
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::CREATED, "{}", resp.body);
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/v1/repos/third/objects/{shared_hex}"))
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {third_token}"),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = f.t.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "C serves the bytes");
+    for (repo, token, status) in [
+        (REPO, f.writer.as_str(), StatusCode::GONE),
+        ("other", other_token.as_str(), StatusCode::GONE),
+    ] {
+        let req = axum::http::Request::builder()
+            .method("PUT")
+            .uri(format!("/v1/repos/{repo}/objects/{shared_hex}"))
+            .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+            .body(axum::body::Body::from(shared.clone()))
+            .unwrap();
+        let res = f.t.app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), status, "{repo}'s re-PUT stays refused");
+    }
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/objects/present"),
+        &f.writer,
+        &json!({ "ids": [shared_hex] }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["missing"], json!([]), "{}", resp.body);
+    assert_eq!(resp.body["redacted"], json!([shared_hex]), "{}", resp.body);
+    let resp = post_json_on(
+        &f.t.app,
+        "/v1/repos/third/objects/present",
+        &third_token,
+        &json!({ "ids": [shared_hex] }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["missing"], json!([]), "{}", resp.body);
+    assert_eq!(resp.body["redacted"], json!([]), "{}", resp.body);
+
+    // fsck stays clean over the whole cross-repo flow: C's post-purge
+    // objects row (touched AFTER the stamp) is a legitimate re-upload, not
+    // purge drift.
+    let fs = fsck::fsck(&f.t.state).await.unwrap();
+    assert!(fs.clean(), "{fs:?}");
+}
+
+/// /log cursor resume past a since-redacted node (QA C2): a stale cursor
+/// naming a since-redacted id resumes at its parent; a valid cursor skips
+/// an inner node redacted after the page was served. No hole is presented
+/// as history.
+#[tokio::test]
+async fn log_cursor_resumes_past_a_since_redacted_node() {
+    let f = fixture();
+    let root = seed_base(&f).await;
+    let c2 = f.commit(json!([root.clone()]), "b.txt", b"second").await;
+    let c3 = f.commit(json!([c2.clone()]), "c.txt", b"third").await;
+
+    // Page 1 from the tip, one entry: [c3], cursor after:c3.
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/log?from={c3}&limit=1"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let ids: Vec<&str> = resp.body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![c3.as_str()]);
+    let cursor = resp.body["next_cursor"].as_str().unwrap().to_string();
+
+    // The inner node goes redacted AFTER the page was served.
+    f.redact("changeset", &c2, "inner takedown").await;
+
+    // Resuming the valid cursor skips the since-redacted node: [root].
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/log?cursor={cursor}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let ids: Vec<&str> = resp.body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![root.as_str()], "{}", resp.body);
+
+    // A STALE cursor naming the since-redacted id itself resumes cleanly
+    // at that node's parent (it was a served entry once).
+    let stale = format!("after%3A{c2}");
+    let resp = f.get(&format!("/v1/repos/{REPO}/log?cursor={stale}")).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let ids: Vec<&str> = resp.body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![root.as_str()], "{}", resp.body);
+}
+
+/// path_history_scan's anti-join drops a tombstoned node with the
+/// tombstone PRESENT (QA C3): with the derived kind unregistered the scan
+/// answers the page, and the tombstoned touch never serves.
+#[tokio::test]
+async fn path_history_scan_drops_the_tombstoned_node() {
+    let f = fixture();
+    let root = seed_base(&f).await;
+    let c2 = f.commit(json!([root.clone()]), "a.txt", b"v2").await;
+    let c3 = f.commit(json!([c2.clone()]), "a.txt", b"v3").await;
+
+    // Unregister the derived kind: the scan fallback answers ?path=.
+    m4b_common::conn_at(&f.t.db_path)
+        .execute("DELETE FROM derive_kinds WHERE name = 'path_history'", [])
+        .unwrap();
+
+    f.redact("changeset", &c2, "scan pin takedown").await;
+
+    let resp = f
+        .get(&format!("/v1/repos/{REPO}/log?path={}", urlencode("a.txt")))
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let ids: Vec<&str> = resp.body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![c3.as_str(), root.as_str()],
+        "the scan drops the tombstoned touch: {}",
+        resp.body
+    );
+    assert_eq!(resp.body["degraded"], false, "{}", resp.body);
 }

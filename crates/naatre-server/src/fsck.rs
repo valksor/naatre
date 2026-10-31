@@ -21,8 +21,13 @@
 //! Redaction consistency (M10b): tombstoned-but-unpurged is a NORMAL state
 //! (counted, never drift — the gates stopped serving at mark time and the
 //! redaction phase reclaims later); PURGED-but-still-referenced (a
-//! tombstone stamped purged whose changeset/objects row still exists) IS
-//! drift — the purge claimed the space but a reference survived.
+//! tombstone stamped purged whose object row still exists FROM BEFORE the
+//! stamp) IS drift — the purge claimed the space but a reference survived.
+//! A fresh `objects` row for a purged blob id (`touched_ns` at or after
+//! the stamp) is NOT drift: the write boundary is per-repo, so a repo that
+//! never tombstoned the content legitimately re-uploads it after another
+//! repo's purge (a changeset row needs no such arm — changeset ids hash
+//! the repo id and cannot be recreated elsewhere).
 //!
 //! Exit contract (the CLI's pinned codes): 0 clean, 1 findings.
 
@@ -99,10 +104,13 @@ pub struct FsckReport {
     pub redactions_active: usize,
     /// Tombstones whose purge completed (`purged_ns` stamped).
     pub redactions_purged: usize,
-    /// DRIFT: tombstones stamped purged whose object row STILL exists (a
-    /// changeset row for kind `changeset`, an `objects` row for kind
-    /// `blob`) — the purge claimed the space but a reference survived, the
-    /// purge-side violation of the never-dangling invariant.
+    /// DRIFT: tombstones stamped purged whose object row STILL exists from
+    /// before the stamp (a changeset row for kind `changeset`; an `objects`
+    /// row for kind `blob` whose `touched_ns` predates the stamp) — the
+    /// purge claimed the space but a reference survived, the purge-side
+    /// violation of the never-dangling invariant. An `objects` row touched
+    /// at or after the stamp is NOT drift: a repo that never tombstoned the
+    /// content re-uploads it legitimately (the write boundary is per-repo).
     pub redaction_purge_drift: usize,
     /// Set when `blob_backend` is "s3": the external-drift note.
     pub external_drift: Option<&'static str>,

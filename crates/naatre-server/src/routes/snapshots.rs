@@ -133,7 +133,7 @@ pub struct SnapshotBlobStored {
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the writer role, or a file path in the posted closure is outside the token's path scope (details.path names the first offender)"),
         (status = 404, description = "No such repo"),
-        (status = 410, description = "The snap id already exists here and is past its TTL (`snapshot_expired`) — a re-POST never resurrects it"),
+        (status = 410, description = "The snap id already exists here and is past its TTL (`snapshot_expired`) — a re-POST never resurrects it; or a closure blob is redacted in this repo (`object_redacted`, details-free message names the ids)"),
         (status = 413, description = "A canonical tree exceeds the 16 MiB cap"),
         (status = 422, description = "ttl_secs below 60 or above the 366-day cap; tree closure incomplete; the closure references more than 8192 distinct blobs (details.limit); ttl_secs differs from an existing snapshot's recorded TTL (details.recorded_expires_ns); or referenced blobs missing from ephemeral/<snap-id>/ (details.missing_blobs, capped at 256 with details.missing_blobs_truncated)")
     )
@@ -269,6 +269,22 @@ pub async fn create(
             // snapshot row commit together or not at all (the plan's "no
             // row" for rejected POSTs covers the tree rows too).
             let tx = conn.transaction().map_err(ApiError::log_internal)?;
+            // The tombstone boundary (inside the write slot): a closure
+            // blob tombstoned in this repo — active or purged — refuses
+            // the snapshot (the tree entries would carry the redacted
+            // blob's name, size, and hash).
+            let redacted = db::redactions_active_among(&tx, repo_id, &blobs)
+                .map_err(ApiError::log_internal)?;
+            if !redacted.is_empty() {
+                let hexes: Vec<String> = redacted.iter().map(Id::to_hex).collect();
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!(
+                        "blobs are redacted in this repo; snapshots may not reference them: {}",
+                        hexes.join(", ")
+                    ),
+                ));
+            }
             let writes: Vec<TreeWrite> = trees
                 .iter()
                 .map(|(id, (canonical, tree))| TreeWrite {
@@ -518,19 +534,34 @@ pub async fn get_snapshot_tree(
 
     // Closure membership first (404 before any entries are served): only
     // the snapshot root itself and the trees reachable from it over dir
-    // entries qualify.
+    // entries qualify. Entries whose blob is tombstoned in this repo mask
+    // exactly as the repo tree route does — the plan's universal gate
+    // covers every serving path, owner-scoped ones included.
     let root = Id(row.tree_id.try_into().expect("tree id is 32 bytes"));
     let rows = state
         .read(move |conn| {
             if !db::tree_in_closure(conn, &root, &tree_id).map_err(ApiError::log_internal)? {
                 return Ok(None);
             }
-            db::tree_entries_load(conn, &tree_id)
-                .map_err(ApiError::log_internal)
-                .map(Some)
+            let rows = db::tree_entries_load(conn, &tree_id).map_err(ApiError::log_internal)?;
+            let gated: std::collections::HashSet<Id> = db::redactions_active_among(
+                conn,
+                repo_id,
+                &rows
+                    .iter()
+                    .filter_map(|e| {
+                        let arr: [u8; 32] = e.object_id.clone().try_into().ok()?;
+                        Some(Id(arr))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(ApiError::log_internal)?
+            .into_iter()
+            .collect();
+            Ok::<_, ApiError>(Some((rows, gated)))
         })
         .await?;
-    let Some(rows) = rows else {
+    let Some((rows, gated)) = rows else {
         return Err(ApiError::new(
             ApiCode::NotFound,
             format!(
@@ -543,15 +574,20 @@ pub async fn get_snapshot_tree(
     Ok(Json(crate::routes::trees::TreeResponse {
         entries: rows
             .into_iter()
-            .map(|e| crate::routes::trees::TreeEntryOut {
-                name: e.name,
-                kind: match e.kind {
-                    0 => "file".into(),
-                    _ => "dir".into(),
-                },
-                object_id: Id(e.object_id.try_into().expect("object id is 32 bytes")).to_hex(),
-                size: e.size as u64,
-                exec: e.exec,
+            .map(|e| {
+                let object = Id(e.object_id.try_into().expect("object id is 32 bytes"));
+                let redacted = gated.contains(&object);
+                crate::routes::trees::TreeEntryOut {
+                    name: e.name,
+                    kind: match e.kind {
+                        0 => "file".into(),
+                        _ => "dir".into(),
+                    },
+                    object_id: (!redacted).then(|| object.to_hex()),
+                    size: (!redacted).then_some(e.size as u64),
+                    exec: e.exec,
+                    redacted,
+                }
             })
             .collect(),
     }))
@@ -582,6 +618,7 @@ pub async fn get_snapshot_tree(
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the writer role"),
         (status = 404, description = "No such repo"),
+        (status = 410, description = "The blob is redacted in this repo (`object_redacted`); upload refused"),
         (status = 413, description = "Payload over the 64 MiB blob cap")
     )
 )]
@@ -594,7 +631,7 @@ pub async fn put_blob(
     require_role(&auth, Role::Writer)?;
     let snap_id = parse_id(&id_hex)?;
     let oid = parse_id(&oid_hex)?;
-    repo_id_or_404(&state, &repo).await?;
+    let repo_id = repo_id_or_404(&state, &repo).await?;
     if object_id(naatre_core::ids::Kind::Blob, &payload) != oid {
         return Err(ApiError::new(
             ApiCode::Malformed,
@@ -609,6 +646,27 @@ pub async fn put_blob(
                 payload.len()
             ),
         ));
+    }
+
+    // The tombstone boundary (before ANY ephemeral write): a redacted id —
+    // active or purged — is refused; same content hashes to the same id,
+    // and the snapshot blob fetch gates on the same tombstone, so storing
+    // the bytes would only invite the 410.
+    {
+        let redacted = state
+            .read(move |conn| {
+                db::redaction_active(conn, repo_id, &oid).map_err(ApiError::log_internal)
+            })
+            .await?;
+        if redacted {
+            return Err(ApiError::new(
+                ApiCode::ObjectRedacted,
+                format!(
+                    "blob {} is redacted in {repo}; upload refused",
+                    oid.to_hex()
+                ),
+            ));
+        }
     }
 
     let ephemeral = Arc::clone(&state.ephemeral);

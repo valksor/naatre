@@ -283,6 +283,21 @@ async fn crash_points_converge_on_rerun() {
             collected.stderr
         );
 
+        // The redact_purge AUDIT row commits INSIDE the purging batch's
+        // transaction (the gc-audit pattern, the M10b closure advisory): a
+        // crash mid-batch rolls the row back WITH the work it reports — the
+        // crashed child can never leave an audit row behind, whatever the
+        // point (mid_cs_purge dies before any batch; mid_blob_purge dies
+        // inside the batch transaction that carries the row).
+        assert_eq!(
+            count_at_dir(
+                &dir,
+                "SELECT COUNT(*) FROM audit_log WHERE action = 'redact_purge'"
+            ),
+            0,
+            "crash point {point}: no audit row survives a crashed batch"
+        );
+
         // The parent reopens and converges, advancing the clock between
         // passes (the orphan blob's dying tree needs the grace window).
         let a = attach(&dir);
@@ -302,6 +317,37 @@ async fn crash_points_converge_on_rerun() {
         assert_eq!(
             lone_purges, 2,
             "crash point {point}: each tombstoned blob purges exactly once"
+        );
+
+        // The converged audit trail covers the blob reclaims the rows
+        // promise: every completed purging pass committed its row WITH its
+        // batch, so the summed `blobs` details equal the two reclaims
+        // exactly — no phantom row for a rolled-back batch, no lost count
+        // for a converged one. (A changeset purged by a batch whose pass
+        // crashed before the loop-ending row is the documented crash-loss
+        // caveat — audited only when the surviving pass purged it.)
+        let details_rows: Vec<String> = m4b_common::conn_at(&a.db_path)
+            .prepare(
+                "SELECT details_json FROM audit_log \
+                 WHERE action = 'redact_purge' ORDER BY id ASC",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            !details_rows.is_empty(),
+            "crash point {point}: the converged passes row their purges"
+        );
+        let mut audited_blobs = 0i64;
+        for details in &details_rows {
+            let v: Value = serde_json::from_str(details).unwrap();
+            audited_blobs += v["blobs"].as_i64().unwrap_or(0);
+        }
+        assert_eq!(
+            audited_blobs, 2,
+            "crash point {point}: the audit rows sum to the actual blob reclaims"
         );
 
         // Converged state: the tombstoned changeset is fully purged, and

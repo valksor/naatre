@@ -359,8 +359,11 @@ pub fn gc(data: &Path, json: bool) -> i32 {
 /// admin verb under the data dir flock). The mark, the tombstoned
 /// changeset's derived-row invalidation, and the `redact` audit row (actor
 /// `admin`, reason in its details — the tombstone ROW carries path + date
-/// only) commit in one transaction; the GC's redaction phase reclaims the
-/// bytes/rows later. Remote administration goes through
+/// only) commit in one immediate transaction; the GC's redaction phase
+/// reclaims the bytes/rows later. An idempotent re-mark stands pat; a
+/// re-mark on a PURGED tombstone re-arms it (new marked_ns, purged state
+/// cleared, a new audit row); a re-mark naming the other kind is refused.
+/// Remote administration goes through
 /// `POST /v1/repos/{r}/redactions` (the same statement layer). Exit 0
 /// marked, 1 error.
 pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -> i32 {
@@ -395,21 +398,14 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
                 }
             })
             .await?;
-        // The target must be a real object (same contract as the route: a
-        // changeset of THIS repo, or a blob whose content the server holds
-        // — the gate stays repo-scoped either way).
-        let is_blob = kind == "blob";
+        // The target must be a real object of this repo, or an already-
+        // tombstoned id (the re-arm target) — the route's contract, the
+        // import-aware presence arms included.
+        let kind_for_probe = kind.clone();
         let exists = state
             .read(move |conn| {
-                if is_blob {
-                    db::objects_missing(conn, &[id])
-                        .map(|missing| missing.is_empty())
-                        .map_err(ApiError::log_internal)
-                } else {
-                    db::changeset_get(conn, repo_id, &id)
-                        .map(|row| row.is_some())
-                        .map_err(ApiError::log_internal)
-                }
+                db::redaction_target_present(conn, repo_id, &id, &kind_for_probe)
+                    .map_err(ApiError::log_internal)
             })
             .await?;
         if !exists {
@@ -422,46 +418,91 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
         let marked = state
             .write(move |store| {
                 let conn = store.conn();
-                let tx = conn.transaction().map_err(ApiError::log_internal)?;
-                let (row, inserted) = db::redaction_mark(&tx, repo_id, &id, &kind, now_ns)
+                // Immediate: the same destructive-write lock class as the
+                // route's mark.
+                let tx = conn
+                    .transaction_immediate()
                     .map_err(ApiError::log_internal)?;
-                if inserted {
-                    db::redaction_invalidate_derived(&tx, repo_id, &id)
+                let outcome = db::redaction_mark(&tx, repo_id, &id, &kind, now_ns)
+                    .map_err(ApiError::log_internal)?;
+                match &outcome {
+                    db::RedactionMarkOutcome::Inserted(_) => {
+                        db::redaction_invalidate_derived(&tx, repo_id, &id)
+                            .map_err(ApiError::log_internal)?;
+                        db::audit_append(
+                            &tx,
+                            now_ns,
+                            "admin",
+                            "redact",
+                            &serde_json::json!({
+                                "repo": repo,
+                                "id": id.to_hex(),
+                                "kind": kind,
+                                "reason": reason,
+                            })
+                            .to_string(),
+                        )
                         .map_err(ApiError::log_internal)?;
-                    db::audit_append(
-                        &tx,
-                        now_ns,
-                        "admin",
-                        "redact",
-                        &serde_json::json!({
-                            "repo": repo,
-                            "id": id.to_hex(),
-                            "kind": kind,
-                            "reason": reason,
-                        })
-                        .to_string(),
-                    )
-                    .map_err(ApiError::log_internal)?;
+                    }
+                    db::RedactionMarkOutcome::Rearmed(_) => {
+                        db::audit_append(
+                            &tx,
+                            now_ns,
+                            "admin",
+                            "redact",
+                            &serde_json::json!({
+                                "repo": repo,
+                                "id": id.to_hex(),
+                                "kind": kind,
+                                "reason": reason,
+                                "rearmed": true,
+                            })
+                            .to_string(),
+                        )
+                        .map_err(ApiError::log_internal)?;
+                    }
+                    db::RedactionMarkOutcome::Existing(_)
+                    | db::RedactionMarkOutcome::KindMismatch { .. } => {}
                 }
                 tx.commit().map_err(ApiError::log_internal)?;
-                Ok((row, inserted))
+                Ok(outcome)
             })
             .await?;
         Ok::<_, ApiError>(marked)
     }) {
-        Ok(Ok((row, inserted))) => {
-            if inserted {
-                print!("redacted {} {}", row.kind, row.object_id.to_hex());
-                if let Some(path) = &row.path {
-                    print!(" at {path}");
+        Ok(Ok(outcome)) => {
+            match outcome {
+                db::RedactionMarkOutcome::Inserted(row) => {
+                    print!("redacted {} {}", row.kind, row.object_id.to_hex());
+                    if let Some(path) = &row.path {
+                        print!(" at {path}");
+                    }
+                    println!(" (marked_ns {})", row.marked_ns);
                 }
-                println!(" (marked_ns {})", row.marked_ns);
-            } else {
-                print!("already redacted {} {}", row.kind, row.object_id.to_hex());
-                if let Some(path) = &row.path {
-                    print!(" at {path}");
+                db::RedactionMarkOutcome::Existing(row) => {
+                    print!("already redacted {} {}", row.kind, row.object_id.to_hex());
+                    if let Some(path) = &row.path {
+                        print!(" at {path}");
+                    }
+                    println!(" (marked_ns {} stands)", row.marked_ns);
                 }
-                println!(" (marked_ns {} stands)", row.marked_ns);
+                db::RedactionMarkOutcome::Rearmed(row) => {
+                    print!("re-armed {} {}", row.kind, row.object_id.to_hex());
+                    if let Some(path) = &row.path {
+                        print!(" at {path}");
+                    }
+                    println!(
+                        " (marked_ns {}, purged state cleared — the purge reclaims again)",
+                        row.marked_ns
+                    );
+                }
+                db::RedactionMarkOutcome::KindMismatch { existing } => {
+                    return fail(format!(
+                        "{} is already tombstoned with kind {:?}; refusing the re-mark",
+                        existing.object_id.to_hex(),
+                        existing.kind
+                    ));
+                }
             }
             0
         }

@@ -1158,10 +1158,15 @@ async fn gc_record_step_after_full_sweep_answers_blob_swept() {
 
     // The racing upload's record step: retryable 503 blob_swept, row never
     // written.
-    let err =
-        naatre_server::routes::objects::record_object(&f.t.state, oid, content.len() as i64, 1)
-            .await
-            .unwrap_err();
+    let err = naatre_server::routes::objects::record_object(
+        &f.t.state,
+        f.repo_id,
+        oid,
+        content.len() as i64,
+        1,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
         err.code(),
         naatre_server::api_code::ApiCode::BlobSwept,
@@ -1249,6 +1254,7 @@ async fn gc_batch_put_after_sweep_answers_blob_swept() {
     gc_pass(&f.t.state).await.unwrap(); // delete
     let err = naatre_server::routes::objects::record_batch(
         &f.t.state,
+        f.repo_id,
         vec![(oid, content.len() as i64, 1)],
     )
     .await
