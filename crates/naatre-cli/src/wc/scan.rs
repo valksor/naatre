@@ -93,6 +93,11 @@ pub struct Report {
     /// the path to actually read/write on a possibly normalization-folding
     /// filesystem (raw may be NFD while the indexed name is NFC).
     pub raw_of: BTreeMap<String, String>,
+    /// M12b: the conflicted paths — materialized marker files at the
+    /// working copy's head, recorded in state.json by sync/clone/land.
+    /// Filled by the status/report layer (the scanner stays disk-vs-index
+    /// and knows nothing of state); `classify` leaves it empty.
+    pub conflicted: Vec<String>,
 }
 
 impl Report {
@@ -101,16 +106,23 @@ impl Report {
     }
 
     pub fn status_word(&self) -> &'static str {
-        if self.is_clean() { "clean" } else { "dirty" }
+        if !self.conflicted.is_empty() {
+            "conflicted"
+        } else if self.is_clean() {
+            "clean"
+        } else {
+            "dirty"
+        }
     }
 
-    /// The pinned `status --json` shape.
+    /// The pinned `status --json` shape (M12b adds `conflicted`).
     pub fn to_json(&self) -> Value {
         json!({
             "status": self.status_word(),
             "modified": self.modified,
             "deleted": self.deleted,
             "untracked": self.untracked,
+            "conflicted": self.conflicted,
         })
     }
 }
@@ -185,13 +197,22 @@ pub fn classify(root: &Path, index: &Index) -> std::io::Result<Report> {
     Ok(report)
 }
 
-/// Human output: `clean`, or `dirty:` plus one line per change.
+/// Human output: `clean` / `conflicted` / `dirty:` plus one line per
+/// change. Conflicted paths print as `C <path>` and count as not-clean
+/// (a conflicted working copy is never reported plain "clean").
 pub fn print_report(report: &Report) {
-    if report.is_clean() {
+    if report.is_clean() && report.conflicted.is_empty() {
         println!("clean");
         return;
     }
-    println!("dirty:");
+    if report.conflicted.is_empty() {
+        println!("dirty:");
+    } else {
+        println!("conflicted:");
+    }
+    for path in &report.conflicted {
+        println!("C {path}");
+    }
     for path in &report.modified {
         println!("M {path}");
     }

@@ -79,6 +79,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
+use naatre_core::changeset;
 use naatre_core::ids::Id;
 use serde_json::json;
 
@@ -179,21 +180,6 @@ pub struct GcReport {
     /// Tombstoned blobs purged by the redaction phase, the tombstoned
     /// changesets' exclusively-referenced blobs included (M10b).
     pub redactions_purged_blobs: usize,
-    /// M12a-fix mechanical hold: true while any format-v2 changeset exists
-    /// (the canonical v2 magic probe, once per sweep). The pass withheld
-    /// NON-REDACTED garbage reclaim — the collectible arms — and the
-    /// `withheld_*` counts are what those arms WOULD have taken (the
-    /// same batch selections, discarded). The redaction purge phase ran
-    /// UNTOUCHED: tombstoned blobs and changesets purge exactly as
-    /// before. TEMPORARY by design: m12b's rep-traversing walker replaces
-    /// the hold (an m12b brief must-item).
-    pub conflict_hold: bool,
-    /// Collectible changeset batches withheld under [`Self::conflict_hold`].
-    pub withheld_cs: usize,
-    /// Condemnable/collectible blob batches withheld under the hold.
-    pub withheld_blobs: usize,
-    /// Collectible history-tree batches withheld under the hold.
-    pub withheld_trees: usize,
 }
 
 impl GcReport {
@@ -325,6 +311,35 @@ pub(crate) fn mark(conn: &naatre_store::Db, now_ns: i64) -> Result<Mark, naatre_
         for (cs, blob) in db::gc_file_change_blobs(conn, repo_id)? {
             if m.cs.contains(&cs) {
                 m.blobs.insert(blob);
+            }
+        }
+
+        // The M12b walker through conflict representations: a marked
+        // format-v2 changeset's rep side/base blobs join the mark — the
+        // losing sides' content lives in no tree (the root tree holds the
+        // MARKER blob) and in no delta of the conflicted node (the delta
+        // carries the markers, not the inputs), so the representation is
+        // their only reference. The canonical probe in
+        // `gc_conflict_rep_canonicals` confines the reads to v2 rows; a
+        // pure-v1 store decodes nothing. (The M12a alternative — a
+        // primary-table mirror of the rep ids — would be migration 013,
+        // the second one-way schema lockout the M12a notes refused; the
+        // conflicted rows are rare enough that decoding them in the mark
+        // is the cheaper design.)
+        let marked: Vec<Id> = m.cs.iter().copied().collect();
+        for canonical in db::gc_conflict_rep_canonicals(conn, repo_id, &marked)? {
+            let cs = changeset::decode(&canonical).map_err(|e| {
+                naatre_store::DbError::from(std::io::Error::other(format!(
+                    "a format-v2 changeset row failed to decode: {e}"
+                )))
+            })?;
+            for rep in cs.conflicts {
+                if let Some(base) = rep.base {
+                    m.blobs.insert(base);
+                }
+                for side in rep.sides {
+                    m.blobs.insert(side);
+                }
             }
         }
 
@@ -464,59 +479,15 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
     }
     crash_point("gc_after_candidates");
 
-    // 4-hold (M12a-fix, MECHANICAL GC HOLD, erasure-safe): while any
-    // format-v2 changeset exists, the sweep withholds NON-REDACTED garbage
-    // reclaim. Detection: `db::gc_conflict_hold_active` — the changesets
-    // canonical v2 magic prefix, EXISTS LIMIT 1, once per sweep; never
-    // lands.state (carried reps have no settlement row of their own), no
-    // new column (that would be migration 013 and a second one-way
-    // lockout bump). Scope: ONLY the collectible arms below are gated —
-    // the redaction purge phase (its own phase below) runs UNTOUCHED, so
-    // tombstoned blobs and changesets purge exactly as before. Temporary:
-    // m12b's rep-traversing walker replaces this hold (an m12b brief
-    // must-item).
-    let conflict_hold = state
-        .read(|conn| db::gc_conflict_hold_active(conn).map_err(ApiError::log_internal))
-        .await?;
-    if conflict_hold {
-        // What the collectible arms WOULD have taken: the same batch
-        // selection SQL, discarded — zero drift with the real arms; the
-        // transaction is dropped (rolled back), so nothing is collected,
-        // condemned, or audited.
-        let (withheld_cs, withheld_blobs, withheld_trees) = state
-            .write(move |store| {
-                let conn = store.conn();
-                let tx = conn
-                    .transaction_immediate()
-                    .map_err(ApiError::log_internal)?;
-                let cs = db::gc_collectible_cs(&tx, cut, GC_BATCH_ROWS)
-                    .map_err(ApiError::log_internal)?
-                    .len();
-                let blobs = db::gc_collectible_blobs(&tx, cut, GC_BATCH_BLOBS)
-                    .map_err(ApiError::log_internal)?
-                    .len();
-                let trees = db::gc_collectible_trees(&tx, now_i, cut, GC_BATCH_ROWS)
-                    .map_err(ApiError::log_internal)?
-                    .len();
-                drop(tx); // ROLLBACK: selection only.
-                Ok((cs, blobs, trees))
-            })
-            .await?;
-        report.conflict_hold = true;
-        report.withheld_cs = withheld_cs;
-        report.withheld_blobs = withheld_blobs;
-        report.withheld_trees = withheld_trees;
-        tracing::info!(
-            cs = withheld_cs,
-            blobs = withheld_blobs,
-            trees = withheld_trees,
-            "gc pass withheld under the conflict hold (a format-v2 changeset exists)"
-        );
-    } else {
-        // 4. Collection. Changesets first (their rows are the references the
-        // blob re-verification reads), then blobs (bytes unlinked before the
-        // row transaction — the orphan-direction rule), then the junctioned
-        // history trees the collected changesets left behind.
+    // 4. Collection. Changesets first (their rows are the references the
+    // blob re-verification reads), then blobs (bytes unlinked before the
+    // row transaction — the orphan-direction rule), then the junctioned
+    // history trees the collected changesets left behind. The mark's
+    // walker already carried every conflict representation's side/base
+    // blobs into the reachable set (M12b — the M12a mechanical hold is
+    // gone; tombstoned blobs purge in the redaction phase below exactly
+    // as before).
+    {
         let landed: HashSet<Id> = state
             .read(|conn| {
                 let mut out = HashSet::new();

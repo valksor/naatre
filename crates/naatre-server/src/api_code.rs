@@ -41,6 +41,12 @@ pub enum ApiCode {
     RedactedBase,
     /// 422 — commit content contains conflict markers.
     ConflictMarkersPresent,
+    /// 409 — the CLIENT refuses a conflicted-node sync (M12b, mixed-fleet
+    /// skew): the client predates format v2 and cannot materialize a
+    /// conflicted node; upgrade the client. The server never emits it —
+    /// the enum is the shared closed registry the CLI's stable codes
+    /// live in (the `dirty_working_copy` precedent).
+    VersionSkewConflicted,
     /// 400 — request payload is structurally malformed.
     Malformed,
     /// 422 — semantic validation failure (delta shape, char sets, caps).
@@ -98,7 +104,7 @@ impl ApiCode {
     /// cross-checks this list against its compile-time-exhaustive variant
     /// list (a `match` with no wildcard arm) and the wire-string table, so
     /// the published enum cannot silently drift from the registry.
-    pub const ALL: [ApiCode; 34] = [
+    pub const ALL: [ApiCode; 35] = [
         ApiCode::TokenInvalid,
         ApiCode::TokenExpired,
         ApiCode::TokenRevoked,
@@ -113,6 +119,7 @@ impl ApiCode {
         ApiCode::GitHistoryDiverged,
         ApiCode::RedactedBase,
         ApiCode::ConflictMarkersPresent,
+        ApiCode::VersionSkewConflicted,
         ApiCode::Malformed,
         ApiCode::Validation,
         ApiCode::PathNotNormalized,
@@ -152,6 +159,7 @@ impl ApiCode {
             Self::GitHistoryDiverged => "git_history_diverged",
             Self::RedactedBase => "redacted_base",
             Self::ConflictMarkersPresent => "conflict_markers_present",
+            Self::VersionSkewConflicted => "version_skew_conflicted",
             Self::Malformed => "malformed",
             Self::Validation => "validation",
             Self::PathNotNormalized => "path_not_normalized",
@@ -189,7 +197,8 @@ impl ApiCode {
             | Self::DirtyWorkingCopy
             | Self::GitHistoryDiverged
             | Self::RedactedBase
-            | Self::ConflictMarkersPresent => StatusCode::CONFLICT,
+            | Self::ConflictMarkersPresent
+            | Self::VersionSkewConflicted => StatusCode::CONFLICT,
             Self::Malformed => StatusCode::BAD_REQUEST,
             Self::Validation
             | Self::PathNotNormalized

@@ -229,6 +229,12 @@ fn add(
     }
 
     let mut written = 0usize;
+    // M12b: a widened path whose bytes are a rendered marker file joins
+    // the conflicted marks (the same detection clone/sync run — the widen
+    // materialized the head tree's conflicted path, so `status` must mark
+    // it and `resolve` must accept it).
+    let mut conflicted: std::collections::BTreeSet<String> =
+        state.conflicted.iter().cloned().collect();
     for file in &files {
         // Reachable only for CLEAN tracked files under an overlapping
         // widen (the list already materialized part of this prefix):
@@ -239,7 +245,11 @@ fn add(
         if !force && index.rows.contains_key(&file.path) {
             continue;
         }
-        materialize(root, file, &blobs[&file.blob])?;
+        let bytes = &blobs[&file.blob];
+        if naatre_core::conflict::marker_shaped(bytes) {
+            conflicted.insert(file.path.clone());
+        }
+        materialize(root, file, bytes)?;
         let meta = std::fs::metadata(root.join(&file.path))
             .map_err(|e| VerbError::Local(format!("stating {}: {e}", file.path)))?;
         index.rows.insert(
@@ -249,6 +259,7 @@ fn add(
         written += 1;
     }
     state.sparse.push(prefix.to_string());
+    state.conflicted = conflicted.into_iter().collect();
     wc.save_state(&state)?;
     wc.save_index(&index)?;
     Ok(json!({

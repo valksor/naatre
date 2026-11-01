@@ -940,6 +940,12 @@ pub struct BlameLine {
     pub author: String,
     /// Line text without its trailing newline.
     pub text: String,
+    /// M12b: true when the line belongs to a conflicted region — it was
+    /// introduced by a format-v2 changeset carrying a conflict
+    /// representation at this path, so the text is the materialized
+    /// marker rendering. It reports as CONFLICT, not as that node's
+    /// author's content.
+    pub conflicted: bool,
 }
 
 /// A blame of one file at one changeset. Pinned shape:
@@ -998,6 +1004,10 @@ struct BlameWalk {
     /// The nearest poisoned ancestors named by the walked rows' own taint
     /// (O(1) off each row, no walk past them needed).
     tainted_poison_cs: Vec<Id>,
+    /// M12b: the walked nodes whose canonical carries a conflict
+    /// representation at the blamed path — the lines they introduce are
+    /// the conflicted region.
+    conflicted_cs: Vec<Id>,
     /// True when the walk stopped at a poison boundary OR any walked row
     /// carried taint.
     degraded: bool,
@@ -1089,6 +1099,7 @@ pub async fn blame(
             };
 
             let mut nodes: Vec<BlameWalkNode> = Vec::new();
+            let mut conflicted_cs: Vec<Id> = Vec::new();
             let mut boundary: Option<BlameBoundary> = None;
             // Taint read straight off the queue rows: a node that derived
             // on a poisoned parent's empty marker is done-with-taint, and
@@ -1185,6 +1196,22 @@ pub async fn blame(
                             let cs_row = db::changeset_get(conn, repo_id, &current)
                                 .map_err(ApiError::log_internal)?
                                 .ok_or_else(|| ApiError::log_internal("walked node vanished"))?;
+                            // M12b: a v2 canonical carrying a rep at this
+                            // path makes the node a conflicted introducer
+                            // — its lines (the marker rendering) report
+                            // as conflict. The magic-byte peek confines
+                            // the decode to v2 rows (v1 rows never carry
+                            // reps).
+                            if cs_row.canonical.len() >= naatre_core::changeset::MAGIC_V2.len()
+                                && cs_row.canonical[16] == naatre_core::changeset::MAGIC_V2[16]
+                                && naatre_core::changeset::decode(&cs_row.canonical)
+                                    .map_err(ApiError::log_internal)?
+                                    .conflicts
+                                    .iter()
+                                    .any(|rep| rep.path == path)
+                            {
+                                conflicted_cs.push(current);
+                            }
                             nodes.push(BlameWalkNode {
                                 cs: current,
                                 author: cs_row.author,
@@ -1230,6 +1257,7 @@ pub async fn blame(
                 nodes,
                 boundary,
                 tainted_poison_cs,
+                conflicted_cs,
                 degraded,
             })
         })
@@ -1323,6 +1351,7 @@ pub async fn blame(
     // assembler before its per-line allocation).
     let cas = Arc::clone(&state.cas);
     let final_blob = walk.final_blob;
+    let conflicted_cs = walk.conflicted_cs.clone();
     let max_blob_bytes = state.blame_max_blob_bytes;
     let assembled = state
         .blocking(move || {
@@ -1363,6 +1392,7 @@ pub async fn blame(
                         cs: l.cs.to_hex(),
                         author: l.author,
                         text: l.text,
+                        conflicted: conflicted_cs.contains(&l.cs),
                     })
                     .collect::<Vec<BlameLine>>(),
             ))

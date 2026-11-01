@@ -83,6 +83,9 @@ pub fn run(url: &str, sparse: &[String], into: Option<&str>, net: &Net) -> i32 {
                 v["dest"].as_str().unwrap_or("?"),
                 v["files"].as_u64().unwrap_or(0),
             );
+            for p in v["conflicted"].as_array().map_or(&[][..], Vec::as_slice) {
+                println!("C {}", p.as_str().unwrap_or("?"));
+            }
             0
         }
         Err(e) => e.report(),
@@ -141,10 +144,17 @@ pub fn value(
     let stage = StageDir::beside(dest)
         .map_err(|e| VerbError::Local(format!("cannot stage beside {}: {e}", dest.display())))?;
     let mut index = Index::default();
+    // M12b: the conflicted paths of the cloned tree — the blobs whose
+    // bytes are a rendered marker file (a conflicted node's
+    // markers-materialized tree carries them as ordinary file entries).
+    let mut conflicted: Vec<String> = Vec::new();
     for file in &files {
         let bytes = &blobs[&file.blob];
         let row = materialize(stage.path(), file, bytes)?;
         index.rows.insert(file.path.clone(), row);
+        if naatre_core::conflict::marker_shaped(bytes) {
+            conflicted.push(file.path.clone());
+        }
     }
     let mut listed: Vec<String> = Vec::new();
     for p in sparse {
@@ -157,6 +167,7 @@ pub fn value(
         base: None,
         sparse: listed,
         server_repo: repo.clone(),
+        conflicted,
     };
     {
         let wc = crate::wc::Wc::open(stage.path()).map_err(VerbError::Local)?;
@@ -178,5 +189,6 @@ pub fn value(
         "files": files.len(),
         "unavailable": unavailable,
         "sparse": sparse,
+        "conflicted": state.conflicted,
     }))
 }

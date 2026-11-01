@@ -64,7 +64,7 @@ Every deliberate limit, with the milestone that lifts it — or an explicit
 | Snapshot restore closure walks | The closure-membership check on `GET .../snapshots/{id}/trees/{tid}` re-walks the root closure per request (`db::tree_in_closure`, one entries-load per visited tree): an n-tree restore costs O(n²) server-side row loads — near the 10k-tree cap, minutes. Acceptable at today's snapshot sizes. | **No milestone** — a POST-time membership structure (tree → mounted paths) is the mitigation when large snapshots become real |
 | `snapshot_gc` audit rows | Written per collecting pass (never idle passes), actor `system`, details `{expired, rowless, rows_purged, trees_purged}`. | **No milestone** — recorded behavior, not a limit |
 | Derive walk budget (per kind, COOPERATIVE) | One derivation call may visit at most `walk_budget` rows / tree nodes / committed outputs through its `DeriveCtx` — a PER-KIND value (`Deriver::walk_budget`; bootstrap default 200,000 ≈ 2× the 100k-entry changeset cap): blame 1,000,000 (a parent-tree walk per touched path of a max changeset), path_history 400,000 (one visit per row), commit_graph 1,000 (two charges per skip entry, O(log chain) entries). The budget binds derivers that charge their visits; a deriver issuing raw SQL past the ctx is not capped by it. BUDGET exhaustion quarantines the node immediately (structural — a retry walks the same graph), with the reason in `derive_reports` and children proceeding on the empty marker. The wall-clock DEADLINE behind it (~2 s, `DERIVE_WALK_DEADLINE_NS`, injectable per state) is deliberately NOT structural: an overrun releases the lease back to pending as a FAILED ATTEMPT (bounded by the 3-attempt cap; the pass ends so the next tick retries), rows a DISTINCT `derive_reports` reason carrying the measured units/sec, and quarantines only at the cap. The budget bounds a deriver's per-CALL walk, never history length: long history derives batch-by-batch through the queue, and a 1,100-commit linear chain is the regression pin (`m6a_test.rs::linear_chain_derives_to_the_end`). | **No milestone** — raise a kind's value in code if a legitimate node shape trips it |
-| Reachability GC pass cost | The mark reads PRIMARY TABLES ONLY (refs, changesets + parents + file_changes, unexpired snapshots, lands, `git_map`) — O(primary rows) per pass, repo-by-repo with every per-repo statement's index leading on `repo_id`; the collectible selection re-verifies each candidate inside its deleting transaction through migration 9's probe indexes (`idx_refs_target`, `idx_lands_head/base`, `idx_git_map_cs`, `idx_cs_parents_parent_id`). Collection runs in generation/age-ordered batches (10 000 rows / 256 blobs per write-slot hold, `BEGIN IMMEDIATE` — on Postgres the fixed advisory lock, the same destructive-writer section land takes), so ticks only ever 503 writes for one batch. Blob deletion is TWO-PHASE (condemn in one pass, delete in a later one; any PUT's row touch clears the mark first), and the grace window (default 30 days, `gc_grace_secs`) is measured from the FIRST-observed-unreachable timestamp. A collecting pass writes ONE `gc` audit row — committed inside its final collecting batch's transaction, actor `system`; idle passes write none. The M12a conflict hold adds one `substr(canonical, 1, 17)` EXISTS probe per pass — a scan of every changeset's canonical bytes when no v2 row exists (the normal case), the same O(primary rows) cost class as the mark itself. | **No milestone** — the plan's mark clause names this cost class |
+| Reachability GC pass cost | The mark reads PRIMARY TABLES ONLY (refs, changesets + parents + file_changes, unexpired snapshots, lands, `git_map`) — O(primary rows) per pass, repo-by-repo with every per-repo statement's index leading on `repo_id`; the collectible selection re-verifies each candidate inside its deleting transaction through migration 9's probe indexes (`idx_refs_target`, `idx_lands_head/base`, `idx_git_map_cs`, `idx_cs_parents_parent_id`). Collection runs in generation/age-ordered batches (10 000 rows / 256 blobs per write-slot hold, `BEGIN IMMEDIATE` — on Postgres the fixed advisory lock, the same destructive-writer section land takes), so ticks only ever 503 writes for one batch. Blob deletion is TWO-PHASE (condemn in one pass, delete in a later one; any PUT's row touch clears the mark first), and the grace window (default 30 days, `gc_grace_secs`) is measured from the FIRST-observed-unreachable timestamp. A collecting pass writes ONE `gc` audit row — committed inside its final collecting batch's transaction, actor `system`; idle passes write none. The M12b walker adds one chunked `substr(canonical, 1, 17)` read over each repo's MARKED changesets — the v2-magic filter confines the frame fetches to the conflicted rows, so a pure-v1 store (the normal case) reads canonical bytes for the probe only, the same O(primary rows) cost class as the mark itself; each v2 row's frame is then decoded in memory to walk its reps' side/base ids (the probe returns every conflicted row's canonical at once — held for the pass, bounded by 16 MiB per row and rare by construction). | **No milestone** — the plan's mark clause names this cost class |
 | Derive-queue quiet passes | The background pass never occupies the single-writer slot on a quiet server: the lease sweep read-probes before taking a write transaction (same pattern as the snapshot-GC junction probe), and the drain writes only when a node is actually eligible. Writes a quiet server makes per tick: none. | **No milestone** — recorded behavior, not a limit |
 | Blame / path-history read cost | `GET /blame` walks the first-parent chain from `at`: two indexed point queries per visited node (queue state + diff-state), plus one CAS fetch per changed-blob version on the chain, plus the in-memory line diff of each touched pair — O(history of the file), never O(trees). `GET /log?path=` is two indexed queries per page off the `path_history` inverted index. | **No milestone** — the index shape, not a pending relaxation |
 | Derived-surface storage growth | `blame_state` grows with (changeset × touched paths) rows; `path_history` with (changeset × touched paths) index rows; `derive_state.output` carries ≤ ~49 bytes × O(log chain) skip entries per node for commit_graph. All bounded by the changeset caps (≤ 100k entries/changeset). The reachability GC collects every M6 row keyed by a collected changeset (queue, reports, blame, path-history) alongside it — and the redaction purge does the same for a tombstoned one (M10b). | **No milestone** — bounded by the same caps |
@@ -246,37 +246,46 @@ content sides (a deletion side has no blob id to carry) are not
 representable in v2 and refuse under the opt-in too — loudly, never
 silently "resolved" by recording.
 
-**Sequencing (honest scope).** This slice owns the format, the land
-semantics, and the pins (golden fixtures, commute/rebase proptest). The
-GC walker's traversal of conflict representations (losing-side blobs stay
-reachable) and blame's conflicted-region reporting arrive with their
-owners in M12b, as does the client surface (`--record-conflict` flag in
-`land --help`, marker materialization on sync, `status` conflict marks,
-`naatre resolve`, the version-skew refusal on conflicted nodes).
-**HOLD-BEFORE-DEPLOY (until M12b): SIGNED releases are refused while the
-marker is present; GC withholds non-redacted reclaim on v2-bearing
-stores; unsigned artifact builds still run for CI and do not constitute a
-release.** The COST, stated plainly: on any store holding a v2 changeset, non-redacted garbage
-ACCUMULATES until M12b — the hold cannot lift before then, because the v2
-changeset itself is collectible and withheld by the same arm (pin (d)'s
-natural lift is impossible for exactly that reason; the pin deletes the
-row by hand to prove the lift works). Redaction purge is unaffected
-throughout. Two standing hazards close together in M12b: (1) until the GC walker traverses
-conflict representations, a losing-side blob of a landed conflicted node
-stays reachable only while some reachable node's delta references it —
-recorded here as a decision, not an oversight; the interim is a
-MECHANICAL GC HOLD in `gc_pass` (the canonical v2-magic probe): it gates
-ONLY the collectible arms and withholds non-redacted garbage reclaim
-while any v2 changeset exists — the redaction purge phase runs UNTOUCHED
-(erasure is never held; tombstoned blobs purge exactly as before), and
-the hold reports itself as `GcReport.conflict_hold` with withheld
-counts; (2) migration 012's
-version bump is a ONE-WAY, store-wide lockout — the first boot of a
-format-v2 binary upgrades the data dir to schema_version 12 and no older
-binary can ever open it again, even holding only v1 data, so the only
-rollback is a pre-upgrade backup (`naatre backup`). The flag itself is
-not gated: `--record-conflict` is an explicit opt-in per land, and its
-opt-in nature is unchanged by the hold.
+**Client surface (M12b).** The client slice closes the loop: `naatre land
+--record-conflict` (the 409 recipe leads with the flag; the API request
+field `record_conflict` stays named for non-CLI clients), materialization
+writes conflict markers (a conflicted node's `root_tree_id` IS the
+markers-materialized tree, so clone/sync/restore write the rendered bytes
+through the ordinary tree walk), `status` marks the conflicted paths
+(`C <path>`, from `.naatre/state.json` — the zero-server-call invariant
+holds), an ordinary commit whose content is a marker file refuses with
+`conflict_markers_present` (the detector is `naatre-core`'s
+`marker_shaped` — the structural inverse of the renderer, shared by
+`status`, the commit gate, and `resolve`), and resolution is
+`naatre resolve <path>`: the resolved content commits as an explicit
+resolution changeset referencing the conflicted head, the conflicted mark
+clears, and the subsequent land advances main past the conflict (linear
+history). A client that predates v2 refuses a conflicted-node sync with
+`version_skew_conflicted` — the documented mixed-fleet shape (it never
+silently materializes content it cannot interpret; `GET /version` names
+the upgrade path).
+
+**GC walker (M12b).** The mark traverses conflict representations: a
+marked format-v2 changeset's rep side/base blob ids join the reachable
+set — the losing sides' content lives in no tree (the root tree holds the
+MARKER blob) and in no delta of the conflicted node, so the
+representation is their only reference. Detection is the canonical v2
+magic prefix (`substr(canonical, 1, 17)`), which confines the frame reads
+to exactly the conflicted rows: a pure-v1 store decodes nothing, and the
+pass cost stays in the mark's O(primary rows) class. The M12a alternative
+(a primary-table mirror of the rep ids) would have been migration 013 —
+the second one-way schema lockout the M12a notes explicitly refused — so
+the reps decode in the mark. Blame reports conflicted regions as
+conflicted: a walked node whose canonical carries a rep at the blamed
+path contributes the marker-rendering lines it introduced under
+`conflicted: true` — the conflict, never a phantom author.
+
+**Standing hazard (migration 012).** Migration 012's version bump is a
+ONE-WAY, store-wide lockout — the first boot of a format-v2 binary
+upgrades the data dir to schema_version 12 and no older binary can ever
+open it again, even holding only v1 data, so the only rollback is a
+pre-upgrade backup (`naatre backup`). The flag itself is not gated:
+`--record-conflict` is an explicit opt-in per land.
 
 ## Honest-scope boundaries
 

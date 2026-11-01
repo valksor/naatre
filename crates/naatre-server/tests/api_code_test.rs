@@ -29,6 +29,11 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
         "conflict_markers_present",
         409,
     ),
+    (
+        ApiCode::VersionSkewConflicted,
+        "version_skew_conflicted",
+        409,
+    ),
     (ApiCode::Malformed, "malformed", 400),
     (ApiCode::Validation, "validation", 422),
     (ApiCode::PathNotNormalized, "path_not_normalized", 422),
@@ -73,6 +78,7 @@ fn all_variants() -> Vec<ApiCode> {
         GitHistoryDiverged,
         RedactedBase,
         ConflictMarkersPresent,
+        VersionSkewConflicted,
         Malformed,
         Validation,
         PathNotNormalized,
@@ -111,6 +117,7 @@ fn all_variants() -> Vec<ApiCode> {
             | GitHistoryDiverged
             | RedactedBase
             | ConflictMarkersPresent
+            | VersionSkewConflicted
             | Malformed
             | Validation
             | PathNotNormalized

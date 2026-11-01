@@ -1898,6 +1898,7 @@ fn flush_land_lands_the_staged_writes_via_the_shared_land_path() {
         "wland2",
         &outcome.changeset.to_hex(),
         &key,
+        false,
         &mut |k| println!("land key: {k}"),
     )
     .expect("land");

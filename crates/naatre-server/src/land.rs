@@ -93,14 +93,16 @@ pub fn crash_point(name: &str) {
 pub fn crash_point(_name: &str) {}
 
 /// The resolution recipe carried in every land-conflict 409 `details`
-/// (plan "Merge"; `naatre land` prints it verbatim). It LEADS with the API
-/// field — the opt-in that exists today — and names the CLI flag as
-/// arriving with the client slice.
+/// (plan "Merge"; `naatre land` prints it verbatim). It LEADS with the
+/// CLI flag (M12b: the flag exists) and names the API request field for
+/// non-CLI clients.
 pub const RESOLUTION_RECIPE: &str = "to record the conflict on main as a conflicted changeset, \
-re-land with the same key and the API request field \"record_conflict\": true \
-(the CLI --record-conflict flag arrives with the client slice) — or fetch the \
-conflict blobs (GET /v1/repos/{r}/objects/{id}), build a resolution changeset \
-on head's parent, and re-land with the same key";
+re-land with the same key and `naatre land --record-conflict` (the API request \
+field \"record_conflict\": true for non-CLI clients) — or resolve instead: \
+materialize the conflicted main (naatre sync), edit the resolved content, \
+and `naatre resolve <path>` (or fetch the conflict blobs \
+GET /v1/repos/{r}/objects/{id} and build a resolution changeset on head's \
+parent), then re-land with the same key";
 
 /// The recipe variant for the refused-under-opt-in case: the rebase hit a
 /// conflict the v2 representation cannot record (a deletion side has no
@@ -109,8 +111,10 @@ on head's parent, and re-land with the same key";
 /// path, never the flag just used.
 pub const RESOLUTION_RECIPE_REFUSED: &str = "this conflict cannot be recorded: a deletion side \
 has no blob id to carry in the conflict representation — resolve it instead: \
-fetch the conflict blobs (GET /v1/repos/{r}/objects/{id}), build a resolution \
-changeset on head's parent, and re-land with the same key \
+materialize the conflicted main (naatre sync), edit the resolved content, \
+and `naatre resolve <path>` (or fetch the conflict blobs \
+GET /v1/repos/{r}/objects/{id} and build a resolution changeset on head's \
+parent), then re-land with the same key \
 (record_conflict: true does not apply here)";
 
 /// One land request, resolved by the route (role + hex checks done). The
@@ -656,19 +660,34 @@ fn land_in_txn(
         }
 
         // Merged blob contents go into the CAS before any row commits
-        // (files before rows; Cas::put fsyncs before returning).
+        // (files before rows; Cas::put fsyncs before returning), and their
+        // objects rows record in the SAME transaction (M12b fix, caught by
+        // the e2e's fsck-after-conflicted-land leg): a rebase's merged
+        // content is byte-identical to what the client PUT, so its row
+        // already exists and the upsert is a no-op — but a recorded
+        // conflict's MARKER blob is server-rendered, never client-PUT, so
+        // without the row the blob is cas_unrecorded and every fsck after
+        // a conflicted land finds it.
         for (blob_id, bytes) in &merged.new_blobs {
             if written_blobs.contains(blob_id) {
                 continue;
             }
-            let put = cas.put(bytes).map_err(ApiError::log_internal)?.id;
-            if put != *blob_id {
+            let put = cas.put(bytes).map_err(ApiError::log_internal)?;
+            if put.id != *blob_id {
                 return Err(ApiError::log_internal(format!(
                     "merged blob id mismatch: computed {}, CAS wrote {}",
                     blob_id.to_hex(),
-                    put.to_hex()
+                    put.id.to_hex()
                 )));
             }
+            db::object_row_upsert(
+                conn,
+                blob_id,
+                bytes.len() as i64,
+                put.csize as i64,
+                cmd.now_ns,
+            )
+            .map_err(ApiError::log_internal)?;
             written_blobs.push(*blob_id);
         }
         crash_point("after_blob_write");

@@ -59,6 +59,13 @@ pub struct State {
     pub sparse: Vec<String>,
     /// Repo name on the server.
     pub server_repo: String,
+    /// M12b: the paths of head's tree that materialize conflict markers
+    /// (the conflicted paths). Recorded by sync/clone/land, cleared by
+    /// resolve and by a commit that rewrites the path; `status` marks
+    /// them (`C <path>`), `resolve` refuses paths outside the list.
+    /// `default`: state files written before M12b carry no key.
+    #[serde(default)]
+    pub conflicted: Vec<String>,
 }
 
 /// A handle on a working copy rooted at `root` (the checkout directory).

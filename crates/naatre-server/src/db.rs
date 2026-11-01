@@ -2444,20 +2444,46 @@ pub fn gc_snapshot_roots(conn: &Db, repo_id: i64, now_ns: i64) -> Result<Vec<Id>
     )
 }
 
-/// M12a-fix mechanical GC hold probe: true while ANY format-v2 changeset
-/// exists. Detection is the changesets canonical magic prefix — the v2
-/// frame magic, first 17 bytes — probed ONCE per sweep, LIMIT 1. Deliberately
-/// NOT `lands.state` (a carried rep has no settlement row of its own) and
-/// deliberately no new column (that would be migration 013 and a second
-/// one-way lockout bump). `substr` is byte-based on both dialects
-/// (SQLite's blob substr; PostgreSQL's substr(bytea, int, int)).
-pub fn gc_conflict_hold_active(conn: &Db) -> Result<bool, DbError> {
-    let hit = conn.query_opt_map(
-        &Sql::plain("SELECT 1 FROM changesets WHERE substr(canonical, 1, 17) = ?1 LIMIT 1"),
-        &pv![naatre_core::changeset::MAGIC_V2.as_slice()],
-        |row| row.get::<i64>(0),
-    )?;
-    Ok(hit.is_some())
+/// The conflict representations' canonical frames among `cs_ids` (M12b
+/// GC walker): the marked changesets whose canonical is a format-v2 frame
+/// — the frame magic, first 17 bytes — chunked IN-lists on the
+/// `(repo_id, cs)` PRIMARY KEY prefix. The caller decodes each frame and
+/// walks its reps' side/base blob ids into the mark (losing-side blobs
+/// live in no tree and no delta — the representation is their only
+/// reference). The v2-magic `substr` filter confines the frame reads to
+/// exactly the conflicted rows: a pure-v1 store reads none. `substr` is
+/// byte-based on both dialects (SQLite's blob substr; PostgreSQL's
+/// substr(bytea, int, int)).
+pub fn gc_conflict_rep_canonicals(
+    conn: &Db,
+    repo_id: i64,
+    cs_ids: &[Id],
+) -> Result<Vec<Vec<u8>>, DbError> {
+    let mut out = Vec::new();
+    for chunk in cs_ids.chunks(GC_IN_CHUNK) {
+        // `?1` is the repo id, `?2` the v2 magic; the IN-list numbers
+        // from ?3.
+        let list = (3..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut params: Vec<P> = vec![
+            P::I(repo_id),
+            P::B(naatre_core::changeset::MAGIC_V2.as_slice().to_vec()),
+        ];
+        params.extend(chunk.iter().map(|id| P::B(id.0.as_slice().to_vec())));
+        let rows: Vec<Vec<u8>> = conn.query_all_map(
+            &Sql::plain_owned(format!(
+                "SELECT canonical FROM changesets WHERE repo_id = ?1 \
+                 AND substr(canonical, 1, 17) = ?2 AND id IN ({list})"
+            )),
+            &params,
+            |r| r.get(0),
+        )?;
+        out.extend(rows);
+    }
+    Ok(out)
 }
 
 /// Every `objects` row (the DB-known blob inventory).

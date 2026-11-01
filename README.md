@@ -106,30 +106,35 @@ TLS-terminating reverse proxy in front (see below).
   `object_redacted` — a ref would stall that changeset's purge forever.
 - **Conflicts can be recorded, not only refused (M12).** Default land is
   unchanged: a rebase conflict still answers the structured 409 with the
-  resolution recipe (which names the opt-in). Explicitly setting
-  `record_conflict` in the land request body (the CLI's
-  `naatre land --record-conflict` flag arrives with the M12 client slice)
-  instead records the conflict on `main` as a conflicted changeset — a
-  logical conflict stored inside the changeset payload (format v2), whose
-  tree holds conflict markers; the land still settles exactly once, with
-  land status `conflicted`. Conflicted nodes rebase like any node and the
-  conflict travels; a conflict with a deletion side is not recordable and
-  still refuses. Formats: `docs/format.md` §8; semantics:
-  `docs/design.md` ("First-class conflicts").
+  resolution recipe (which leads with the opt-in). Explicitly setting
+  `record_conflict` in the land request body — the CLI's
+  `naatre land --record-conflict` — records the conflict on `main` as a
+  conflicted changeset — a logical conflict stored inside the changeset
+  payload (format v2), whose tree holds conflict markers; the land still
+  settles exactly once, with land status `conflicted`. Conflicted nodes
+  rebase like any node and the conflict travels; a conflict with a
+  deletion side is not recordable and still refuses. **The client side
+  (M12b):** syncing/cloning a conflicted main materializes the markers
+  (the conflicted node's root tree IS the markers-materialized tree);
+  `naatre status` marks the conflicted paths (`C <path>`); a commit of
+  marker-shaped content refuses with `conflict_markers_present`; the
+  resolution is `naatre resolve <path>` — the resolved content commits as
+  an explicit resolution changeset referencing the conflicted head, and
+  the following `naatre land` advances main past the conflict (linear
+  history); a client that predates v2 refuses a conflicted-node sync with
+  `version_skew_conflicted` (upgrade the client). Formats:
+  `docs/format.md` §8; semantics: `docs/design.md` ("First-class
+  conflicts").
 - **Deploy note for format v2 (M12a): the schema upgrade is a ONE-WAY,
   store-wide lockout.** The first boot of a format-v2 binary upgrades the
   data dir to `schema_version` 12; no older binary can ever open that
   data dir again — even one holding only v1 data. Rollback after the
   first upgrade means restoring a pre-upgrade backup (`naatre backup`
-  first). **Take a backup before upgrading.** While the hold marker is present
-  (removed at M12b): **signed releases are refused; GC withholds
-  non-redacted reclaim on v2-bearing stores; unsigned artifact builds
-  still run for CI and do not constitute a release** (unsigned artifacts
-  are untrusted-by-default per SECURITY.md; the release gate is signing).
-  The GC walker does not yet traverse conflict representations
-  (losing-side blobs of a recorded conflict are kept only by their
-  writing changesets until M12b closes the loop), so a conflicted land
-  must not be followed by an interim downgrade or a pre-M12b GC rollout.
+  first). **Take a backup before upgrading.** The GC mark traverses
+  conflict representations (M12b): a conflicted changeset's rep side/base
+  blobs stay reachable through collection, so a conflicted land is safe
+  to run GC against; tombstoned content purges exactly as before
+  (erasure is never held).
 
 ## TLS and reverse proxies
 
@@ -672,6 +677,7 @@ a generic message + `request_id` only.
 | `git_history_diverged` | 409 | import graft refused: histories diverged |
 | `redacted_base` | 409 | the land's base chain crosses a redacted changeset (details name it) |
 | `conflict_markers_present` | 409 | commit content contains conflict markers (M12) |
+| `version_skew_conflicted` | 409 | a pre-v2 client refused a conflicted-node sync — upgrade the client (M12; the CLI emits it, the server never does) |
 | `malformed` | 400 | structurally malformed payload |
 | `validation` | 422 | semantic validation failure |
 | `path_not_normalized` | 422 | path is not NFC |

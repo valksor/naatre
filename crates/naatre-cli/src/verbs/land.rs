@@ -1,14 +1,17 @@
-//! `naatre land [--key K]` — land the working copy's head onto the server's
-//! `main` (server-side rebase + CAS).
+//! `naatre land [--key K] [--record-conflict]` — land the working copy's
+//! head onto the server's `main` (server-side rebase + CAS).
 //!
 //! The idempotency key defaults to a random 8-hex suffix and is PRINTED so
 //! a retry can reuse it (`--key`). A 503 (writer slot busy or the same key
 //! in flight) prints the retry hint; a 409 `ref_conflict` prints the
 //! per-path conflicts and the server's resolution recipe (the same key
-//! re-lands after a conflict); a 409 `idempotency_key_settled` prints the
-//! settled head and land-status pointer. On success the working copy
-//! advances onto the landed history (its head is rewritten server-side) and
-//! records the land base.
+//! re-lands after a conflict; `--record-conflict` instead records the
+//! conflict on main as a conflicted changeset and settles once —
+//! `resolve` then clears the conflicted paths); a 409
+//! `idempotency_key_settled` prints the settled head and land-status
+//! pointer. On success the working copy advances onto the landed history
+//! (its head is rewritten server-side) and records the land base and the
+//! settlement's conflicted paths (M12).
 
 use std::path::Path;
 
@@ -26,38 +29,53 @@ pub struct LandOutcome {
     pub landed: String,
     pub main: String,
     pub rebased: u64,
+    /// Paths the settlement node records as conflicted (M12b; empty unless
+    /// the land settled a conflicted node — `lands.state = 'conflicted'`).
+    pub conflicts: Vec<String>,
 }
 
 /// The shared land POST (`{head, key}` → `{landed, main, rebased}`): the
 /// one code path `naatre land` and the mount daemon's `--flush-land` both
 /// drive. `on_key` fires BEFORE the request (a 503 or a crash must still
 /// show the key a retry needs) — the CLI prints it, the mount daemon
-/// prints it, the MCP server passes a no-op.
+/// prints it, the MCP server passes a no-op. `record_conflict` is the M12
+/// opt-in: instead of the default 409 + recipe on a rebase conflict, the
+/// conflict is recorded on main as a conflicted changeset (settled ONCE,
+/// `lands.state = 'conflicted'`).
 pub fn land_changeset(
     client: &Client,
     repo: &str,
     head: &str,
     key: &str,
+    record_conflict: bool,
     on_key: &mut dyn FnMut(&str),
 ) -> Result<LandOutcome, HttpError> {
     on_key(key);
     let (_status, value) = client.post_json(
         &format!("/v1/repos/{}/land", crate::client::uri_segment(repo)),
-        &json!({ "head": head, "key": key }),
+        &json!({ "head": head, "key": key, "record_conflict": record_conflict }),
     )?;
     Ok(LandOutcome {
         key: key.to_string(),
         landed: value["landed"].as_str().unwrap_or("?").to_string(),
         main: value["main"].as_str().unwrap_or("?").to_string(),
         rebased: value["rebased"].as_u64().unwrap_or(0),
+        conflicts: value["conflicts"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
 /// Runs land; returns the pinned exit code (0 success, 2 conflict-class,
 /// 1 otherwise).
-pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
+pub fn run(root: &Path, key: Option<&str>, record_conflict: bool, net: &Net) -> i32 {
     let mut printed_key = String::new();
-    match core(root, key, net, &mut |k| {
+    match core(root, key, record_conflict, net, &mut |k| {
         printed_key = k.to_string();
         println!("land key: {k}");
     }) {
@@ -66,6 +84,9 @@ pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
                 "{}",
                 json!({ "landed": o.landed, "main": o.main, "rebased": o.rebased })
             );
+            for c in &o.conflicts {
+                println!("conflicted: {c}");
+            }
             0
         }
         Err(VerbError::Http(HttpError::Envelope {
@@ -136,6 +157,7 @@ pub fn run(root: &Path, key: Option<&str>, net: &Net) -> i32 {
 pub fn core(
     root: &Path,
     key: Option<&str>,
+    record_conflict: bool,
     net: &Net,
     on_key: &mut dyn FnMut(&str),
 ) -> Result<LandOutcome, VerbError> {
@@ -144,16 +166,34 @@ pub fn core(
     let client = wc.client(net).map_err(VerbError::Local)?;
     let key = key.map(str::to_string).unwrap_or_else(random_key);
 
-    let outcome = land_changeset(&client, &state.server_repo, &state.head, &key, on_key)
-        .map_err(VerbError::Http)?;
+    let outcome = land_changeset(
+        &client,
+        &state.server_repo,
+        &state.head,
+        &key,
+        record_conflict,
+        on_key,
+    )
+    .map_err(VerbError::Http)?;
     // The rebase rewrote the client's head server-side; advance the
-    // working copy onto the landed history and record the base.
+    // working copy onto the landed history and record the base. The
+    // settlement's conflicted paths (M12b) come from the response: a
+    // conflicted settlement names them, so the lander's `status` marks
+    // them and `resolve` accepts them; a settlement that is not itself a
+    // conflicted node keeps the existing marks (markers persist in the
+    // tree until resolved even when the new tip is a clean descendant).
     if outcome.landed != "?" {
+        let conflicted = if outcome.conflicts.is_empty() {
+            state.conflicted.clone()
+        } else {
+            outcome.conflicts.clone()
+        };
         let new_state = State {
             head: outcome.landed.clone(),
             base: Some(outcome.main.clone()),
             sparse: state.sparse,
             server_repo: state.server_repo,
+            conflicted,
         };
         wc.save_state(&new_state).map_err(|e| {
             VerbError::Local(format!(

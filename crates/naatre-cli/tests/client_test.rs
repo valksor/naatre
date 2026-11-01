@@ -844,6 +844,7 @@ fn exit_codes_and_json_shapes() {
             "modified": [],
             "deleted": [],
             "untracked": [],
+            "conflicted": [],
         })
     );
 
@@ -1319,6 +1320,7 @@ fn report_json_shape_tracks_classification() {
             "modified": [],
             "deleted": ["f.txt"],
             "untracked": ["g.txt"],
+            "conflicted": [],
         })
     );
 }

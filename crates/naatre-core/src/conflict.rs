@@ -122,6 +122,101 @@ fn push_block(out: &mut Vec<u8>, content: Vec<u8>) {
     }
 }
 
+/// True when `bytes` IS a materialized marker file — the exact shape
+/// [`marker_bytes`] renders, matched structurally (the client's marker
+/// detector behind `status`'s conflict marks, the `conflict_markers_present`
+/// commit gate, and `resolve`'s still-conflicted check; one detector, so
+/// the writer and the readers can never drift).
+///
+/// The whole input must parse as one marker structure: the FIRST line is
+/// the opener `<<<<<<< naatre side 1/N: <64 lowercase hex>` (N ≥ 2), each
+/// further side K = 2..=N appears as the exact divider line
+/// `======= naatre side K/N: <64 lowercase hex>` in order (the optional
+/// `||||||| naatre base: <64 lowercase hex>` line appears once, inside
+/// side 1's block — the renderer writes it after side 1's content,
+/// followed by the base's own content), and the LAST line is the closer
+/// `>>>>>>> naatre conflict: <non-empty path>`. Everything between is
+/// content. Prose that merely quotes the format (docs, another tool's
+/// markers) fails the structure — the opener must be the first line and
+/// the closer the last, with every divider exact.
+pub fn marker_shaped(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut lines = text.lines();
+    // The opener pins the side count and side 1's blob id.
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    let Some((n, id)) = parse_opener(first) else {
+        return false;
+    };
+    if !is_blob_hex(id) {
+        return false;
+    }
+    let mut middle: Vec<&str> = lines.collect();
+    // The closer is the last line; a marker file is never just the opener.
+    let Some(last) = middle.pop() else {
+        return false;
+    };
+    let Some(path) = last.strip_prefix(">>>>>>> naatre conflict: ") else {
+        return false;
+    };
+    if path.is_empty() {
+        return false;
+    }
+    let mut expected_side = 2usize;
+    let mut base_line_seen = false;
+    for line in middle {
+        if let Some((k, n_line, id)) = parse_side_divider(line) {
+            if k != expected_side || n_line != n || !is_blob_hex(id) {
+                return false;
+            }
+            expected_side += 1;
+        } else if let Some(id) = line.strip_prefix("||||||| naatre base: ") {
+            // Exactly one base line, in side 1's block: the renderer
+            // writes it after side 1's content, ahead of the base's own
+            // content block.
+            if base_line_seen || expected_side != 2 || !is_blob_hex(id.as_bytes()) {
+                return false;
+            }
+            base_line_seen = true;
+        }
+    }
+    expected_side == n + 1
+}
+
+/// Parses the opener `<<<<<<< naatre side 1/N: <hex>` into `(N, hex)`.
+fn parse_opener(line: &str) -> Option<(usize, &[u8])> {
+    let rest = line.strip_prefix("<<<<<<< naatre side 1/")?;
+    let (n, id) = rest.split_once(": ")?;
+    let n = n.parse::<usize>().ok()?;
+    if n < 2 {
+        return None;
+    }
+    Some((n, id.as_bytes()))
+}
+
+/// Parses a divider `======= naatre side K/N: <hex>` into `(K, N, hex)`.
+fn parse_side_divider(line: &str) -> Option<(usize, usize, &[u8])> {
+    let rest = line.strip_prefix("======= naatre side ")?;
+    let (kn, id) = rest.split_once(": ")?;
+    let (k, n) = kn.split_once('/')?;
+    Some((
+        k.parse::<usize>().ok()?,
+        n.parse::<usize>().ok()?,
+        id.as_bytes(),
+    ))
+}
+
+/// 64 lowercase hex characters.
+fn is_blob_hex(id: &[u8]) -> bool {
+    id.len() == 64
+        && id
+            .iter()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +339,67 @@ mod tests {
         let mut z = a.clone();
         z.path = "z.txt".into();
         assert_eq!(validate(&[z, a]), Err(CoreError::EncodeUnsortedConflicts));
+    }
+
+    /// Every rendering `marker_bytes` produces is shaped — two sides with
+    /// a base, three sides without, empty content blocks.
+    #[test]
+    fn marker_shaped_accepts_every_rendering() {
+        let two = rep(Some(side(0)), vec![side(1), side(2)]);
+        assert!(marker_shaped(&marker_bytes(&two, fetch_of).unwrap()));
+        let three = rep(None, vec![side(1), side(2), side(3)]);
+        assert!(marker_shaped(&marker_bytes(&three, fetch_of).unwrap()));
+        // Empty side content: dividers stack directly.
+        let bytes = marker_bytes(&rep(None, vec![side(1), side(2)]), |_| Ok(Vec::new())).unwrap();
+        assert!(marker_shaped(&bytes));
+    }
+
+    /// Content that is not a rendered marker file is not shaped: ordinary
+    /// prose, prose quoting the marker format mid-file, git-style
+    /// markers, truncated renderings, a stray opener.
+    #[test]
+    fn marker_shaped_rejects_non_markers() {
+        assert!(!marker_shaped(b"hello\nworld\n"));
+        assert!(!marker_shaped(
+            b"see the format:\n<<<<<<< naatre side 1/2: aa\n=======\n"
+        ));
+        assert!(!marker_shaped(b"<<<<<<< mine\ncontent\n>>>>>>> mine\n"));
+        // A rendering with the closer line cut off (whole-line truncation
+        // is detectable; a byte-level cut inside the closer's path text
+        // is structurally indistinguishable from a shorter path and is
+        // not — detection is structural by design).
+        let r = rep(Some(side(0)), vec![side(1), side(2)]);
+        let full = marker_bytes(&r, fetch_of).unwrap();
+        let text = String::from_utf8(full).unwrap();
+        let no_closer = text
+            .lines()
+            .filter(|l| !l.starts_with(">>>>>>> "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!marker_shaped(no_closer.as_bytes()));
+        // An opener-only file.
+        let opener = format!("<<<<<<< naatre side 1/2: {}\n", side(1).to_hex());
+        assert!(!marker_shaped(opener.as_bytes()));
+        // Divider side count disagreement (opener says 2, two dividers).
+        let bogus = format!(
+            "<<<<<<< naatre side 1/2: {s1}\n======= naatre side 2/2: {s2}\n\
+             ======= naatre side 3/2: {s3}\n>>>>>>> naatre conflict: a.txt\n",
+            s1 = side(1).to_hex(),
+            s2 = side(2).to_hex(),
+            s3 = side(3).to_hex(),
+        );
+        assert!(!marker_shaped(bogus.as_bytes()));
+        // A second base line.
+        let twobase = format!(
+            "<<<<<<< naatre side 1/2: {s1}\n||||||| naatre base: {s0}\n\
+             ||||||| naatre base: {s0}\n======= naatre side 2/2: {s2}\n\
+             >>>>>>> naatre conflict: a.txt\n",
+            s0 = side(0).to_hex(),
+            s1 = side(1).to_hex(),
+            s2 = side(2).to_hex(),
+        );
+        assert!(!marker_shaped(twobase.as_bytes()));
+        // Non-UTF-8 bytes.
+        assert!(!marker_shaped(&[0xff, 0xfe, 0xfd]));
     }
 }

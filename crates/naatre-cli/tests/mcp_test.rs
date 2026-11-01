@@ -610,7 +610,7 @@ fn mcp_e2e_clone_edit_commit_land_and_sync_after_foreign_land() {
         verbs::commit::run(&wc3, "second client", None, &net(&server)),
         0
     );
-    assert_eq!(verbs::land::run(&wc3, None, &net(&server)), 0);
+    assert_eq!(verbs::land::run(&wc3, None, false, &net(&server)), 0);
 
     let synced = mcp.call_ok("sync", json!({}));
     assert_eq!(synced["up_to_date"], false);

@@ -219,12 +219,24 @@ hash input, so a v2 id never equals a v1 id of the same bytes.
 share a data dir: the old binary refuses the store at open (the guard
 above), and `naatre restore` refuses a v12 backup under a v11 binary by
 the same comparison (`staged_version > MAX_SUPPORTED`). The client-side
-case: a v2-ignorant client against a v2-aware server sees a conflicted
-node as opaque/version-skewed — it refuses rather than guessing at
-content it cannot interpret, and points at `GET /version` (which reports
-the protocol version clients warn on skew about). It never receives v2
-content reinterpreted under v1. The client-side conflicted-node refusals
-(sync, `status`) land with the M12 client slice.
+case (landed with the M12 client slice): a v2-ignorant client against a
+v2-aware server detects a conflicted node through the changeset read's
+`conflicted` field (M12a) and refuses with `version_skew_conflicted`
+(exit 2) — it never silently materializes marker content it cannot
+interpret, and the message points at `GET /version` (which reports the
+protocol version clients warn on skew about). It never receives v2
+content reinterpreted under v1. A v2-aware client materializes the
+markers (the conflicted node's `root_tree_id` IS the markers-materialized
+tree), `status` marks the conflicted paths from `.naatre/state.json`
+(zero server calls), commits of marker-shaped files refuse with
+`conflict_markers_present`, and `naatre resolve <path>` commits the
+resolution. The refusal above needs the M12b detection code; an
+UNCHANGED pre-M12 binary client has neither the detection code nor the
+marker gate — it syncs a conflicted main as plain marker text and can
+commit those markers as ordinary content, and for such a binary the
+store-level schema guard is the only lockout. Operators should upgrade
+clients before enabling `record_conflict` flows. (A server-side
+marker-shape check at land is recorded as a follow-up, not built here.)
 
 ## 8. Conflict representations (format v2)
 

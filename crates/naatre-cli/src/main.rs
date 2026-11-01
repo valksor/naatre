@@ -2,8 +2,8 @@
 //! (`init`, `serve`, `token --new-admin`, `import`) that run directly
 //! against the 0700 data dir, thin HTTP client verbs (`repo`, `token`
 //! subcommands), the working-copy verbs (`clone`, `status`, `sparse`,
-//! `sync`, `commit`, `cat`, `ls`, `diff`, `doctor`, `login`, `snapshot`,
-//! `restore`, `mcp`), and the mount daemon (`mount`, M8).
+//! `sync`, `commit`, `resolve`, `cat`, `ls`, `diff`, `doctor`, `login`,
+//! `snapshot`, `restore`, `mcp`), and the mount daemon (`mount`, M8).
 //!
 //! Pinned exit codes across client verbs: 0 success, 1 generic error,
 //! 2 conflict-class (409 envelopes), 3 usage.
@@ -188,11 +188,32 @@ enum Cmd {
     },
     /// Land the working copy's head onto the server's main (server-side
     /// rebase). The random default key is printed; pass it back with --key
-    /// to retry or to re-land after a conflict.
+    /// to retry or to re-land after a conflict. A rebase conflict answers
+    /// the structured 409 + recipe; --record-conflict opts into recording
+    /// the conflict on main instead (a conflicted changeset, settled once).
     Land {
         /// Idempotency key (default: a random 8-hex suffix, printed).
         #[arg(long)]
         key: Option<String>,
+        /// M12 opt-in (default off): instead of the 409 + recipe on a
+        /// rebase conflict, record the conflict on main as a conflicted
+        /// changeset (format v2, markers materialized in its tree,
+        /// `lands.state = 'conflicted'` — still ONE settlement; the same
+        /// key re-lands after the 409). Unrepresentable conflicts (a
+        /// deletion side) still refuse. Resolve afterwards with
+        /// `naatre resolve <path>`.
+        #[arg(long)]
+        record_conflict: bool,
+        #[command(flatten)]
+        net: NetOpts,
+    },
+    /// Commit the resolved content of one conflicted path as an explicit
+    /// resolution changeset referencing the conflicted head (M12): the
+    /// path must be one `status` marks conflicted, and the file on disk
+    /// must no longer be a marker file. Follow with `naatre land`.
+    Resolve {
+        /// Repo-relative path of the conflicted file (as `status` shows it).
+        path: String,
         #[command(flatten)]
         net: NetOpts,
     },
@@ -581,8 +602,15 @@ fn main() {
         } => wc_locked(cwd, || {
             verbs::commit::run(cwd, &message, author.as_deref(), &net.net())
         }),
-        Cmd::Land { key, net } => {
-            wc_locked(cwd, || verbs::land::run(cwd, key.as_deref(), &net.net()))
+        Cmd::Land {
+            key,
+            record_conflict,
+            net,
+        } => wc_locked(cwd, || {
+            verbs::land::run(cwd, key.as_deref(), record_conflict, &net.net())
+        }),
+        Cmd::Resolve { path, net } => {
+            wc_locked(cwd, || verbs::resolve::run(cwd, &path, &net.net()))
         }
         Cmd::Cat { path, at, net } => wc_locked(cwd, || {
             verbs::reads::cat(cwd, &path, at.as_deref(), &net.net())

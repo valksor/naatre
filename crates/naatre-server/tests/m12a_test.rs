@@ -656,20 +656,20 @@ async fn recipes_lead_with_the_api_field_and_name_the_refusal() {
     .await;
     f.t.move_main(f.repo_id, &c_mod);
 
-    // The DEFAULT 409 recipe leads with the API field (the opt-in that
-    // exists today) and names the CLI flag as arriving with the slice.
+    // The DEFAULT 409 recipe leads with the CLI flag (M12b: it exists)
+    // and keeps the API request field named for non-CLI clients.
     let resp = land(&f, &c_del, "k-def").await;
     assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
     let recipe = resp.body["error"]["details"]["recipe"].as_str().unwrap();
     assert!(
         recipe.starts_with(
             "to record the conflict on main as a conflicted changeset, re-land with the \
-             same key and the API request field \"record_conflict\": true"
+             same key and `naatre land --record-conflict`"
         ),
         "{recipe}"
     );
     assert!(
-        recipe.contains("--record-conflict flag arrives with the client slice"),
+        recipe.contains("the API request field \"record_conflict\": true for non-CLI clients"),
         "{recipe}"
     );
 

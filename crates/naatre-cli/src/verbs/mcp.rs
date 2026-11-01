@@ -766,7 +766,13 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
         }
         "land" => {
             let key = take_str(args, "key", false)?;
-            let outcome = tool(super::land::core(root, key.as_deref(), net, &mut |_| {}))?;
+            let outcome = tool(super::land::core(
+                root,
+                key.as_deref(),
+                false,
+                net,
+                &mut |_| {},
+            ))?;
             let payload = json!({
                 "key": outcome.key,
                 "landed": outcome.landed,

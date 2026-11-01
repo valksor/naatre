@@ -1479,36 +1479,36 @@ async fn gc_collects_while_derive_queue_holds_leases() {
     assert!(report.clean(), "{report:?}");
 }
 
-// ---- M12a-fix: the mechanical GC hold ---------------------------------------
+// ---- M12b: the GC walker through conflict representations -------------------
 
-/// The hold is erasure-safe and mechanical: (a) a pure-v1 store reclaims
-/// garbage exactly as before (`conflict_hold` false); (b) a store holding
-/// a v2 changeset withholds NON-REDACTED garbage — the report names the
-/// hold and the withheld counts; (c) the SAME store still purges a
-/// tombstoned blob (the redaction purge phase is untouched); (d) the
-/// withheld garbage reclaims on the first sweep after the v2 changeset is
-/// gone. Detection is the canonical v2-magic probe — never lands.state
-/// (carried reps have no settlement row), no new column.
+/// The M12a-fix mechanical hold is GONE (m12b replaced it with the walker).
+/// Pins: (a) a pure-v1 store reclaims garbage exactly as before; (b) on a
+/// v2-bearing store, garbage still RECLAIMS (the hold is lifted) — and the
+/// conflicted changeset's rep side/base blobs stay reachable even when the
+/// scaffolding that shadowed them (the land row's head/base seeds, the
+/// side changesets' file_changes rows) is removed by hand, so the
+/// representation is provably their only remaining reference; (c) a
+/// tombstoned blob still purges (the redaction phase runs untouched —
+/// erasure is never held).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gc_conflict_hold_withholds_non_redacted_garbage_only() {
+async fn gc_walker_keeps_conflict_rep_blobs_reachable() {
     let f = fixture();
     let (root, _) = seed_base(&f).await;
 
     // (a) v1-only: the orphan is garbage; ledgered at the base clock, it
-    // reclaims on the first past-grace sweep, no hold.
+    // reclaims on the first past-grace sweep — pure-v1 collection
+    // unchanged by the walker.
     let _orphan1 = f.commit(json!([root.clone()]), "o1.txt", b"orphan-1").await;
-    let report = gc_pass(&f.t.state).await.unwrap();
-    assert!(!report.conflict_hold, "{report:?}");
+    gc_pass(&f.t.state).await.unwrap();
     f.tick_to(BASE_NS + GRACE_NS);
     let report = gc_pass(&f.t.state).await.unwrap();
-    assert!(!report.conflict_hold, "{report:?}");
     assert!(report.cs_collected >= 1, "v1 garbage reclaims: {report:?}");
 
     // The v2 changeset: a record-conflict land settles a conflicted node
-    // on main.
+    // on main. base = c1's content, ours = c2's, theirs = c2p's.
+    let base = b"l1\nl2\nl3\n".to_vec();
     let ours = b"L1-gc\nl2\nl3\n".to_vec();
     let theirs = b"X1-gc\nl2\nl3\n".to_vec();
-    let base = b"l1\nl2\nl3\n".to_vec();
     let (bc, bo, bt) = (
         f.put_blob(&base).await,
         f.put_blob(&ours).await,
@@ -1550,7 +1550,7 @@ async fn gc_conflict_hold_withholds_non_redacted_garbage_only() {
         &f.t.app,
         &format!("/v1/repos/{REPO}/land"),
         &f.writer,
-        &json!({ "head": c2, "key": "k-hold", "record_conflict": true }),
+        &json!({ "head": c2, "key": "k-walker", "record_conflict": true }),
     )
     .await;
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
@@ -1564,8 +1564,7 @@ async fn gc_conflict_hold_withholds_non_redacted_garbage_only() {
         .unwrap();
     assert_eq!(canonical[16], 0x02, "the settlement is a v2 node");
 
-    // (b) + (c): fresh v1 garbage is WITHHELD while the v2 node exists,
-    // and a tombstoned blob still purges in the same sweep.
+    // (c) the tombstone: a doomed blob purges on the next purging pass.
     let doomed = f.put_blob(b"doomed-blob").await;
     m4b_common::conn_at(&f.t.db_path)
         .execute(
@@ -1574,32 +1573,45 @@ async fn gc_conflict_hold_withholds_non_redacted_garbage_only() {
             rusqlite::params![f.repo_id, hex_id(&doomed).0.as_slice(), BASE_NS as i64],
         )
         .unwrap();
+
+    // Fresh v1 garbage on the v2-bearing store: with the hold GONE it
+    // reclaims like any garbage (the M12a accumulation is over).
     let _orphan2 = f.commit(json!([root.clone()]), "o2.txt", b"orphan-2").await;
-    // The ledger pass at BASE+GRACE stamps the orphan's first-seen (the
-    // hold already gates the collection arms — nothing reclaims).
-    f.tick_to(BASE_NS + GRACE_NS);
-    let report = gc_pass(&f.t.state).await.unwrap();
-    assert!(report.conflict_hold, "{report:?}");
-    assert!(
-        report.cs_collected + report.blobs_collected + report.trees_collected == 0,
-        "{report:?}"
-    );
-    // Past the orphan's grace: the arms WOULD take it — the hold withholds.
+
+    // Scaffolding: strip every reference that shadows the rep sides — the
+    // land row's head/base seeds and the side changesets' rows (c2p is
+    // the v2 node's parent, so its ID still walks the closure; with its
+    // row gone its delta no longer marks theirs, and c1's row gone
+    // unmarks base; c2 itself drops out of the mark and collects below).
+    // After this, the v2 representation is the ONLY reference to all
+    // three side/base blobs.
+    let conn = m4b_common::conn_at(&f.t.db_path);
+    conn.execute(
+        "UPDATE lands SET head = NULL, base = NULL WHERE repo_id = ?1",
+        rusqlite::params![f.repo_id],
+    )
+    .unwrap();
+    for cs in [&c1, &c2p] {
+        conn.execute(
+            "DELETE FROM file_changes WHERE repo_id = ?1 AND cs = ?2",
+            rusqlite::params![f.repo_id, hex_id(cs).0.as_slice()],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            rusqlite::params![f.repo_id, hex_id(cs).0.as_slice()],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    // First past-grace pass: ledgers the new garbage (first-seen NOW —
+    // nothing collects yet), purges the tombstoned blob.
     f.tick_to(BASE_NS + 2 * GRACE_NS);
     let report = gc_pass(&f.t.state).await.unwrap();
-    assert!(report.conflict_hold, "{report:?}");
-    assert!(
-        report.withheld_cs >= 1,
-        "the orphan is withheld: {report:?}"
-    );
-    assert!(report.withheld_blobs >= 1, "{report:?}");
-    assert!(
-        report.cs_collected + report.blobs_collected + report.trees_collected == 0,
-        "nothing non-redacted reclaims under the hold: {report:?}"
-    );
     assert!(
         report.redactions_purged_blobs >= 1,
-        "the tombstoned blob purged under the hold: {report:?}"
+        "the tombstoned blob purged: {report:?}"
     );
     assert_eq!(
         f.count_params(
@@ -1610,21 +1622,38 @@ async fn gc_conflict_hold_withholds_non_redacted_garbage_only() {
         "the doomed blob's rows went with the purge"
     );
 
-    // (d) the v2 changeset gone (the row deleted, main rewound off it):
-    // the withheld garbage reclaims on the FIRST sweep, no hold.
-    let conn = m4b_common::conn_at(&f.t.db_path);
-    conn.execute(
-        "UPDATE refs SET target = ?2 WHERE repo_id = ?1 AND name = 'main'",
-        rusqlite::params![f.repo_id, hex_id(&c2p).0.as_slice()],
-    )
-    .unwrap();
-    conn.execute(
-        "DELETE FROM changesets WHERE repo_id = ?1 AND id = ?2",
-        rusqlite::params![f.repo_id, hex_id(&v2).0.as_slice()],
-    )
-    .unwrap();
-    drop(conn);
+    // Second pass: the ledgered garbage collects ON THE V2-BEARING STORE
+    // (the hold is gone), and the walker's pins hold — every rep
+    // side/base blob is still present in the CAS inventory, reachable
+    // through nothing but the conflict representation.
+    f.tick_to(BASE_NS + 3 * GRACE_NS);
     let report = gc_pass(&f.t.state).await.unwrap();
-    assert!(!report.conflict_hold, "{report:?}");
-    assert!(report.cs_collected >= 1, "the orphan reclaims: {report:?}");
+    assert!(
+        report.cs_collected >= 2,
+        "c2 and orphan2 collected (the hold is lifted): {report:?}"
+    );
+    for (name, blob) in [("ours", &bo), ("theirs", &bt), ("base", &bc)] {
+        assert_eq!(
+            f.count_params(
+                "SELECT COUNT(*) FROM objects WHERE object_id = ?1",
+                &[&hex_id(blob).0.as_slice()]
+            ),
+            1,
+            "the {name} side survives collection through the rep"
+        );
+        assert!(
+            f.t.state.cas.has(&[hex_id(blob)]).unwrap()[0],
+            "the {name} side's bytes are still in the CAS"
+        );
+    }
+    // The conflicted node itself is main's tip and still serves its
+    // markers.
+    assert_eq!(
+        f.count_params(
+            "SELECT COUNT(*) FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            &[&f.repo_id, &hex_id(&v2).0.as_slice()]
+        ),
+        1,
+        "the settlement node is untouched"
+    );
 }

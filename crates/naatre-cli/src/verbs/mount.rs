@@ -384,6 +384,7 @@ pub fn flush_and_cleanup(
                         vfs.repo(),
                         &outcome.changeset.to_hex(),
                         &key,
+                        false,
                         &mut |_| {},
                     ) {
                         Ok(landed) => println!(

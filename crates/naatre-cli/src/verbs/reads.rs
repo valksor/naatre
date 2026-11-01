@@ -112,9 +112,12 @@ pub fn cat_bytes(
 
 /// `naatre blame <path> [--at REF|CS]` — per-line attribution from the
 /// server's derived blame. Pinned human line format:
-/// `<8-hex cs> <author> | <line>` (the first 8 hex of the changeset id).
+/// `<8-hex cs> <author> | <line>` (the first 8 hex of the changeset id);
+/// a conflicted region's lines (M12b) print
+/// `<8-hex cs> (conflict) | <line>`.
 /// `--json` prints exactly `{"lines":[{cs,author,text}]}` with the full
-/// 64-hex ids. A binary file is the server's structured empty result:
+/// 64-hex ids (M12b adds `conflicted` per line, the server's field
+/// verbatim). A binary file is the server's structured empty result:
 /// exit 0, `{"lines":[]}` on stdout under `--json` (nothing in the human
 /// format), the stable code noted on stderr. A degraded (quarantined
 /// chain) blame prints a stderr warning and exits 0.
@@ -141,7 +144,14 @@ pub fn blame(root: &Path, path: &str, at: Option<&str>, json_out: bool, net: &Ne
             } else {
                 for l in result.lines.as_array().map_or(&[][..], Vec::as_slice) {
                     let cs8: String = l["cs"].as_str().unwrap_or("?").chars().take(8).collect();
-                    let author = l["author"].as_str().unwrap_or("?");
+                    // M12b: a conflicted region's lines name the conflict,
+                    // not the recording node's author (the JSON carries
+                    // both fields).
+                    let author = if l["conflicted"].as_bool() == Some(true) {
+                        "(conflict)"
+                    } else {
+                        l["author"].as_str().unwrap_or("?")
+                    };
                     let text = l["text"].as_str().unwrap_or("");
                     println!("{cs8} {author} | {text}");
                 }

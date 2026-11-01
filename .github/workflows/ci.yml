@@ -126,12 +126,6 @@ jobs:
       # format under the signed envelope): 0.5.9 is the version
       # scripts/release.sh was validated with.
       - run: cargo install cargo-cyclonedx --locked --version 0.5.9
-      # The M12a release HOLD selftest (fast; the marker path is anchored
-      # to the script and the selftest creates/removes the marker only
-      # when the hold is not live): signing mode refuses with the hold,
-      # and --no-sign (CI's shape, in any argument position) proceeds.
-      # Removed with m12b together with the marker.
-      - run: scripts/release.sh --selftest-hold
       - run: scripts/release.sh --no-sign release-artifacts x86_64-unknown-linux-musl
       # The SBOM and the versioned binary must be INSIDE the checksummed
       # set: the minisign signature covers SHA256SUMS, so a file missing

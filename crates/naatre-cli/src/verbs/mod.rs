@@ -19,6 +19,7 @@ pub mod login;
 pub mod mcp;
 pub mod mount;
 pub mod reads;
+pub mod resolve;
 pub mod restore;
 pub mod snapshot;
 pub mod sparse;

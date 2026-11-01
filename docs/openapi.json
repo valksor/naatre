@@ -166,6 +166,10 @@
           "author": {
             "type": "string"
           },
+          "conflicted": {
+            "description": "M12b: true when the line belongs to a conflicted region — it was\nintroduced by a format-v2 changeset carrying a conflict\nrepresentation at this path, so the text is the materialized\nmarker rendering. It reports as CONFLICT, not as that node's\nauthor's content.",
+            "type": "boolean"
+          },
           "cs": {
             "description": "64-hex id of the changeset whose edit introduced the line\n(first-parent semantics: compared against the first parent).",
             "type": "string"
@@ -178,7 +182,8 @@
         "required": [
           "cs",
           "author",
-          "text"
+          "text",
+          "conflicted"
         ],
         "type": "object"
       },
@@ -651,6 +656,7 @@
           "git_history_diverged",
           "redacted_base",
           "conflict_markers_present",
+          "version_skew_conflicted",
           "malformed",
           "validation",
           "path_not_normalized",

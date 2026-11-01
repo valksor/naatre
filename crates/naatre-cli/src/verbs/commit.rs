@@ -11,10 +11,12 @@
 
 use std::path::Path;
 
+use naatre_core::conflict;
 use naatre_core::ids::{Id, Kind, object_id};
 use serde_json::{Value, json};
 
 use super::{Net, VerbError};
+use crate::client::HttpError;
 use crate::wc::index::Row;
 use crate::wc::{Wc, default_author, now_ns, under_sparse};
 
@@ -91,7 +93,25 @@ pub fn value(
     }
     for path in &report.modified {
         let raw = raw_of(path);
-        let (blob, size, exec) = read_file(root, &raw)?;
+        let (blob, size, exec, bytes) = read_file(root, &raw)?;
+        // M12b marker gate: a pending file that IS a rendered conflict
+        // marker file refuses before any upload — committing it would
+        // store the conflict as anonymous content. Resolved content is
+        // just a mod; `naatre resolve` is the contract for clearing.
+        if conflict::marker_shaped(&bytes) {
+            return Err(VerbError::Http(HttpError::Envelope {
+                status: 409,
+                code: "conflict_markers_present".into(),
+                message: format!(
+                    "{path} contains conflict markers (a \">>>>>>> naatre conflict:\" \
+                     file rendered from a recorded conflict); committing it would store \
+                     the conflict as anonymous content — resolve it instead: edit the \
+                     resolved content, then run `naatre resolve {path}`"
+                ),
+                details: None,
+                retry_after: None,
+            }));
+        }
         pending.push(Pending {
             path: path.clone(),
             raw,
@@ -106,7 +126,21 @@ pub fn value(
             continue; // add-all applies under the sparse prefixes only
         }
         let raw = raw_of(path);
-        let (blob, size, exec) = read_file(root, &raw)?;
+        let (blob, size, exec, bytes) = read_file(root, &raw)?;
+        if conflict::marker_shaped(&bytes) {
+            return Err(VerbError::Http(HttpError::Envelope {
+                status: 409,
+                code: "conflict_markers_present".into(),
+                message: format!(
+                    "{path} contains conflict markers (a \">>>>>>> naatre conflict:\" \
+                     file rendered from a recorded conflict); committing it would store \
+                     the conflict as anonymous content — resolve it instead: edit the \
+                     resolved content, then run `naatre resolve {path}`"
+                ),
+                details: None,
+                retry_after: None,
+            }));
+        }
         pending.push(Pending {
             path: path.clone(),
             raw,
@@ -176,8 +210,14 @@ pub fn value(
         .and_then(Id::from_hex)
         .ok_or_else(|| VerbError::Local("server returned a malformed changeset id".into()))?;
 
-    // Update state head and the index rows for committed paths.
+    // Update state head and the index rows for committed paths. A
+    // committed pending path is non-marker content (the gate refused the
+    // marker-shaped ones), so committing it clears its conflicted mark —
+    // a manual edit + plain commit is a valid resolution-by-commit.
+    let mut conflicted: std::collections::BTreeSet<String> =
+        state.conflicted.iter().cloned().collect();
     for p in &pending {
+        conflicted.remove(&p.path);
         match p.op {
             "del" => {
                 index.rows.remove(&p.path);
@@ -198,6 +238,7 @@ pub fn value(
         base: state.base,
         sparse: state.sparse,
         server_repo: state.server_repo,
+        conflicted: conflicted.into_iter().collect(),
     };
     wc.save_state(&new_state)?;
     wc.save_index(&index)?;
@@ -210,13 +251,18 @@ pub fn value(
     }))
 }
 
-/// Reads a pending file's bytes and derives (blob, size, exec).
-fn read_file(root: &Path, raw: &str) -> Result<(Id, u64, bool), VerbError> {
+/// Reads a pending file's bytes and derives (blob, size, exec, bytes).
+fn read_file(root: &Path, raw: &str) -> Result<(Id, u64, bool, Vec<u8>), VerbError> {
     use std::os::unix::fs::MetadataExt as _;
     let bytes = std::fs::read(root.join(raw))
         .map_err(|e| VerbError::Local(format!("reading {raw:?}: {e}")))?;
     let meta = std::fs::metadata(root.join(raw))
         .map_err(|e| VerbError::Local(format!("stating {raw:?}: {e}")))?;
     let exec = meta.mode() & 0o111 != 0;
-    Ok((object_id(Kind::Blob, &bytes), bytes.len() as u64, exec))
+    Ok((
+        object_id(Kind::Blob, &bytes),
+        bytes.len() as u64,
+        exec,
+        bytes,
+    ))
 }

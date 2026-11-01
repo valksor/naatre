@@ -22,12 +22,49 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use naatre_core::conflict;
 use naatre_core::ids::Id;
 use serde_json::{Value, json};
 
 use super::{Net, VerbError};
+use crate::client::HttpError;
 use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree_allowing_missing_prefixes};
 use crate::wc::{State, Wc, remove_and_prune, under_sparse};
+
+/// The build's conflicted-node capability (M12b): this client understands
+/// format v2 — it materializes a conflicted node's markers and gates its
+/// own commits against them (naatre-core carries the v2 frame and the
+/// marker rendering/detector). A client build predating M12b lacks that
+/// machinery entirely; for the wire-level story the capability is named
+/// here so the refusal decision is real, unit-pinned code instead of an
+/// undocumented hole in the mixed-fleet contract (docs/format.md
+/// "Mixed-fleet skew": an old client refuses, never guesses).
+const CONFLICT_MATERIALIZATION_SUPPORTED: bool = true;
+
+/// The conflicted-sync decision (unit-pinned both ways): a conflicted
+/// node needs v2 materialization support. A client without it refuses
+/// with the documented version-skew error — it never silently
+/// materializes marker content it cannot interpret, and the error names
+/// the upgrade (GET /version reports the server's protocol, the pointer
+/// docs/format.md pins for skew).
+pub(crate) fn conflicted_sync_decision(
+    conflicted: bool,
+    v2_capable: bool,
+) -> Result<(), VerbError> {
+    if conflicted && !v2_capable {
+        return Err(VerbError::Http(HttpError::Envelope {
+            status: 409,
+            code: "version_skew_conflicted".into(),
+            message: "main's head carries a first-class conflict (format v2); this client \
+                      predates v2 and cannot materialize it honestly — upgrade the client \
+                      (GET /version reports the server's protocol)"
+                .into(),
+            details: None,
+            retry_after: None,
+        }));
+    }
+    Ok(())
+}
 
 /// Runs sync; prints the outcome and returns the exit code.
 pub fn run(root: &Path, force: bool, net: &Net) -> i32 {
@@ -46,6 +83,11 @@ pub fn run(root: &Path, force: bool, net: &Net) -> i32 {
                         _ => "M",
                     };
                     println!("{c} {}", entry["path"].as_str().unwrap_or("?"));
+                }
+                // M12b: the conflicted paths after this sync (markers
+                // materialized on disk); `resolve` clears them.
+                for p in v["conflicted"].as_array().map_or(&[][..], Vec::as_slice) {
+                    println!("C {}", p.as_str().unwrap_or("?"));
                 }
             }
             0
@@ -79,6 +121,22 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     if target == head {
         return Ok(json!({ "up_to_date": true, "head": target.to_hex(), "applied": [] }));
     }
+
+    // The M12 conflicted-node contract: the target changeset's `conflicted`
+    // field (served since M12a) is what makes detection possible. A client
+    // without v2 materialization support refuses here — never guesses.
+    let csv = client.get_json(
+        &format!(
+            "/v1/repos/{}/changesets/{}",
+            crate::client::uri_segment(&repo),
+            target.to_hex()
+        ),
+        &[],
+    )?;
+    conflicted_sync_decision(
+        csv["conflicted"].as_bool() == Some(true),
+        CONFLICT_MATERIALIZATION_SUPPORTED,
+    )?;
 
     // Incoming path-level diff.
     let diffv = client.get_json(
@@ -216,11 +274,20 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     }
 
     // Apply, then update the index and state together at the end.
+    let mut conflicted: BTreeSet<String> = state.conflicted.iter().cloned().collect();
     for (path, blob) in &adds {
         let bytes = &blobs[blob];
         let file = by_path[path.as_str()];
         let row = materialize(root, file, bytes)?;
         index.rows.insert(path.clone(), row);
+        // M12b: a fetched blob that IS a rendered marker file marks the
+        // path conflicted; any other incoming content clears a stale
+        // conflicted mark (a resolution reached the path from elsewhere).
+        if conflict::marker_shaped(bytes) {
+            conflicted.insert(path.clone());
+        } else {
+            conflicted.remove(path);
+        }
     }
     for (path, kind) in &incoming {
         // Belt and braces: only a tracked path can be deleted from disk —
@@ -232,12 +299,18 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
         remove_and_prune(root, path)
             .map_err(|e| VerbError::Local(format!("removing {path:?}: {e}")))?;
         index.rows.remove(path);
+        conflicted.remove(path);
     }
+    // Paths untouched by this sync keep their marks: the blob behind them
+    // is unchanged in the target tree (any change to the path would have
+    // appeared in the incoming diff above).
+    let conflicted: Vec<String> = conflicted.into_iter().collect();
     let new_state = State {
         head: target.to_hex(),
         base: state.base,
         sparse: state.sparse,
         server_repo: repo,
+        conflicted,
     };
     wc.save_state(&new_state)?;
     wc.save_index(&index)?;
@@ -256,5 +329,42 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
         "head": target.to_hex(),
         "applied": applied,
         "unavailable": unavailable,
+        "conflicted": new_state.conflicted,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The version-skew refusal (M12b, docs/format.md "Mixed-fleet skew"):
+    /// an old-shape client (one that does not understand v2) syncing a
+    /// conflicted node refuses with the documented skew error naming the
+    /// upgrade — it never silently materializes content it cannot
+    /// interpret. A v2-capable client proceeds to materialize (the e2e
+    /// pins that path against the real binary).
+    #[test]
+    fn conflicted_sync_refuses_for_a_pre_v2_client() {
+        let err = conflicted_sync_decision(true, false).expect_err("old client refuses");
+        match err {
+            VerbError::Http(HttpError::Envelope {
+                status,
+                code,
+                message,
+                ..
+            }) => {
+                assert_eq!(status, 409);
+                assert_eq!(code, "version_skew_conflicted");
+                assert!(message.contains("format v2"), "{message}");
+                assert!(message.contains("upgrade the client"), "{message}");
+                assert!(message.contains("GET /version"), "{message}");
+            }
+            other => panic!("expected the skew envelope, got {other:?}"),
+        }
+        // The same client on a CLEAN main proceeds — the refusal is
+        // conflicted-node-shaped, not a blanket refusal.
+        conflicted_sync_decision(false, false).expect("a clean sync needs no v2 support");
+        // The v2-capable client (this build) proceeds on a conflicted node.
+        conflicted_sync_decision(true, true).expect("v2-capable client materializes");
+    }
 }
