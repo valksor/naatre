@@ -1013,6 +1013,15 @@ struct BlameWalk {
     degraded: bool,
 }
 
+/// True when a changeset's canonical is a format-v2 frame — the FULL
+/// v2 magic prefix (all 17 bytes, m12b-fix: a one-byte compare could be
+/// carried by any frame sharing byte 16). The blame walk's conflicted
+/// introducer checks confine their decode with this peek.
+fn canonical_is_v2(canonical: &[u8]) -> bool {
+    canonical.len() >= naatre_core::changeset::MAGIC_V2.len()
+        && canonical[..naatre_core::changeset::MAGIC_V2.len()] == *naatre_core::changeset::MAGIC_V2
+}
+
 /// The author string a tombstone boundary carries: the redacted changeset's
 /// real author must never serve (the plan's tombstone-meta rule), so the
 /// boundary is labeled with this placeholder instead — attribution to the
@@ -1164,6 +1173,22 @@ pub async fn blame(
                                 .expect("walk only advances past a parent-blob node"),
                             None => final_blob,
                         };
+                        // M12b-fix (compliance A3): the boundary branch
+                        // applies the same conflicted check as the
+                        // touched-path branch — a quarantined node whose
+                        // canonical carries a rep at this path introduced
+                        // marker-rendering lines, and the lines attributed
+                        // to the boundary report as conflict, not as the
+                        // (otherwise servable) author's content.
+                        if canonical_is_v2(&cs_row.canonical)
+                            && naatre_core::changeset::decode(&cs_row.canonical)
+                                .map_err(ApiError::log_internal)?
+                                .conflicts
+                                .iter()
+                                .any(|rep| rep.path == path)
+                        {
+                            conflicted_cs.push(current);
+                        }
                         boundary = Some(BlameBoundary {
                             cs: current,
                             // A redacted node never reaches this arm (the
@@ -1199,11 +1224,10 @@ pub async fn blame(
                             // M12b: a v2 canonical carrying a rep at this
                             // path makes the node a conflicted introducer
                             // — its lines (the marker rendering) report
-                            // as conflict. The magic-byte peek confines
+                            // as conflict. The full-magic peek confines
                             // the decode to v2 rows (v1 rows never carry
                             // reps).
-                            if cs_row.canonical.len() >= naatre_core::changeset::MAGIC_V2.len()
-                                && cs_row.canonical[16] == naatre_core::changeset::MAGIC_V2[16]
+                            if canonical_is_v2(&cs_row.canonical)
                                 && naatre_core::changeset::decode(&cs_row.canonical)
                                     .map_err(ApiError::log_internal)?
                                     .conflicts

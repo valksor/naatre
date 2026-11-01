@@ -34,12 +34,46 @@ use crate::wc::{State, Wc, remove_and_prune, under_sparse};
 /// The build's conflicted-node capability (M12b): this client understands
 /// format v2 — it materializes a conflicted node's markers and gates its
 /// own commits against them (naatre-core carries the v2 frame and the
-/// marker rendering/detector). A client build predating M12b lacks that
-/// machinery entirely; for the wire-level story the capability is named
-/// here so the refusal decision is real, unit-pinned code instead of an
-/// undocumented hole in the mixed-fleet contract (docs/format.md
-/// "Mixed-fleet skew": an old client refuses, never guesses).
+/// marker rendering/detector). HONESTY (the mixed-fleet disclosure,
+/// docs/format.md "Mixed-fleet skew"): NO shipped binary emits the
+/// refusal — every naatre build ships this constant true, and an
+/// UNCHANGED pre-M12 client binary predates the branch entirely (it
+/// syncs markers as plain text and can commit them; the store-level
+/// schema guard is that binary's only lockout). The constant and the
+/// decision below are the CONTRACT a v2-aware-lineage build with the
+/// capability absent honors, unit-pinned by
+/// `conflicted_sync_refuses_for_a_pre_v2_client`; the repo-required
+/// comment keeps the dead-in-practice branch from reading as live
+/// behavior.
 const CONFLICT_MATERIALIZATION_SUPPORTED: bool = true;
+
+/// The guarded contract check (see the call site): the changeset fetch
+/// and the skew decision run only when this build's v2 capability is
+/// absent. A plain `if CONST` at the call site would read as live
+/// behavior; this wrapper names the contract and folds away in shipped
+/// builds (a const condition inside a function body, not a call-site
+/// branch).
+fn conflicted_contract_check(
+    client: &crate::client::Client,
+    repo: &str,
+    target: &Id,
+) -> Result<(), VerbError> {
+    if CONFLICT_MATERIALIZATION_SUPPORTED {
+        return Ok(());
+    }
+    let csv = client.get_json(
+        &format!(
+            "/v1/repos/{}/changesets/{}",
+            crate::client::uri_segment(repo),
+            target.to_hex()
+        ),
+        &[],
+    )?;
+    conflicted_sync_decision(
+        csv["conflicted"].as_bool() == Some(true),
+        CONFLICT_MATERIALIZATION_SUPPORTED,
+    )
+}
 
 /// The conflicted-sync decision (unit-pinned both ways): a conflicted
 /// node needs v2 materialization support. A client without it refuses
@@ -102,7 +136,7 @@ pub fn run(root: &Path, force: bool, net: &Net) -> i32 {
 pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     let wc = Wc::open(root)?;
     let state = wc.load_state()?;
-    let mut index = wc.load_index()?;
+    let index = wc.load_index()?;
     let client = wc.client(net)?;
 
     let repo = state.server_repo.clone();
@@ -122,28 +156,108 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
         return Ok(json!({ "up_to_date": true, "head": target.to_hex(), "applied": [] }));
     }
 
-    // The M12 conflicted-node contract: the target changeset's `conflicted`
-    // field (served since M12a) is what makes detection possible. A client
-    // without v2 materialization support refuses here — never guesses.
-    let csv = client.get_json(
-        &format!(
-            "/v1/repos/{}/changesets/{}",
-            crate::client::uri_segment(&repo),
-            target.to_hex()
-        ),
-        &[],
-    )?;
-    conflicted_sync_decision(
-        csv["conflicted"].as_bool() == Some(true),
-        CONFLICT_MATERIALIZATION_SUPPORTED,
-    )?;
+    // The M12 conflicted-node contract (senior-qa A2): the target
+    // changeset's `conflicted` field (served since M12a) is what makes
+    // detection possible — for a build WITHOUT v2 materialization. The
+    // fetch + decision are guarded behind the capability constant: every
+    // shipped build folds this away and issues no GET (the v2-aware path
+    // needs no metadata — detection is the marker content itself); the
+    // branch is a contract kept for a v2-ignorant build, pinned by the
+    // decision-function unit tests, unreachable at runtime.
+    conflicted_contract_check(&client, &repo, &target)?;
 
+    // Apply the head → target tree difference through the ONE
+    // materialization path (m12b-fix: land's working-copy update shares
+    // this exact code — see `apply_tree_diff`).
+    let applied = match apply_tree_diff(root, &state, index, &client, &head, &target, force)? {
+        Ok(applied) => applied,
+        Err(blocked) => {
+            let blocked_list = blocked.blocked.join(", ");
+            let collide_list = blocked.colliding.join(", ");
+            return Err(VerbError::Http(crate::client::HttpError::Envelope {
+                status: 409,
+                code: "dirty_working_copy".into(),
+                message: format!(
+                    "refusing to sync (nothing changed): local edits on incoming paths: \
+                     [{blocked_list}]; colliding untracked: [{collide_list}]; \
+                     use --force to discard them"
+                ),
+                details: None,
+                retry_after: None,
+            }));
+        }
+    };
+    let conflicted = applied.conflicted;
+    let new_state = State {
+        head: target.to_hex(),
+        base: state.base,
+        sparse: state.sparse,
+        server_repo: repo,
+        conflicted,
+    };
+    wc.save_state(&new_state)?;
+    wc.save_index(&applied.index)?;
+
+    // Output honesty: only paths this sync actually applied (cone-included)
+    // count as applied — an out-of-cone incoming path was NOT applied here
+    // and must not pose as one, and a redacted path was reported
+    // unavailable, never applied.
+    Ok(json!({
+        "up_to_date": false,
+        "head": target.to_hex(),
+        "applied": applied.applied,
+        "unavailable": applied.unavailable,
+        "conflicted": new_state.conflicted,
+    }))
+}
+
+/// What applying one tree difference produced.
+pub(crate) struct AppliedTree {
+    /// The cone-included paths applied, as the sync result's {path, kind}
+    /// entries.
+    pub applied: Vec<Value>,
+    /// Cone-included incoming paths the target tree masks (tombstoned in
+    /// this repo) — reported unavailable, never applied.
+    pub unavailable: Vec<String>,
+    /// The conflicted marks after the apply (the carry rule: old marks
+    /// keep except paths the difference changed, marker-shaped incoming
+    /// content marks).
+    pub conflicted: Vec<String>,
+    /// The stat index advanced to the new tree.
+    pub index: crate::wc::index::Index,
+}
+
+/// The dirty gate's refusal: local work the difference would clobber.
+/// Nothing was written.
+pub(crate) struct TreeDiffBlocked {
+    pub blocked: Vec<String>,
+    pub colliding: Vec<String>,
+}
+
+/// Applies the tree difference `old_head` → `new_head` through sync's ONE
+/// materialization path — the dirty gate (preserve-everything, all-or-
+/// nothing), the verified batch fetch, temp+rename per file, the tracked-
+/// del loop, the stat-index update, and the conflicted-mark rules. The
+/// gate refusal returns as a VALUE (nothing changed) so each caller
+/// renders its own outcome: sync answers the pinned dirty_working_copy
+/// envelope; land degrades to preserve-and-warn (its write already
+/// settled server-side and cannot un-settle).
+pub(crate) fn apply_tree_diff(
+    root: &Path,
+    state: &State,
+    index: crate::wc::index::Index,
+    client: &crate::client::Client,
+    old_head: &Id,
+    new_head: &Id,
+    force: bool,
+) -> Result<Result<AppliedTree, TreeDiffBlocked>, VerbError> {
+    let repo = &state.server_repo;
     // Incoming path-level diff.
     let diffv = client.get_json(
-        &format!("/v1/repos/{}/diff", crate::client::uri_segment(&repo)),
+        &format!("/v1/repos/{}/diff", crate::client::uri_segment(repo)),
         &[
-            ("a", head.to_hex().as_str()),
-            ("b", target.to_hex().as_str()),
+            ("a", old_head.to_hex().as_str()),
+            ("b", new_head.to_hex().as_str()),
         ],
     )?;
     let incoming = diffv["changes"]
@@ -201,19 +315,7 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     colliding.dedup();
 
     if (!blocked.is_empty() || !colliding.is_empty()) && !force {
-        let blocked_list = blocked.join(", ");
-        let collide_list = colliding.join(", ");
-        return Err(VerbError::Http(crate::client::HttpError::Envelope {
-            status: 409,
-            code: "dirty_working_copy".into(),
-            message: format!(
-                "refusing to sync (nothing changed): local edits on incoming paths: \
-                 [{blocked_list}]; colliding untracked: [{collide_list}]; \
-                 use --force to discard them"
-            ),
-            details: None,
-            retry_after: None,
-        }));
+        return Ok(Err(TreeDiffBlocked { blocked, colliding }));
     }
 
     // Target tree metadata for the incoming add/mod paths (sparse-filtered;
@@ -221,8 +323,8 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     let rootv = client.get_json(
         &format!(
             "/v1/repos/{}/changesets/{}/root",
-            crate::client::uri_segment(&repo),
-            target.to_hex()
+            crate::client::uri_segment(repo),
+            new_head.to_hex()
         ),
         &[],
     )?;
@@ -235,7 +337,7 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     // remove the indexed files under it and the sync completes, instead of
     // failing forever on normal history.
     let target_walk =
-        walk_tree_allowing_missing_prefixes(&client, &repo, &target_root, &state.sparse)?;
+        walk_tree_allowing_missing_prefixes(client, repo, &target_root, &state.sparse)?;
     let target_files = target_walk.files;
     let by_path: BTreeMap<&str, &_> = target_files.iter().map(|f| (f.path.as_str(), f)).collect();
 
@@ -263,7 +365,7 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     }
     unavailable.sort();
     unavailable.dedup();
-    let blobs = fetch_blobs_verified(&client, &repo, &to_fetch)?;
+    let blobs = fetch_blobs_verified(client, repo, &to_fetch)?;
 
     // Every incoming blob is fetched and hash-verified, so --force can now
     // discard exactly the colliders the gate named — a failed fetch above
@@ -273,7 +375,9 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
             .map_err(|e| VerbError::Local(format!("removing colliding untracked {raw:?}: {e}")))?;
     }
 
-    // Apply, then update the index and state together at the end.
+    // Apply, then update the index (taken by value; the caller saves
+    // state with the advanced one this returns).
+    let mut index = index;
     let mut conflicted: BTreeSet<String> = state.conflicted.iter().cloned().collect();
     for (path, blob) in &adds {
         let bytes = &blobs[blob];
@@ -305,31 +409,20 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     // is unchanged in the target tree (any change to the path would have
     // appeared in the incoming diff above).
     let conflicted: Vec<String> = conflicted.into_iter().collect();
-    let new_state = State {
-        head: target.to_hex(),
-        base: state.base,
-        sparse: state.sparse,
-        server_repo: repo,
-        conflicted,
-    };
-    wc.save_state(&new_state)?;
-    wc.save_index(&index)?;
-
     // Output honesty: only paths this sync actually applied (cone-included)
     // count as applied — an out-of-cone incoming path was NOT applied here
     // and must not pose as one, and a redacted path was reported
     // unavailable, never applied.
     let applied: Vec<Value> = incoming
         .iter()
-        .filter(|(p, _)| under_sparse(&new_state.sparse, p) && !unavailable.contains(p))
+        .filter(|(p, _)| under_sparse(&state.sparse, p) && !unavailable.contains(p))
         .map(|(path, kind)| json!({ "path": path, "kind": kind }))
         .collect();
-    Ok(json!({
-        "up_to_date": false,
-        "head": target.to_hex(),
-        "applied": applied,
-        "unavailable": unavailable,
-        "conflicted": new_state.conflicted,
+    Ok(Ok(AppliedTree {
+        applied,
+        unavailable,
+        conflicted,
+        index,
     }))
 }
 

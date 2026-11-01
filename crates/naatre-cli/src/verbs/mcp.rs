@@ -205,8 +205,9 @@ struct Tool {
     schema: Value,
 }
 
-/// The complete plan set: clone, sync, sparse, status, log, diff, cat, ls,
-/// commit, land, snapshot, restore, blame. Input schemas mirror the CLI
+/// The complete plan set (M12b adds resolve): clone, sync, sparse, status,
+/// log, diff, cat, ls, commit, land, resolve, snapshot, restore, blame.
+/// Input schemas mirror the CLI
 /// flags; for the HTTP-analog reads (log, diff, cat, ls-tree via `ls`,
 /// blame) the parameter names match the OpenAPI query params (test
 /// `mcp_tool_schemas_match_openapi` pins this against docs/openapi.json).
@@ -276,7 +277,9 @@ fn tool_defs() -> Vec<Tool> {
         Tool {
             name: "status",
             description: "Working-copy status: disk vs the stat index. Zero server calls. \
-                         Returns {status, modified, deleted, untracked}.",
+                         Returns {status, modified, deleted, untracked, conflicted} — \
+                         conflicted lists the paths materializing conflict markers \
+                         (M12).",
             schema: json!({
                 "type": "object",
                 "properties": {},
@@ -368,14 +371,39 @@ fn tool_defs() -> Vec<Tool> {
             name: "land",
             description: "Land this working copy's head onto the server's main (server-side \
                          rebase). Returns {key, landed, main, rebased} — the key goes back \
-                         into a retry or a re-land after a conflict.",
+                         into a retry or a re-land after a conflict. A rebase conflict \
+                         answers the structured 409 + recipe; record_conflict opts into \
+                         recording the conflict on main instead (a conflicted changeset, \
+                         settled once; resolve the paths afterwards).",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "key": { "type": "string",
                              "description": "Idempotency key (default: a random 8-hex \
                                              suffix)" },
+                    "record_conflict": { "type": "boolean",
+                                         "description": "M12 opt-in (default false): record \
+                                                         a rebase conflict on main as a \
+                                                         conflicted changeset instead of the \
+                                                         409 + recipe" },
                 },
+                "additionalProperties": false,
+            }),
+        },
+        Tool {
+            name: "resolve",
+            description: "Commit the resolved content of one conflicted path as an explicit \
+                         resolution changeset referencing the conflicted head. Takes a path \
+                         that is conflicted (status marks it, `C <path>`) or whose on-disk \
+                         bytes are marker-shaped. Follow with land. Returns {resolved, id, \
+                         root_tree_id, generation}.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string",
+                              "description": "Repo-relative path of the conflicted file" },
+                },
+                "required": ["path"],
                 "additionalProperties": false,
             }),
         },
@@ -413,7 +441,9 @@ fn tool_defs() -> Vec<Tool> {
         Tool {
             name: "blame",
             description: "Blame a file: per-line attribution. Returns {lines:[{cs,author, \
-                         text}]} (empty for a binary file — a structured empty result).",
+                         text, conflicted}]} — conflicted marks a conflicted region's \
+                         lines (M12); empty for a binary file (a structured empty \
+                         result).",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -766,10 +796,14 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
         }
         "land" => {
             let key = take_str(args, "key", false)?;
+            let record_conflict = args
+                .get("record_conflict")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let outcome = tool(super::land::core(
                 root,
                 key.as_deref(),
-                false,
+                record_conflict,
                 net,
                 &mut |_| {},
             ))?;
@@ -778,7 +812,27 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
                 "landed": outcome.landed,
                 "main": outcome.main,
                 "rebased": outcome.rebased,
+                "conflicts": outcome.conflicts,
             });
+            Ok(ToolOk {
+                payload,
+                notes: vec![],
+            })
+        }
+        "resolve" => {
+            let path = take_str(args, "path", true)?;
+            let path = path.unwrap_or_default();
+            // The same jail the other path tools sit behind, applied
+            // BEFORE any read: the repo-relative grammar (which refuses
+            // absolute paths and traversal components) over the NFC
+            // form — a tool argument never picks a file outside this
+            // working copy's root. A grammar refusal is a verb-level
+            // failure (isError tool result), not a protocol error.
+            let jailed = crate::wc::nfc(&path);
+            if let Err(e) = naatre_core::path::validate(&jailed) {
+                return Err(ToolFailure::Tool(format!("invalid path {path:?}: {e}")));
+            }
+            let payload = tool(super::resolve::value(root, &jailed, net))?;
             Ok(ToolOk {
                 payload,
                 notes: vec![],
@@ -870,14 +924,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_set_is_the_complete_plan_thirteen() {
+    fn tool_set_is_the_complete_plan_fourteen() {
         let defs = tool_defs();
         let names: Vec<&str> = defs.iter().map(|t| t.name).collect();
         assert_eq!(
             names,
             [
                 "clone", "sync", "sparse", "status", "log", "diff", "cat", "ls", "commit", "land",
-                "snapshot", "restore", "blame"
+                "resolve", "snapshot", "restore", "blame"
             ]
         );
         for t in &defs {

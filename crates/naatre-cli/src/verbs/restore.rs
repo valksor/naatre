@@ -163,13 +163,27 @@ pub fn value(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<Value
     }
 
     // Materialize, then move the index to the restored state. The head is
-    // deliberately untouched (see the module docs).
+    // deliberately untouched (see the module docs). M12b-fix: the
+    // materialize loop also maintains the conflicted marks — a restored
+    // blob that IS a rendered marker file records its path, and a
+    // restored non-marker path clears a stale mark (the same
+    // content-based rule sync/clone/sparse add apply; a conflicted
+    // snapshot restores as a conflicted working copy).
+    let mut conflicted: BTreeSet<String> = state.conflicted.iter().cloned().collect();
     let mut new_index = crate::wc::index::Index::default();
     for file in &files {
         let bytes = &blobs[&file.blob];
         let row = materialize(root, file, bytes)?;
         new_index.rows.insert(file.path.clone(), row);
+        if naatre_core::conflict::marker_shaped(bytes) {
+            conflicted.insert(file.path.clone());
+        } else {
+            conflicted.remove(&file.path);
+        }
     }
+    let mut new_state = state.clone();
+    new_state.conflicted = conflicted.into_iter().collect();
+    wc.save_state(&new_state)?;
     wc.save_index(&new_index)?;
 
     Ok(json!({
@@ -177,6 +191,7 @@ pub fn value(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<Value
         "files": files.len(),
         "unavailable": unavailable,
         "head": state.head,
+        "conflicted": new_state.conflicted,
     }))
 }
 

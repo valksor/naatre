@@ -1657,3 +1657,185 @@ async fn gc_walker_keeps_conflict_rep_blobs_reachable() {
         "the settlement node is untouched"
     );
 }
+
+// ---- M12b-fix: the carried-rep walker pin -----------------------------------
+
+/// The walker's carried-representation case (five lenses): the conflict
+/// travels THROUGH A REBASE (the m12a carry rule) — a conflicted node
+/// leaves main's ancestry and comes back rebased, carrying its rep
+/// verbatim. After the ORIGINAL settlement's shadowing references are
+/// stripped (its land row, its side changesets' rows), the side/base
+/// blobs survive collection through the CARRIED rep alone, while the
+/// genuinely-unreachable garbage (the old chain heads) collects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gc_walker_keeps_carried_rep_blobs_reachable() {
+    let f = fixture();
+    let _root_tree = seed_base(&f).await;
+
+    // The conflicted settlement on main (the m10a walker test's shape).
+    let base = b"l1\nl2\nl3\n".to_vec();
+    let ours = b"L1\nl2\nl3\n".to_vec();
+    let theirs = b"X1\nl2\nl3\n".to_vec();
+    let (bc, bo, bt) = (
+        f.put_blob(&base).await,
+        f.put_blob(&ours).await,
+        f.put_blob(&theirs).await,
+    );
+    let c1 = f
+        .create_ok(&cs_body(
+            json!([]),
+            json!([m4b_common::add("s.txt", &bc, base.len())]),
+            "c1",
+        ))
+        .await
+        .0;
+    let c2 = f
+        .create_ok(&cs_body(
+            json!([c1.clone()]),
+            json!([m4b_common::mod_("s.txt", &bo, ours.len())]),
+            "c2",
+        ))
+        .await
+        .0;
+    let c2p = f
+        .create_ok(&cs_body(
+            json!([c1.clone()]),
+            json!([m4b_common::mod_("s.txt", &bt, theirs.len())]),
+            "c2p",
+        ))
+        .await
+        .0;
+    m4b_common::conn_at(&f.t.db_path)
+        .execute(
+            "UPDATE refs SET target = ?2 WHERE repo_id = ?1 AND name = 'main'",
+            rusqlite::params![f.repo_id, hex_id(&c2p).0.as_slice()],
+        )
+        .unwrap();
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/land"),
+        &f.writer,
+        &json!({ "head": c2, "key": "k-carry", "record_conflict": true }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let v2 = resp.body["landed"].as_str().unwrap().to_string();
+
+    // The travel: rewind main off v2's ancestry (test scaffolding — land
+    // is main's only writer), diverge WITHOUT touching s.txt (the
+    // m12a-carry shape: the marker content applies cleanly, the rep
+    // travels), then land a chain CONTAINING the conflicted node.
+    m4b_common::conn_at(&f.t.db_path)
+        .execute(
+            "UPDATE refs SET target = ?2 WHERE repo_id = ?1 AND name = 'main'",
+            rusqlite::params![f.repo_id, hex_id(&c2p).0.as_slice()],
+        )
+        .unwrap();
+    let other = b"other\n".to_vec();
+    let bod = f.put_blob(&other).await;
+    let d = f
+        .create_ok(&cs_body(
+            json!([c2p.clone()]),
+            json!([m4b_common::add("other.txt", &bod, other.len())]),
+            "d",
+        ))
+        .await
+        .0;
+    m4b_common::conn_at(&f.t.db_path)
+        .execute(
+            "UPDATE refs SET target = ?2 WHERE repo_id = ?1 AND name = 'main'",
+            rusqlite::params![f.repo_id, hex_id(&d).0.as_slice()],
+        )
+        .unwrap();
+    let x = b"x\n".to_vec();
+    let bx = f.put_blob(&x).await;
+    let x1 = f
+        .create_ok(&cs_body(
+            json!([v2.clone()]),
+            json!([m4b_common::add("x.txt", &bx, x.len())]),
+            "x1",
+        ))
+        .await
+        .0;
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/land"),
+        &f.writer,
+        &json!({ "head": x1, "key": "k-travel" }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let tip = resp.body["landed"].as_str().unwrap().to_string();
+    let rebased_count = resp.body["rebased"].as_u64().unwrap();
+    assert!(
+        rebased_count >= 2,
+        "the chain [v2, x1] rebased (rebased = {rebased_count})"
+    );
+    // The carried rep: the new tip's ancestry holds a v2 node whose
+    // canonical still carries the conflict (the m12a carry rule).
+    let conn = m4b_common::conn_at(&f.t.db_path);
+    let carried_v2: Vec<u8> = conn
+        .query_row(
+            "SELECT c2.canonical FROM changesets c2 \
+             JOIN changeset_parents p ON p.repo_id = c2.repo_id AND p.cs = ?3 \
+             WHERE c2.repo_id = ?1 AND substr(c2.canonical, 1, 17) = ?2",
+            rusqlite::params![
+                f.repo_id,
+                naatre_core::changeset::MAGIC_V2.as_slice(),
+                hex_id(&tip).0.as_slice()
+            ],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(carried_v2[16], 0x02, "the rebased node carries the v2 rep");
+    drop(conn);
+
+    // Strip the ORIGINAL settlement's shadowing references: its land row
+    // seeds and its side changesets' rows — exactly the m10a walker
+    // test's scaffolding, now against the pre-travel history. The v2
+    // node itself leaves main's ancestry and collects as garbage; the
+    // CARRIED rep (in the rebased v2') is then the side/base blobs' only
+    // reference.
+    let conn = m4b_common::conn_at(&f.t.db_path);
+    conn.execute(
+        "UPDATE lands SET head = NULL, base = NULL WHERE repo_id = ?1 AND key = 'k-carry'",
+        rusqlite::params![f.repo_id],
+    )
+    .unwrap();
+    for cs in [&c1, &c2p, &c2, &v2] {
+        conn.execute(
+            "DELETE FROM file_changes WHERE repo_id = ?1 AND cs = ?2",
+            rusqlite::params![f.repo_id, hex_id(cs).0.as_slice()],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            rusqlite::params![f.repo_id, hex_id(cs).0.as_slice()],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    // Ledger pass (first-seen), then the past-grace sweep.
+    gc_pass(&f.t.state).await.unwrap();
+    f.tick_to(BASE_NS + GRACE_NS);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert!(
+        report.cs_collected >= 1,
+        "the pre-travel garbage (v2, x1, root) collects: {report:?}"
+    );
+    for (name, blob) in [("ours", &bo), ("theirs", &bt), ("base", &bc)] {
+        assert_eq!(
+            f.count_params(
+                "SELECT COUNT(*) FROM objects WHERE object_id = ?1",
+                &[&hex_id(blob).0.as_slice()]
+            ),
+            1,
+            "the {name} side survives collection through the CARRIED rep"
+        );
+        assert!(
+            f.t.state.cas.has(&[hex_id(blob)]).unwrap()[0],
+            "the {name} side's bytes are still in the CAS"
+        );
+    }
+}

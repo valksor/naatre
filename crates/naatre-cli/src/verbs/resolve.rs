@@ -6,22 +6,25 @@
 //! a silent rewrite of the conflicted node — and landing it advances main
 //! past the conflict (linear history).
 //!
-//! The path must be one `status` marks conflicted (state.json's list).
-//! The disk content must not itself be a marker file any more — editing
-//! the resolved content is the user's half of the contract; the verb
-//! refuses markers-as-resolution. Other local edits stay local: the
-//! changeset carries exactly the one path. A conflicted mark cleared here
-//! is gone from state; a subsequent `naatre land` / `naatre commit` is a
-//! clean settlement.
+//! The state mark (state.json's list) is a STATUS INDEX, not a
+//! permission (m12b-fix): the verb proceeds for a path whose on-disk
+//! bytes are marker-shaped — with or without a mark — and for a marked
+//! path whose content the user already edited. When the bytes it commits
+//! are themselves marker-shaped (a conflict the index lost track of, or
+//! an explicit keep-the-markers resolution), it says so on stderr and
+//! records them as the explicit resolution — the ordinary-commit gate
+//! stays the fence for non-explicit flows. Other local edits stay local:
+//! the changeset carries exactly the one path. A conflicted mark cleared
+//! here is gone from state; a subsequent `naatre land` / `naatre commit`
+//! is a clean settlement.
 
 use std::path::Path;
 
 use naatre_core::conflict;
-use naatre_core::ids::{Id, Kind, object_id};
+use naatre_core::ids::Id;
 use serde_json::{Value, json};
 
 use super::{Net, VerbError};
-use crate::client::HttpError;
 use crate::wc::index::Row;
 use crate::wc::{Wc, default_author, now_ns};
 
@@ -56,12 +59,6 @@ pub fn value(root: &Path, path: &str, net: &Net) -> Result<Value, VerbError> {
     let head = Id::from_hex(&state.head)
         .ok_or_else(|| VerbError::Local("state.json head is not a valid changeset id".into()))?;
 
-    // Contract: the verb resolves conflicted paths, not arbitrary files.
-    if !state.conflicted.iter().any(|p| p == &path) {
-        return Err(VerbError::Usage(format!(
-            "{path:?} is not a conflicted path in this working copy (see: naatre status)"
-        )));
-    }
     // The raw disk name the scanner records (raw may be an NFD twin of
     // the NFC indexed path on a folding filesystem — commit's rule).
     let report = crate::wc::scan::classify(root, &index)
@@ -71,35 +68,38 @@ pub fn value(root: &Path, path: &str, net: &Net) -> Result<Value, VerbError> {
         .get(&path)
         .cloned()
         .unwrap_or_else(|| path.clone());
-    let bytes = std::fs::read(root.join(&raw)).map_err(|e| {
-        VerbError::Local(format!(
-            "reading {raw:?}: {e} — the resolved content must be on disk; \
+    let (blob, size, exec, bytes) = super::read_wc_file(root, &raw).map_err(|e| match e {
+        VerbError::Local(m) => VerbError::Local(format!(
+            "{m} — the resolved content must be on disk; \
              restore the file (or delete the conflict with a commit) first"
-        ))
+        )),
+        other => other,
     })?;
-    // The user's half: the resolution content must not be markers again.
-    if conflict::marker_shaped(&bytes) {
-        return Err(VerbError::Http(HttpError::Envelope {
-            status: 409,
-            code: "conflict_markers_present".into(),
-            message: format!(
-                "{path} still contains conflict markers — edit the resolved content \
-                 first, then run `naatre resolve {path}`"
-            ),
-            details: None,
-            retry_after: None,
-        }));
+    // The permission gate is the CONTENT, not the index (m12b-fix): the
+    // path resolves when its disk bytes are marker-shaped — with or
+    // without a mark — or when the mark is present (the edit-first flow).
+    // The mark applies status's cone-membership filter: a mark on a path
+    // the index no longer tracks (dropped by a sparse remove) is stale,
+    // exactly as status refuses to print it.
+    let marked = state.conflicted.iter().any(|p| p == &path) && index.rows.contains_key(&path);
+    let marker_shaped = conflict::marker_shaped(&bytes);
+    if !marked && !marker_shaped {
+        return Err(VerbError::Usage(format!(
+            "{path:?} is not a conflicted path in this working copy (see: naatre status)"
+        )));
     }
-    let blob = object_id(Kind::Blob, &bytes);
-    let size = bytes.len() as u64;
-    let exec = {
-        use std::os::unix::fs::MetadataExt as _;
-        std::fs::metadata(root.join(&raw))
-            .map_err(|e| VerbError::Local(format!("stating {raw:?}: {e}")))?
-            .mode()
-            & 0o111
-            != 0
-    };
+    // The resolution commits the current disk bytes, whatever they are.
+    // Marker-shaped content is said out loud: it enters history as the
+    // explicit resolution (the ordinary-commit gate stays the fence for
+    // non-explicit flows; a server-side land check is the recorded
+    // follow-up).
+    if marker_shaped {
+        eprintln!(
+            "warning: {path} still carries conflict markers; recording them as the \
+             explicit resolution (edit the content and re-run first if that is \
+             not what you want)"
+        );
+    }
 
     let repo = &state.server_repo;
     // The blob first (the id is the address, computed client-side).

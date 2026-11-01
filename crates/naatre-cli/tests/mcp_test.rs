@@ -500,10 +500,104 @@ fn prepare_wc(server: &TestServer, repo: &str, dest: &Path) {
 
 // ---- tests -----------------------------------------------------------------
 
-const ALL_TOOLS: [&str; 13] = [
-    "clone", "sync", "sparse", "status", "log", "diff", "cat", "ls", "commit", "land", "snapshot",
-    "restore", "blame",
+const ALL_TOOLS: [&str; 14] = [
+    "clone", "sync", "sparse", "status", "log", "diff", "cat", "ls", "commit", "land", "resolve",
+    "snapshot", "restore", "blame",
 ];
+
+/// M12b: the full agent flow through tools alone — land
+/// record_conflict:true settles the conflicted node (the settlement's
+/// markers materialize into the session's copy), sync reports current,
+/// edit + resolve clear the path; a traversal path argument is refused
+/// before any read.
+#[test]
+fn mcp_conflicted_flow_record_land_sync_resolve_through_tools() {
+    let server = start_server();
+    create_repo(&server, "mcpconflict");
+    let v1 = b"base-1\nbase-2\n";
+    put_blob(&server, "mcpconflict", v1);
+    let c1 = changeset(
+        &server,
+        "mcpconflict",
+        &[],
+        vec![change("add", "f.txt", v1)],
+        "c1",
+    );
+    seed_main(&server, "mcpconflict", c1["id"].as_str().unwrap());
+
+    let wc = server._dir.path().join("wc");
+    prepare_wc(&server, "mcpconflict", &wc);
+    let mut mcp = spawn_mcp(&wc, &server, &[]);
+    let init = mcp.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": { "name": "naatre-mcp-test", "version": "0" },
+        }),
+    );
+    assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
+    mcp.notify("notifications/initialized");
+    let cloned = mcp.call_ok(
+        "clone",
+        json!({ "url": format!("{}/mcpconflict", server.base), "into":
+              server._dir.path().join("wc2").to_str().unwrap() }),
+    );
+    assert_eq!(cloned["repo"], "mcpconflict");
+
+    // AGENT A (plain CLI, second directory): the competing edit on main.
+    let wc_a = server._dir.path().join("wc_a");
+    prepare_wc(&server, "mcpconflict", &wc_a);
+    write_file(&wc_a, "f.txt", b"alpha-1\nbase-2\n");
+    assert_eq!(
+        verbs::commit::run(&wc_a, "alpha edit", None, &net(&server)),
+        0
+    );
+    assert_eq!(verbs::land::run(&wc_a, None, false, &net(&server)), 0);
+
+    // AGENT B (the session, tools alone): the conflicting edit, then the
+    // opt-in land settles the conflicted node ONCE.
+    write_file(&wc, "f.txt", b"beta-1\nbase-2\n");
+    let committed = mcp.call_ok("commit", json!({ "message": "beta edit" }));
+    assert_eq!(committed["committed"], true);
+    let landed = mcp.call_ok("land", json!({ "key": "kb", "record_conflict": true }));
+    assert!(is_64_hex(landed["landed"].as_str().unwrap()));
+    assert_eq!(
+        landed["conflicts"],
+        json!(["f.txt"]),
+        "the settlement names the conflicted paths: {landed}"
+    );
+    // The lander materialized the settlement: the session's disk holds
+    // the marker bytes and status marks the path (senior-qa C1).
+    let disk = std::fs::read_to_string(wc.join("f.txt")).unwrap();
+    assert!(
+        disk.starts_with("<<<<<<< naatre side 1/2: "),
+        "the lander's disk holds the markers:\n{disk}"
+    );
+    let st = mcp.call_ok("status", json!({}));
+    assert_eq!(st["conflicted"], json!(["f.txt"]), "{st}");
+    // sync: the session is at the settlement already — current, marks
+    // intact.
+    let synced = mcp.call_ok("sync", json!({}));
+    assert_eq!(synced["up_to_date"], true, "{synced}");
+
+    // Edit to the resolved content, then resolve — through the tool.
+    write_file(&wc, "f.txt", b"resolved-1\nbase-2\n");
+    let resolved = mcp.call_ok("resolve", json!({ "path": "f.txt" }));
+    assert_eq!(resolved["resolved"], "f.txt");
+    assert!(is_64_hex(resolved["id"].as_str().unwrap()));
+    let st = mcp.call_ok("status", json!({}));
+    assert_eq!(st["conflicted"], json!([]), "the mark cleared: {st}");
+
+    // The jail: traversal and absolute path arguments are refused before
+    // any read (the same grammar the other path tools sit behind).
+    let traversal = mcp.call_err("resolve", json!({ "path": "../escape.txt" }));
+    assert!(traversal.contains("invalid path"), "{traversal}");
+    let absolute = mcp.call_err("resolve", json!({ "path": "/etc/passwd" }));
+    assert!(absolute.contains("invalid path"), "{absolute}");
+
+    let _ = mcp.shutdown();
+}
 
 /// Test (a) — the plan's e2e: an MCP session performs clone → edit →
 /// commit → land, then syncs after ANOTHER client lands, ending clean.
@@ -548,7 +642,8 @@ fn mcp_e2e_clone_edit_commit_land_and_sync_after_foreign_land() {
     );
     mcp.notify("notifications/initialized");
 
-    // tools/list: the complete plan set of 13, each with schema sanity.
+    // tools/list: the complete plan set of 14 (M12b adds resolve), each
+    // with schema sanity.
     let tools = mcp.request("tools/list", json!({}));
     let listed: Vec<&str> = tools["result"]["tools"]
         .as_array()
@@ -556,7 +651,7 @@ fn mcp_e2e_clone_edit_commit_land_and_sync_after_foreign_land() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(listed.len(), 13, "exactly the 13 plan tools: {listed:?}");
+    assert_eq!(listed.len(), 14, "exactly the 14 plan tools: {listed:?}");
     for expected in ALL_TOOLS {
         assert!(listed.contains(&expected), "tool {expected} listed");
     }
@@ -740,13 +835,14 @@ fn mcp_read_only_refuses_mutations_and_allows_reads() {
     // The blame tool below needs the derived index over the seeded chain.
     wait_blame_ready(&server, "ro", c1["id"].as_str().unwrap(), "file.txt");
 
-    // The tool LIST still shows all 13 (the gate fires at call time).
+    // The tool LIST still shows all 14 (the gate fires at call time).
     let tools = mcp.request("tools/list", json!({}));
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 13);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 14);
 
-    // Every non-read tool refuses, naming the flag.
+    // Every non-read tool refuses, naming the flag (resolve included —
+    // it commits a resolution changeset).
     for gated in [
-        "clone", "sync", "sparse", "commit", "land", "snapshot", "restore",
+        "clone", "sync", "sparse", "commit", "land", "resolve", "snapshot", "restore",
     ] {
         let text = mcp.call_err(gated, json!({}));
         assert!(

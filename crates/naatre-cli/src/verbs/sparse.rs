@@ -295,6 +295,10 @@ fn remove(root: &Path, wc: &Wc, mut state: State, prefix: &str) -> Result<Value,
         removed += 1;
     }
     state.sparse.retain(|p| p != prefix);
+    // M12b-fix: the removed subtree's files left the index (they are no
+    // longer materialized), so their conflicted marks go with them —
+    // the same cone-membership rule status applies when printing.
+    state.conflicted.retain(|p| !under_prefix(prefix, p));
     wc.save_state(&state)?;
     wc.save_index(&index)?;
     Ok(json!({ "action": "remove", "prefix": prefix, "removed": removed }))

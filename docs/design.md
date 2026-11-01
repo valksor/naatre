@@ -250,8 +250,10 @@ silently "resolved" by recording.
 --record-conflict` (the 409 recipe leads with the flag; the API request
 field `record_conflict` stays named for non-CLI clients), materialization
 writes conflict markers (a conflicted node's `root_tree_id` IS the
-markers-materialized tree, so clone/sync/restore write the rendered bytes
-through the ordinary tree walk), `status` marks the conflicted paths
+markers-materialized tree, so every materializing verb — sync, clone,
+land (the record-conflict settlement materializes at land success),
+sparse add, restore — writes the rendered bytes through its ordinary
+walk), `status` marks the conflicted paths
 (`C <path>`, from `.naatre/state.json` — the zero-server-call invariant
 holds), an ordinary commit whose content is a marker file refuses with
 `conflict_markers_present` (the detector is `naatre-core`'s
@@ -260,10 +262,35 @@ holds), an ordinary commit whose content is a marker file refuses with
 `naatre resolve <path>`: the resolved content commits as an explicit
 resolution changeset referencing the conflicted head, the conflicted mark
 clears, and the subsequent land advances main past the conflict (linear
-history). A client that predates v2 refuses a conflicted-node sync with
-`version_skew_conflicted` — the documented mixed-fleet shape (it never
-silently materializes content it cannot interpret; `GET /version` names
-the upgrade path).
+history). **Mixed-fleet honesty:** the documented skew refusal
+(`version_skew_conflicted`) is emitted by NO shipped binary — it exists
+only in v2-aware-lineage client builds that lack the v2 capability
+(unit-pinned as a contract); an UNCHANGED pre-M12 client binary has
+neither the detection code nor the marker gate, so it syncs a conflicted
+main as plain marker text and can commit those markers as ordinary
+content — for such a binary the store-level schema guard is the only
+lockout, and operators upgrade clients before enabling `record_conflict`
+flows (the server-side marker-shape check at land is the recorded
+follow-up). **NAMED FOLLOW-UP (the M12 contract question): landing onto a
+conflicted main drops the conflict representation.** Observed on a real
+flow (the blocked-land retry pin): a plain re-land of a delta that
+competes with a conflicted main MERGES cleanly against the marker
+content — the line merge composes the two renderings into a new
+well-formed marker file whose side sections carry both sides' content —
+but lands it as a PLAIN v1 node: main's tip no longer carries the
+conflict representation, and the served text is
+markers-as-ordinary-content. Content is NOT fully preserved: the
+ORIGINAL base (the g-side content) is dropped from the served text, and
+its base section instead holds one side's content under a different blob
+id — the rendering MISLABELS that side's content as the base. Both
+sides' content survives in the text, content detection re-marks the path
+conflicted on the next sync/clone, but the first-class conflict DATA is
+gone from the tip and the base is silently replaced — so the markers
+cannot be trusted as a three-way view (any three-way resolution would
+start from the wrong ancestor) until the server-side land check — or a
+re-landing fix — exists. The server-side marker-shape check at land is
+the fence for exactly this case; until it exists, re-landing onto a
+conflicted main is a downgrade of a recorded conflict to marker text.
 
 **GC walker (M12b).** The mark traverses conflict representations: a
 marked format-v2 changeset's rep side/base blob ids join the reachable

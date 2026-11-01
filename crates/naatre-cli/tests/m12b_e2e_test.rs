@@ -281,9 +281,15 @@ fn m12_conflicted_land_sync_resolve_and_gc_blame_e2e() {
         );
     }
 
-    // ---- agent A: a clean edit lands (default land, no flag).
+    // ---- agent A: a clean edit lands (default land, no flag). A changes
+    // TWO paths — the conflicted one AND an unrelated one — so the
+    // settlement B later records rebases over a main that moved keep.txt
+    // as well (the advisor's pin shape: the lander's disk must match a
+    // fresh sync of the new head at EVERY landed path, not only the
+    // markers).
     step!("agent A lands cleanly");
     std::fs::write(wc_a.join("f.txt"), b"alpha-1\nbase-2\n").expect("A edits");
+    std::fs::write(wc_a.join("keep.txt"), b"alpha-keep\n").expect("A edits keep.txt");
     let out = cli.run(&wc_a, &["commit", "-m", "alpha edit"]);
     assert!(out.status.success(), "A commit: {}", string_of(&out.stderr));
     let out = cli.run(&wc_a, &["land", "--key", "ka"]);
@@ -352,15 +358,38 @@ fn m12_conflicted_land_sync_resolve_and_gc_blame_e2e() {
     assert_eq!(v["conflicted"], serde_json::json!(["f.txt"]), "{v}");
     let human = cli.run_ok(&wc_c, &["status"]);
     assert!(human.contains("C f.txt"), "{human}");
-    // The conflicted working copy is preserved: a sync of OTHER content
-    // still refuses to clobber a manual resolution (the dirty gate) — the
-    // disk still carries markers, matching the index (clean).
+    // The lander materialized the settlement (senior-qa C1): agent B's
+    // disk advanced with head — the same marker bytes every other client
+    // sees after syncing — and status marks the path. (The older
+    // half-state — head on the settlement, disk still on the pre-land
+    // content — is gone.) Resolve works locally for the lander too.
+    let b_disk = std::fs::read_to_string(wc_b.join("f.txt")).expect("B's materialized disk");
+    assert!(
+        b_disk.starts_with("<<<<<<< naatre side 1/2: "),
+        "the lander's disk holds the settlement's markers:\n{b_disk}"
+    );
+    // The rebase carried main's OTHER change too: the lander's disk
+    // matches what a fresh sync of the new head writes — main's keep.txt
+    // present, markers at the conflicted path, nothing stale.
+    let b_keep = std::fs::read_to_string(wc_b.join("keep.txt")).expect("B's keep.txt");
+    assert_eq!(
+        b_keep, "alpha-keep\n",
+        "the lander's disk carries main's other change: {b_keep:?}"
+    );
     let human = cli.run_ok(&wc_b, &["status", "--json"]);
     let v: serde_json::Value = serde_json::from_str(human.trim()).expect("B status JSON");
     assert_eq!(
         v["conflicted"],
         serde_json::json!(["f.txt"]),
         "B marks too: {v}"
+    );
+    std::fs::write(wc_b.join("f.txt"), b"b-resolved\nbase-2\n").expect("B resolves");
+    let out = cli.run(&wc_b, &["resolve", "f.txt"]);
+    assert!(
+        out.status.success(),
+        "the lander resolves locally: {}{}",
+        string_of(&out.stdout),
+        string_of(&out.stderr)
     );
 
     // ---- a FRESH clone of the conflicted main materializes the same
@@ -605,4 +634,724 @@ fn m12_conflicted_land_sync_resolve_and_gc_blame_e2e() {
 
 fn json_str(s: &str) -> serde_json::Value {
     serde_json::Value::String(s.to_string())
+}
+
+/// The shared boot: init the data dir (a 1-second GC grace, the gc task
+/// off), write backend.toml 0600, start serve. Returns the running
+/// server and the admin token.
+fn boot(bin: &Path, root: &Path, log_name: &str) -> (Serve, String) {
+    let data = root.join("data");
+    let out = Command::new(bin)
+        .args(["init", "--data", data.to_str().unwrap()])
+        .output()
+        .expect("init");
+    assert!(out.status.success(), "init: {}", string_of(&out.stderr));
+    let admin = string_of(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("admin token: "))
+        .expect("init printed the admin token")
+        .to_string();
+    {
+        // The operator file is 0600 (serve refuses anything else).
+        use std::io::Write as _;
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(data.join("backend.toml"))
+                .expect("write backend.toml")
+        };
+        #[cfg(not(unix))]
+        let mut f = std::fs::File::create(data.join("backend.toml")).expect("write backend.toml");
+        write!(
+            f,
+            "[backend]\nmeta = \"sqlite\"\nblob = \"fs\"\ngc_interval_secs = 0\ngc_grace_secs = 1\n"
+        )
+        .expect("write backend.toml");
+    }
+    let serve = Serve::start(bin, &data, &root.join(log_name));
+    (serve, admin)
+}
+
+/// m12b-fix item 2 + item 10's repro pin: the state mark is a status
+/// index, not a permission — resolve accepts a marker-shaped file with
+/// OR without a mark (the unmarked case simulates a legacy/rolled-back
+/// state file); restore over a conflicted snapshot RECORDS the marks;
+/// an API-stored marker-shaped blob (the server has no create-side
+/// marker gate — the recorded follow-up) surfaces as a conflicted mark
+/// on clone, pinned here as that follow-up's repro.
+#[test]
+fn resolve_unmarked_markers_restore_records_marks_and_misclassification() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_naatre"));
+    let root = tempfile::tempdir().expect("tempdir");
+    let root = root.path();
+    let data = root.join("data");
+    let (mut serve, admin) = boot(&bin, root, "serve-fix.log");
+    let mut cli = Naatre {
+        bin: bin.clone(),
+        url: format!("http://127.0.0.1:{}", serve.port),
+        token: admin,
+    };
+
+    // Repo + seed (the import path; serve stops for the flock).
+    cli.run_ok(root, &["repo", "create", "fixe2e"]);
+    serve.stop();
+    let seed_git = root.join("seed-git");
+    let out = Command::new("git")
+        .args(["-c", "init.defaultBranch=main", "init", "-q"])
+        .arg(&seed_git)
+        .output()
+        .expect("git init");
+    assert!(out.status.success(), "git init: {}", string_of(&out.stderr));
+    std::fs::write(seed_git.join("f.txt"), b"base-1\nbase-2\n").unwrap();
+    std::fs::write(seed_git.join("keep.txt"), b"keep\n").unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git").args(args).output().expect("git run");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            string_of(&out.stderr)
+        );
+    };
+    git(&["-C", seed_git.to_str().unwrap(), "add", "."]);
+    git(&[
+        "-C",
+        seed_git.to_str().unwrap(),
+        "-c",
+        "user.email=seed@example.com",
+        "-c",
+        "user.name=seed",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
+    cli.run_ok(
+        root,
+        &[
+            "import",
+            "--data",
+            data.to_str().unwrap(),
+            "--into",
+            "fixe2e",
+            seed_git.to_str().unwrap(),
+        ],
+    );
+    let mut serve = Serve::start(&bin, &data, &root.join("serve-fix2.log"));
+    cli.url = format!("http://127.0.0.1:{}", serve.port);
+
+    let writer = {
+        let out = cli.run(root, &["token", "create", "agent", "--role", "writer"]);
+        assert!(
+            out.status.success(),
+            "token create: {}",
+            string_of(&out.stderr)
+        );
+        string_of(&out.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix("token: "))
+            .expect("token printed")
+            .to_string()
+    };
+    cli.token = writer;
+
+    // Agents: A lands cleanly; B lands --record-conflict.
+    for wc in ["wc_a", "wc_b", "wc_g"] {
+        let out = cli.run(
+            root,
+            &[
+                "clone",
+                &format!("{}/fixe2e", cli.url),
+                "--into",
+                root.join(wc).to_str().unwrap(),
+            ],
+        );
+        assert!(
+            out.status.success(),
+            "clone {wc}: {}",
+            string_of(&out.stderr)
+        );
+    }
+    let wc_a = root.join("wc_a");
+    let wc_b = root.join("wc_b");
+    let wc_g = root.join("wc_g");
+    std::fs::write(wc_a.join("f.txt"), b"alpha-1\nbase-2\n").unwrap();
+    cli.run_ok(&wc_a, &["commit", "-m", "alpha"]);
+    cli.run_ok(&wc_a, &["land", "--key", "ka"]);
+    std::fs::write(wc_b.join("f.txt"), b"beta-1\nbase-2\n").unwrap();
+    cli.run_ok(&wc_b, &["commit", "-m", "beta"]);
+    let out = cli.run(&wc_b, &["land", "--key", "kb", "--record-conflict"]);
+    assert!(
+        out.status.success(),
+        "record land: {}",
+        string_of(&out.stderr)
+    );
+    let conflicted_node = string_of(&out.stdout)
+        .split(['"', ':'])
+        .find(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        .expect("the land printed the settled id")
+        .to_string();
+
+    // The repro (senior-qa A6): an API-stored MARKER-SHAPED blob as an
+    // ordinary commit — the server has no create-side marker gate (the
+    // recorded follow-up) — surfaces on clone as a conflicted mark.
+    {
+        let client = naatre_cli::client::Client::new(&cli.url, Some(cli.token.clone()));
+        let marker = format!(
+            "<<<<<<< naatre side 1/2: {}\nside one\n======= naatre side 2/2: {}\n\
+             side two\n>>>>>>> naatre conflict: fake.txt\n",
+            "1".repeat(64),
+            "2".repeat(64)
+        );
+        let blob = naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, marker.as_bytes());
+        client
+            .put_bytes(
+                &format!("/v1/repos/fixe2e/objects/{}", blob.to_hex()),
+                marker.as_bytes(),
+            )
+            .expect("marker blob PUT");
+        let (_st, created) = client
+            .post_json(
+                "/v1/repos/fixe2e/changesets",
+                &serde_json::json!({
+                    "parents": [conflicted_node],
+                    "author": "api <api@naatre.dev>",
+                    "message": "api-stored markers",
+                    "changes": [{"path": "fake.txt", "op": "add",
+                                 "blob": blob.to_hex(), "size": marker.len(), "exec": false}],
+                }),
+            )
+            .expect("api changeset create");
+        assert!(created["id"].is_string(), "{created}");
+        // Land it: main moves onto the API-stored node (fast-forward),
+        // so a client's sync materializes the marker-shaped blob.
+        let (_st, landed) = client
+            .post_json(
+                "/v1/repos/fixe2e/land",
+                &serde_json::json!({ "head": created["id"], "key": "k-api" }),
+            )
+            .expect("api land");
+        assert_eq!(landed["main"], landed["landed"], "main moved: {landed}");
+    }
+    cli.run_ok(&wc_g, &["sync"]);
+    let status_g = cli.run_ok(&wc_g, &["status", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(status_g.trim()).unwrap();
+    let conflicted = v["conflicted"].as_array().unwrap();
+    assert!(
+        conflicted.contains(&serde_json::json!("fake.txt")),
+        "the sync marks the API-stored marker-shaped blob (the follow-up's repro): {v}"
+    );
+
+    // The dirty-gate interaction (advisor's pin, the "blocks or is
+    // preserved" leg): a lander with an uncommitted edit on a path its
+    // own delta touches (f.txt, edited again after the commit) AND on a
+    // path MAIN changes underneath it (keep.txt, which H lands). The
+    // plain (non-conflicted) rebased land settles server-side; the
+    // working-copy update is refused by the same dirty rules a sync
+    // uses, everything preserved, the land degrades to a warning.
+    {
+        let wc_g = root.join("wc_g2");
+        let wc_h = root.join("wc_h");
+        for wc in [&wc_g, &wc_h] {
+            let out = cli.run(
+                root,
+                &[
+                    "clone",
+                    &format!("{}/fixe2e", cli.url),
+                    "--into",
+                    wc.to_str().unwrap(),
+                ],
+            );
+            assert!(out.status.success(), "clone: {}", string_of(&out.stderr));
+        }
+        std::fs::write(wc_g.join("f.txt"), b"g-side\nbase-2\n").unwrap();
+        cli.run_ok(&wc_g, &["commit", "-m", "g edit"]);
+        // AFTER the commit: an uncommitted edit on the delta's own path,
+        // and one on a path main will change under the lander.
+        // The pre-land head (the commit's parent), for the state-head
+        // pin below.
+        let g_head = {
+            let state_g: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(wc_g.join(".naatre/state.json")).unwrap(),
+            )
+            .unwrap();
+            state_g["head"].as_str().unwrap().to_string()
+        };
+        std::fs::write(wc_g.join("f.txt"), b"h-side2\nbase-2\n").unwrap();
+        std::fs::write(wc_g.join("keep.txt"), b"g-keep\n").unwrap();
+        // H lands main's keep.txt change (a clean rebased land — the
+        // normal-land shape goes through the same materialization).
+        std::fs::write(wc_h.join("keep.txt"), b"h-keep\n").unwrap();
+        cli.run_ok(&wc_h, &["commit", "-m", "h keep"]);
+        cli.run_ok(&wc_h, &["land", "--key", "kh"]);
+        assert_eq!(
+            std::fs::read_to_string(wc_h.join("keep.txt")).unwrap(),
+            "h-keep\n",
+            "the clean rebased lander carries main's change"
+        );
+        // G's land: settles (its delta rebases cleanly), then the
+        // working-copy update is refused by the dirty rules.
+        let out = cli.run(&wc_g, &["land", "--key", "kg"]);
+        let text = string_of(&out.stdout) + "\n" + &string_of(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the land itself settles (exit 0): {text}"
+        );
+        assert!(
+            text.contains("refused by the dirty rules"),
+            "the preservation warning fires: {text}"
+        );
+        assert!(
+            !text.contains("do NOT re-land"),
+            "a clean settlement's retry is a harmless no-op — no do-not-re-land note: {text}"
+        );
+        let kg_landed = string_of(&out.stdout)
+            .split(['"', ':'])
+            .find(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("the land printed the settled id")
+            .to_string();
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("f.txt")).unwrap(),
+            "h-side2\nbase-2\n",
+            "the uncommitted edit on the delta path is preserved"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("keep.txt")).unwrap(),
+            "g-keep\n",
+            "the uncommitted edit on main's changed path is preserved"
+        );
+        let status_g = cli.run_ok(&wc_g, &["status", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(status_g.trim()).unwrap();
+        assert_eq!(
+            v["modified"],
+            serde_json::json!(["f.txt", "keep.txt"]),
+            "both preserved edits show as modified: {v}"
+        );
+        // The blocked land reaches the fallback mark arm (no diff
+        // applied): G's older mark survives while its disk bytes are
+        // still marker-shaped; the resolved f.txt mark is gone.
+        assert_eq!(
+            v["conflicted"],
+            serde_json::json!(["fake.txt"]),
+            "the fallback keeps the still-true older mark: {v}"
+        );
+        // m12b-fix round 2 (advisor option a): the blocked land leaves
+        // state.head on the OLD head — the disk and index truthfully
+        // materialize that tree, so the promised sync recovery actually
+        // sees a difference (sync short-circuits when target == head).
+        let state_g: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(wc_g.join(".naatre/state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state_g["head"],
+            json_str(&g_head),
+            "state stays on the old head after a blocked land"
+        );
+        // GAP 2 (m12b-fix round 2): a rerun land right after a blocked
+        // land is a clean no-op — head still names the just-landed
+        // changeset, the server re-derives its (already-contained)
+        // delta, and settles done on the UNCHANGED main: no duplicate
+        // node (landed == the first settlement), no self-conflict
+        // (rebased == 0).
+        let out = cli.run(&wc_g, &["land", "--key", "kg-retry"]);
+        let text = string_of(&out.stdout) + "\n" + &string_of(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the retry land is a clean no-op (exit 0): {text}"
+        );
+        assert!(
+            text.contains(&format!("\"landed\":\"{kg_landed}\"")),
+            "the retry settles on the SAME main tip — no duplicate node: {text}"
+        );
+        assert!(
+            text.contains("\"rebased\":0"),
+            "the retry applies no delta (no self-conflict): {text}"
+        );
+        // The warning's PLAIN recovery path (item 3): clear the
+        // colliding edit (keep.txt back to the old-head content) while
+        // the non-colliding f.txt edit stays — a PLAIN `naatre sync`
+        // then runs the recovery: it reaches the landed head and
+        // preserves the non-colliding local edit.
+        std::fs::write(wc_g.join("keep.txt"), b"keep\n").unwrap();
+        let out = cli.run(&wc_g, &["sync"]);
+        assert!(
+            out.status.success(),
+            "plain recovery sync: {}",
+            string_of(&out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("keep.txt")).unwrap(),
+            "h-keep\n",
+            "the plain sync reached the landed head at the cleared path"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("f.txt")).unwrap(),
+            "h-side2\nbase-2\n",
+            "the non-colliding local edit is preserved by the plain sync"
+        );
+        let state_g: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(wc_g.join(".naatre/state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state_g["head"],
+            json_str(&kg_landed),
+            "the plain recovery reached the landed head"
+        );
+        // The --force recovery (up to date after the plain one — the
+        // same machinery, asserted anyway): the disk then matches the
+        // settled head at every landed path.
+        let out = cli.run(&wc_g, &["sync", "--force"]);
+        assert!(
+            out.status.success(),
+            "recovery sync: {}",
+            string_of(&out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("keep.txt")).unwrap(),
+            "h-keep\n",
+            "main's other change materialized"
+        );
+        // f.txt is NOT in the old→new difference (the settlement's f.txt
+        // equals the old head's — G's own delta was already the landed
+        // content), so the uncommitted edit on it persists per the dirty
+        // rules: the disk matches the new head at every CHANGED path.
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("f.txt")).unwrap(),
+            "h-side2\nbase-2\n",
+            "the preserved edit persists on the unchanged path"
+        );
+        let state_g: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(wc_g.join(".naatre/state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state_g["head"],
+            json_str(&kg_landed),
+            "the recovery sync reached the landed head"
+        );
+        // The follow-up commit parents against the recovered head, and
+        // the follow-up land still works (the advisor's check).
+        std::fs::write(wc_g.join("f.txt"), b"g-followup\nbase-2\n").unwrap();
+        let out = cli.run(&wc_g, &["commit", "-m", "g follow-up"]);
+        assert!(
+            out.status.success(),
+            "follow-up commit: {}",
+            string_of(&out.stderr)
+        );
+        let followup = string_of(&out.stdout)
+            .split(['"', ':'])
+            .find(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("the commit printed its id")
+            .to_string();
+        {
+            let client = naatre_cli::client::Client::new(&cli.url, Some(cli.token.clone()));
+            let cs = client
+                .get_json(&format!("/v1/repos/fixe2e/changesets/{followup}"), &[])
+                .expect("fetch the follow-up changeset");
+            assert_eq!(
+                cs["parents"],
+                serde_json::json!([kg_landed]),
+                "the follow-up commit parents against the recovered head"
+            );
+        }
+        let out = cli.run(&wc_g, &["land", "--key", "kg-followup"]);
+        assert!(
+            out.status.success(),
+            "the follow-up land still works: {}{}",
+            string_of(&out.stdout),
+            string_of(&out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(wc_g.join("f.txt")).unwrap(),
+            "g-followup\nbase-2\n",
+            "the follow-up lander materializes its own settlement"
+        );
+        let status_g = cli.run_ok(&wc_g, &["status", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(status_g.trim()).unwrap();
+        assert_eq!(
+            v["modified"],
+            serde_json::json!([]),
+            "the follow-up commit took the whole disk state: {v}"
+        );
+
+        // Round 2 — the fallback's RESPONSE-UNION half: a CONFLICTED
+        // blocked land. Both agents commit competing f.txt edits off the
+        // same base; H lands first (contained — main's f.txt becomes
+        // h3); then G, holding an UNCOMMITTED f.txt edit on its own
+        // delta's path, record-lands: its rebase now genuinely
+        // conflicts (base g2-side vs ours h3-side vs theirs g4-side),
+        // the settlement settles CONFLICTED (the response names f.txt),
+        // and the gate refuses the update — the marks union the
+        // response's f.txt with G's still-true fake.txt.
+        std::fs::write(wc_g.join("f.txt"), b"g4-side\nbase-2\n").unwrap();
+        cli.run_ok(&wc_g, &["commit", "-m", "g4 edit"]);
+        std::fs::write(wc_g.join("f.txt"), b"g5-uncommitted\nbase-2\n").unwrap();
+        // H syncs to main first (its head is behind G's settlement), so
+        // its h3 commit sits on main's tip and its land is contained —
+        // main's f.txt becomes h3-side.
+        cli.run_ok(&wc_h, &["sync"]);
+        std::fs::write(wc_h.join("f.txt"), b"h3-side\nbase-2\n").unwrap();
+        cli.run_ok(&wc_h, &["commit", "-m", "h3 edit"]);
+        let out = cli.run(&wc_h, &["land", "--key", "kh3"]);
+        assert!(
+            out.status.success(),
+            "H's contained land: {}",
+            string_of(&out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(wc_h.join("f.txt")).unwrap(),
+            "h3-side\nbase-2\n",
+            "H's disk carries its own settled content"
+        );
+        let out = cli.run(&wc_g, &["land", "--key", "kg3", "--record-conflict"]);
+        let text = string_of(&out.stdout) + "\n" + &string_of(&out.stderr);
+        assert!(out.status.success(), "G's record land settles: {text}");
+        assert!(
+            text.contains("refused by the dirty rules"),
+            "the preservation warning fires again: {text}"
+        );
+        assert!(
+            text.contains("do NOT re-land"),
+            "a conflicted settlement's warning says do NOT re-land: {text}"
+        );
+        let kg3_landed = string_of(&out.stdout)
+            .split(['"', ':'])
+            .find(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("the land printed the settled id")
+            .to_string();
+        let status_g = cli.run_ok(&wc_g, &["status", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(status_g.trim()).unwrap();
+        assert_eq!(
+            v["conflicted"],
+            serde_json::json!(["fake.txt"]),
+            "the blocked record land leaves the old marks and head untouched — NO new \
+             mark at the conflicted path (that would show C for the user's own edit): {v}"
+        );
+        assert_eq!(
+            v["modified"],
+            serde_json::json!(["f.txt"]),
+            "the conflicted path shows as the user's EDIT, not C: {v}"
+        );
+        // The retry pin, conflicted shape (asserted as OBSERVED — this
+        // is not the clean no-op): the plain rerun MERGES G's committed
+        // delta against the settlement's markers — G's g4-side is one of
+        // the marker sides, so the line merge resolves instead of
+        // re-raising — and advances main to a NEW node (rebased == 1,
+        // landed != kg3_landed: no duplicate). The update blocks on the
+        // same uncommitted edit, and the warning says do NOT re-land.
+        let out = cli.run(&wc_g, &["land", "--key", "kg3-retry"]);
+        let retry_text = string_of(&out.stdout) + "\n" + &string_of(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the rerun settles (exit 0): {retry_text}"
+        );
+        assert!(
+            text.contains("do NOT re-land"),
+            "the first warning already said do NOT re-land"
+        );
+        let retry_landed = string_of(&out.stdout)
+            .split(['"', ':'])
+            .find(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("the retry printed its landed id")
+            .to_string();
+        assert_ne!(
+            retry_landed, kg3_landed,
+            "the retry is a NEW node, not a duplicate settlement"
+        );
+        let retry_status = naatre_cli::client::Client::new(&cli.url, Some(cli.token.clone()))
+            .get_json("/v1/repos/fixe2e/land/kg3-retry", &[])
+            .expect("the retry settled");
+        assert_eq!(retry_status["state"], json_str("done"), "{retry_status}");
+        assert_eq!(
+            retry_status["result"]["rebased"],
+            serde_json::json!(1),
+            "{retry_status}"
+        );
+        // The observed composition, pinned: the retry node is a PLAIN
+        // v1 node — the recorded conflict is DOWNGRADED to marker text
+        // on main's tip (landing onto a conflicted main via a plain
+        // rerun merges the marker renderings into a new marker file —
+        // the missing server-side marker-shape check at land, the
+        // recorded follow-up in docs/design.md) — and the ORIGINAL BASE
+        // is replaced by a mislabeled section, while both sides' content
+        // survives in the text.
+        let cs_obs = naatre_cli::client::Client::new(&cli.url, Some(cli.token.clone()))
+            .get_json(&format!("/v1/repos/fixe2e/changesets/{retry_landed}"), &[])
+            .expect("fetch the retry changeset");
+        assert_eq!(
+            cs_obs["conflicted"],
+            serde_json::json!(false),
+            "the retry node is plain v1 — the recorded conflict is DOWNGRADED to marker \
+             text on main's tip (nothing was resolved)"
+        );
+        let retry_cat = cli.run(&wc_g, &["cat", "f.txt", "--at", &retry_landed]);
+        let retry_content = string_of(&retry_cat.stdout);
+        assert!(
+            retry_content.starts_with("<<<<<<< naatre side 1/"),
+            "the served content is a marker rendering"
+        );
+        // H's side lives in the SIDE-1 section (scoped like side-2
+        // below — an unscoped contains() would be satisfiable by the
+        // mislabeled base section).
+        let side1 = retry_content
+            .split("<<<<<<< naatre side 1/2: ")
+            .nth(1)
+            .expect("a side-1 divider exists")
+            .split("||||||| naatre base:")
+            .next()
+            .expect("the side-1 block ends at the base divider");
+        assert!(
+            side1.contains("h3-side"),
+            "H's side survives in the side-1 section: {side1:?}"
+        );
+        // G's side lives in the SIDE-2 section (the base section holds
+        // the mislabeled g4-side content too — contains() alone cannot
+        // prove the side survived).
+        let side2 = retry_content
+            .split("======= naatre side 2/2: ")
+            .nth(1)
+            .expect("a side-2 divider exists")
+            .split(">>>>>>>")
+            .next()
+            .expect("the side-2 block ends at the closer");
+        assert!(
+            side2.contains("g4-side"),
+            "G's side survives in the side-2 section: {side2:?}"
+        );
+        assert!(
+            retry_content.contains("||||||| naatre base: ")
+                && retry_content.contains("g4-side\nbase-2"),
+            "the base section is replaced by mislabeled side content (the recorded \
+             defect): {retry_content}"
+        );
+        // The retry's own update was refused by the dirty rules (the
+        // uncommitted g5 edit sits on its delta's path), and head stays
+        // on the old side — the disk holds the user's edit
+        // byte-for-byte.
+        let retry_disk = std::fs::read_to_string(wc_g.join("f.txt")).unwrap();
+        assert_eq!(
+            retry_disk, "g5-uncommitted\nbase-2\n",
+            "the user's uncommitted edit is preserved byte-for-byte: {retry_disk:?}"
+        );
+        // The warning's PLAIN recovery path (item 3, the record-land
+        // shape): clear the colliding edit (f.txt back to the old-head
+        // content g4-side) — a PLAIN `naatre sync` reaches the landed
+        // head and marks f.txt by content (the settlement's re-conflict
+        // markers).
+        std::fs::write(wc_g.join("f.txt"), b"g4-side\nbase-2\n").unwrap();
+        let out = cli.run(&wc_g, &["sync"]);
+        assert!(
+            out.status.success(),
+            "round-2 plain recovery sync: {}",
+            string_of(&out.stderr)
+        );
+        assert!(
+            std::fs::read_to_string(wc_g.join("f.txt"))
+                .unwrap()
+                .starts_with("<<<<<<< naatre side 1/"),
+            "the plain recovery materialized the re-conflict markers"
+        );
+        let state_g: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(wc_g.join(".naatre/state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state_g["head"],
+            serde_json::json!(retry_landed.clone()),
+            "the plain recovery reached main's tip (the retry's settlement)"
+        );
+        // The --force recovery (up to date after the plain one — the
+        // same machinery, asserted anyway): the marks union the incoming
+        // marker detection (f.txt) with the carried still-true fake.txt.
+        let out = cli.run(&wc_g, &["sync", "--force"]);
+        assert!(
+            out.status.success(),
+            "round-2 recovery sync: {}",
+            string_of(&out.stderr)
+        );
+        assert!(
+            std::fs::read_to_string(wc_g.join("f.txt"))
+                .unwrap()
+                .starts_with("<<<<<<< naatre side 1/"),
+            "the recovery materialized the re-conflict markers"
+        );
+        let state_g: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(wc_g.join(".naatre/state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state_g["head"],
+            serde_json::json!(retry_landed.clone()),
+            "the recovery reached the landed head (the retry's settlement)"
+        );
+        let status_g = cli.run_ok(&wc_g, &["status", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(status_g.trim()).unwrap();
+        assert_eq!(
+            v["conflicted"],
+            serde_json::json!(["f.txt", "fake.txt"]),
+            "the recovery unions the conflicted marks: {v}"
+        );
+    }
+
+    // restore marks: B (the lander, marker bytes on disk) snapshots the
+    // conflicted working copy; H resolves its copy (plain commit clears
+    // the mark), then RESTORES the conflicted snapshot — the restored
+    // marker bytes record the mark again.
+    let snap_out = cli.run_ok(&wc_b, &["snapshot"]);
+    let snap = snap_out
+        .split(['"', ':'])
+        .find(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        .expect("snapshot printed its id")
+        .to_string();
+    std::fs::write(wc_b.join("f.txt"), b"b-resolved\nbase-2\n").unwrap();
+    let out = cli.run(&wc_b, &["resolve", "f.txt"]);
+    assert!(
+        out.status.success(),
+        "B resolve: {}",
+        string_of(&out.stderr)
+    );
+    // B's wc is clean-and-resolved; restore the CONFLICTED snapshot back
+    // over it.
+    let out = cli.run(&wc_b, &["restore", &snap]);
+    assert!(out.status.success(), "restore: {}", string_of(&out.stderr));
+    let disk_b = std::fs::read_to_string(wc_b.join("f.txt")).unwrap();
+    assert!(disk_b.starts_with("<<<<<<< naatre side 1/2: "), "{disk_b}");
+    let status_b = cli.run_ok(&wc_b, &["status", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(status_b.trim()).unwrap();
+    assert_eq!(
+        v["conflicted"],
+        serde_json::json!(["f.txt"]),
+        "restore over a conflicted snapshot records the mark: {v}"
+    );
+
+    // resolve-unmarked (the index is not a permission): strip the mark
+    // from state.json (a legacy/rolled-back state file shape) — resolve
+    // on the marker-shaped bytes still proceeds, says so on stderr, and
+    // clears whatever mark there is.
+    let state_path = wc_b.join(".naatre/state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["conflicted"] = serde_json::json!([]);
+    std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+    let out = cli.run(&wc_b, &["resolve", "f.txt"]);
+    let text = string_of(&out.stdout) + "\n" + &string_of(&out.stderr);
+    assert!(
+        out.status.success(),
+        "resolve accepts an unmarked marker-shaped file: {text}"
+    );
+    assert!(
+        text.contains("still carries conflict markers"),
+        "the honesty note names the marker content: {text}"
+    );
+    let status_b = cli.run_ok(&wc_b, &["status", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(status_b.trim()).unwrap();
+    assert_eq!(v["conflicted"], serde_json::json!([]), "{v}");
+
+    serve.stop();
 }

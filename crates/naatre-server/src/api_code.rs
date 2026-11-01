@@ -41,11 +41,13 @@ pub enum ApiCode {
     RedactedBase,
     /// 422 — commit content contains conflict markers.
     ConflictMarkersPresent,
-    /// 409 — the CLIENT refuses a conflicted-node sync (M12b, mixed-fleet
-    /// skew): the client predates format v2 and cannot materialize a
-    /// conflicted node; upgrade the client. The server never emits it —
-    /// the enum is the shared closed registry the CLI's stable codes
-    /// live in (the `dirty_working_copy` precedent).
+    /// 409 — conflicted-node sync refusal (M12b, mixed-fleet skew):
+    /// emitted by NO shipped binary. It exists for v2-aware-lineage client
+    /// builds whose v2 capability is absent (the capability constant
+    /// false) and is unit-pinned there as a contract; an unchanged
+    /// pre-M12 binary predates the refusal entirely. The server never
+    /// emits it — the enum is the shared closed registry the CLI's stable
+    /// codes live in (the `dirty_working_copy` precedent).
     VersionSkewConflicted,
     /// 400 — request payload is structurally malformed.
     Malformed,

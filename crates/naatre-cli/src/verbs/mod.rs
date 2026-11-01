@@ -26,6 +26,8 @@ pub mod sparse;
 pub mod status;
 pub mod sync;
 
+use std::path::Path;
+
 use crate::client::HttpError;
 use crate::wc::fetch::FetchError;
 
@@ -67,6 +69,45 @@ impl From<String> for VerbError {
     fn from(m: String) -> Self {
         VerbError::Local(m)
     }
+}
+
+/// The ONE source of the `conflict_markers_present` envelope text (M12b):
+/// both commit arms build it here, so the e2e's asserted message has a
+/// single home. Exit 2, the conflict class.
+pub(crate) fn marker_gate_envelope(path: &str) -> VerbError {
+    VerbError::Http(HttpError::Envelope {
+        status: 409,
+        code: "conflict_markers_present".into(),
+        message: format!(
+            "{path} contains conflict markers (a \">>>>>>> naatre conflict:\" \
+             file rendered from a recorded conflict); committing it would store \
+             the conflict as anonymous content — resolve it instead: edit the \
+             resolved content, then run `naatre resolve {path}`"
+        ),
+        details: None,
+        retry_after: None,
+    })
+}
+
+/// Reads a working-copy file and derives the (blob, size, exec, bytes)
+/// pending-file triplet — commit's and resolve's shared read (the id is
+/// the address, computed client-side).
+pub(crate) fn read_wc_file(
+    root: &Path,
+    raw: &str,
+) -> Result<(naatre_core::ids::Id, u64, bool, Vec<u8>), VerbError> {
+    use std::os::unix::fs::MetadataExt as _;
+    let bytes = std::fs::read(root.join(raw))
+        .map_err(|e| VerbError::Local(format!("reading {raw:?}: {e}")))?;
+    let meta = std::fs::metadata(root.join(raw))
+        .map_err(|e| VerbError::Local(format!("stating {raw:?}: {e}")))?;
+    let exec = meta.mode() & 0o111 != 0;
+    Ok((
+        naatre_core::ids::object_id(naatre_core::ids::Kind::Blob, &bytes),
+        bytes.len() as u64,
+        exec,
+        bytes,
+    ))
 }
 
 impl std::fmt::Display for VerbError {

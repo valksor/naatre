@@ -234,7 +234,12 @@ resolution. The refusal above needs the M12b detection code; an
 UNCHANGED pre-M12 binary client has neither the detection code nor the
 marker gate — it syncs a conflicted main as plain marker text and can
 commit those markers as ordinary content, and for such a binary the
-store-level schema guard is the only lockout. Operators should upgrade
+store-level schema guard is the only lockout. The same hole exists in
+the current binary's WRITABLE MOUNT: a marker-shaped file written
+through a `--writable --flush-land` mount lands as ordinary content
+(the flush path drives land directly and never passes the client's
+commit gate) — avoid conflicted paths on writable mounts until the
+follow-up exists. Operators should upgrade
 clients before enabling `record_conflict` flows. (A server-side
 marker-shape check at land is recorded as a follow-up, not built here.)
 

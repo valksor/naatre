@@ -53,17 +53,25 @@ pub struct Config {
 pub struct State {
     /// Current changeset id (64 lowercase hex).
     pub head: String,
-    /// Land base once land exists (M4); null until then.
+    /// Land base once land exists (M4); null until then. Carried for
+    /// state.json compatibility: no code reads it for a decision, and a
+    /// no-op fast-forward land (head == landed) intentionally writes no
+    /// state at all, so it is not refreshed there either.
     pub base: Option<String>,
     /// Sparse prefix list; empty = the full tree is checked out.
     pub sparse: Vec<String>,
     /// Repo name on the server.
     pub server_repo: String,
     /// M12b: the paths of head's tree that materialize conflict markers
-    /// (the conflicted paths). Recorded by sync/clone/land, cleared by
-    /// resolve and by a commit that rewrites the path; `status` marks
-    /// them (`C <path>`), `resolve` refuses paths outside the list.
-    /// `default`: state files written before M12b carry no key.
+    /// (the conflicted paths). Recorded by every materializing verb —
+    /// sync, clone, land (the record-conflict settlement's tree), sparse
+    /// add, restore — based on the marker-shaped bytes each wrote;
+    /// cleared by resolve and by a commit that rewrites the path (and by
+    /// sparse remove pruning the removed subtree). The list is a STATUS
+    /// INDEX, not a permission: `status` marks them (`C <path>`), and
+    /// `resolve` keys on the marker-shaped content itself, the mark
+    /// notwithstanding. `default`: state files written before M12b carry
+    /// no key.
     #[serde(default)]
     pub conflicted: Vec<String>,
 }

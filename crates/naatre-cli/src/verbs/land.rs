@@ -10,11 +10,19 @@
 //! `resolve` then clears the conflicted paths); a 409
 //! `idempotency_key_settled` prints the settled head and land-status
 //! pointer. On success the working copy advances onto the landed history
-//! (its head is rewritten server-side) and records the land base and the
-//! settlement's conflicted paths (M12).
+//! through the ONE sync materialization path (the old-head → landed-head
+//! tree difference: the same dirty gate, verified fetch, temp+rename,
+//! and stat-index update — the lander's disk matches what a fresh sync
+//! of the new head writes, on every landed path; a dirty-gate refusal
+//! degrades to preserve-and-warn, the land itself cannot un-settle) and
+//! records the land base and the conflicted marks (m12b-fix: the diff's
+//! marker detection, unioned with a conflicted settlement's response
+//! `conflicts`; a stale mark whose disk bytes are no longer markers
+//! clears).
 
 use std::path::Path;
 
+use naatre_core::ids::Id;
 use serde_json::json;
 
 use super::{Net, VerbError};
@@ -176,32 +184,171 @@ pub fn core(
     )
     .map_err(VerbError::Http)?;
     // The rebase rewrote the client's head server-side; advance the
-    // working copy onto the landed history and record the base. The
-    // settlement's conflicted paths (M12b) come from the response: a
-    // conflicted settlement names them, so the lander's `status` marks
-    // them and `resolve` accepts them; a settlement that is not itself a
-    // conflicted node keeps the existing marks (markers persist in the
-    // tree until resolved even when the new tip is a clean descendant).
+    // working copy onto the landed history through the ONE sync
+    // materialization path (m12b-fix, advisor): the tree difference
+    // OLD head → landed head applies with the same dirty gate,
+    // verified fetch, temp+rename, tracked-del loop, and stat-index
+    // update a sync uses — so the lander's disk matches what a fresh
+    // sync of the new head would write, at EVERY landed path (a record
+    // land rebases onto current main; the settlement tree can differ
+    // from the local tree in many paths, and a normal rebased land has
+    // the same shape — both go through this shared path, so neither is
+    // left stale-on-disk). The settlement's conflicted marks come from
+    // the diff's marker detection, unioned with the response's
+    // authoritative `conflicts` for a conflicted settlement.
+    //
+    // m12b-fix round 2 (advisor, option a): a REFUSED difference leaves
+    // the working copy COMPLETELY untouched — state.head stays on the
+    // OLD head, whose tree the disk and index truthfully still
+    // materialize. Advancing the head anyway would strand the working
+    // copy (sync short-circuits when target == head, so the promised
+    // recovery would never apply the difference); with head on the old
+    // side the later sync — once the local edit is cleared or stashed —
+    // sees a real difference and applies it through sync's own dirty
+    // rules. The same no-state-change rule covers a hard
+    // fetch/materialization failure (the settlement stands server-side;
+    // `naatre doctor --rebuild` + `naatre sync` recover locally).
     if outcome.landed != "?" {
-        let conflicted = if outcome.conflicts.is_empty() {
-            state.conflicted.clone()
-        } else {
-            outcome.conflicts.clone()
-        };
-        let new_state = State {
-            head: outcome.landed.clone(),
-            base: Some(outcome.main.clone()),
-            sparse: state.sparse,
-            server_repo: state.server_repo,
-            conflicted,
-        };
-        wc.save_state(&new_state).map_err(|e| {
-            VerbError::Local(format!(
-                "land settled but updating .naatre/state.json failed: {e}"
-            ))
+        let old_head = Id::from_hex(&state.head).ok_or_else(|| {
+            VerbError::Local("state.json head is not a valid changeset id".into())
         })?;
+        let new_head = Id::from_hex(&outcome.landed)
+            .ok_or_else(|| VerbError::Local("the server landed an invalid changeset id".into()))?;
+        if new_head != old_head {
+            let old_index = wc.load_index().map_err(VerbError::Local)?;
+            match super::sync::apply_tree_diff(
+                root, &state, old_index, &client, &old_head, &new_head, false,
+            ) {
+                Ok(Ok(applied)) => {
+                    let mut conflicted = applied.conflicted.clone();
+                    for p in &outcome.conflicts {
+                        if !conflicted.contains(p) {
+                            conflicted.push(p.clone());
+                        }
+                    }
+                    let new_state = State {
+                        head: outcome.landed.clone(),
+                        base: Some(outcome.main.clone()),
+                        sparse: state.sparse.clone(),
+                        server_repo: state.server_repo.clone(),
+                        conflicted,
+                    };
+                    wc.save_state(&new_state).map_err(|e| {
+                        VerbError::Local(format!(
+                            "land settled but updating .naatre/state.json failed: {e}"
+                        ))
+                    })?;
+                    wc.save_index(&applied.index).map_err(|e| {
+                        VerbError::Local(format!(
+                            "land settled but updating .naatre/index.nai failed: {e}"
+                        ))
+                    })?;
+                }
+                Ok(Err(blocked)) => {
+                    // GAP 1 (m12b-fix round 2): with head back on the old
+                    // side, the disk holds the USER'S bytes at every path
+                    // — carrying the response's conflicts as marks would
+                    // show `C` for the user's own edit and let resolve
+                    // settle blind. Keep only the older marks whose disk
+                    // bytes are still marker-shaped; the recovery sync
+                    // marks by content once it materializes the
+                    // settlement.
+                    let new_state = State {
+                        head: old_head.to_string(),
+                        base: state.base.clone(),
+                        sparse: state.sparse.clone(),
+                        server_repo: state.server_repo.clone(),
+                        conflicted: stale_marks(root, &state.conflicted),
+                    };
+                    wc.save_state(&new_state).map_err(|e| {
+                        VerbError::Local(format!(
+                            "land settled but updating .naatre/state.json failed: {e}"
+                        ))
+                    })?;
+                    let blocked_list = blocked.blocked.join(", ");
+                    let collide_list = blocked.colliding.join(", ");
+                    // The retry hazard, per settlement kind (m12b-fix
+                    // round 2): a rerun land after a blocked CLEAN
+                    // settlement is a harmless no-op (the server
+                    // re-derives the already-contained delta and settles
+                    // done on the unchanged main — pinned). After a
+                    // blocked CONFLICTED settlement the rerun MERGES:
+                    // your delta goes through the line merge against the
+                    // marker content and lands a NEW PLAIN node — main
+                    // advances silently and the recorded conflict is
+                    // DOWNGRADED to marker text on the tip (observed +
+                    // pinned; this is the missing server-side
+                    // marker-shape check at land, the recorded
+                    // follow-up) — so that shape's warning says do NOT
+                    // re-land.
+                    let (conflicts_note, retry_note) = if outcome.conflicts.is_empty() {
+                        (String::new(), String::new())
+                    } else {
+                        (
+                            format!(
+                                "; the landed head is conflicted at: [{}]",
+                                outcome.conflicts.join(", ")
+                            ),
+                            "; do NOT re-land — a rerun merges your delta against the \
+                             marker content and lands a new plain node, advancing main \
+                             without the conflict representation"
+                                .to_string(),
+                        )
+                    };
+                    eprintln!(
+                        "warning: the land settled, but the working-copy update was refused \
+                         by the dirty rules — local edits on incoming paths: [{blocked_list}]; \
+                         colliding untracked: [{collide_list}]; everything preserved at the \
+                         old head{conflicts_note}. Clear or stash the edits, then run \
+                         `naatre sync` (`--force` discards) to reach the landed \
+                         head{retry_note}"
+                    );
+                }
+                // A hard failure fetching/applying the difference: the
+                // settlement stands; the working copy may be partially
+                // written (per-file atomic renames, index not advanced) —
+                // the marks filter the same way, doctor rebuilds the
+                // index, sync converges on the re-run.
+                Err(e) => {
+                    let new_state = State {
+                        head: old_head.to_string(),
+                        base: state.base.clone(),
+                        sparse: state.sparse.clone(),
+                        server_repo: state.server_repo.clone(),
+                        conflicted: stale_marks(root, &state.conflicted),
+                    };
+                    wc.save_state(&new_state).map_err(|e| {
+                        VerbError::Local(format!(
+                            "land settled but updating .naatre/state.json failed: {e}"
+                        ))
+                    })?;
+                    eprintln!(
+                        "warning: the land settled, but the working-copy update failed \
+                         ({e}); run `naatre doctor --rebuild` if status looks wrong, \
+                         then `naatre sync` to reach the landed head"
+                    );
+                }
+            }
+        }
     }
     Ok(outcome)
+}
+
+/// The older conflicted marks whose disk bytes are still a rendered
+/// marker file — the marks a degraded land (blocked gate, hard failure)
+/// keeps: with head back on the old side, the disk holds the user's own
+/// bytes, and a mark on them would show `C` for the user's edit and let
+/// resolve settle blind.
+fn stale_marks(root: &Path, marks: &[String]) -> Vec<String> {
+    marks
+        .iter()
+        .filter(|p| {
+            std::fs::read(root.join(p))
+                .map(|b| naatre_core::conflict::marker_shaped(&b))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
 }
 
 /// The default idempotency key: a random 8-hex suffix (4 bytes from the OS

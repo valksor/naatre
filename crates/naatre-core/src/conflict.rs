@@ -139,6 +139,17 @@ fn push_block(out: &mut Vec<u8>, content: Vec<u8>) {
 /// content. Prose that merely quotes the format (docs, another tool's
 /// markers) fails the structure — the opener must be the first line and
 /// the closer the last, with every divider exact.
+///
+/// Structural ambiguity, acknowledged: a side's content line that
+/// EXACTLY equals a valid divider form for the expected next side
+/// (byte-identical, blob id included) is consumed as that divider —
+/// the detection is structural, not content-addressed, so such content
+/// shifts the parse (a false-negative on the surrounding shape). The
+/// same holds for a truncated closer whose path prefix survives: a
+/// byte-level cut inside the closer's path text is indistinguishable
+/// from a shorter path. Both are inherent to detecting a rendering
+/// whose content blocks are arbitrary bytes; the renderer itself never
+/// emits them.
 pub fn marker_shaped(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
@@ -187,11 +198,16 @@ pub fn marker_shaped(bytes: &[u8]) -> bool {
 }
 
 /// Parses the opener `<<<<<<< naatre side 1/N: <hex>` into `(N, hex)`.
+/// N is capped at [`MAX_ENTRIES`] — the entry cap the frame format
+/// itself carries — so a hostile opener (`side 1/18446744073709551615`)
+/// parses to None here instead of overflowing the side-count arithmetic
+/// downstream (`n + 1` would panic the debug profile; the cap removes
+/// the overflow path entirely, both profiles).
 fn parse_opener(line: &str) -> Option<(usize, &[u8])> {
     let rest = line.strip_prefix("<<<<<<< naatre side 1/")?;
     let (n, id) = rest.split_once(": ")?;
     let n = n.parse::<usize>().ok()?;
-    if n < 2 {
+    if !(2..=crate::changeset::MAX_ENTRIES).contains(&n) {
         return None;
     }
     Some((n, id.as_bytes()))
@@ -401,5 +417,18 @@ mod tests {
         assert!(!marker_shaped(twobase.as_bytes()));
         // Non-UTF-8 bytes.
         assert!(!marker_shaped(&[0xff, 0xfe, 0xfd]));
+        // A hostile side count at the usize boundary (security A1): the
+        // cap rejects it before any arithmetic on N — this MUST run in a
+        // debug build to mean anything (the plain `cargo test` profile
+        // is debug; release would hide the pre-fix overflow panic), and
+        // post-fix it cannot panic at all.
+        let hostile = format!(
+            "<<<<<<< naatre side 1/18446744073709551615: {s1}\n\
+             ======= naatre side 2/18446744073709551615: {s2}\n\
+             >>>>>>> naatre conflict: a.txt\n",
+            s1 = side(1).to_hex(),
+            s2 = side(2).to_hex(),
+        );
+        assert!(!marker_shaped(hostile.as_bytes()));
     }
 }

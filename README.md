@@ -121,10 +121,16 @@ TLS-terminating reverse proxy in front (see below).
   resolution is `naatre resolve <path>` — the resolved content commits as
   an explicit resolution changeset referencing the conflicted head, and
   the following `naatre land` advances main past the conflict (linear
-  history); a client that predates v2 refuses a conflicted-node sync with
-  `version_skew_conflicted` (upgrade the client). Formats:
-  `docs/format.md` §8; semantics: `docs/design.md` ("First-class
-  conflicts").
+  history). **Mixed-fleet honesty:** the documented skew refusal
+  (`version_skew_conflicted`) is emitted by NO shipped binary — it exists
+  only in v2-aware-lineage client builds that lack the v2 capability
+  (unit-pinned as a contract); an UNCHANGED pre-M12 client binary has
+  neither the detection code nor the marker gate, so it syncs a conflicted
+  main as plain marker text and can commit those markers as ordinary
+  content. Operators should upgrade clients before enabling
+  `record_conflict` flows (a server-side marker-shape check at land is
+  the recorded follow-up). Formats: `docs/format.md` §8; semantics:
+  `docs/design.md` ("First-class conflicts").
 - **Deploy note for format v2 (M12a): the schema upgrade is a ONE-WAY,
   store-wide lockout.** The first boot of a format-v2 binary upgrades the
   data dir to `schema_version` 12; no older binary can ever open that
@@ -650,7 +656,14 @@ anything** (no ref moves; re-flush re-stages). With `--flush-land`
 the **same land path `naatre land` uses**: the idempotency key is printed
 before the request, main advances onto the landed head, and the exit code
 mirrors land's conflict contract (2 for a 409 conflict or a settled key).
-No mkdir, delete, or rename in this first cut.
+No mkdir, delete, or rename in this first cut. **Known hole (named, not
+papered over): the writable mount has no client marker gate** — a
+marker-shaped file written through the mount flush-lands as ordinary
+content on a current binary, because the client-side
+`conflict_markers_present` check runs in the commit/resolve verbs, which
+the mount's flush path never passes through. Interim workaround: avoid
+conflicted paths on writable mounts until the server-side marker-shape
+check at land (the recorded follow-up) exists.
 
 ## Error codes
 
@@ -676,8 +689,8 @@ a generic message + `request_id` only.
 | `dirty_working_copy` | 409 | sync/restore refused: local edits or colliding untracked files |
 | `git_history_diverged` | 409 | import graft refused: histories diverged |
 | `redacted_base` | 409 | the land's base chain crosses a redacted changeset (details name it) |
-| `conflict_markers_present` | 409 | commit content contains conflict markers (M12) |
-| `version_skew_conflicted` | 409 | a pre-v2 client refused a conflicted-node sync — upgrade the client (M12; the CLI emits it, the server never does) |
+| `conflict_markers_present` | 409 | the CLI's commit gate refuses marker-shaped content (M12; CLI-emitted only — the server never emits it) |
+| `version_skew_conflicted` | 409 | conflicted-node sync refusal (M12) — emitted by NO shipped binary; lives in the registry for v2-aware-lineage builds with the v2 capability absent (unit-pinned as a contract; the server never emits it) |
 | `malformed` | 400 | structurally malformed payload |
 | `validation` | 422 | semantic validation failure |
 | `path_not_normalized` | 422 | path is not NFC |

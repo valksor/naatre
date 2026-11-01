@@ -577,13 +577,11 @@ async fn fsck_repair_backfills_legacy_marker_blob_rows() {
             .unwrap();
         Id(<[u8; 32]>::try_from(hex).unwrap())
     };
-    // The store references it (membership + file_changes + tree entry)
-    // and holds the bytes, but the record row is missing — the legacy
-    // shape.
-    // The store references it (membership + file_changes + tree entry)
-    // and holds the bytes, but the record row is missing — the legacy
-    // shape. The DELETE below lands on a row that exists (the m12b land
-    // now records it; the delete simulates the m12a defect).
+    // The legacy shape (the m12a defect): the store references the
+    // marker blob (membership + file_changes + tree entry) and holds the
+    // bytes, but the objects record row is missing. The m12b land
+    // records the row, so the pin deletes it by hand to reproduce the
+    // defect before exercising the repair.
     let conn = f.t.db();
     assert_eq!(
         conn.query_row(
@@ -645,5 +643,63 @@ async fn fsck_repair_backfills_legacy_marker_blob_rows() {
             .iter()
             .all(|(name, n)| *n == 0 || name == "changeset_parent_missing"),
         "fsck-clean after repair: {after:?}"
+    );
+}
+
+// ---- the poison boundary applies the conflicted check (m12b-fix) ------------
+
+/// Blame at a resolution child whose CONFLICTED ancestor's derive row is
+/// poisoned (the quarantine path): the walk stops at the poisoned node,
+/// the marker-rendering lines attribute to the boundary — and they report
+/// conflicted (compliance A3), degraded, with the node named in
+/// poisoned_cs. The same check the touched-path branch applies.
+#[tokio::test]
+async fn blame_poisoned_conflicted_boundary_reports_conflict() {
+    let f = fixture();
+    let (v2, _) = conflicted_main(&f).await;
+    // A resolution child of the conflicted node.
+    let resolved = b"resolved\nl2\nl3\n".to_vec();
+    let br = put_blob(&f, &resolved).await;
+    let r = create_ok(
+        &f,
+        cs_body(
+            json!([v2.clone()]),
+            json!([change("f.txt", "mod", &br, resolved.len())]),
+            "resolve",
+        ),
+    )
+    .await;
+    f.t.drain().await;
+    // Quarantine the conflicted node (test scaffolding: the poison state
+    // a real quarantine produces; the drained queue keeps it).
+    f.t.db()
+        .execute(
+            "UPDATE derive_state SET state = 'poison' \
+             WHERE repo_id = ?1 AND cs = ?2 AND kind = \
+             (SELECT id FROM derive_kinds WHERE name = 'blame')",
+            rusqlite::params![f.repo_id, Id::from_hex(&v2).unwrap().0.as_slice()],
+        )
+        .unwrap();
+
+    let resp = blame(&f, &r, "f.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["degraded"], json!(true), "{}", resp.body);
+    assert!(
+        resp.body["poisoned_cs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == &json!(v2)),
+        "the conflicted node is the poison boundary: {}",
+        resp.body
+    );
+    let lines = resp.body["lines"].as_array().unwrap();
+    let boundary_conflicted: Vec<&Value> = lines
+        .iter()
+        .filter(|l| l["cs"] == json!(v2) && l["conflicted"].as_bool() == Some(true))
+        .collect();
+    assert!(
+        !boundary_conflicted.is_empty(),
+        "the boundary's marker lines report conflicted: {lines:?}"
     );
 }
