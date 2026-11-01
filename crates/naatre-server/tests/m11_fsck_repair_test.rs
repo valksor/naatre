@@ -309,3 +309,67 @@ fn object_bytes(blob: &Id) -> &'static [u8] {
         _ => unreachable!("only fixture ids are put into the CAS"),
     }
 }
+
+/// The selector's THIRD arm (`tree_entries`, the README's
+/// `tree_blob_row_missing` promise): a blob referenced ONLY by a tree
+/// entry — no `repo_blobs` membership, no `file_changes` row — backfills,
+/// while a tombstoned id in the same arm still never gains a row (the
+/// exclusion applies to the new arm identically).
+#[tokio::test]
+async fn repair_covers_tree_only_references_and_still_skips_tombstones() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("naatre.db"), b"").unwrap();
+    let cfg = BackendConfig::default();
+    let store = Store::open_backend(DataDir::open_any(&data), &cfg).unwrap();
+    let conn = store.conn();
+    let repo_id = db::repos_create(conn, "legacy", BASE_NS).unwrap();
+    let cas = naatre_store::blob::history_cas(&DataDir::open_any(&data), &cfg).unwrap();
+
+    let tree_only = object_id(Kind::Blob, b"tree only\n");
+    let tree_tombstoned = object_id(Kind::Blob, b"tree only, tombstoned\n");
+    cas.put(b"tree only\n").unwrap();
+    cas.put(b"tree only, tombstoned\n").unwrap();
+    for (name, blob) in [("a.txt", &tree_only), ("b.txt", &tree_tombstoned)] {
+        conn.execute(
+            &Sql::plain(
+                "INSERT INTO tree_entries(tree_id, name, kind, object_id, size, exec) \
+                 VALUES (?1, ?2, 0, ?3, 10, 0)",
+            ),
+            &naatre_store::pv![[0x77; 32], name, blob.0.as_slice()],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        &Sql::plain(
+            "INSERT INTO redactions(repo_id, object_id, kind, path, marked_ns, purged_ns) \
+             VALUES (?1, ?2, 'blob', NULL, ?3, NULL)",
+        ),
+        &naatre_store::pv![repo_id, tree_tombstoned.0.as_slice(), BASE_NS],
+    )
+    .unwrap();
+
+    // Only the tree class reports the dirt (no membership/file_changes).
+    let report = fsck::fsck(&state_of(&data)).await.unwrap();
+    assert_eq!(danglings_of(&report, "tree_blob_row_missing"), 2);
+    assert_eq!(danglings_of(&report, "membership_row_object_missing"), 0);
+    assert_eq!(danglings_of(&report, "file_change_blob_row_missing"), 0);
+
+    let report = fsck::fsck_repair(&state_of(&data)).await.unwrap();
+    assert_eq!(report.backfilled, vec![tree_only.to_hex()]);
+    assert_eq!(
+        danglings_of(&report, "tree_blob_row_missing"),
+        1,
+        "only the tombstoned id's dangling entry remains"
+    );
+    let rows: i64 = store
+        .conn()
+        .query_row_map(
+            &Sql::plain("SELECT COUNT(*) FROM objects WHERE object_id = ?1"),
+            &naatre_store::pv![tree_tombstoned.0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0, "a tombstoned id gains no row via the tree arm");
+}

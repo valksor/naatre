@@ -170,13 +170,16 @@ pub fn check_case_fold_duplicates(paths: &[String]) -> Result<(), PathError> {
     Ok(())
 }
 
-/// Unicode general category Cc (control characters).
-pub(crate) fn is_cc(c: char) -> bool {
+/// Unicode general category Cc (control characters). Exposed for the
+/// import `--sanitize` codec (the escape must mirror the character rule
+/// exactly — a hand-copied predicate would drift).
+pub fn is_cc(c: char) -> bool {
     c.is_control()
 }
 
 /// Unicode general category Cf (format characters), Unicode 16.0 set.
-pub(crate) fn is_cf(c: char) -> bool {
+/// Exposed for the import `--sanitize` codec (same drift argument).
+pub fn is_cf(c: char) -> bool {
     matches!(c as u32,
         0x00AD
         | 0x0600..=0x0605

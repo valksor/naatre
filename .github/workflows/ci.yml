@@ -122,9 +122,19 @@ jobs:
       # Signing stays OFFLINE — CI never holds any release key — so the
       # --no-sign artifact set is what CI proves; the signature verify gate
       # below runs for real against the CI TEST key on every push.
-      - run: cargo install cargo-cyclonedx --locked
+      # cargo-cyclonedx is pinned (a floating install drifts the SBOM
+      # format under the signed envelope): 0.5.9 is the version
+      # scripts/release.sh was validated with.
+      - run: cargo install cargo-cyclonedx --locked --version 0.5.9
       - run: scripts/release.sh --no-sign release-artifacts x86_64-unknown-linux-musl
-      - run: test -f release-artifacts/naatre.cdx.json
+      # The SBOM and the versioned binary must be INSIDE the checksummed
+      # set: the minisign signature covers SHA256SUMS, so a file missing
+      # from it ships unsigned.
+      - run: |
+          test -f release-artifacts/naatre.cdx.json
+          grep -E '  naatre\.cdx\.json$' release-artifacts/SHA256SUMS
+          grep -E '  naatre-[0-9][^ ]*-x86_64-unknown-linux-musl$' release-artifacts/SHA256SUMS
+          grep -E '  THIRD_PARTY_LICENSES\.md$' release-artifacts/SHA256SUMS
       # The signature verify gate (scripts/release-verify.sh): the fixture
       # in scripts/release-fixture carries a REAL signature made by the CI
       # TEST key (deploy/naatre-release-test.pub — NOT a release anchor;

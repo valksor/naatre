@@ -2931,7 +2931,12 @@ pub fn fsck_repair_candidates(conn: &Db) -> Result<Vec<Id>, DbError> {
              SELECT DISTINCT blob_id FROM file_changes f \
              WHERE f.blob_id IS NOT NULL \
                AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = f.blob_id) \
-               AND NOT EXISTS (SELECT 1 FROM redactions r WHERE r.object_id = f.blob_id)",
+               AND NOT EXISTS (SELECT 1 FROM redactions r WHERE r.object_id = f.blob_id) \
+             UNION \
+             SELECT DISTINCT te.object_id FROM tree_entries te \
+             WHERE te.kind = 0 \
+               AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = te.object_id) \
+               AND NOT EXISTS (SELECT 1 FROM redactions r WHERE r.object_id = te.object_id)",
         ),
         &[],
         |r| {

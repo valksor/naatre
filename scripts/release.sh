@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# The M11 release step: build the release artifact set, write SHA256SUMS
-# (the M0 behavior), emit a CycloneDX SBOM for the shipped binary's
-# dependency closure, and — when the release key is provided — sign the
-# checksums with minisign. Verification is scripts/release-verify.sh; the
-# commands are documented in SECURITY.md.
+# The M11 release step: build the release artifact set, emit a CycloneDX
+# SBOM for the shipped binary's dependency closure, write SHA256SUMS over
+# EVERY shipped file (binary, licenses, SBOM — the SBOM is written BEFORE
+# the sums, so the minisign signature over SHA256SUMS covers it), and —
+# when the release key is provided — sign the checksums with minisign.
+# Verification is scripts/release-verify.sh; the commands are documented
+# in SECURITY.md.
 #
 # The PRIVATE KEY IS NEVER in the repo: NAATRE_MINISIGN_KEY names the
 # secret key file (keep it offline; a password-protected key is the
@@ -55,18 +57,20 @@ command -v rustup >/dev/null 2>&1 && rustup target add "$TARGET" >/dev/null
 cargo build --release --locked --target "$TARGET"
 [[ -f "$BIN" ]] || fail "the binary did not land at $BIN"
 
+# The shipped binary carries the versioned name the checksums, the fixture,
+# and the docs use: naatre-<ver>-<target>.
+VER=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+[[ -n "$VER" ]] || fail "no workspace version found in Cargo.toml"
+ARTIFACT="naatre-$VER-$TARGET"
+
 step "stage artifacts in $DEST"
 mkdir -p "$DEST"
-cp "$BIN" "$DEST/"
+cp "$BIN" "$DEST/$ARTIFACT"
 cp THIRD_PARTY_LICENSES.md "$DEST/"
-
-step "SHA256SUMS"
-sum naatre THIRD_PARTY_LICENSES.md >"$DEST/SHA256SUMS"
-cat "$DEST/SHA256SUMS"
 
 step "CycloneDX SBOM (cargo-cyclonedx: a documented tool dependency, not a runtime dep)"
 command -v cargo-cyclonedx >/dev/null 2>&1 ||
-	fail "cargo-cyclonedx is not installed: cargo install cargo-cyclonedx"
+	fail "cargo-cyclonedx is not installed: cargo install cargo-cyclonedx --locked --version <the version pinned in ci.yml>"
 # The binary target's SBOM is the shipped artifact's dependency closure;
 # the generated files land beside the crate sources and are cleaned up.
 cargo cyclonedx --describe binaries --format json
@@ -77,6 +81,12 @@ command rm -f crates/naatre-cli/naatre_bin.cdx.json \
 	crates/naatre-core/naatre-core.cdx.json \
 	crates/naatre-server/naatre-server.cdx.json \
 	crates/naatre-store/naatre-store.cdx.json
+
+# AFTER the SBOM: SHA256SUMS lists every shipped file, so the signature
+# over it covers the SBOM too.
+step "SHA256SUMS"
+sum "$ARTIFACT" THIRD_PARTY_LICENSES.md naatre.cdx.json >"$DEST/SHA256SUMS"
+cat "$DEST/SHA256SUMS"
 
 if [[ "$NO_SIGN" == 1 ]]; then
 	step "unsigned (--no-sign): CI's shape — CI never holds any release key"

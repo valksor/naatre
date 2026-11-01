@@ -344,18 +344,34 @@ orphans, never dangling references.
   convention as git for import); a missing binary is a clean operator
   error naming the tool. A missing/mismatched `pg_dump` is refused before
   anything is written; on a dump failure the tool's stderr lands in
-  `tool-error.log` inside the backup dir (connection errors can name the
-  host and user, so naatre's own error carries the exit status only).
+  `tool-error.log` (0600) inside the new backup dir and naatre's own error
+  carries the exit status only (connection errors can name the host and
+  user). **Backup of an uninitialized Postgres target is refused**,
+  naming `naatre init` — the probe connects without creating anything, so
+  no empty schema is migrated into existence by the check. Any OTHER
+  failed backup removes its manifest-less partial dir; one that kept a
+  `tool-error.log` stays, and the next run's error names it as the
+  leftover of a failed backup. **Role hygiene**: `pg_dump` runs with
+  `--no-owner --no-privileges` (psql, the replay tool, takes no such flags,
+  so a role-clean dump is what makes the replay role-independent): the
+  restored objects belong to the **restoring role**, and a restore under a
+  different role than the one that dumped succeeds. naatre assumes a
+  **dedicated database** per instance (production stores use the DSN
+  database's default schema, never a named one): `pg_dump` dumps that whole
+  database, and the replay recreates it in the target database.
 - **sqlite + s3 / postgres + s3**: the DB snapshot first; `manifest.json`
-  then lists the
-  object ids and **the bucket copy is the operator's duty** — naatre does
-  not duplicate a bucket into the backup dir (out-of-band S3 tooling,
-  e.g. `aws s3 sync`/`mc mirror`; incremental syncs between backups work
-  because objects are immutable). The same caveat as the erasure section
-  below applies: external bucket lifecycle/versioning policies can
-  violate invariants naatre cannot see — that note lives in "Erasure",
-  and restore's presence gate is the tripwire that catches an incomplete
-  bucket copy.
+  then lists the object ids and **the bucket copy is the operator's duty**
+  — naatre does not duplicate a bucket into the backup dir (out-of-band S3
+  tooling, e.g. `aws s3 sync`/`mc mirror`). **Sync the WHOLE bucket**, not
+  the manifest's ids one by one: objects are immutable, so incremental
+  whole-bucket syncs between backups are cheap, and a whole-bucket copy
+  also carries any object written between the DB snapshot and the sync.
+  Stragglers are caught after the fact: restore's presence gate refuses
+  before it writes anything, and `naatre fsck` reports a referenced object
+  missing from the bucket as `bytes_missing`. The same caveat as the
+  erasure section below applies: external bucket lifecycle/versioning
+  policies can violate invariants naatre cannot see — that note lives in
+  "Erasure".
 - `ephemeral/` is never backed up — snapshots expire by design (TTL),
   and fsck does not scan that namespace.
 - The **DB-per-repo coordinated snapshot** (one backup spanning several
@@ -364,23 +380,70 @@ orphans, never dangling references.
 
 **Restore** validates the manifest, refuses a backend-combo mismatch with
 the target's config (naming both sides), and refuses a non-empty target —
-naming what it found — unless `--force` is given. **Postgres targets** are
-refused while the database already holds the naatre schema, and that
-refusal holds **even with `--force`**: dropping the schema IS the wipe,
-and because the refusal happens *before any psql write*, a failed Postgres
-restore can never strand a live store half-replaced — the worst a failed
-psql leaves is the uninitialized target it started on. **S3 targets**: the
-presence gate is the refusal — restore answers only when the target holds
-every manifest object (an incomplete bucket copy names the duty), and an
-S3-configured target whose local `objects/` holds data is the backend
-mismatch, refused regardless of `--force`. It is **all-or-nothing**: every
-artifact is copied into a staging directory and SHA256-verified against
-the manifest BEFORE any write to the target — a corrupt or tampered backup
-(one flipped byte) is refused and the target is left untouched — then the
-verified DB snapshot is moved into place and the objects follow. It checks
-every manifest id is PRESENT in the target CAS (not reachability) and
-points the operator at `naatre fsck` — restore never silently skips
-verification.
+naming what it found — unless `--force` is given. The manifest's artifact
+paths are checked at parse time: only `naatre.db`, `postgres.sql`, and
+`objects/<2 hex>/<2 hex>/<60 hex>` (a 64-hex id split 2/2/60 across the
+shard dirs and the file name) are accepted — absolute paths, `..`/`.`
+components, and every other shape are refused with the target untouched.
+**Combo mismatch after a wipe**: the combo comes from the target's
+`backend.toml`. After a full wipe of a **non-default** data dir, recreate
+`backend.toml` (or do not wipe it) before restoring — the error says so.
+
+*What the restore claims, and what pins it*:
+
+- **Trust boundary**: the manifest's checksums catch a corrupted or
+  tampered ARTIFACT; the manifest itself is unsigned, so someone who can
+  rewrite the whole backup directory (manifest included) is outside what
+  the check proves — keep backup dirs 0700 and treat them as trusted
+  input (signing manifests is a recorded followup).
+- **A corrupt, tampered, or too-new backup leaves the target untouched.**
+  Every artifact is copied into a staging directory (streamed; the
+  checksum covers the STAGED copy, so no window exists between hashing and
+  copying) and SHA256-verified against the manifest BEFORE any write to
+  the target. A backup whose schema version is newer than this binary
+  supports is refused from the staged snapshot (SQLite) or the staged dump
+  (Postgres; a dump whose version cannot be read is refused too — it is
+  never assumed old) before anything is written.
+- **A failed Postgres replay leaves the uninitialized target it started
+  on.** `psql` runs the dump in ONE transaction (`-1`), so a failure
+  anywhere in the replay rolls back every statement, schema included, and
+  an immediate re-run works. **Postgres targets** are refused while the
+  database already holds the naatre schema, and that refusal holds **even
+  with `--force`**: dropping the schema IS the wipe. `psql`'s stderr lands
+  in `tool-error.log` (0600) beside the target (its parent directory) —
+  restore never writes into the backup dir; if that log cannot be
+  written, the error says so after the real `psql` status.
+- **SQLite: leftover WAL/SHM sidecars never replay.** A target holding
+  `naatre.db-wal`/`-shm` — even without a `naatre.db` — counts as
+  non-empty (refused without `--force`, the refusal names them), and a
+  forced restore unlinks them before the snapshot lands, so the restored
+  store carries exactly the snapshot's content.
+- **Restore answers only when the target holds every manifest object.**
+  On S3 the presence gate runs BEFORE any target write: an incomplete
+  bucket copy is refused with the target still uninitialized, naming the
+  missing ids. An S3-configured target whose local `objects/` holds data
+  is the backend mismatch, refused regardless of `--force`. fs objects are
+  fsynced as they land, like the DB.
+
+Then the verified DB snapshot is moved into place and the objects follow.
+Restore checks every manifest id is PRESENT in the target CAS (not
+reachability), writes one `restore` audit row into the restored store
+(manifest format, backup timestamp, combo, the waived ids if any, and the
+restored object count — nothing else), prints the pre-redaction duty
+reminder keyed to the backup's age (below), and points the operator at
+`naatre fsck` — restore never silently skips verification.
+
+**S3 purge race — the two-step waiver.** If a redaction purge already ate
+bucket objects the manifest lists, no bucket copy can ever satisfy the
+presence gate. The refusal lists the missing ids AND a waiver argument (a
+short digest of that exact set):
+`naatre restore --data <target> <backup-dir> --allow-missing <digest-or-ids>`
+accepts it — the argument is either the digest or the comma-separated id
+list. The waiver covers EXACTLY the set it was issued for: if the missing
+set differs on the second run (a purge landed in between), restore refuses
+again and prints the NEW set and its digest; a purge is never silently
+waived. Waived ids appear in the restore output and the `restore` audit
+row, and the redaction duty below applies to them.
 
 **GC, purges, and the copy phase**: plain GC cannot race a fresh backup
 within `gc_grace_secs` (bytes reachable at snapshot time survive the
@@ -400,7 +463,9 @@ restoring it brings redacted content back. Re-apply the redactions
 immediately (every serving path and the import boundary refuse the
 content), and the next GC pass re-purges the bytes. Backups taken AFTER a
 redaction carry the tombstones and re-purge (or stay gated) on their own.
-Backup copies — and the TLS proxy's own access logs — are outside the
+Every restore prints this duty keyed to the backup's age (redactions
+recorded only in the destroyed store must be re-applied; `fsck` cannot
+detect them). Backup copies — and the TLS proxy's own access logs — are outside the
 data dir's erasure guarantee; they are the operator's to handle.
 
 ## Git interop
@@ -433,7 +498,9 @@ Import discloses its two content mutations and its skip behavior:
   entries name each escaped field and code point, and decoding the stored
   text (the same codec, invertible) returns the original bytes — modulo
   the `\r\n` normalization above, which applies before sanitization in
-  both modes.
+  both modes. Decode only objects the report's `escaped` list names: a
+  string with no offending character is stored unchanged, and decoding it
+  would corrupt a literal backslash.
 - Unsupported content (octopus parents, symlinks, gitlinks, …) aborts the
   import by default with a per-object report; `--skip-unsupported` skips
   the commit **and all its descendants** (the `cascaded` list) — one
@@ -744,8 +811,14 @@ public key (see [`SECURITY.md`](SECURITY.md), "Verifying release
 artifacts"). Once it exists, verify a download with it:
 
 ```sh
-minisign -Vm naatre-<ver>-x86_64-unknown-linux-musl -p <the published release public key>
+minisign -Vm SHA256SUMS -p <the published release public key>   # reads SHA256SUMS.minisig beside it
+sha256sum -c SHA256SUMS
 ```
+
+The signature covers `SHA256SUMS`, and `SHA256SUMS` lists every shipped
+file — the binary (`naatre-<ver>-<target>`), `THIRD_PARTY_LICENSES.md`, and
+the SBOM (`naatre.cdx.json`) — so the signature extends to the SBOM too.
+The SBOM generator is pinned in CI (`cargo-cyclonedx` 0.5.9).
 
 ## Distribution note (conditional)
 

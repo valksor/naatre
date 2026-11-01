@@ -258,8 +258,9 @@ U+FFFD and the commit is listed in the import report's `sanitized` array;
 with `--sanitize` (M11) the text is instead escaped losslessly (`\u{hex}`
 per offending character, literal backslashes doubled — the inverse codec
 decodes to the original bytes), with per-object `escaped` report entries
-naming each escaped field and code point. The `\r\n` normalization
-applies before either mode.
+naming each escaped field and code point. Decode only objects the
+`escaped` report names (an un-escaped string keeps its literal
+backslashes). The `\r\n` normalization applies before either mode.
 `--skip-unsupported` skips a commit **and all its descendants** (the
 `cascaded` list reports the cascade) — one offending early commit skips
 everything after it.

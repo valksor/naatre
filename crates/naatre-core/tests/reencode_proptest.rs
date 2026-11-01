@@ -319,3 +319,34 @@ fn insert_at(s: &str, pos: usize, ch: char) -> String {
     out.push_str(&s[p..]);
     out
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// The `--sanitize` codec's predicate — `path::is_cc`/`is_cf` minus
+    /// the allowed `\n`/`\t` — agrees with the ENFORCER
+    /// (`changeset::validate`'s character rule) in both directions,
+    /// across the scalar range. The codec and the rule cannot drift.
+    #[test]
+    fn sanitize_predicate_matches_check_text(cp in any::<u32>()) {
+        let Some(c) = char::from_u32(cp) else { return Ok(()); };
+        let carrier = Changeset {
+            repo_id: 0,
+            parents: vec![],
+            author: c.to_string(),
+            message: "m".into(),
+            timestamp_ns: 0,
+            changes: vec![FileChange {
+                path: "x".into(),
+                op: Op::Add,
+                blob: Some(Id([0u8; 32])),
+                size: Some(0),
+                exec: Some(false),
+            }],
+        };
+        let allowed = (naatre_core::path::is_cc(c) || naatre_core::path::is_cf(c))
+            == (c != '\n' && c != '\t');
+        let validates = changeset::validate(&carrier).is_ok();
+        prop_assert_eq!(allowed, validates, "predicate/enforcer disagree on U+{:04X}", cp);
+    }
+}

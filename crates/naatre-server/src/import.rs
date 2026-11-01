@@ -1232,7 +1232,8 @@ fn map_derive(e: tree_derive::DeriveError) -> ImportError {
 
 /// The `--sanitize` text codec (M11): a LOSSLESS escape for author/message
 /// content the character rule refuses (Unicode Cc except `\n`/`\t`, plus
-/// the Cf set — `changeset::check_text`'s rule). Every offending character
+/// the Cf set — naatre-core's own `path::is_cc`/`is_cf`, the exact rule
+/// `changeset::check_text` enforces). Every offending character
 /// becomes `\u{hex}` (lowercase hex, the standard escape shape) and every
 /// literal `\` in a string that contains offenders becomes `\\`, so the
 /// escape is unambiguously invertible. A string WITHOUT offenders passes
@@ -1240,7 +1241,7 @@ fn map_derive(e: tree_derive::DeriveError) -> ImportError {
 /// is [`unescape_text_lossless`]; the report's `escaped` entries name each
 /// escaped object and code point.
 pub fn escape_text_lossless(s: &str) -> (String, Vec<char>) {
-    if !s.chars().any(text_offender) {
+    if !s.chars().any(offends_text_rule) {
         return (s.to_string(), Vec::new());
     }
     let mut out = String::with_capacity(s.len() + 8);
@@ -1248,7 +1249,7 @@ pub fn escape_text_lossless(s: &str) -> (String, Vec<char>) {
     for c in s.chars() {
         if c == '\\' {
             out.push_str("\\\\");
-        } else if text_offender(c) {
+        } else if offends_text_rule(c) {
             escaped.push(c);
             out.push_str(&format!("\\u{{{:x}}}", c as u32));
         } else {
@@ -1302,39 +1303,11 @@ pub fn unescape_text_lossless(s: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Mirrors `changeset::check_text`'s character rule: Unicode Cc except
-/// `\n`/`\t`, plus the Cf set (`path::is_cc`/`is_cf` are crate-private to
-/// naatre-core). The carrier validation after the escape is the actual
-/// gate — this predicate only decides whether the cheap pass-through
-/// applies and which characters get escaped.
-fn text_offender(c: char) -> bool {
-    if c == '\n' || c == '\t' {
-        return false;
-    }
-    c.is_control()
-        || matches!(c as u32,
-            0x00AD
-            | 0x0600..=0x0605
-            | 0x061C
-            | 0x06DD
-            | 0x070F
-            | 0x0890..=0x0891
-            | 0x08E2
-            | 0x180E
-            | 0x200B..=0x200F
-            | 0x202A..=0x202E
-            | 0x2060..=0x2064
-            | 0x2066..=0x206F
-            | 0xFEFF
-            | 0xFFF9..=0xFFFB
-            | 0x110BD
-            | 0x110CD
-            | 0x13430..=0x1343F
-            | 0x1BCA0..=0x1BCA3
-            | 0x1D173..=0x1D17A
-            | 0xE0001
-            | 0xE0020..=0xE007F
-        )
+/// The character rule `changeset::check_text` enforces — Cc (minus `\n` and
+/// `\t`) and Cf — read straight from naatre-core's own predicates; the
+/// codec carries no copy of the Cf table to drift.
+fn offends_text_rule(c: char) -> bool {
+    (naatre_core::path::is_cc(c) || naatre_core::path::is_cf(c)) && c != '\n' && c != '\t'
 }
 
 /// Replaces every Cc/Cf character of author and message (after the

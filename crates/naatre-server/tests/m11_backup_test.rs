@@ -307,7 +307,7 @@ async fn backup_wipe_restore_fsck_clean() {
     std::fs::remove_dir_all(&d.data).unwrap();
     std::fs::create_dir_all(&d.data).unwrap();
 
-    let report = backup::restore(&d.data, &cfg(), &dest, false).unwrap();
+    let report = backup::restore(&d.data, &cfg(), &dest, false, None).unwrap();
     assert_eq!(
         report.counts, counts,
         "the restored store carries the backup's counts"
@@ -331,7 +331,7 @@ async fn backup_wipe_restore_fsck_clean() {
 
     // A second restore refuses: the target is now a live store. The
     // refusal names what it found and the --force remedy.
-    match backup::restore(&d.data, &cfg(), &dest, false) {
+    match backup::restore(&d.data, &cfg(), &dest, false, None) {
         Err(BackupError::TargetInitialized { path, found }) => {
             assert_eq!(path, d.data);
             assert!(found.contains("naatre.db"), "{found}");
@@ -342,7 +342,7 @@ async fn backup_wipe_restore_fsck_clean() {
     }
 
     // With --force the live store IS overwritten — and stays consistent.
-    backup::restore(&d.data, &cfg(), &dest, true).unwrap();
+    backup::restore(&d.data, &cfg(), &dest, true, None).unwrap();
     assert!(
         fsck_clean(&d.data).await,
         "the forced overwrite restores clean"
@@ -369,7 +369,7 @@ async fn restore_refuses_mismatched_combo_and_incomplete_backup() {
         path_style: true,
     });
     let target = d._root.path().join("target-s3");
-    let e = backup::restore(&target, &s3_cfg, &dest, false).unwrap_err();
+    let e = backup::restore(&target, &s3_cfg, &dest, false, None).unwrap_err();
     let msg = e.to_string();
     assert!(matches!(e, BackupError::ComboMismatch { .. }), "{msg}");
     assert!(msg.contains("fs") && msg.contains("s3"), "{msg}");
@@ -390,7 +390,7 @@ async fn restore_refuses_mismatched_combo_and_incomplete_backup() {
     bytes[mid] ^= 0x01;
     std::fs::write(&db_snapshot, &bytes).unwrap();
     let target2 = d._root.path().join("target2");
-    match backup::restore(&target2, &cfg(), &dest, false) {
+    match backup::restore(&target2, &cfg(), &dest, false, None) {
         Err(BackupError::ChecksumMismatch { path }) => {
             assert_eq!(path, "naatre.db");
             let msg = BackupError::ChecksumMismatch { path }.to_string();
@@ -407,7 +407,7 @@ async fn restore_refuses_mismatched_combo_and_incomplete_backup() {
     );
     let repaired = d._root.path().join("backup2");
     backup::backup(&d.data, &cfg(), &repaired).unwrap();
-    backup::restore(&target2, &cfg(), &repaired, false).unwrap();
+    backup::restore(&target2, &cfg(), &repaired, false, None).unwrap();
     assert!(
         fsck_clean(&target2).await,
         "the repaired path restores clean"
@@ -569,7 +569,7 @@ async fn restore_of_pre_redaction_backup_repurges() {
     // restored DB predates the tombstones — the resurrection the operator
     // duty covers.
     std::fs::remove_dir_all(&d.data).unwrap();
-    backup::restore(&d.data, &cfg(), &dest, false).unwrap();
+    backup::restore(&d.data, &cfg(), &dest, false, None).unwrap();
     assert!(
         cas(&d.data, &cfg()).has(&[d.blob]).unwrap()[0],
         "the restored backup carries the content again"
@@ -640,7 +640,7 @@ async fn gc_between_snapshot_and_copy_grace_holds() {
     ids.sort();
     assert_eq!(manifest.objects, ids, "the backup is complete");
     std::fs::remove_dir_all(&d.data).unwrap();
-    backup::restore(&d.data, &cfg(), &dest, false).unwrap();
+    backup::restore(&d.data, &cfg(), &dest, false, None).unwrap();
     assert!(fsck_clean(&d.data).await, "the raced backup restores clean");
 }
 
@@ -691,7 +691,7 @@ async fn redaction_between_snapshot_and_copy_names_and_repurges() {
     // RESTORE succeeds; the restored store is DIRTY (the snapshot's rows
     // reference bytes the purge reclaimed); the duty converges it.
     std::fs::remove_dir_all(&d.data).unwrap();
-    backup::restore(&d.data, &cfg(), &dest, false).unwrap();
+    backup::restore(&d.data, &cfg(), &dest, false, None).unwrap();
     assert!(
         !fsck_clean(&d.data).await,
         "the restored store references the vanished bytes (dirty until the duty runs)"
@@ -743,4 +743,331 @@ async fn copy_past_grace_is_flagged() {
     let dest2 = d._root.path().join("backup2");
     let report = backup::backup(&d.data, &cfg(), &dest2).unwrap();
     assert!(!report.past_grace);
+}
+
+// ---- round 4 fix pins -------------------------------------------------------
+
+/// A leftover self-consistent WAL+SHM pair counts as non-empty (refused
+/// without --force), and a forced restore UNLINKS the sidecars instead of
+/// replaying them: the restored store carries exactly the snapshot's
+/// content, nothing the WAL held.
+#[tokio::test]
+async fn wal_sidecars_refuse_then_force_replaces_without_replay() {
+    if !git_works() {
+        return;
+    }
+    let d = seed("m11fix-wal");
+    let dest = d._root.path().join("backup");
+    backup::backup(&d.data, &cfg(), &dest).unwrap();
+
+    // A LIVE store whose WAL holds an extra committed row: the connection
+    // is leaked (never closed → no checkpoint → the -wal/-shm stay), so
+    // the trio on disk is a self-consistent store.
+    let target = d._root.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    // A SIDECAR-ONLY target: the -wal/-shm pair from a live store, no db
+    // file (the exact half-wiped shape the refusal exists for).
+    {
+        let scratch = d._root.path().join("wal-src");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let conn = rusqlite::Connection::open(scratch.join("naatre.db")).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE wal_probe(x);
+             INSERT INTO wal_probe VALUES (1);",
+        )
+        .unwrap();
+        std::mem::forget(conn); // leak: the WAL sidecars stay on disk
+        std::fs::copy(scratch.join("naatre.db-wal"), target.join("naatre.db-wal")).unwrap();
+        std::fs::copy(scratch.join("naatre.db-shm"), target.join("naatre.db-shm")).unwrap();
+    }
+    assert!(
+        target.join("naatre.db-wal").is_file(),
+        "the WAL sidecar is on disk"
+    );
+    assert!(target.join("naatre.db-shm").is_file());
+
+    // WITHOUT --force: refused, and the refusal NAMES the sidecars.
+    match backup::restore(&target, &cfg(), &dest, false, None) {
+        Err(BackupError::TargetNotEmpty { found, .. }) => {
+            assert!(found.contains("sidecar"), "{found}");
+        }
+        other => panic!("expected the sidecar refusal, got {other:?}"),
+    }
+
+    // WITH --force: the sidecars are unlinked, the snapshot lands, and
+    // the WAL's extra row is NOT replayed (the store opens clean with the
+    // snapshot's content only).
+    backup::restore(&target, &cfg(), &dest, true, None).unwrap();
+    assert!(
+        !target.join("naatre.db-wal").exists(),
+        "the sidecar was unlinked"
+    );
+    assert!(
+        !target.join("naatre.db-shm").exists(),
+        "the shm was unlinked"
+    );
+    let snap = rusqlite::Connection::open_with_flags(
+        target.join("naatre.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let probe: i64 = snap
+        .query_row("SELECT COUNT(*) FROM wal_probe", [], |r| r.get(0))
+        .unwrap_or(-1);
+    assert_eq!(probe, -1, "the WAL replayed (the probe table survived)");
+    let version: String = snap
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        version,
+        naatre_store::MAX_SUPPORTED.to_string(),
+        "the snapshot's content"
+    );
+    assert!(fsck_clean(&target).await, "the restored store is clean");
+    drop(snap);
+
+    // The FULL-TRIO shape: a target holding naatre.db + a live,
+    // self-consistent -wal/-shm pair (the db alone lacks the probe rows —
+    // they sit in the WAL). A copy of the trio proves the WAL is real
+    // (opening it shows the row); the forced restore over the original
+    // then carries the snapshot's content with NO replay.
+    let trio = d._root.path().join("trio");
+    std::fs::create_dir_all(&trio).unwrap();
+    let scratch = d._root.path().join("wal-src");
+    for name in ["naatre.db", "naatre.db-wal", "naatre.db-shm"] {
+        std::fs::copy(scratch.join(name), trio.join(name)).unwrap();
+    }
+    {
+        let sanity_dir = d._root.path().join("trio-sanity");
+        std::fs::create_dir_all(&sanity_dir).unwrap();
+        for name in ["naatre.db", "naatre.db-wal", "naatre.db-shm"] {
+            std::fs::copy(trio.join(name), sanity_dir.join(name)).unwrap();
+        }
+        let live = rusqlite::Connection::open(sanity_dir.join("naatre.db")).unwrap();
+        let rows: i64 = live
+            .query_row("SELECT COUNT(*) FROM wal_probe", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "the planted WAL is live (it WOULD replay)");
+    }
+    assert!(
+        matches!(
+            backup::restore(&trio, &cfg(), &dest, false, None),
+            Err(BackupError::TargetInitialized { .. })
+        ),
+        "a db + sidecars target is refused without --force"
+    );
+    backup::restore(&trio, &cfg(), &dest, true, None).unwrap();
+    assert!(!trio.join("naatre.db-wal").exists() && !trio.join("naatre.db-shm").exists());
+    let snap = rusqlite::Connection::open_with_flags(
+        trio.join("naatre.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert!(
+        snap.query_row("SELECT COUNT(*) FROM wal_probe", [], |r| r.get::<_, i64>(0))
+            .is_err(),
+        "the WAL did not replay over the restored snapshot"
+    );
+    drop(snap);
+    assert!(fsck_clean(&trio).await, "the trio-restored store is clean");
+}
+
+/// A too-new backup (schema_version past this binary's MAX_SUPPORTED) is
+/// refused from the VERIFIED staged artifact BEFORE any write to the
+/// target — the too-new direction the migration guard cannot catch
+/// without the fix.
+#[tokio::test]
+async fn too_new_backup_refused_before_any_write() {
+    if !git_works() {
+        return;
+    }
+    let d = seed("m11fix-toonew");
+    let dest = d._root.path().join("backup");
+    backup::backup(&d.data, &cfg(), &dest).unwrap();
+
+    // Bump the SNAPSHOT's schema_version past MAX_SUPPORTED and re-sign
+    // the manifest so the checksum gate passes — the too-new refusal must
+    // then fire on its own, pre-write.
+    {
+        let conn = rusqlite::Connection::open(dest.join("naatre.db")).unwrap();
+        conn.execute(
+            "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let mut manifest = backup::load_manifest(&dest.join("manifest.json")).unwrap();
+        let sha = {
+            use sha2::Digest as _;
+            let bytes = std::fs::read(dest.join("naatre.db")).unwrap();
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        };
+        for a in &mut manifest.artifacts {
+            if a.path == "naatre.db" {
+                a.sha256 = sha.clone();
+            }
+        }
+        std::fs::write(
+            dest.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+    let target = d._root.path().join("target");
+    match backup::restore(&target, &cfg(), &dest, false, None) {
+        Err(BackupError::TooNew { found, supported }) => {
+            assert_eq!(found, 99);
+            assert_eq!(supported, naatre_store::MAX_SUPPORTED);
+        }
+        other => panic!("expected TooNew, got {other:?}"),
+    }
+    assert!(!target.exists(), "the too-new refusal wrote nothing");
+}
+
+/// A backup that fails after creating dest removes the manifest-less
+/// partial dir; when the tool log carries the diagnostics, the dir stays
+/// and the next run's OutputExists names the leftover.
+#[tokio::test]
+async fn failed_backup_cleans_the_partial_dir() {
+    if !git_works() {
+        return;
+    }
+    let d = seed("m11fix-cleanup");
+    // The two-phase API drills into the failure window: begin (dest
+    // created, snapshot taken), then make the copy phase fail (the source
+    // objects become unreadable), then finish must fail AND clean.
+    let dest = d._root.path().join("backup");
+    let session = backup::backup_begin(&d.data, &cfg(), &dest).unwrap();
+    assert!(dest.is_dir(), "begin created the dest");
+    let objects = d.data.join("objects");
+    let keep_mode = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let m = std::fs::metadata(&objects).unwrap().permissions().mode();
+            std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o000)).unwrap();
+            Some(m)
+        }
+        #[cfg(not(unix))]
+        None
+    };
+    let result = backup::backup_finish(session, &cfg(), &dest);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            &objects,
+            std::fs::Permissions::from_mode(keep_mode.unwrap()),
+        )
+        .unwrap();
+    }
+    assert!(
+        result.is_err(),
+        "the unreadable source fails the copy phase"
+    );
+    assert!(!dest.exists(), "the manifest-less partial dir was removed");
+    // The composed verb's shape: a clean backup still works afterwards.
+    backup::backup(&d.data, &cfg(), &dest).unwrap();
+    assert!(dest.join("manifest.json").is_file());
+}
+
+/// The restore audit row (the compliance item): written into the RESTORED
+/// store, action `restore`, actor `admin`, naming the manifest identity,
+/// combo, and the restored object count — count-only beyond those fields.
+#[tokio::test]
+async fn restore_writes_the_audit_row() {
+    if !git_works() {
+        return;
+    }
+    let d = seed("m11fix-audit");
+    let dest = d._root.path().join("backup");
+    backup::backup(&d.data, &cfg(), &dest).unwrap();
+    let manifest = backup::load_manifest(&dest.join("manifest.json")).unwrap();
+    std::fs::remove_dir_all(&d.data).unwrap();
+    backup::restore(&d.data, &cfg(), &dest, false, None).unwrap();
+
+    let store = Store::open_backend(DataDir::open_any(&d.data), &cfg()).unwrap();
+    let (principal, action, details): (String, String, String) = store
+        .conn()
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT principal, action, details_json FROM audit_log \
+                 WHERE action = 'restore' ORDER BY ts_ns DESC LIMIT 1",
+            ),
+            &[],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(principal, "admin");
+    assert_eq!(action, "restore");
+    let json: serde_json::Value = serde_json::from_str(&details).unwrap();
+    assert_eq!(json["format"], 1);
+    assert_eq!(json["created_ns"], manifest.created_ns);
+    assert_eq!(json["meta"], "sqlite");
+    assert_eq!(json["blob"], "fs");
+    assert_eq!(json["objects_restored"], manifest.objects.len());
+    assert_eq!(json["waived_ids"], serde_json::json!([]));
+}
+
+/// Manifest path grammar (restore side): an artifact path that climbs
+/// (`../`), is absolute, or sits outside the grammar (`evil.txt`, a wrong
+/// shard depth) is refused at PARSE time with the target untouched — and
+/// nothing outside the backup/target is read or written.
+#[tokio::test]
+async fn manifest_paths_outside_the_grammar_are_refused_target_untouched() {
+    if !git_works() {
+        return;
+    }
+    let d = seed("m11fix-paths");
+    let dest = d._root.path().join("backup");
+    backup::backup(&d.data, &cfg(), &dest).unwrap();
+    let good = backup::load_manifest(&dest.join("manifest.json")).unwrap();
+    let sentinel = d._root.path().join("outside.txt");
+    std::fs::write(&sentinel, b"outside the backup").unwrap();
+    let sentinel_sha = {
+        use sha2::Digest as _;
+        format!("{:x}", sha2::Sha256::digest(b"outside the backup"))
+    };
+    let target = d._root.path().join("target");
+    let abs = sentinel.display().to_string();
+    for bad in [
+        "../outside.txt",
+        "objects/../../outside.txt",
+        abs.as_str(),
+        "evil.txt",
+        "objects/ab/cd.txt",
+        "objects/ab/cd/ef/ghijkl",
+    ] {
+        let mut manifest = good.clone();
+        manifest.artifacts.push(backup::ArtifactChecksum {
+            path: bad.to_string(),
+            // A MATCHING checksum: only the grammar can refuse it.
+            sha256: sentinel_sha.clone(),
+        });
+        std::fs::write(
+            dest.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        match backup::restore(&target, &cfg(), &dest, false, None) {
+            Err(BackupError::Manifest { .. }) => {}
+            other => panic!("{bad:?} must be refused by the grammar, got {other:?}"),
+        }
+        assert!(!target.exists(), "{bad:?}: the target was touched");
+        let strays: Vec<_> = std::fs::read_dir(d._root.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".naatre-restore-")
+            })
+            .collect();
+        assert!(strays.is_empty(), "{bad:?}: a stage dir leaked");
+    }
 }

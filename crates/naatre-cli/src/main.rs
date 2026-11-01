@@ -29,10 +29,10 @@ orphans, never dangling references.
                  is copied per the manifest.
   postgres + fs  one pg_dump run (a documented external dependency, the
                  same convention as git for import), then objects/.
-  * + s3         the DB snapshot first; manifest.json then lists the
-                 object ids for the operator's BUCKET COPY (README
-                 \"Backup\" — incremental sync between backups works:
-                 objects are immutable).
+  * + s3         the DB snapshot first; the operator then syncs the
+                 WHOLE BUCKET (README \"Backup\" — incremental sync
+                 between backups works: objects are immutable; fsck's
+                 bytes_missing catches stragglers afterwards).
 
 The DB-per-repo coordinated snapshot lands with M13a.";
 
@@ -332,11 +332,19 @@ enum Cmd {
         /// is refused without --force. Postgres targets are refused while
         /// the schema is initialized EVEN WITH --force (dropping the
         /// schema is the wipe) — because the refusal happens before any
-        /// psql write, a failed Postgres restore can never strand a live
-        /// store half-replaced. Run `naatre fsck --data <dir>`
+        /// psql write and the replay is ONE transaction, a failed Postgres
+        /// restore leaves the uninitialized target it started on. Run `naatre fsck --data <dir>`
         /// afterwards (restore checks object presence, not reachability).
         #[arg(long)]
         data: Option<PathBuf>,
+        /// The S3 purge-race escape (two-step): after a presence-gate
+        /// refusal named the missing ids and printed a waiver digest,
+        /// re-run with `--allow-missing <digest-or-ids>` to accept EXACTLY
+        /// that set (anything else missing refuses again; waived ids land
+        /// in the report and the restore audit row, and the redaction duty
+        /// applies to them).
+        #[arg(long, value_name = "DIGEST_OR_IDS", requires = "data")]
+        allow_missing: Option<String>,
         #[command(flatten)]
         net: NetOpts,
     },
@@ -623,10 +631,16 @@ fn main() {
         Cmd::Restore {
             snap_id,
             force,
+            allow_missing,
             data,
             net,
         } => match data {
-            Some(data) => host::restore_backup(&data, std::path::Path::new(&snap_id), force),
+            Some(data) => host::restore_backup(
+                &data,
+                std::path::Path::new(&snap_id),
+                force,
+                allow_missing.as_deref(),
+            ),
             None => wc_locked(cwd, || {
                 verbs::restore::run(cwd, &snap_id, force, &net.net())
             }),

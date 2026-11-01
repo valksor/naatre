@@ -626,16 +626,33 @@ impl Db {
         // connect runs on a helper thread — making this constructor
         // thread-agnostic for every caller.
         let pg = pg.clone();
-        std::thread::spawn(move || Self::connect_postgres_on_this_thread(&pg, read_only))
+        std::thread::spawn(move || Self::connect_postgres_on_this_thread(&pg, read_only, true))
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
+    /// [`Db::connect_postgres`] WITHOUT the test-schema setup: no
+    /// `CREATE SCHEMA IF NOT EXISTS` runs, so connecting to an
+    /// uninitialized database leaves it exactly as it was. The backup
+    /// guard's probe uses this — backup must never migrate an empty
+    /// schema into existence as a side effect of checking for one.
+    pub fn connect_postgres_without_schema_setup(
+        pg: &crate::backend::PgConnect,
+    ) -> Result<Db, DbError> {
+        let pg = pg.clone();
+        std::thread::spawn(move || Self::connect_postgres_on_this_thread(&pg, false, false))
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 
     /// The connect itself; must run OFF tokio runtime threads (see
-    /// [`Db::connect_postgres`]).
+    /// [`Db::connect_postgres`]). `setup_schema` runs the test-schema
+    /// CREATE/SET pair (every production caller wants it; the backup
+    /// probe opts out).
     fn connect_postgres_on_this_thread(
         pg: &crate::backend::PgConnect,
         read_only: bool,
+        setup_schema: bool,
     ) -> Result<Db, DbError> {
         let mut cfg = postgres::Config::new();
         cfg.host(&pg.host);
@@ -725,7 +742,7 @@ impl Db {
             client: RefCell::new(Some(Box::new(client))),
             in_tx: Cell::new(false),
         });
-        if let Some(schema) = &pg.schema {
+        if setup_schema && let Some(schema) = &pg.schema {
             // Test isolation only (never parseable from backend.toml):
             // every connection for this store lands in the schema, and the
             // migration set runs inside it. BEFORE the read-only SET — a

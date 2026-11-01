@@ -61,8 +61,9 @@
 //!
 //! `restore` validates the manifest, verifies the SHA256 of EVERY artifact
 //! into a staging directory BEFORE any write to the final location
-//! (all-or-nothing: a corrupt or tampered backup leaves the target
-//! untouched), refuses a backend-combo mismatch with the target's config
+//! (a corrupt, tampered, or too-new backup leaves the target untouched; the
+//! Postgres replay is ONE transaction, so a failed `psql` leaves the
+//! uninitialized target it started on), refuses a backend-combo mismatch with the target's config
 //! (the `check_data_dir_backend` convention), refuses a non-empty target
 //! unless `--force` is given (an initialized Postgres schema is refused
 //! regardless — dropping it is the operator's wipe), restores DB then
@@ -72,7 +73,9 @@
 //!
 //! Driver/tool error text is redacted by construction: `pg_dump`/`psql`
 //! failures carry the exit status only, with the tool's own stderr left in
-//! a log file inside the backup dir for the operator to inspect — the same
+//! a 0600 `tool-error.log` for the operator to inspect — beside the new
+//! backup dir's contents for `pg_dump`, in the target's writable PARENT for
+//! `psql` (a failed restore never mutates the backup dir) — the same
 //! posture as the backend config surface (connection errors can embed
 //! DSN, host, and user).
 
@@ -81,6 +84,7 @@ use std::process::Command;
 
 use sha2::Digest;
 
+use crate::db;
 use naatre_store::backend::{BackendError, PgConnect, check_data_dir_backend};
 use naatre_store::{
     BackendConfig, BlobKind, DataDir, Db, MetaKind, Sql, Store, StoreError, data_dir::DB_FILE,
@@ -105,7 +109,7 @@ const STAGE_PREFIX: &str = ".naatre-restore-";
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ArtifactChecksum {
     /// Forward-slash path relative to the backup dir (`naatre.db`,
-    /// `postgres.sql`, `objects/<2hex>/<2hex>/<62hex>`).
+    /// `postgres.sql`, `objects/<2hex>/<2hex>/<60hex>`).
     pub path: String,
     /// Lowercase hex SHA256 of the file's bytes.
     pub sha256: String,
@@ -178,6 +182,13 @@ pub struct RestoreReport {
     pub objects_present: u64,
     /// True when the run overrode the non-empty-target refusal.
     pub forced: bool,
+    /// When the backup was taken (from the manifest) — the duty
+    /// reminder's age line keys to it.
+    pub created_ns: i64,
+    /// The manifest ids the presence gate found missing and the run
+    /// accepted anyway (`--allow-missing`, the S3 purge-race escape).
+    /// Recorded in the restore audit row too.
+    pub waived: Vec<String>,
 }
 
 /// Everything a backup/restore can fail with. Messages name paths, rules,
@@ -202,6 +213,13 @@ pub enum BackupError {
         .0.display()
     )]
     OutputExists(PathBuf),
+    #[error(
+        "backup directory {} already exists and holds no manifest.json: it is the leftover of \
+         a failed backup (it may carry tool-error.log with the failing tool's stderr) — \
+         inspect and remove it, then re-run",
+        .0.display()
+    )]
+    PartialLeftover(PathBuf),
     #[error("backup at {}: {why}", path.display())]
     Manifest { path: PathBuf, why: &'static str },
     #[error(
@@ -217,7 +235,9 @@ pub enum BackupError {
     #[error(
         "backup was taken on meta = {manifest_meta}, blob = {manifest_blob} but the target \
          selects meta = {configured_meta}, blob = {configured_blob}: refusing to restore \
-         across backend combos (a data dir never switches backends in place)"
+         across backend combos (a data dir never switches backends in place). If you wiped \
+         a non-default data dir, recreate its backend.toml — or do not wipe it — before \
+         restoring"
     )]
     ComboMismatch {
         manifest_meta: String,
@@ -244,25 +264,54 @@ pub enum BackupError {
     )]
     MissingTool { tool: &'static str },
     #[error(
-        "{tool} exited with {status}; its stderr is in {} (connection errors can name the \
-         host and user, so they are not echoed here)",
-        log.display()
+        "{tool} exited with {status};{log_note} (connection errors can name the host and \
+         user, so they are not echoed here)",
+        log_note = .log.as_ref().map(|p| format!(" its stderr is in {}", p.display()))
+            .unwrap_or_else(|| " its stderr could not be saved (the log write failed)".to_string())
     )]
     ToolFailed {
         tool: &'static str,
         status: std::process::ExitStatus,
-        log: PathBuf,
+        /// `None` when the log write itself failed — the status above is
+        /// never masked by that io failure.
+        log: Option<PathBuf>,
     },
     #[error(
-        "the target CAS is missing {} of the manifest's object(s) (e.g. {sample}): for \
-         blob = \"s3\" restore the bucket copy FIRST — restore checks presence, then the \
-         operator runs fsck",
-        missing.len()
+        "{note}the target CAS is missing {} of the manifest's object(s): {ids}. For blob = \
+         \"s3\" restore the bucket copy FIRST — restore checks presence, then the operator \
+         runs fsck. If a redaction purge already ate these bytes, re-run with \
+         `--allow-missing {waiver}` (or `--allow-missing` with the comma-separated id list \
+         above) to accept EXACTLY these ids: the waiver is void the moment the missing set \
+         changes. Waived ids land in the report and the restore audit row, and the redaction \
+         duty applies to them",
+        missing.len(),
+        ids = missing.join(", "),
+        note = if *rejected_waiver {
+            "the --allow-missing argument does not match the currently-missing set (the \
+             missing set changed since it was issued; nothing was waived). "
+        } else {
+            ""
+        }
     )]
     ObjectsMissing {
+        /// The currently-missing ids, sorted.
         missing: Vec<String>,
-        sample: String,
+        /// The waiver argument for exactly this set ([`waiver_digest`]).
+        waiver: String,
+        /// True when the run carried an `--allow-missing` that no longer
+        /// covers the set (the NEW set is what this error prints).
+        rejected_waiver: bool,
     },
+    #[error(
+        "the data dir {path} is not initialized: run `naatre init` first (backup never \
+         migrates an empty schema into existence as a side effect of checking)"
+    )]
+    Uninitialized { path: PathBuf },
+    #[error(
+        "the backup was written by a NEWER naatre (schema version {found} > {supported} \
+         here): refusing before any write — restore with the newer binary first"
+    )]
+    TooNew { found: i64, supported: i64 },
 }
 
 impl BackupError {
@@ -271,6 +320,12 @@ impl BackupError {
             path: path.to_path_buf(),
             e,
         }
+    }
+
+    /// Whether this is the NotFound io error — the backup copy phase's
+    /// raced-away-object signal (recorded in the report, never fatal).
+    fn is_not_found(&self) -> bool {
+        matches!(self, BackupError::Io { e, .. } if e.kind() == std::io::ErrorKind::NotFound)
     }
 }
 
@@ -292,6 +347,33 @@ pub fn resolve_tool(tool: &'static str) -> Result<PathBuf, BackupError> {
         }
     }
     Err(BackupError::MissingTool { tool })
+}
+
+/// The waiver argument for one missing-id set: the first 16 hex characters
+/// of the SHA256 over the SORTED ids (each followed by `\n`). The presence
+/// gate prints it with the refusal; `--allow-missing` takes it back.
+pub fn waiver_digest(missing_sorted: &[String]) -> String {
+    let mut hasher = sha2::Sha256::new();
+    for id in missing_sorted {
+        hasher.update(id.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())[..16].to_string()
+}
+
+/// Whether an `--allow-missing` argument (the digest, or a comma-separated
+/// id list) names EXACTLY the currently-missing set. A superset, a subset,
+/// or a stale digest never covers it — a purge landing between the two
+/// runs must not be silently waived.
+fn waiver_covers(arg: &str, missing_sorted: &[String]) -> bool {
+    let arg = arg.trim();
+    if arg == waiver_digest(missing_sorted) {
+        return true;
+    }
+    let mut listed: Vec<String> = arg.split(',').map(|id| id.trim().to_string()).collect();
+    listed.sort();
+    listed.dedup();
+    listed == missing_sorted
 }
 
 /// Reads and validates one backup manifest. Every listed id must re-parse
@@ -333,13 +415,192 @@ pub fn load_manifest(path: &Path) -> Result<BackupManifest, BackupError> {
             why: "an artifact line does not carry a 64-hex SHA256",
         });
     }
+    if let Some(bad) = manifest
+        .artifacts
+        .iter()
+        .map(|a| a.path.as_str())
+        .find(|p| !valid_artifact_path(p))
+    {
+        return Err(BackupError::Manifest {
+            path: path.to_path_buf(),
+            why: match bad {
+                p if p.starts_with('/') => "an artifact path is absolute",
+                p if p.split('/').any(|c| c == ".." || c == ".") => {
+                    "an artifact path climbs with .. or ."
+                }
+                _ => {
+                    "an artifact path is outside the manifest grammar (naatre.db, \
+                      postgres.sql, objects/<2hex>/<2hex>/<62hex>)"
+                }
+            },
+        });
+    }
     Ok(manifest)
 }
 
-/// SHA256 of a file's bytes, lowercase hex.
+/// The artifact-path grammar (M11 fix): EXACTLY `naatre.db`,
+/// `postgres.sql`, or the CAS shard layout `objects/<2hex>/<2hex>/<60hex>`
+/// (a 64-hex id split 2/2/60 across the shard dirs and the file name —
+/// the same shape `shard_path` writes; cas.rs's older "<62hex>" doc
+/// comment is off by two). Anything else — absolute paths, `..`/`.`
+/// climbs, other depths or names — is refused at parse time, before
+/// restore touches any path.
+fn valid_artifact_path(path: &str) -> bool {
+    if path == SQLITE_DUMP || path == PG_DUMP {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix("objects/") else {
+        return false;
+    };
+    let is_2hex = |s: &str| {
+        s.len() == 2
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b.is_ascii_hexdigit() && b.is_ascii_lowercase()))
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() == 3
+        && is_2hex(parts[0])
+        && is_2hex(parts[1])
+        && parts[2].len() == 60
+        && parts[2]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b.is_ascii_hexdigit() && b.is_ascii_lowercase()))
+}
+
+/// SHA256 of a file's bytes, streamed (no whole-file reads), lowercase hex.
 fn sha256_file(path: &Path) -> Result<String, BackupError> {
-    let bytes = std::fs::read(path).map_err(|e| BackupError::io(path, e))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(&bytes)))
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| BackupError::io(path, e))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 256 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| BackupError::io(path, e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Streams `src` into `dst` while hashing the WRITTEN bytes — the staged
+/// copy is what gets verified (closing the hash-then-copy window), and no
+/// whole file is ever read into memory. The staged file lands 0600 and
+/// fsynced.
+fn stream_copy_hash(src: &Path, dst: &Path) -> Result<String, BackupError> {
+    use std::io::{Read, Write};
+    let mut src_file = std::fs::File::open(src).map_err(|e| BackupError::io(src, e))?;
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| BackupError::io(parent, e))?;
+    }
+    let mut dst_file = std::fs::File::create(dst).map_err(|e| BackupError::io(dst, e))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 256 * 1024];
+    loop {
+        let n = src_file
+            .read(&mut buf)
+            .map_err(|e| BackupError::io(src, e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        dst_file
+            .write_all(&buf[..n])
+            .map_err(|e| BackupError::io(dst, e))?;
+    }
+    dst_file.sync_all().map_err(|e| BackupError::io(dst, e))?;
+    chmod(dst, 0o600)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// The schema version the VERIFIED staged SQLite snapshot claims (the
+/// too-new pre-write check; the target is untouched when it refuses).
+fn staged_sqlite_version(path: &Path) -> Result<i64, BackupError> {
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(BackupError::from)?;
+    let v: String = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| BackupError::Manifest {
+            path: path.to_path_buf(),
+            why: "the SQLite snapshot carries no schema_version row (corrupt or foreign)",
+        })?;
+    v.parse::<i64>().map_err(|_| BackupError::Manifest {
+        path: path.to_path_buf(),
+        why: "the SQLite snapshot's schema_version is not an integer",
+    })
+}
+
+/// The schema version the VERIFIED staged dump carries, read (streaming)
+/// from its `meta` COPY block (`schema_version\t<nnn>`). FAILS CLOSED: a
+/// dump whose version cannot be found or parsed is refused — it is never
+/// assumed old.
+fn staged_pg_version(path: &Path) -> Result<i64, BackupError> {
+    use std::io::BufRead;
+    let unreadable = |why: &'static str| BackupError::Manifest {
+        path: path.to_path_buf(),
+        why,
+    };
+    let file = std::fs::File::open(path).map_err(|e| BackupError::io(path, e))?;
+    let mut in_meta = false;
+    for line in std::io::BufReader::new(file).lines() {
+        // Non-UTF-8 data lines (bytea, text in another encoding) are not
+        // the meta block's ASCII rows: skip them rather than fail.
+        let Ok(line) = line else { continue };
+        if in_meta {
+            if line == "\\." {
+                in_meta = false;
+            } else if let Some(rest) = line.strip_prefix("schema_version\t") {
+                return rest
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| unreadable("the dump's schema_version is not an integer"));
+            }
+        } else if line.starts_with("COPY ")
+            && (line.contains(".meta (") || line.starts_with("COPY meta ("))
+        {
+            in_meta = true;
+        }
+    }
+    Err(unreadable(
+        "the dump carries no readable schema_version row (corrupt or foreign dump)",
+    ))
+}
+
+/// Whether the Postgres database ALREADY carries the naatre store —
+/// probed WITHOUT the schema-setup side effect (backup must never create
+/// an empty schema while checking for one). A probe error (schema absent)
+/// reads as uninitialized.
+fn postgres_store_initialized(pg: &PgConnect, target: &Path) -> Result<bool, BackupError> {
+    let conn = Db::connect_postgres_without_schema_setup(pg)
+        .map_err(StoreError::Db)
+        .map_err(BackupError::Store)?;
+    let sql = match &pg.schema {
+        Some(schema) => {
+            if schema.is_empty()
+                || !schema
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                return Err(BackupError::Manifest {
+                    path: target.to_path_buf(),
+                    why: "the configured postgres schema name is not a plain identifier",
+                });
+            }
+            Sql::plain_owned(format!(
+                "SELECT value FROM \"{schema}\".meta WHERE key = 'schema_version'"
+            ))
+        }
+        None => Sql::plain("SELECT value FROM meta WHERE key = 'schema_version'"),
+    };
+    Ok(conn
+        .query_opt(&sql, &[])
+        .map(|row| row.is_some())
+        .unwrap_or(false))
 }
 
 /// The CAS shard path under `root` — `root/<2hex>/<2hex>/<62hex>`, the
@@ -397,174 +658,237 @@ pub fn backup_begin(
     check_data_dir_backend(data_dir.path(), cfg).map_err(BackupError::Store)?;
     let lock = data_dir.lock().map_err(BackupError::Store)?;
     let root = data_dir.path().to_path_buf();
-    if dest.exists() {
-        return Err(BackupError::OutputExists(dest.to_path_buf()));
-    }
-    std::fs::create_dir_all(dest).map_err(|e| BackupError::io(dest, e))?;
-    // The backup dir holds the whole instance's personal data: 0700.
-    chmod(dest, 0o700)?;
-
-    // The CAS object universe first: one listing backs both the fs copy
-    // and the manifest (the flock makes it a consistent universe — nothing
-    // else can write while it is held).
-    let cas = naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?;
-    let mut ids = cas.ids().map_err(BackupError::Store)?;
-    ids.sort_by_key(|id| id.to_hex());
-    let store = Store::open_backend(data_dir, cfg).map_err(BackupError::Store)?;
-    let changesets: i64 = store
-        .conn()
-        .query_row_map(&Sql::plain("SELECT COUNT(*) FROM changesets"), &[], |r| {
-            r.get(0)
-        })
-        .map_err(store_db)?;
-
-    // 1. The consistent DB snapshot FIRST — per meta backend.
+    // Backup never migrates an empty schema into existence: an
+    // uninitialized Postgres target is refused (naming `naatre init`)
+    // BEFORE anything is created — the probe connects WITHOUT the
+    // schema-setup side effect.
     match cfg.meta {
-        MetaKind::Sqlite => {
-            dump_sqlite(store.sqlite_conn(), &dest.join(SQLITE_DUMP))?;
-            chmod(&dest.join(SQLITE_DUMP), 0o600)?;
-        }
+        MetaKind::Sqlite => {}
         MetaKind::Postgres => {
             let pg = cfg.pg.as_ref().ok_or(BackupError::Manifest {
                 path: root.clone(),
                 why: "meta = postgres requires a parsed DSN (the config parser guarantees it)",
             })?;
-            let sql_path = dest.join(PG_DUMP).display().to_string();
-            let mut args: Vec<&str> = vec!["--file", &sql_path];
-            let schema;
-            if let Some(s) = &pg.schema {
-                schema = s.clone();
-                args.extend(["--schema", &schema]);
+            if !postgres_store_initialized(pg, &root)? {
+                return Err(BackupError::Uninitialized { path: root.clone() });
             }
-            run_pg_tool("pg_dump", pg, &args, dest)?;
-            chmod(&dest.join(PG_DUMP), 0o600)?;
         }
     }
+    if dest.exists() {
+        // A manifest-less directory is a failed backup's leftover (the
+        // manifest is written last): name it as such.
+        return Err(if dest.is_dir() && !dest.join("manifest.json").exists() {
+            BackupError::PartialLeftover(dest.to_path_buf())
+        } else {
+            BackupError::OutputExists(dest.to_path_buf())
+        });
+    }
+    std::fs::create_dir_all(dest).map_err(|e| BackupError::io(dest, e))?;
+    // The backup dir holds the whole instance's personal data: 0700.
+    chmod(dest, 0o700)?;
 
-    Ok(BackupSession {
-        store,
-        ids,
-        changesets,
-        snapshot_ns: now_ns(),
-        root,
-        _lock: lock,
-    })
+    // Everything past the dest creation cleans the partial dir on failure
+    // (the fix round's item 21): a manifest-less dest must not survive —
+    // EXCEPT when the tool log is in it (the diagnostic carrier; the next
+    // run's OutputExists names the leftover).
+    let build = || -> Result<BackupSession, BackupError> {
+        // The CAS object universe first: one listing backs both the fs
+        // copy and the manifest (the flock makes it a consistent universe
+        // — nothing else can write while it is held).
+        let cas = naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?;
+        let mut ids = cas.ids().map_err(BackupError::Store)?;
+        ids.sort_by_key(|id| id.to_hex());
+        let store = Store::open_backend(data_dir, cfg).map_err(BackupError::Store)?;
+        let changesets: i64 = store
+            .conn()
+            .query_row_map(&Sql::plain("SELECT COUNT(*) FROM changesets"), &[], |r| {
+                r.get(0)
+            })
+            .map_err(store_db)?;
+
+        // 1. The consistent DB snapshot FIRST — per meta backend.
+        match cfg.meta {
+            MetaKind::Sqlite => {
+                dump_sqlite(store.sqlite_conn(), &dest.join(SQLITE_DUMP))?;
+                chmod(&dest.join(SQLITE_DUMP), 0o600)?;
+            }
+            MetaKind::Postgres => {
+                let pg = cfg.pg.as_ref().ok_or(BackupError::Manifest {
+                    path: root.clone(),
+                    why: "meta = postgres requires a parsed DSN (the config parser guarantees it)",
+                })?;
+                let sql_path = dest.join(PG_DUMP).display().to_string();
+                let mut args: Vec<&str> = vec![
+                    // Role hygiene (the fix round): the replay belongs to
+                    // the restoring role — no ownership/ACL statements in
+                    // the dump, so psql (which takes no such flags)
+                    // replays a role-clean dump by construction.
+                    "--no-owner",
+                    "--no-privileges",
+                    "--file",
+                    &sql_path,
+                ];
+                let schema;
+                if let Some(s) = &pg.schema {
+                    schema = s.clone();
+                    args.extend(["--schema", &schema]);
+                }
+                run_pg_tool("pg_dump", pg, &args, dest)?;
+                chmod(&dest.join(PG_DUMP), 0o600)?;
+            }
+        }
+
+        Ok(BackupSession {
+            store,
+            ids,
+            changesets,
+            snapshot_ns: now_ns(),
+            root,
+            _lock: lock,
+        })
+    };
+    match build() {
+        Ok(session) => Ok(session),
+        Err(e) => {
+            if !dest.join(TOOL_LOG).exists() {
+                let _ = std::fs::remove_dir_all(dest);
+            }
+            Err(e)
+        }
+    }
 }
 
 /// `naatre backup --data <dir> <dest>`, phase 2 of 2: copy the immutable
 /// objects (tolerantly — a vanished id lands in the report, not a
 /// failure), then write the manifest LAST with every artifact's SHA256.
+/// A failure here removes the manifest-less partial dir it leaves behind
+/// (unless the tool log carries the diagnostics).
 #[doc(hidden)]
 pub fn backup_finish(
     session: BackupSession,
     cfg: &BackendConfig,
     dest: &Path,
 ) -> Result<BackupReport, BackupError> {
-    let BackupSession {
-        store,
-        ids,
-        changesets,
-        snapshot_ns,
-        root,
-        ..
-    } = session;
-    let grace_secs = cfg
-        .gc_grace_secs
-        .unwrap_or(crate::gc::GC_DEFAULT_GRACE_SECS);
-    // At-or-past grace flags: with a zero grace window every elapsed time
-    // qualifies, and sub-second equality against a real window is noise —
-    // warning is the operator-safe side.
-    let past_grace = now_ns().saturating_sub(snapshot_ns) >= (grace_secs as i64) * 1_000_000_000;
+    let build = || -> Result<BackupReport, BackupError> {
+        let BackupSession {
+            store,
+            ids,
+            changesets,
+            snapshot_ns,
+            root,
+            ..
+        } = session;
+        let grace_secs = cfg
+            .gc_grace_secs
+            .unwrap_or(crate::gc::GC_DEFAULT_GRACE_SECS);
+        // At-or-past grace flags: with a zero grace window every elapsed time
+        // qualifies, and sub-second equality against a real window is noise —
+        // warning is the operator-safe side.
+        let past_grace =
+            now_ns().saturating_sub(snapshot_ns) >= (grace_secs as i64) * 1_000_000_000;
 
-    // 2. THEN the immutable objects — per blob backend. A missing source
-    // (a redaction purge raced the snapshot) is RECORDED, not fatal: the
-    // report names it and the manifest lists only what the backup carries.
-    let mut missing: Vec<String> = Vec::new();
-    let mut artifacts: Vec<ArtifactChecksum> = Vec::new();
-    let bucket_copy_duty = cfg.blob == BlobKind::S3;
-    if cfg.blob == BlobKind::Fs {
-        let out_objects = dest.join("objects");
-        for id in &ids {
-            let hex = id.to_hex();
-            let src = shard_path(&root.join(naatre_store::data_dir::OBJECTS_DIR), id);
-            let dst = shard_path(&out_objects, id);
-            if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| BackupError::io(parent, e))?;
-            }
-            // Read once, hash, write — the artifact checksum is the exact
-            // bytes the backup carries.
-            match std::fs::read(&src) {
-                Ok(bytes) => {
-                    let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
-                    std::fs::write(&dst, &bytes).map_err(|e| BackupError::io(&dst, e))?;
-                    chmod(&dst, 0o600)?;
-                    artifacts.push(ArtifactChecksum {
-                        path: format!("objects/{}/{}/{}", &hex[0..2], &hex[2..4], &hex[4..]),
-                        sha256: sha,
-                    });
+        // 2. THEN the immutable objects — per blob backend. A missing source
+        // (a redaction purge raced the snapshot) is RECORDED, not fatal: the
+        // report names it and the manifest lists only what the backup carries.
+        let mut missing: Vec<String> = Vec::new();
+        let mut artifacts: Vec<ArtifactChecksum> = Vec::new();
+        let bucket_copy_duty = cfg.blob == BlobKind::S3;
+        if cfg.blob == BlobKind::Fs {
+            let out_objects = dest.join("objects");
+            for id in &ids {
+                let hex = id.to_hex();
+                let src = shard_path(&root.join(naatre_store::data_dir::OBJECTS_DIR), id);
+                let dst = shard_path(&out_objects, id);
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| BackupError::io(parent, e))?;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing.push(hex),
-                Err(e) => return Err(BackupError::io(&src, e)),
+                // Streamed copy with the hash of the WRITTEN bytes — the
+                // artifact checksum is the exact bytes the backup carries,
+                // and no whole file is ever read into memory.
+                match stream_copy_hash(&src, &dst) {
+                    Ok(sha) => {
+                        artifacts.push(ArtifactChecksum {
+                            path: format!("objects/{}/{}/{}", &hex[0..2], &hex[2..4], &hex[4..]),
+                            sha256: sha,
+                        });
+                    }
+                    Err(e) if e.is_not_found() => missing.push(hex),
+                    Err(e) => return Err(e),
+                }
             }
         }
+        // The DB artifact's checksum (whichever meta backend ran in phase 1).
+        let db_artifact = match cfg.meta {
+            MetaKind::Sqlite => SQLITE_DUMP,
+            MetaKind::Postgres => PG_DUMP,
+        };
+        artifacts.push(ArtifactChecksum {
+            path: db_artifact.to_string(),
+            sha256: sha256_file(&dest.join(db_artifact))?,
+        });
+        artifacts.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // 3. The manifest LAST: an interrupted run leaves no manifest, and
+        // restore refuses a manifest-less directory. For fs the list is what
+        // the copy captured (a raced-away id is in the report, not here); for
+        // S3 nothing is copied, so the list is the full bucket listing — the
+        // restore presence gate is what catches bucket-side gaps.
+        let carried: Vec<String> = match cfg.blob {
+            BlobKind::Fs => artifacts
+                .iter()
+                .filter(|a| a.path.starts_with("objects/"))
+                .map(|a| a.path.trim_start_matches("objects/").replace('/', ""))
+                .collect(),
+            BlobKind::S3 => ids.iter().map(|id| id.to_hex()).collect(),
+        };
+        let manifest = BackupManifest {
+            format: MANIFEST_FORMAT,
+            naatre_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_ns: now_ns(),
+            meta: cfg.meta.as_str().to_string(),
+            blob: cfg.blob.as_str().to_string(),
+            schema_version: store.schema_version(),
+            counts: BackupCounts {
+                changesets,
+                objects: carried.len() as u64,
+            },
+            objects: carried,
+            artifacts,
+        };
+        let manifest_path = dest.join("manifest.json");
+        let json = serde_json::to_string_pretty(&manifest).expect("manifest serializes");
+        std::fs::write(&manifest_path, json).map_err(|e| BackupError::io(&manifest_path, e))?;
+        chmod(&manifest_path, 0o600)?;
+
+        let report = BackupReport {
+            dest: dest.to_path_buf(),
+            meta: cfg.meta,
+            blob: cfg.blob,
+            schema_version: manifest.schema_version,
+            counts: manifest.counts,
+            dump_file: match cfg.meta {
+                MetaKind::Postgres => Some(PG_DUMP),
+                MetaKind::Sqlite => None,
+            },
+            bucket_copy_duty,
+            missing,
+            past_grace,
+        };
+        Ok(report)
+    };
+    match build() {
+        Ok(report) => Ok(report),
+        Err(e) => {
+            // The manifest is written LAST: a failure here leaves a
+            // manifest-less partial dir — remove it, unless the tool log
+            // carries the diagnostics (then OutputExists names the
+            // leftover).
+            if !dest.join(TOOL_LOG).exists() {
+                let _ = std::fs::remove_dir_all(dest);
+            }
+            Err(e)
+        }
     }
-    // The DB artifact's checksum (whichever meta backend ran in phase 1).
-    let db_artifact = match cfg.meta {
-        MetaKind::Sqlite => SQLITE_DUMP,
-        MetaKind::Postgres => PG_DUMP,
-    };
-    artifacts.push(ArtifactChecksum {
-        path: db_artifact.to_string(),
-        sha256: sha256_file(&dest.join(db_artifact))?,
-    });
-    artifacts.sort_by(|a, b| a.path.cmp(&b.path));
-
-    // 3. The manifest LAST: an interrupted run leaves no manifest, and
-    // restore refuses a manifest-less directory. For fs the list is what
-    // the copy captured (a raced-away id is in the report, not here); for
-    // S3 nothing is copied, so the list is the full bucket listing — the
-    // restore presence gate is what catches bucket-side gaps.
-    let carried: Vec<String> = match cfg.blob {
-        BlobKind::Fs => artifacts
-            .iter()
-            .filter(|a| a.path.starts_with("objects/"))
-            .map(|a| a.path.trim_start_matches("objects/").replace('/', ""))
-            .collect(),
-        BlobKind::S3 => ids.iter().map(|id| id.to_hex()).collect(),
-    };
-    let manifest = BackupManifest {
-        format: MANIFEST_FORMAT,
-        naatre_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_ns: now_ns(),
-        meta: cfg.meta.as_str().to_string(),
-        blob: cfg.blob.as_str().to_string(),
-        schema_version: store.schema_version(),
-        counts: BackupCounts {
-            changesets,
-            objects: carried.len() as u64,
-        },
-        objects: carried,
-        artifacts,
-    };
-    let manifest_path = dest.join("manifest.json");
-    let json = serde_json::to_string_pretty(&manifest).expect("manifest serializes");
-    std::fs::write(&manifest_path, json).map_err(|e| BackupError::io(&manifest_path, e))?;
-    chmod(&manifest_path, 0o600)?;
-
-    Ok(BackupReport {
-        dest: dest.to_path_buf(),
-        meta: cfg.meta,
-        blob: cfg.blob,
-        schema_version: manifest.schema_version,
-        counts: manifest.counts,
-        dump_file: match cfg.meta {
-            MetaKind::Postgres => Some(PG_DUMP),
-            MetaKind::Sqlite => None,
-        },
-        bucket_copy_duty,
-        missing,
-        past_grace,
-    })
 }
 
 /// `naatre backup --data <dir> <dest>`: snapshot the whole data dir for
@@ -604,16 +928,20 @@ fn stage_dir(target: &Path) -> Result<StageDir, BackupError> {
 /// any write to the target (all-or-nothing), refuses a combo mismatch,
 /// refuses a non-empty target unless `force` (an initialized Postgres
 /// schema is refused regardless — dropping it is the wipe), restores DB
-/// then objects, and directs the operator to fsck.
+/// then objects, and directs the operator to fsck. `allow_missing` is the
+/// S3 purge-race waiver argument ([`waiver_digest`] or the id list): it
+/// accepts the presence gate's missing set only while that set is EXACTLY
+/// the one the argument names.
 pub fn restore(
     target: &Path,
     cfg: &BackendConfig,
     backup_dir: &Path,
     force: bool,
+    allow_missing: Option<&str>,
 ) -> Result<RestoreReport, BackupError> {
     let manifest = load_manifest(&backup_dir.join("manifest.json"))?;
     // Combo agreement FIRST (the check_data_dir_backend convention: name
-    // both sides, refuse loudly).
+    // both sides, refuse loudly) — and name the wiped-backend.toml remedy.
     if manifest.meta != cfg.meta.as_str() || manifest.blob != cfg.blob.as_str() {
         return Err(BackupError::ComboMismatch {
             manifest_meta: manifest.meta.clone(),
@@ -625,12 +953,13 @@ pub fn restore(
     // The target guard — check_data_dir_backend's convention with the
     // uninitialized arms INVERTED: restore expects an uninitialized dir
     // and refuses every marker of a live or half-wiped one, naming what
-    // it found and the --force remedy. `force` overrides the sqlite and
-    // fs findings; a stray naatre.db under a postgres config and an
-    // INITIALIZED postgres schema are refused regardless — dropping the
-    // schema is the operator's wipe, not a flag's business.
+    // it found and the --force remedy. A leftover SQLite WAL/SHM sidecar
+    // counts as non-empty even without the db file (replaying one over a
+    // restored snapshot would resurrect the wiped store).
     let data_dir = DataDir::open_any(target);
     let root = data_dir.path().to_path_buf();
+    let sidecars = [format!("{DB_FILE}-wal"), format!("{DB_FILE}-shm")];
+    let sidecar_present = sidecars.iter().any(|s| root.join(s).exists());
     if root.join(DB_FILE).exists() {
         match cfg.meta {
             MetaKind::Sqlite if force => {}
@@ -652,7 +981,14 @@ pub fn restore(
     // The target dir itself may be gone (a wiped data dir usually is);
     // it is created AFTER staging — a refused restore leaves the target
     // untouched, not even created.
-    if objects_dir_has_entries(target) {
+    let not_empty: Option<&'static str> = if objects_dir_has_entries(target) {
+        Some("objects/ holds data")
+    } else if sidecar_present {
+        Some("a SQLite WAL/SHM sidecar sits beside a missing naatre.db")
+    } else {
+        None
+    };
+    if let Some(found) = not_empty {
         match cfg.blob {
             BlobKind::S3 => {
                 return Err(StoreError::Backend(BackendError::Mismatch {
@@ -665,7 +1001,7 @@ pub fn restore(
             BlobKind::Fs => {
                 return Err(BackupError::TargetNotEmpty {
                     path: target.to_path_buf(),
-                    found: "objects/ holds data",
+                    found,
                 });
             }
         }
@@ -676,8 +1012,7 @@ pub fn restore(
             if postgres_initialized(cfg, target)? {
                 return Err(BackupError::TargetInitialized {
                     path: target.to_path_buf(),
-                    found: "the postgres schema carries the naatre schema (drop it first — \
-                            the drop IS the wipe; --force does not apply here)",
+                    found: "the postgres schema carries the naatre schema (drop it first — the drop IS the wipe; --force does not apply here)",
                 });
             }
             drop_empty_schema(cfg);
@@ -698,29 +1033,83 @@ pub fn restore(
         }
     }
 
+    let ids: Vec<naatre_core::ids::Id> = manifest
+        .objects
+        .iter()
+        .map(|hex| naatre_core::ids::Id::from_hex(hex).expect("load_manifest validated the ids"))
+        .collect();
+
+    // The S3 PRESENCE GATE runs before ANY target write: restore answers
+    // only when the target holds every manifest object. The missing set
+    // is the purge-race escape hatch — refused unless --allow-missing
+    // accepts exactly these ids (recorded in the report and the audit
+    // row; the redaction duty applies to them).
+    let mut waived: Vec<String> = Vec::new();
+    let cas = match cfg.blob {
+        BlobKind::S3 => {
+            let cas =
+                naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?;
+            let have =
+                naatre_store::BlobStore::has(cas.as_ref(), &ids).map_err(BackupError::Store)?;
+            let mut missing: Vec<String> = ids
+                .iter()
+                .zip(&have)
+                .filter(|(_, present)| !**present)
+                .map(|(id, _)| id.to_hex())
+                .collect();
+            missing.sort();
+            missing.dedup();
+            if !missing.is_empty() {
+                // The waiver covers EXACTLY the set it was issued for:
+                // anything else missing now refuses again with the NEW set.
+                if !allow_missing.is_some_and(|arg| waiver_covers(arg, &missing)) {
+                    return Err(BackupError::ObjectsMissing {
+                        waiver: waiver_digest(&missing),
+                        rejected_waiver: allow_missing.is_some(),
+                        missing,
+                    });
+                }
+                waived = missing;
+            }
+            Some(cas)
+        }
+        BlobKind::Fs => None,
+    };
+
     // STAGE + VERIFY: every manifest artifact is copied into the staging
-    // directory and checksummed. Any refusal up to and including this
-    // point leaves the target untouched.
+    // directory and the STAGED bytes are SHA256-checked against the
+    // manifest (streaming — no whole-file reads). Any refusal up to and
+    // including this point leaves the target untouched.
     let stage = stage_dir(target)?;
     for artifact in &manifest.artifacts {
         let src = backup_dir.join(&artifact.path);
         let dst = stage.path.join(&artifact.path);
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| BackupError::io(parent, e))?;
-        }
         if !src.is_file() {
             return Err(BackupError::Manifest {
                 path: backup_dir.to_path_buf(),
                 why: "the manifest lists an artifact the backup directory does not carry",
             });
         }
-        let got = sha256_file(&src)?;
+        let got = stream_copy_hash(&src, &dst)?;
         if got != artifact.sha256 {
             return Err(BackupError::ChecksumMismatch {
                 path: artifact.path.clone(),
             });
         }
-        std::fs::copy(&src, &dst).map_err(|e| BackupError::io(&dst, e))?;
+    }
+
+    // Too-new backups are refused BEFORE any write to the target: read
+    // the schema version from the VERIFIED staged artifact (sqlite: the
+    // snapshot itself; postgres: the dump's meta COPY block).
+    let staged_version = match cfg.meta {
+        MetaKind::Sqlite => staged_sqlite_version(&stage.path.join(SQLITE_DUMP))?,
+        MetaKind::Postgres => staged_pg_version(&stage.path.join(PG_DUMP))?,
+    };
+    if staged_version > naatre_store::MAX_SUPPORTED {
+        return Err(BackupError::TooNew {
+            found: staged_version,
+            supported: naatre_store::MAX_SUPPORTED,
+        });
     }
 
     // Every artifact verified. NOW the target: create it 0700 like init
@@ -733,21 +1122,29 @@ pub fn restore(
     }
     let _lock = data_dir.lock().map_err(BackupError::Store)?;
 
-    let ids: Vec<naatre_core::ids::Id> = manifest
-        .objects
-        .iter()
-        .map(|hex| naatre_core::ids::Id::from_hex(hex).expect("load_manifest validated the ids"))
-        .collect();
-
     // 1. The DB first — the mirror of the backup order. The sqlite write
-    // is a RENAME of the verified staged file (atomic, same filesystem);
-    // psql reads the verified staged dump.
+    // is a RENAME of the verified staged file (atomic, same filesystem)
+    // with any leftover WAL/SHM sidecars unlinked first (a replayed WAL
+    // would resurrect the wiped store over the snapshot); psql replays
+    // the verified staged dump in ONE transaction (-1), so a mid-replay
+    // failure rolls back to the empty target it started on.
     match cfg.meta {
         MetaKind::Sqlite => {
+            for sidecar in &sidecars {
+                let p = root.join(sidecar);
+                if p.exists() {
+                    std::fs::remove_file(&p).map_err(|e| BackupError::io(&p, e))?;
+                }
+            }
             let staged = stage.path.join(SQLITE_DUMP);
             let dst = root.join(DB_FILE);
             std::fs::rename(&staged, &dst).map_err(|e| BackupError::io(&dst, e))?;
             chmod(&dst, 0o600)?;
+            // The write path's durability convention: the renamed DB hits
+            // the disk before the run reports success.
+            std::fs::File::open(&dst)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| BackupError::io(&dst, e))?;
         }
         MetaKind::Postgres => {
             let pg = cfg.pg.as_ref().ok_or(BackupError::Manifest {
@@ -756,25 +1153,38 @@ pub fn restore(
             })?;
             let staged = stage.path.join(PG_DUMP);
             let staged_path = staged.display().to_string();
+            // -1: ONE transaction around the whole replay. The dump is
+            // role-clean (pg_dump ran --no-owner --no-privileges; psql
+            // itself takes no such flags), so it replays under the
+            // restoring role.
             let args = [
                 "--file",
                 &staged_path,
                 "--set",
                 "ON_ERROR_STOP=1",
+                "--single-transaction",
                 "--quiet",
             ];
-            run_pg_tool("psql", pg, &args, backup_dir)?;
+            // The tool log lands beside the TARGET (the writable parent),
+            // never inside the backup dir — a failed restore does not
+            // mutate the backup.
+            let context = target.parent().unwrap_or(target);
+            run_pg_tool("psql", pg, &args, context)?;
         }
     }
 
     // The open validates the restored DB and forward-migrates if the
-    // backup predates this binary's schema (a too-new backup fails the
-    // migration guard loudly); the handle holds the connection for the
-    // presence gate below.
-    let cas = naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?;
-    let _store = Store::open_backend(data_dir, cfg).map_err(BackupError::Store)?;
+    // backup predates this binary's schema (a too-new backup already
+    // failed the pre-write check above); the handle holds the connection
+    // for the audit row.
+    let cas = match cas {
+        Some(cas) => cas,
+        None => naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?,
+    };
+    let store = Store::open_backend(data_dir, cfg).map_err(BackupError::Store)?;
 
-    // 2. THEN the objects — moved out of verified staging.
+    // 2. THEN the objects — moved out of verified staging, each fsynced
+    // (the write path's durability convention).
     if cfg.blob == BlobKind::Fs {
         for id in &ids {
             let hex = id.to_hex();
@@ -790,28 +1200,49 @@ pub fn restore(
             }
             std::fs::copy(&src, &dst).map_err(|e| BackupError::io(&src, e))?;
             chmod(&dst, 0o600)?;
+            std::fs::File::open(&dst)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| BackupError::io(&dst, e))?;
         }
     }
     drop(stage);
 
-    // 3. The presence gate — every manifest id must be in the target CAS
-    // (fs: just moved; S3: the operator's bucket copy). Restore checks
-    // PRESENCE, not reachability; fsck is the operator's next step.
-    let have = cas.has(&ids).map_err(BackupError::Store)?;
-    let missing: Vec<String> = ids
-        .iter()
-        .zip(&have)
-        .filter(|(_, present)| !**present)
-        .map(|(id, _)| id.to_hex())
-        .collect();
-    if !missing.is_empty() {
-        let sample = missing
-            .iter()
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(BackupError::ObjectsMissing { missing, sample });
+    // 3. The fs presence self-check (S3's gate ran before any write): the
+    // moved objects are checksum-verified, so a miss here is an fs-level
+    // error, never waived.
+    if cfg.blob == BlobKind::Fs {
+        let have = naatre_store::BlobStore::has(cas.as_ref(), &ids).map_err(BackupError::Store)?;
+        if have.iter().any(|present| !*present) {
+            return Err(BackupError::Manifest {
+                path: backup_dir.to_path_buf(),
+                why: "a moved object is not present in the target CAS (filesystem error)",
+            });
+        }
+    }
+
+    // 4. The restore audit row (the CLI's actor convention), inside the
+    // RESTORED store: manifest identity, combo, the waived ids when the
+    // purge-race escape ran, and the restored object count — count-only
+    // beyond those named fields.
+    {
+        let tx = store.conn().transaction().map_err(store_db)?;
+        db::audit_append(
+            &tx,
+            now_ns(),
+            "admin",
+            "restore",
+            &serde_json::json!({
+                "format": MANIFEST_FORMAT,
+                "created_ns": manifest.created_ns,
+                "meta": cfg.meta.as_str(),
+                "blob": cfg.blob.as_str(),
+                "waived_ids": waived,
+                "objects_restored": manifest.objects.len(),
+            })
+            .to_string(),
+        )
+        .map_err(store_db)?;
+        tx.commit().map_err(store_db)?;
     }
 
     Ok(RestoreReport {
@@ -821,6 +1252,8 @@ pub fn restore(
         counts: manifest.counts,
         objects_present: manifest.objects.len() as u64,
         forced: force,
+        created_ns: manifest.created_ns,
+        waived,
     })
 }
 
@@ -932,28 +1365,56 @@ fn pg_command(program: &Path, pg: &PgConnect, args: &[&str]) -> Command {
     cmd
 }
 
-/// Runs one PostgreSQL client tool. On failure the tool's stderr is
-/// written to `<context>/tool-error.log` and the error carries the exit
-/// status only.
+/// Runs one PostgreSQL client tool resolved from PATH (see [`run_tool`]).
 fn run_pg_tool(
     tool: &'static str,
     pg: &PgConnect,
     args: &[&str],
     context: &Path,
 ) -> Result<(), BackupError> {
-    let program = resolve_tool(tool)?;
-    let mut cmd = pg_command(&program, pg, args);
+    run_tool(&resolve_tool(tool)?, tool, pg, args, context)
+}
+
+/// Runs `program` as `tool`. On failure the tool's stderr is written to
+/// `<context>/tool-error.log` (0600) and the error carries the exit status
+/// only. `context` is a directory the caller can write: restore passes the
+/// target's parent, never the backup dir. A failed log write is reported
+/// APPENDED to the error (`log: None`); it never replaces the real tool
+/// status.
+fn run_tool(
+    program: &Path,
+    tool: &'static str,
+    pg: &PgConnect,
+    args: &[&str],
+    context: &Path,
+) -> Result<(), BackupError> {
+    let mut cmd = pg_command(program, pg, args);
     let out = cmd.output().map_err(|e| BackupError::io(context, e))?;
     if !out.status.success() {
         let log_path = context.join(TOOL_LOG);
-        std::fs::write(&log_path, &out.stderr).map_err(|e| BackupError::io(&log_path, e))?;
+        let log = write_private(&log_path, &out.stderr)
+            .ok()
+            .map(|()| log_path);
         return Err(BackupError::ToolFailed {
             tool,
             status: out.status,
-            log: log_path,
+            log,
         });
     }
     Ok(())
+}
+
+/// Writes `bytes` to `path`, created 0600 (never widened from a umask).
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
 }
 
 fn now_ns() -> i64 {
@@ -1126,6 +1587,108 @@ mod tests {
             load_manifest(&dir.path().join("absent.json")).unwrap_err(),
             BackupError::Manifest { .. }
         ));
+    }
+
+    #[test]
+    fn manifest_refuses_artifact_paths_outside_the_grammar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let ok_object = format!("objects/ab/cd/{}", "e".repeat(60));
+        let manifest = |artifact: &str| BackupManifest {
+            format: MANIFEST_FORMAT,
+            naatre_version: "0.1.0".into(),
+            created_ns: 1,
+            meta: "sqlite".into(),
+            blob: "fs".into(),
+            schema_version: naatre_store::MAX_SUPPORTED,
+            counts: BackupCounts {
+                changesets: 0,
+                objects: 0,
+            },
+            objects: vec![],
+            artifacts: vec![ArtifactChecksum {
+                path: artifact.to_string(),
+                sha256: "a".repeat(64),
+            }],
+        };
+        for good in ["naatre.db", "postgres.sql", ok_object.as_str()] {
+            std::fs::write(&path, serde_json::to_string(&manifest(good)).unwrap()).unwrap();
+            load_manifest(&path).unwrap_or_else(|e| panic!("{good}: {e}"));
+        }
+        let long_tail = format!("objects/ab/cd/{}", "e".repeat(62));
+        let upper = format!("objects/AB/cd/{}", "e".repeat(60));
+        for bad in [
+            "../naatre.db",
+            "objects/../../etc/passwd",
+            "objects/ab/../cd/ee",
+            "./naatre.db",
+            "/etc/passwd",
+            "evil.txt",
+            "objects/ab/cd",
+            "objects/ab/cd/ef/ee",
+            "objects/ab/cd/short",
+            "naatre.db/",
+            "",
+            long_tail.as_str(),
+            upper.as_str(),
+        ] {
+            std::fs::write(&path, serde_json::to_string(&manifest(bad)).unwrap()).unwrap();
+            assert!(
+                matches!(load_manifest(&path), Err(BackupError::Manifest { .. })),
+                "{bad:?} must be refused at parse time"
+            );
+        }
+    }
+
+    #[test]
+    fn waiver_covers_exactly_the_issued_set() {
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        let c = "c".repeat(64);
+        let set = vec![a.clone(), b.clone()];
+        let digest = waiver_digest(&set);
+        assert_eq!(digest.len(), 16);
+        // The digest and the id list (any order, padded) cover the set.
+        assert!(waiver_covers(&digest, &set));
+        assert!(waiver_covers(&format!("{b}, {a}"), &set));
+        // A set that grew (an extra id went missing) is NOT covered by the
+        // old digest or the old list; a smaller set is not either.
+        let grown = vec![a.clone(), b.clone(), c.clone()];
+        assert!(!waiver_covers(&digest, &grown));
+        assert!(!waiver_covers(&format!("{a},{b}"), &grown));
+        assert!(!waiver_covers(&waiver_digest(&grown), &set));
+        assert!(!waiver_covers("", &set));
+    }
+
+    #[test]
+    fn failed_log_write_never_masks_the_tool_status() {
+        let pg = PgConnect {
+            host: "127.0.0.1".into(),
+            port: 1,
+            dbname: "x".into(),
+            user: None,
+            password: None,
+            tls: naatre_store::backend::PgTls::Disable,
+            sslrootcert: None,
+            schema: None,
+        };
+        let no_such_dir = tempfile::tempdir().unwrap().path().join("gone");
+        let program = resolve_tool("false").expect("`false` is on PATH");
+        match run_tool(&program, "psql", &pg, &[], &no_such_dir) {
+            Err(BackupError::ToolFailed {
+                tool: "psql",
+                log: None,
+                ..
+            }) => {}
+            other => panic!("expected ToolFailed with no log, got {other:?}"),
+        }
+        let msg = run_tool(&program, "psql", &pg, &[], &no_such_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("exited with") && msg.contains("could not be saved"),
+            "{msg}"
+        );
     }
 
     #[test]

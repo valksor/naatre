@@ -24,6 +24,80 @@ mod pg_provision;
 
 const BASE_NS: i64 = 1_700_000_000_000_000_000;
 
+/// Recursive directory copy (a backup dir is plain files).
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let to = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).unwrap();
+        }
+    }
+}
+
+/// Rewrites a backup dir's `postgres.sql` and re-signs the manifest so the
+/// checksum gate passes (the failure under test must land elsewhere).
+fn rewrite_dump(dir: &std::path::Path, sql: &str) {
+    std::fs::write(dir.join("postgres.sql"), sql).unwrap();
+    let mut manifest = backup::load_manifest(&dir.join("manifest.json")).unwrap();
+    let sha = {
+        use sha2::Digest as _;
+        format!("{:x}", sha2::Sha256::digest(sql.as_bytes()))
+    };
+    for a in &mut manifest.artifacts {
+        if a.path == "postgres.sql" {
+            a.sha256 = sha.clone();
+        }
+    }
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+/// Whether the configured schema exists, and whether the probe table
+/// exists in ANY schema — the post-failure "target is as it started" check.
+fn schema_and_probe_state(cfg: &BackendConfig) -> (i64, i64) {
+    let schema = cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let conn =
+        naatre_store::Db::connect_postgres_without_schema_setup(cfg.pg.as_ref().unwrap()).unwrap();
+    let schemas: i64 = conn
+        .query_row_map(
+            &Sql::plain_owned(format!(
+                "SELECT COUNT(*) FROM pg_namespace WHERE nspname = '{schema}'"
+            )),
+            &[],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let probes: i64 = conn
+        .query_row_map(
+            &Sql::plain(
+                "SELECT COUNT(*) FROM information_schema.tables \
+                 WHERE table_name = 'naatre_fix_probe'",
+            ),
+            &[],
+            |r| r.get(0),
+        )
+        .unwrap();
+    (schemas, probes)
+}
+
+/// chmod for the read-only-backup-dir pin (no-op off unix).
+fn set_mode(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+}
+
 struct Ctx {
     _target: pg_provision::PgTarget,
     cfg: BackendConfig,
@@ -189,7 +263,7 @@ fn backup_wipe_restore_fsck_clean_postgres_fs() {
     // make it TargetNotEmpty — and with the local dir EMPTY (a fresh dir,
     // same DB) the schema probe answers TargetInitialized. The refusals
     // name what they found and the remedy.
-    match backup::restore(&ctx.data, &ctx.cfg, &dest, false) {
+    match backup::restore(&ctx.data, &ctx.cfg, &dest, false, None) {
         Err(
             e @ (backup::BackupError::TargetNotEmpty { .. }
             | backup::BackupError::TargetInitialized { .. }),
@@ -201,7 +275,7 @@ fn backup_wipe_restore_fsck_clean_postgres_fs() {
     }
     let fresh_dir = ctx._root.path().join("fresh-empty");
     std::fs::create_dir_all(&fresh_dir).unwrap();
-    match backup::restore(&fresh_dir, &ctx.cfg, &dest, false) {
+    match backup::restore(&fresh_dir, &ctx.cfg, &dest, false, None) {
         Err(backup::BackupError::TargetInitialized { found, .. }) => {
             assert!(found.contains("schema"), "{found}");
         }
@@ -257,70 +331,118 @@ fn backup_wipe_restore_fsck_clean_postgres_fs() {
     // uninitialized (restore refuses initialized targets BEFORE any psql
     // write, so a failure can never strand a half-restored live store).
     let poisoned = ctx._root.path().join("backup-poison");
+    let poisoned_first = ctx._root.path().join("backup-poison-first");
     {
+        let original = std::fs::read_to_string(dest.join("postgres.sql")).unwrap();
+        // The FIRST-STATEMENT poison (the strictest "nothing replays"
+        // reading — kept from the original pin).
+        backup::backup(&ctx.data, &ctx.cfg, &poisoned_first).unwrap();
+        rewrite_dump(&poisoned_first, &format!("NAATRE IS NOT SQL;\n{original}"));
+        // The poison AFTER successful DDL: a probe table up front and the
+        // bad statement right behind the dump's own CREATE SCHEMA. Without
+        // -1 both the table and the schema would survive the failure — the
+        // single transaction is what rolls them back.
         backup::backup(&ctx.data, &ctx.cfg, &poisoned).unwrap();
-        let mut sql = std::fs::read_to_string(poisoned.join("postgres.sql")).unwrap();
-        // PREPEND: the poison fails on psql's first statement, so NOTHING
-        // of the dump replays — the strictest reading of "the target is
-        // untouched by a failed restore".
-        sql = "NAATRE IS NOT SQL;\n".to_string() + &sql;
-        std::fs::write(poisoned.join("postgres.sql"), &sql).unwrap();
-        // Re-sign the poisoned artifact so the checksum gate passes and
-        // the failure lands INSIDE psql.
-        let mut manifest = backup::load_manifest(&poisoned.join("manifest.json")).unwrap();
-        let sha = {
-            use sha2::Digest as _;
-            format!("{:x}", sha2::Sha256::digest(sql.as_bytes()))
-        };
-        for a in &mut manifest.artifacts {
-            if a.path == "postgres.sql" {
-                a.sha256 = sha.clone();
-            }
-        }
-        std::fs::write(
-            poisoned.join("manifest.json"),
-            serde_json::to_string_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
+        let mut lines: Vec<String> = original.lines().map(str::to_string).collect();
+        let at = lines
+            .iter()
+            .position(|l| l.starts_with("CREATE SCHEMA"))
+            .expect("the schema-scoped dump carries CREATE SCHEMA");
+        lines.insert(at + 1, "NAATRE IS NOT SQL;".to_string());
+        rewrite_dump(
+            &poisoned,
+            &format!(
+                "CREATE TABLE naatre_fix_probe (ignored int);\n{}\n",
+                lines.join("\n")
+            ),
+        );
     }
 
     // WIPE: schema dropped, data dir gone.
     wipe(&ctx);
 
-    // The poisoned restore now runs against an UNINITIALIZED database:
-    // psql fails mid-replay, and the target stays uninitialized.
-    {
-        let target = ctx._root.path().join("target-poison");
-        match backup::restore(&target, &ctx.cfg, &poisoned, false) {
-            Err(backup::BackupError::ToolFailed { tool, .. }) => assert_eq!(tool, "psql"),
-            other => panic!("expected ToolFailed from psql, got {other:?}"),
+    // Both poisoned restores run against an UNINITIALIZED database: psql
+    // fails mid-replay, and the target database is exactly as it started —
+    // NO schema, NO probe table — with an immediate re-run succeeding.
+    // The backup dir is READ-ONLY while it runs: the failure surfaces as
+    // the psql ToolFailed (not an io error), the tool log lands in the
+    // writable target PARENT (0600), and the backup dir gains no file.
+    for (name, dir) in [("first", &poisoned_first), ("after-ddl", &poisoned)] {
+        let target = ctx._root.path().join(format!("target-poison-{name}"));
+        set_mode(dir, 0o500);
+        let before: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        let result = backup::restore(&target, &ctx.cfg, dir, false, None);
+        set_mode(dir, 0o700);
+        match result {
+            Err(backup::BackupError::ToolFailed { tool, log, .. }) => {
+                assert_eq!(tool, "psql", "{name}");
+                assert_eq!(
+                    log.as_deref(),
+                    Some(ctx._root.path().join("tool-error.log").as_path()),
+                    "{name}: the log lands beside the target, not in the backup"
+                );
+            }
+            other => panic!("{name}: expected ToolFailed from psql, got {other:?}"),
         }
-        // The target database is UNINITIALIZED after the failure: the
-        // probe answers false (no naatre schema_version anywhere).
-        let conn = naatre_store::Db::connect_postgres(ctx.cfg.pg.as_ref().unwrap(), false).unwrap();
+        let after: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            before.len(),
+            after.len(),
+            "{name}: the backup dir gained a file"
+        );
+        assert!(!dir.join("tool-error.log").exists(), "{name}");
+        assert_eq!(
+            schema_and_probe_state(&ctx.cfg),
+            (0, 0),
+            "{name}: a failed psql left schema or tables behind"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(ctx._root.path().join("tool-error.log"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "the tool log is 0600");
+    }
+
+    // The IMMEDIATE RE-RUN with the fixed dump succeeds (the two-step the
+    // error teaches): restore the original dump bytes and re-sign.
+    {
+        let original = std::fs::read_to_string(dest.join("postgres.sql")).unwrap();
+        rewrite_dump(&poisoned, &original);
+        let target = ctx._root.path().join("target-poison-2");
+        let report = backup::restore(&target, &ctx.cfg, &poisoned, false, None).unwrap();
+        assert_eq!(report.meta, naatre_store::MetaKind::Postgres);
+    }
+
+    // The re-run re-created the schema (the fixed dump restored it): drop
+    // it again — the operator's wipe — before the final restore.
+    {
         let schema = ctx.cfg.pg.as_ref().unwrap().schema.clone().unwrap();
-        // An absent schema makes the probe itself error — that error IS
-        // "uninitialized" (the same reading postgres_initialized uses).
-        let probe = conn
-            .query_opt(
-                &Sql::plain_owned(format!(
-                    "SELECT value FROM \"{schema}\".meta WHERE key = 'schema_version'"
-                )),
-                &[],
-            )
-            .ok()
-            .flatten();
-        assert!(probe.is_none(), "a failed psql left naatre schema behind");
+        let conn = naatre_store::Db::connect_postgres(ctx.cfg.pg.as_ref().unwrap(), false).unwrap();
+        conn.execute(
+            &Sql::plain_owned(format!("DROP SCHEMA \"{schema}\" CASCADE")),
+            &[],
+        )
+        .unwrap();
     }
 
     // RESTORE: psql replays the dump, objects copy back, presence gate
     // passes, fsck clean.
-    let report = match backup::restore(&ctx.data, &ctx.cfg, &dest, false) {
+    let report = match backup::restore(&ctx.data, &ctx.cfg, &dest, false, None) {
         Ok(r) => r,
         Err(e) => {
             // The tool log is a local-trust artifact (loopback cluster);
             // print it so the failure is diagnosable.
-            if let Ok(log) = std::fs::read_to_string(dest.join("tool-error.log")) {
+            if let Ok(log) = std::fs::read_to_string(ctx._root.path().join("tool-error.log")) {
                 panic!("restore failed: {e}\npsql log:\n{log}");
             }
             panic!("restore failed: {e}");
@@ -344,5 +466,186 @@ fn backup_wipe_restore_fsck_clean_postgres_fs() {
 
     // The schema exists again (the dump carried it) — a second restore is
     // refused again (local objects back in place).
-    assert!(backup::restore(&ctx.data, &ctx.cfg, &dest, false).is_err());
+    assert!(backup::restore(&ctx.data, &ctx.cfg, &dest, false, None).is_err());
+}
+
+/// Round 4 fix items: backup refuses an UNINITIALIZED PG target (no
+/// schema silently migrated into existence), and a dump/restore
+/// round-trip under a DIFFERENT role than the one that dumped
+/// (--no-owner --no-privileges: the replay belongs to the restoring
+/// role).
+#[test]
+fn backup_refuses_uninitialized_pg_and_round_trips_cross_role() {
+    let Some(target) = pg_provision::acquire() else {
+        return;
+    };
+    // An UNINITIALIZED target: a data dir + a config whose schema has
+    // never been created. Backup must refuse naming `naatre init` — and
+    // must NOT leave the schema behind (the probe ran without the
+    // schema-setup side effect).
+    let cfg = target.config();
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let dest = root.path().join("backup");
+    match backup::backup(&data, &cfg, &dest) {
+        Err(backup::BackupError::Uninitialized { path }) => {
+            let msg = backup::BackupError::Uninitialized { path: path.clone() }.to_string();
+            assert!(msg.contains("naatre init"), "{msg}");
+            assert_eq!(path, data);
+        }
+        other => panic!("expected Uninitialized, got {other:?}"),
+    }
+    let schema = cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let probe_conn =
+        naatre_store::Db::connect_postgres_without_schema_setup(cfg.pg.as_ref().unwrap()).unwrap();
+    let schema_rows: i64 = probe_conn
+        .query_row_map(
+            &Sql::plain_owned(format!(
+                "SELECT COUNT(*) FROM pg_namespace WHERE nspname = '{schema}'"
+            )),
+            &[],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        schema_rows, 0,
+        "the probe created the schema as a side effect"
+    );
+
+    // Seed a real store (the schema comes into existence properly via the
+    // store open), back it up as the "naatre" role…
+    let seeded = root.path().join("seeded");
+    std::fs::create_dir_all(&seeded).unwrap();
+    let store = Store::open_backend(DataDir::open_any(&seeded), &cfg).unwrap();
+    db::repos_create(store.conn(), "demo", 1_700_000_000_000_000_000).unwrap();
+    drop(store);
+    let backup_dir = root.path().join("backup-role");
+    backup::backup(&seeded, &cfg, &backup_dir).unwrap();
+
+    // …then restore under a DIFFERENT role: the replay must succeed and
+    // the restored objects must belong to the restoring role
+    // (--no-owner --no-privileges makes the dump role-clean).
+    let admin = naatre_store::Db::connect_postgres(cfg.pg.as_ref().unwrap(), false).unwrap();
+    admin
+        .execute(
+            &Sql::plain("DROP SCHEMA IF EXISTS naatre_fix_role CASCADE"),
+            &[],
+        )
+        .expect("drop probe schema");
+    admin
+        .execute(&Sql::plain("CREATE ROLE naatre_fix_role LOGIN"), &[])
+        .expect("create role");
+    admin
+        .execute(
+            &Sql::plain("GRANT CREATE ON DATABASE postgres TO naatre_fix_role"),
+            &[],
+        )
+        .expect("grant create");
+    let mut role_cfg = cfg.clone();
+    role_cfg.pg.as_mut().unwrap().user = Some("naatre_fix_role".into());
+    let schema = role_cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let _ = admin.execute(
+        &Sql::plain_owned(format!("DROP SCHEMA \"{schema}\" CASCADE")),
+        &[],
+    );
+    let restored = root.path().join("restored-as-role");
+    backup::restore(&restored, &role_cfg, &backup_dir, false, None).unwrap();
+    let role_conn =
+        naatre_store::Db::connect_postgres(role_cfg.pg.as_ref().unwrap(), false).unwrap();
+    let repos: i64 = role_conn
+        .query_row_map(
+            &Sql::plain("SELECT COUNT(*) FROM repos WHERE name = 'demo'"),
+            &[],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(repos, 1, "the cross-role replay carries the data");
+    let schema = role_cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let owner: String = role_conn
+        .query_row_map(
+            &Sql::plain_owned(format!(
+                "SELECT tableowner FROM pg_tables \
+                 WHERE tablename = 'repos' AND schemaname = '{schema}'"
+            )),
+            &[],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        owner, "naatre_fix_role",
+        "the restored objects belong to the restoring role"
+    );
+    // No role-drop cleanup: the role owns the restored objects, and the
+    // throwaway cluster dies with the test process anyway.
+}
+
+/// Too-new / unreadable-version dumps are refused from the VERIFIED staged
+/// dump BEFORE psql runs: the Postgres target stays uninitialized and the
+/// target dir is never created. The version parse FAILS CLOSED — a dump
+/// with no readable `schema_version` row is refused, never assumed old.
+#[test]
+fn pg_too_new_and_unreadable_version_dumps_refused_before_any_write() {
+    let Some(target) = pg_provision::acquire() else {
+        return;
+    };
+    let ctx = seed(target);
+    let dest = ctx._root.path().join("backup");
+    backup::backup(&ctx.data, &ctx.cfg, &dest).unwrap();
+    let original = std::fs::read_to_string(dest.join("postgres.sql")).unwrap();
+    let version_line = format!("schema_version\t{}", naatre_store::MAX_SUPPORTED);
+    assert!(
+        original.lines().any(|l| l == version_line),
+        "the dump's meta COPY block carries the version line"
+    );
+    wipe(&ctx);
+
+    let too_new = ctx._root.path().join("backup-too-new");
+    let no_version = ctx._root.path().join("backup-no-version");
+    let garbled = ctx._root.path().join("backup-garbled");
+    for (dir, sql) in [
+        (
+            &too_new,
+            original.replace(&version_line, "schema_version\t99"),
+        ),
+        (
+            &no_version,
+            original
+                .lines()
+                .filter(|l| *l != version_line)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        ),
+        (
+            &garbled,
+            original.replace(&version_line, "schema_version\tnew"),
+        ),
+    ] {
+        copy_dir(&dest, dir);
+        rewrite_dump(dir, &sql);
+    }
+
+    let restore_target = ctx._root.path().join("restore-target");
+    match backup::restore(&restore_target, &ctx.cfg, &too_new, false, None) {
+        Err(backup::BackupError::TooNew { found, supported }) => {
+            assert_eq!(found, 99);
+            assert_eq!(supported, naatre_store::MAX_SUPPORTED);
+        }
+        other => panic!("expected TooNew, got {other:?}"),
+    }
+    for (name, dir) in [("no version", &no_version), ("garbled version", &garbled)] {
+        match backup::restore(&restore_target, &ctx.cfg, dir, false, None) {
+            Err(backup::BackupError::Manifest { why, .. }) => {
+                assert!(why.contains("schema_version"), "{name}: {why}")
+            }
+            other => panic!("{name}: expected the fail-closed refusal, got {other:?}"),
+        }
+    }
+    assert!(!restore_target.exists(), "no refusal created the target");
+    assert_eq!(
+        schema_and_probe_state(&ctx.cfg).0,
+        0,
+        "no refusal reached psql (the schema never came back)"
+    );
 }

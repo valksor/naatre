@@ -204,19 +204,126 @@ fn backup_restore_sqlite_s3() {
         "the seeded blob is listed"
     );
 
-    // The restore's presence gate refuses an incomplete bucket copy: a
-    // manifest id the bucket lacks (the phantom) names the duty. That gate
-    // is the S3 target's documented refusal: the restore answers only
-    // when the target holds every manifest object.
+    // The restore's presence gate refuses an incomplete bucket copy — and
+    // it runs BEFORE ANY target write: the refused restore leaves the
+    // target untouched (not even created). That gate is the S3 target's
+    // documented refusal: the restore answers only when the target holds
+    // every manifest object.
     let phantom_dir = root.path().join("phantom");
     manifest_with_phantom(&dest, &phantom_dir);
     let fresh = root.path().join("fresh");
-    match backup::restore(&fresh, &cfg, &phantom_dir, false) {
+    match backup::restore(&fresh, &cfg, &phantom_dir, false, None) {
         Err(backup::BackupError::ObjectsMissing { missing, .. }) => {
             assert!(missing.contains(&"f".repeat(64)))
         }
         other => panic!("expected ObjectsMissing, got {other:?}"),
     }
+    assert!(
+        !fresh.exists(),
+        "the presence-gate refusal wrote nothing to the target"
+    );
+
+    // The purge-race escape (two-step): a bucket copy that is genuinely
+    // PARTIAL (the seeded object deleted bucket-side) refuses naming the
+    // id AND a waiver argument, with the target still unwritten.
+    let bucket = |data: &std::path::Path| {
+        naatre_store::blob::history_cas(&DataDir::open_any(data), &cfg).unwrap()
+    };
+    naatre_store::BlobStore::delete(bucket(&data).as_ref(), &[seeded.blob]).unwrap();
+    let partial_target = root.path().join("partial-target");
+    let (first_missing, first_waiver) =
+        match backup::restore(&partial_target, &cfg, &dest, false, None) {
+            Err(e @ backup::BackupError::ObjectsMissing { .. }) => {
+                let msg = e.to_string();
+                let backup::BackupError::ObjectsMissing {
+                    missing, waiver, ..
+                } = e
+                else {
+                    unreachable!()
+                };
+                assert_eq!(missing, vec![seeded.blob.to_hex()]);
+                assert!(
+                    msg.contains(&seeded.blob.to_hex()) && msg.contains(&waiver),
+                    "the refusal lists the ids AND the waiver argument: {msg}"
+                );
+                (missing, waiver)
+            }
+            other => panic!("expected the partial-copy refusal, got {other:?}"),
+        };
+    assert!(!partial_target.exists(), "the refusal wrote nothing");
+
+    // The RE-RUN leg after the operator's bucket copy: the bytes return,
+    // the same restore now succeeds with no waiver (a fresh target).
+    let rerun_target = root.path().join("rerun-target");
+    naatre_store::BlobStore::put(bucket(&data).as_ref(), b"s3 backup me\n").unwrap();
+    let report = backup::restore(&rerun_target, &cfg, &dest, false, None).unwrap();
+    assert!(report.waived.is_empty());
+    naatre_store::BlobStore::delete(bucket(&data).as_ref(), &[seeded.blob]).unwrap();
+
+    // The race: an EXTRA id goes missing between the two runs (here the
+    // phantom id, absent from the bucket). The OLD waiver must be refused
+    // again, the refusal printing the NEW set and its own waiver.
+    let racing_target = root.path().join("racing-target");
+    match backup::restore(
+        &racing_target,
+        &cfg,
+        &phantom_dir,
+        false,
+        Some(&first_waiver),
+    ) {
+        Err(e @ backup::BackupError::ObjectsMissing { .. }) => {
+            let msg = e.to_string();
+            let backup::BackupError::ObjectsMissing {
+                missing,
+                waiver,
+                rejected_waiver,
+            } = e
+            else {
+                unreachable!()
+            };
+            let mut both = vec![seeded.blob.to_hex(), "f".repeat(64)];
+            both.sort();
+            assert_eq!(missing, both, "the NEW set is what the refusal prints");
+            assert_ne!(waiver, first_waiver);
+            assert!(rejected_waiver, "{msg}");
+            assert!(msg.contains(&"f".repeat(64)), "{msg}");
+        }
+        other => panic!("a stale waiver must be refused, got {other:?}"),
+    }
+    assert!(!racing_target.exists(), "the stale waiver wrote nothing");
+
+    // The id-list form of the argument covers the new set exactly.
+    let both_ids = format!("{},{}", "f".repeat(64), seeded.blob.to_hex());
+    let report =
+        backup::restore(&racing_target, &cfg, &phantom_dir, false, Some(&both_ids)).unwrap();
+    assert_eq!(report.waived.len(), 2);
+
+    // The re-run with the digest accepts exactly the first refusal's set:
+    // the report names the waived id, the restored store misses those
+    // bytes (the redaction duty applies).
+    let report = backup::restore(&partial_target, &cfg, &dest, false, Some(&first_waiver)).unwrap();
+    assert_eq!(report.waived, first_missing);
+    let cas = naatre_store::blob::history_cas(&DataDir::open_any(&partial_target), &cfg).unwrap();
+    assert!(
+        !cas.has(&[seeded.blob]).unwrap()[0],
+        "the waived id's bytes are genuinely absent"
+    );
+    // The waived id is in the restore audit row.
+    let store = Store::open_backend(DataDir::open_any(&partial_target), &cfg).unwrap();
+    let audits: Vec<String> = store
+        .conn()
+        .query_all_map(
+            &Sql::plain("SELECT details_json FROM audit_log WHERE action = 'restore'"),
+            &[],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        audits
+            .iter()
+            .any(|d| d.contains(&format!("\"waived_ids\":[\"{}\"]", seeded.blob.to_hex()))),
+        "the audit row names the waived ids: {audits:?}"
+    );
 
     // An S3-configured target whose LOCAL objects/ already holds data is
     // refused (the fs-CAS marker under blob = "s3" — the backend
@@ -225,7 +332,7 @@ fn backup_restore_sqlite_s3() {
     std::fs::create_dir_all(marker.join("objects/ab")).unwrap();
     std::fs::write(marker.join("objects/ab/cd"), b"a shard dir marks data").unwrap();
     for forced in [false, true] {
-        match backup::restore(&marker, &cfg, &dest, forced) {
+        match backup::restore(&marker, &cfg, &dest, forced, None) {
             Err(e) => {
                 let msg = e.to_string();
                 assert!(msg.contains("fs") && msg.contains("s3"), "{msg}");
@@ -235,18 +342,26 @@ fn backup_restore_sqlite_s3() {
     }
 
     // WIPE: the data dir goes; the BUCKET stays (it is the operator's
-    // copy) — the duty is fulfilled out-of-band.
+    // copy) — the duty is fulfilled out-of-band. The seeded object's
+    // bytes return first (the partial-copy leg deleted them).
+    naatre_store::BlobStore::put(
+        naatre_store::blob::history_cas(&DataDir::open_any(&data), &cfg)
+            .unwrap()
+            .as_ref(),
+        b"s3 backup me\n",
+    )
+    .unwrap();
     std::fs::remove_dir_all(&data).unwrap();
 
     // RESTORE: DB back, presence gate over the bucket passes, fsck clean
     // (the S3 external-drift note is informational, not dirt).
-    let report = backup::restore(&data, &cfg, &dest, false).unwrap();
+    let report = backup::restore(&data, &cfg, &dest, false, None).unwrap();
     assert_eq!(report.blob, BlobKind::S3);
     assert!(report.objects_present >= 1);
     assert_content(&data, &cfg, &seeded);
     assert!(fsck_clean(&data, &cfg), "fsck clean after the S3 restore");
     assert!(
-        backup::restore(&data, &cfg, &dest, false).is_err(),
+        backup::restore(&data, &cfg, &dest, false, None).is_err(),
         "a live target refuses"
     );
 }
@@ -295,7 +410,7 @@ fn backup_restore_postgres_s3() {
     std::fs::remove_dir_all(&data).unwrap();
 
     // RESTORE: psql replays, presence gate over the bucket, fsck clean.
-    let report = match backup::restore(&data, &cfg, &dest, false) {
+    let report = match backup::restore(&data, &cfg, &dest, false, None) {
         Ok(r) => r,
         Err(e) => {
             if let Ok(log) = std::fs::read_to_string(dest.join("tool-error.log")) {

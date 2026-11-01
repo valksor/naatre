@@ -283,3 +283,57 @@ fn redact_marks_a_blob_and_carries_path_date_only() {
         .unwrap();
     assert_eq!(audits, 1);
 }
+
+/// The restore duty reminder (compliance C7): a restore from an OLDER
+/// backup names the backup's age and the redaction re-apply duty. The
+/// manifest's `created_ns` is backdated by a year (it is not covered by an
+/// artifact checksum), so the age line has something to say.
+#[test]
+fn restore_prints_the_age_keyed_redaction_duty() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let backup = dir.path().join("backup");
+    let restored = dir.path().join("restored");
+    let out = run(&["init", "--data", data.to_str().unwrap()]);
+    assert!(out.status.success(), "init: {}", string_of(&out.stderr));
+    let out = run(&[
+        "backup",
+        "--data",
+        data.to_str().unwrap(),
+        backup.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "backup: {}", string_of(&out.stderr));
+
+    let manifest_path = backup.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let year_ns: i64 = 365 * 86_400 * 1_000_000_000;
+    let created = manifest["created_ns"].as_i64().unwrap() - year_ns;
+    manifest["created_ns"] = serde_json::json!(created);
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let out = run(&[
+        "restore",
+        "--data",
+        restored.to_str().unwrap(),
+        backup.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "restore: {}", string_of(&out.stderr));
+    let stdout = string_of(&out.stdout);
+    let duty = stdout
+        .lines()
+        .find(|l| l.contains("DUTY"))
+        .unwrap_or_else(|| panic!("no duty line in {stdout:?}"));
+    assert!(
+        duty.contains("365 day(s)"),
+        "the backup's age is named: {duty}"
+    );
+    assert!(
+        duty.contains("redaction") && duty.contains("re-applied") && duty.contains("fsck"),
+        "the duty names the re-apply and fsck's blind spot: {duty}"
+    );
+}

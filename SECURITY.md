@@ -45,15 +45,15 @@ Verify a download once the production key exists (the artifacts sit in
 one directory):
 
 ```sh
-minisign -Vm naatre-<ver>-x86_64-unknown-linux-musl \
-    -p <the published release public key>   # reads SHA256SUMS.minisig beside it
-sha256sum -c SHA256SUMS                     # after unpacking the artifacts
+minisign -Vm SHA256SUMS -p <the published release public key>   # reads SHA256SUMS.minisig beside it
+sha256sum -c SHA256SUMS                                         # the signed list covers the binary, the licenses, and the SBOM
 ```
 
 `scripts/release-verify.sh [--selftest] <artifact-dir> [pubkey]` runs the
 same gate: signature against the given key (default: the CI test key —
 mechanics only), the checksum lines, and (with `--selftest`) proof that a
-tampered `SHA256SUMS` line FAILS verification. To rotate the production
+tampered `SHA256SUMS` line FAILS verification and that a modified artifact
+under a valid signature FAILS the checksum check. To rotate the production
 key, generate a new pair, replace the published `.pub`, and announce the
 change on the release channel.
 

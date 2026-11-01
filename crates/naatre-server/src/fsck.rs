@@ -88,8 +88,10 @@ pub struct FsckReport {
     /// direction; on S3 see `external_drift`).
     pub bytes_missing: usize,
     /// CAS-present blob ids without an `objects` row (the orphaned-upload
-    /// direction — collectible garbage; note the offline import records no
-    /// `objects` rows, so a freshly imported repo reports its blobs here).
+    /// direction — collectible garbage). The import records its rows
+    /// (`put_recorded`), so a fresh import adds none here; only a legacy
+    /// pre-record import leaves referenced blobs in this class, and
+    /// `fsck --repair` backfills the referenced ones.
     pub cas_unrecorded: usize,
     /// Ledger rows whose data is reachable again (the next pass repairs).
     pub stale_candidates: usize,

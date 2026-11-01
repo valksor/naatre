@@ -667,9 +667,9 @@ pub fn backup(data: &Path, dest: &Path) -> i32 {
             }
             if report.bucket_copy_duty {
                 println!(
-                    "backup: S3 — copy the BUCKET per manifest.json's object ids \
-                     (README \"Backup\"); objects are immutable, so incremental \
-                     syncs between backups work"
+                    "backup: S3 — sync the WHOLE BUCKET (README \"Backup\"); \
+                     objects are immutable, so incremental syncs between backups \
+                     work, and fsck's bytes_missing catches stragglers afterwards"
                 );
             }
             if !report.missing.is_empty() {
@@ -698,6 +698,22 @@ pub fn backup(data: &Path, dest: &Path) -> i32 {
     }
 }
 
+/// A backup's age in whole days/hours/minutes/seconds (largest unit with
+/// the next one for context) — the restore duty line's key.
+fn backup_age(elapsed_ns: i64) -> String {
+    let secs = (elapsed_ns / 1_000_000_000).max(0);
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3_600, secs % 3_600 / 60);
+    if d > 0 {
+        format!("{d} day(s) {h} hour(s)")
+    } else if h > 0 {
+        format!("{h} hour(s) {m} minute(s)")
+    } else if m > 0 {
+        format!("{m} minute(s) {}s", secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
 /// `naatre restore --data <target-dir> <backup-dir>`: restore one backup
 /// directory into a data dir for the configured backend. Verifies the
 /// manifest and every artifact's SHA256 into staging BEFORE any write to
@@ -705,13 +721,18 @@ pub fn backup(data: &Path, dest: &Path) -> i32 {
 /// `--force`; restores DB then objects; checks object PRESENCE (not
 /// reachability) and points the operator at fsck. Exit 0 on success, 1 on
 /// error.
-pub fn restore_backup(target: &Path, backup_dir: &Path, force: bool) -> i32 {
+pub fn restore_backup(
+    target: &Path,
+    backup_dir: &Path,
+    force: bool,
+    allow_missing: Option<&str>,
+) -> i32 {
     println!("restore: target {}", target.display());
     let cfg = match load_backend_or_fail(target) {
         Ok(c) => c,
         Err(code) => return code,
     };
-    match naatre_server::backup::restore(target, &cfg, backup_dir, force) {
+    match naatre_server::backup::restore(target, &cfg, backup_dir, force, allow_missing) {
         Ok(report) => {
             println!(
                 "restore: manifest format 1 (naatre backup, schema v{}, meta {}, blob {})",
@@ -728,6 +749,27 @@ pub fn restore_backup(target: &Path, backup_dir: &Path, force: bool) -> i32 {
             println!(
                 "restore: changesets {}, objects {} present in the target CAS",
                 report.counts.changesets, report.objects_present
+            );
+            if !report.waived.is_empty() {
+                println!(
+                    "restore: --allow-missing waived {} object(s): {}",
+                    report.waived.len(),
+                    report.waived.join(", ")
+                );
+            }
+            // The pre-redaction duty, keyed to the backup's age (the
+            // compliance item): redactions recorded only in the destroyed
+            // store must be re-applied — fsck cannot detect their absence.
+            let now_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0);
+            println!(
+                "restore: DUTY — this backup is {} old (taken {}): any redaction recorded \
+                 only in the destroyed store since then must be re-applied (fsck cannot \
+                 detect them)",
+                backup_age(now_ns.saturating_sub(report.created_ns)),
+                format_args!("unix {}", report.created_ns / 1_000_000_000),
             );
             println!(
                 "restore: now run `naatre fsck --data {}` — restore does not \
