@@ -97,7 +97,10 @@ pub async fn get_ref(
 /// must also be a fast-forward: the new target has to contain the current
 /// one (merge-base(current, new) == current), else 422 `not_fast_forward`
 /// — a target that is not a changeset of this repo cannot prove
-/// containment and is refused identically.
+/// containment and is refused identically. A tombstoned target — active
+/// or purged — is refused with 410 `object_redacted` (M10b), create and
+/// move alike: a ref onto a tombstoned changeset would stall its purge
+/// forever.
 #[utoipa::path(
     post,
     path = "/v1/repos/{r}/refs/{name}",
@@ -113,6 +116,7 @@ pub async fn get_ref(
         (status = 403, description = "Authenticated without the admin role"),
         (status = 404, description = "No such repo, or CAS expected a ref that does not exist"),
         (status = 409, description = "CAS lost (`ref_conflict`); details carry the current version and target"),
+        (status = 410, description = "The target is tombstoned in this repo (`object_redacted`) — create or move, active or purged"),
         (status = 422, description = "`main` moves only via land; or the move is not a fast-forward (`not_fast_forward`)")
     )
 )]
@@ -155,6 +159,22 @@ pub async fn cas_ref(
                         format!("no repo named {repo_name:?} on this server"),
                     )
                 })?;
+
+            // The tombstone gate (M10b): a ref whose target is tombstoned
+            // in this repo — active or purged — is refused with 410
+            // `object_redacted`, creates and moves alike. The purge's
+            // selection refuses ids under a ref, so writing one onto a
+            // tombstoned target would stall that changeset's purge
+            // forever.
+            if db::redaction_active(conn, repo_id, &target).map_err(ApiError::log_internal)? {
+                return Err(ApiError::new(
+                    ApiCode::ObjectRedacted,
+                    format!(
+                        "ref target {} is redacted in this repo; the ref write is refused",
+                        target.to_hex()
+                    ),
+                ));
+            }
 
             // Fast-forward gate (M2a): when this CAS would move an existing
             // ref, the new target must CONTAIN the old one — merge-base(old,

@@ -284,20 +284,28 @@
         "description": "One change of a changeset fetch response.",
         "properties": {
           "blob": {
-            "description": "Hex blob id; null for deletes.",
+            "description": "Hex blob id; null for deletes and for a redacted blob (the\npath-level fact serves, the pointer to redacted content does not).",
             "type": [
               "string",
               "null"
             ]
           },
           "exec": {
-            "type": "boolean"
+            "description": "Exec bit; null on a redacted change (a content attribute of\nredacted content does not serve).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "op": {
             "type": "string"
           },
           "path": {
             "type": "string"
+          },
+          "redacted": {
+            "description": "True when this change's blob is tombstoned in this repo: `blob`,\n`size`, and `exec` serve as null (the tombstone wins over the\nstored row — active or purged).",
+            "type": "boolean"
           },
           "size": {
             "format": "int64",
@@ -311,7 +319,7 @@
         "required": [
           "path",
           "op",
-          "exec"
+          "redacted"
         ],
         "type": "object"
       },
@@ -1096,7 +1104,7 @@
         "description": "Mark response (201 on a new tombstone; 200 on an idempotent re-POST —\nthe recorded row, the earliest `marked_ns` stands — or on a RE-ARM of a\npurged tombstone, `rearmed: true`).",
         "properties": {
           "rearmed": {
-            "description": "True when this call re-armed a PURGED tombstone (new `marked_ns`,\n`purged_ns` cleared, a new `redact` audit row). Never true on the\n201 insert.",
+            "description": "True when this call re-armed a PURGED tombstone (new `marked_ns`,\na new `redact` audit row). `purged_ns` cleared when something\nremains to purge (the tombstone re-enters the work list); for a\nchangeset id whose row the purge already deleted, `purged_ns`\nre-stamps to this call's time — nothing remains to purge, and the\ntombstone reports purged with the write gates still armed. Never\ntrue on the 201 insert.",
             "type": "boolean"
           },
           "redaction": {
@@ -1135,7 +1143,7 @@
         "type": "object"
       },
       "RejectedEntry": {
-        "description": "A batch-PUT rejection: the entry id and its error code (`malformed` for\nhex/base64/hash mismatches, `too_large` over the 64 MiB cap).",
+        "description": "A batch-PUT rejection: the entry id and its error code (`malformed` for\nhex/base64/hash mismatches, `too_large` over the 64 MiB cap,\n`redacted` for a tombstoned id — active or purged).",
         "properties": {
           "code": {
             "type": "string"
@@ -1443,7 +1451,11 @@
         "description": "One entry of a tree listing.",
         "properties": {
           "exec": {
-            "type": "boolean"
+            "description": "Exec bit; null on a redacted entry (a content attribute of\nredacted content does not serve).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "kind": {
             "description": "`file` | `dir`.",
@@ -1453,18 +1465,18 @@
             "type": "string"
           },
           "object_id": {
-            "description": "Blob id for files, child tree id for dirs — null with\n`redacted: true` when the entry's blob is tombstoned in this repo\n(M10b SEC gate: the name serves, the pointer to redacted content,\nits size, and its hash do not).",
+            "description": "Blob id for files, child tree id for dirs — null with\n`redacted: true` when the entry's blob is tombstoned in this repo\n(M10b SEC gate: the name serves, the pointer to redacted content,\nits size, exec bit, and hash do not).",
             "type": [
               "string",
               "null"
             ]
           },
           "redacted": {
-            "description": "True when this entry's blob is tombstoned in this repo and its\npointer/size are withheld.",
+            "description": "True when this entry's own blob is tombstoned in this repo and its\npointer/size/exec are withheld. A size-null dir with\n`redacted: false` carries the aggregate mask above.",
             "type": "boolean"
           },
           "size": {
-            "description": "File: content bytes. Dir: recursive total. Null on a redacted\nentry (the size of redacted content does not serve).",
+            "description": "File: content bytes. Dir: recursive total. Null on a redacted\nentry, and null on a dir entry under which ANY descendant blob is\ntombstoned in this repo (the aggregate would embed the redacted\nfile's exact byte length — listing the parent and subtracting the\nchildren would recover it).",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -1476,7 +1488,6 @@
         "required": [
           "name",
           "kind",
-          "exec",
           "redacted"
         ],
         "type": "object"
@@ -1685,7 +1696,7 @@
             "description": "No principal with that name"
           }
         },
-        "summary": "Deletes a principal (admin, audited `principal_delete`): its token rows\nand principals row are deleted, and every `audit_log` row it acted on is\npseudonymized to `deleted:<name>` (the log is append-only on a\nsecurity-accountability basis — rows are rewritten in the actor column\nonly; `details_json` payloads are history and stay). History attribution\n(`changesets.principal`, `refs.last_principal`, `lands.*`,\n`snapshots.principal`) is left as-is: attribution survives unless the\nchangesets are themselves tombstoned. Unknown principal → 404.",
+        "summary": "Deletes a principal (admin, audited `principal_delete`): its token rows\nand principals row are deleted, and every `audit_log` row it acted on is\npseudonymized to `deleted:<opaque token>` — a fresh 16-hex-char token\nper deletion event (the log is append-only on a\nsecurity-accountability basis — rows are rewritten in the actor column\nonly; `details_json` payloads are history and stay, the erasure\nreceipt's own details carrying the token, never the name). History\nattribution (`changesets.principal`, `refs.last_principal`, `lands.*`,\n`snapshots.principal`) is left as-is: attribution survives unless the\nchangesets are themselves tombstoned. Unknown principal → 404.",
         "tags": [
           "routes::principals"
         ]
@@ -1964,7 +1975,7 @@
             "description": "The changeset is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Fetches one changeset with its parents and file changes (any\nauthenticated principal; ids and path metadata are repo-visible). An\nactively-tombstoned changeset answers 410 `object_redacted` (M10b —\nattribution never serves after the mark; the row itself persists until\nthe redaction purge).",
+        "summary": "Fetches one changeset with its parents and file changes (any\nauthenticated principal; ids and path metadata are repo-visible). A\ntombstoned changeset — active or purged — answers 410\n`object_redacted` (M10b — attribution never serves after the mark; the\npurge later reclaims the rows). Each change whose blob is tombstoned in\nthis repo serves with `redacted: true` and null blob/size (the same\nmasking rule the diff route applies to its sides).",
         "tags": [
           "routes::changesets"
         ]
@@ -2195,7 +2206,10 @@
             "description": "No such repo, or head is not a changeset of this repo"
           },
           "409": {
-            "description": "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head"
+            "description": "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head; or redacted_base: the base chain crosses a redacted changeset (details.redacted names it)"
+          },
+          "410": {
+            "description": "The rebase body is tombstoned in this repo (`object_redacted`, active or purged): the reproduced changeset id, or a blob id the rebase writes or references — the key stays unsettled and no rows are written"
           },
           "413": {
             "description": "A rebased changeset or merged tree exceeds the 16 MiB canonical cap"
@@ -2459,6 +2473,9 @@
           "404": {
             "description": "No such repo"
           },
+          "410": {
+            "description": "A tombstoned id survived the per-entry probe to the record step's re-check (`object_redacted`, active or purged) — the whole record refuses and no rows are written"
+          },
           "422": {
             "description": "More than 256 entries"
           }
@@ -2517,7 +2534,7 @@
             "description": "More than 256 ids"
           }
         },
-        "summary": "Batch fetch (any authenticated principal), membership-enforced: only ids\nwith a `repo_blobs` row for this repo are served; the rest land in\n`missing`. Actively-tombstoned ids (M10b) are gated out of `objects` and\nreported in `redacted` — never served, never silently `missing`. More\nthan 256 ids → 422; a non-hex id → 400.",
+        "summary": "Batch fetch (any authenticated principal), membership-enforced: only ids\nwith a `repo_blobs` row for this repo are served; the rest land in\n`missing`. Tombstoned ids — active or purged (M10b) — are gated out of `objects` and\nreported in `redacted` — never served, never silently `missing`. More\nthan 256 ids → 422; a non-hex id → 400.",
         "tags": [
           "routes::objects"
         ]
@@ -2614,7 +2631,7 @@
             "description": "The object is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Raw fetch (any authenticated principal), redaction-gated then\nmembership-enforced: an actively-tombstoned id answers 410\n`object_redacted` (M10b — the tombstone wins over everything); no\n`repo_blobs` row for this repo → 404 `object_not_found` (a cross-repo\nid is indistinguishable from a nonexistent one). Serves the raw\ndecompressed bytes as `application/octet-stream` with\n`X-Content-Type-Options: nosniff`.",
+        "summary": "Raw fetch (any authenticated principal), redaction-gated then\nmembership-enforced: a tombstoned id — active or purged — answers 410\n`object_redacted` (M10b — the tombstone wins over everything); no\n`repo_blobs` row for this repo → 404 `object_not_found` (a cross-repo\nid is indistinguishable from a nonexistent one). Serves the raw\ndecompressed bytes as `application/octet-stream` with\n`X-Content-Type-Options: nosniff`.",
         "tags": [
           "routes::objects"
         ]
@@ -2684,6 +2701,9 @@
           },
           "404": {
             "description": "No such repo"
+          },
+          "410": {
+            "description": "The id is tombstoned in this repo (`object_redacted`, active or purged) — re-upload refused before any bytes are written"
           },
           "413": {
             "description": "Payload over the 64 MiB blob cap"
@@ -2819,7 +2839,7 @@
             "description": "Authenticated without the admin role"
           },
           "404": {
-            "description": "No such repo; or the target id is not an object of this repo"
+            "description": "No such repo; or the target is not a blob or changeset known to this repo, imported content included"
           },
           "422": {
             "description": "kind is not `blob`/`changeset`, the reason is empty, or the id is already tombstoned with the other kind"
@@ -2878,7 +2898,7 @@
         ]
       },
       "post": {
-        "description": "Rules: `main` is rejected with 422 (`main` moves only via land, M4);\n`target` must be 64 lowercase hex (else 400); `expected: null` creates\nthe ref (409 `ref_conflict` if it exists); `expected: {\"version\": v}`\nmoves only while the current version is `v` (stale → 409\n`ref_conflict` with `current_version`/`current_target` details). A move\nmust also be a fast-forward: the new target has to contain the current\none (merge-base(current, new) == current), else 422 `not_fast_forward`\n— a target that is not a changeset of this repo cannot prove\ncontainment and is refused identically.",
+        "description": "Rules: `main` is rejected with 422 (`main` moves only via land, M4);\n`target` must be 64 lowercase hex (else 400); `expected: null` creates\nthe ref (409 `ref_conflict` if it exists); `expected: {\"version\": v}`\nmoves only while the current version is `v` (stale → 409\n`ref_conflict` with `current_version`/`current_target` details). A move\nmust also be a fast-forward: the new target has to contain the current\none (merge-base(current, new) == current), else 422 `not_fast_forward`\n— a target that is not a changeset of this repo cannot prove\ncontainment and is refused identically. A tombstoned target — active\nor purged — is refused with 410 `object_redacted` (M10b), create and\nmove alike: a ref onto a tombstoned changeset would stall its purge\nforever.",
         "operationId": "cas_ref",
         "parameters": [
           {
@@ -2935,6 +2955,9 @@
           },
           "409": {
             "description": "CAS lost (`ref_conflict`); details carry the current version and target"
+          },
+          "410": {
+            "description": "The target is tombstoned in this repo (`object_redacted`) — create or move, active or purged"
           },
           "422": {
             "description": "`main` moves only via land; or the move is not a fast-forward (`not_fast_forward`)"
@@ -3256,7 +3279,7 @@
                 }
               }
             },
-            "description": "The tree's entries"
+            "description": "The tree's entries. Entries whose blob is redacted in this repo serve with `redacted: true` and null object_id/size/exec; a dir entry with a redacted descendant serves size-null"
           },
           "400": {
             "description": "An id is not 64 lowercase hex"
@@ -3350,7 +3373,7 @@
                 }
               }
             },
-            "description": "The tree's entries; this repo has membership for it. Entries whose blob is redacted in this repo serve with `redacted: true` and null object_id/size"
+            "description": "The tree's entries; this repo has membership for it. Entries whose blob is redacted in this repo serve with `redacted: true` and null object_id/size/exec; a dir entry with a redacted descendant serves size-null"
           },
           "400": {
             "description": "Id is not 64 lowercase hex"
@@ -3362,7 +3385,7 @@
             "description": "No such repo, or no tree membership for this repo"
           }
         },
-        "summary": "Reads one tree node's entries (any authenticated principal with repo\naccess). Tree ids are content-addressed, so identical subtrees share one\nrow across repos; the read is gated on `repo_trees` membership — 200 iff\n*this* repo wrote the tree (directly or as part of its derivation), 404\nfor any repo that never wrote it, even though the id exists elsewhere.\nShared subtrees are readable by every repo that wrote them (see\n`docs/design.md`, honest-scope section). Entries whose blob is\ntombstoned in this repo — active or purged — serve masked (M10b SEC\ngate, the diff route's per-entry shape: file names/sizes/hashes of\nredacted objects never serve, including via a live root tree).",
+        "summary": "Reads one tree node's entries (any authenticated principal with repo\naccess). Tree ids are content-addressed, so identical subtrees share one\nrow across repos; the read is gated on `repo_trees` membership — 200 iff\n*this* repo wrote the tree (directly or as part of its derivation), 404\nfor any repo that never wrote it, even though the id exists elsewhere.\nShared subtrees are readable by every repo that wrote them (see\n`docs/design.md`, honest-scope section). Entries whose blob is\ntombstoned in this repo — active or purged — serve masked (M10b SEC\ngate, the diff route's per-entry shape: file names/sizes/hashes of\nredacted objects never serve, including via a live root tree), and a\ndir entry whose recursive blob closure carries a tombstone serves\nsize-null (the aggregate mask).",
         "tags": [
           "routes::trees"
         ]

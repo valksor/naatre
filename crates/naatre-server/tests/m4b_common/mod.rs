@@ -299,6 +299,20 @@ pub fn cs_body(parents: Value, changes: Value, message: &str) -> Value {
     })
 }
 
+/// `cs_body` with an explicit `timestamp_ns`: the id-determinism pins
+/// recreate an EXACT canonical body, which needs the original commit's
+/// stamp (an omitted field defaults to the server clock, hashing to a
+/// different id).
+pub fn cs_body_at(parents: Value, changes: Value, message: &str, timestamp_ns: u64) -> Value {
+    json!({
+        "parents": parents,
+        "author": "Agent <agent@naatre.dev>",
+        "message": message,
+        "timestamp_ns": timestamp_ns,
+        "changes": changes,
+    })
+}
+
 pub async fn land_on(app: &Router, token: &str, head: &str, key: &str) -> Resp {
     post_json_on(
         app,

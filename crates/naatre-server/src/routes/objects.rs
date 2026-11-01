@@ -75,7 +75,8 @@ pub struct BatchPutRequest {
 }
 
 /// A batch-PUT rejection: the entry id and its error code (`malformed` for
-/// hex/base64/hash mismatches, `too_large` over the 64 MiB cap).
+/// hex/base64/hash mismatches, `too_large` over the 64 MiB cap,
+/// `redacted` for a tombstoned id — active or purged).
 #[derive(Serialize, ToSchema)]
 pub struct RejectedEntry {
     pub id: String,
@@ -160,15 +161,24 @@ pub async fn present(
     let cas = Arc::clone(&state.cas);
     let (missing, redacted) = state
         .blocking(move || {
-            let has = cas.has(&ids).map_err(ApiError::log_internal)?;
+            // Tombstoned ids never reach the CAS probe: the tombstone
+            // already decided their answer, so the backend is not asked
+            // about them.
+            let probe: Vec<Id> = ids
+                .iter()
+                .filter(|id| !tombstoned.contains(id))
+                .copied()
+                .collect();
+            let has = cas.has(&probe).map_err(ApiError::log_internal)?;
             let mut missing = Vec::new();
             let mut redacted = Vec::new();
-            for (id, present) in ids.iter().zip(has) {
+            let mut has = has.into_iter();
+            for id in &ids {
                 if tombstoned.contains(id) {
                     // The tombstone wins over the CAS answer: never an
                     // invitation to re-upload.
                     redacted.push(id.to_hex());
-                } else if !present {
+                } else if !has.next().unwrap_or(false) {
                     missing.push(id.to_hex());
                 }
             }
@@ -196,6 +206,7 @@ pub async fn present(
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the writer role"),
         (status = 404, description = "No such repo"),
+        (status = 410, description = "The id is tombstoned in this repo (`object_redacted`, active or purged) — re-upload refused before any bytes are written"),
         (status = 413, description = "Payload over the 64 MiB blob cap")
     )
 )]
@@ -234,7 +245,7 @@ pub async fn put_raw(
         .blocking(move || put_and_size(cas.as_ref(), &id, &payload_owned))
         .await?;
 
-    let existed = record_object(&state, repo_id, id, payload.len() as i64, csize).await?;
+    let existed = record_object(&state, repo_id, &repo, id, payload.len() as i64, csize).await?;
     let status = if existed {
         StatusCode::OK
     } else {
@@ -275,18 +286,24 @@ fn object_redacted(id_hex: &str, repo: &str) -> ApiError {
 /// transaction (`repo_id`-scoped, purged tombstones included): a redacted
 /// id answers 410 `object_redacted` and its row is never written — the
 /// authoritative half of put_raw's early probe, closing the probe-to-
-/// record race against a concurrent mark. Returns whether the row already
-/// existed. `pub` for the M10a race pin (the fs and S3 suites drive this
-/// step after a full sweep).
+/// record race against a concurrent mark. The refusal also condemns the
+/// bytes the CAS step already wrote into the GC ledger (scope blob, in a
+/// step committed before the refusal's rollback): no row will ever name
+/// them, so the sweep's reference re-check — the cross-repo safety — is
+/// the path that reclaims them. Returns whether the row already existed.
+/// `pub` for the M10a race pin (the fs and S3 suites drive this step
+/// after a full sweep).
 pub async fn record_object(
     state: &AppState,
     repo_id: i64,
+    repo: &str,
     id: Id,
     size: i64,
     csize: i64,
 ) -> Result<bool, ApiError> {
     let cas = Arc::clone(&state.cas);
     let now_i = state.now_ns() as i64;
+    let repo = repo.to_string();
     state
         .write(move |store| {
             let tx = store
@@ -294,7 +311,17 @@ pub async fn record_object(
                 .transaction_immediate()
                 .map_err(ApiError::log_internal)?;
             if db::redaction_active(&tx, repo_id, &id).map_err(ApiError::log_internal)? {
-                return Err(object_redacted(&id.to_hex(), "this repo"));
+                // Commit the ledger condemnation BEFORE the refusal
+                // unwinds: the error return drops this transaction with a
+                // ROLLBACK, and the row must survive it — it is the only
+                // record naming the bytes the CAS step already wrote.
+                // Nothing else has been written at this point (the
+                // refusal precedes the presence check and the upsert), so
+                // the early commit carries the condemnation alone.
+                db::gc_candidates_upsert(&tx, db::GC_SCOPE_BLOB, &[id], now_i)
+                    .map_err(ApiError::log_internal)?;
+                tx.commit().map_err(ApiError::log_internal)?;
+                return Err(object_redacted(&id.to_hex(), &repo));
             }
             if !BlobStore::has(cas.as_ref(), &[id]).map_err(ApiError::log_internal)?[0] {
                 return Err(ApiError::new(
@@ -324,6 +351,7 @@ pub async fn record_object(
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the writer role"),
         (status = 404, description = "No such repo"),
+        (status = 410, description = "A tombstoned id survived the per-entry probe to the record step's re-check (`object_redacted`, active or purged) — the whole record refuses and no rows are written"),
         (status = 422, description = "More than 256 entries")
     )
 )]
@@ -400,7 +428,7 @@ pub async fn create_batch(
     // …then the rows, in one single-writer transaction — the batch form of
     // [`record_object`]'s contract ([`record_batch`]).
     if !rows.is_empty() {
-        record_batch(&state, repo_id, rows).await?;
+        record_batch(&state, repo_id, &repo, rows).await?;
     }
 
     Ok(Json(BatchPutResponse { stored, rejected }))
@@ -417,14 +445,20 @@ pub async fn create_batch(
 /// purged included): any redacted id fails the whole record with 410
 /// `object_redacted` naming them — the authoritative half of the route's
 /// per-entry probe, closing the probe-to-record race against a concurrent
-/// mark. `pub` for the M10a race pin.
+/// mark. The refusal also condemns EVERY id's already-written bytes into
+/// the GC ledger (scope blob, committed before the refusal's rollback —
+/// the batch form of [`record_object]'s orphan rule: the clean siblings'
+/// rows die with the same rollback, so their bytes orphan identically).
+/// `pub` for the M10a race pin.
 pub async fn record_batch(
     state: &AppState,
     repo_id: i64,
+    repo: &str,
     rows: Vec<(Id, i64, i64)>,
 ) -> Result<(), ApiError> {
     let cas = Arc::clone(&state.cas);
     let now_i = state.now_ns() as i64;
+    let repo = repo.to_string();
     state
         .write(move |store| {
             let tx = store
@@ -436,7 +470,19 @@ pub async fn record_batch(
                 db::redactions_active_among(&tx, repo_id, &ids).map_err(ApiError::log_internal)?;
             if !redacted.is_empty() {
                 let hexes: Vec<String> = redacted.iter().map(Id::to_hex).collect();
-                return Err(object_redacted(&hexes.join(", "), "this repo"));
+                // Committed before the refusal unwinds (the error return
+                // rolls this transaction back — the condemnation must
+                // survive it; nothing else has been written yet). EVERY
+                // written id is condemned, not only the redacted ones: the
+                // whole batch's bytes are already in the CAS and no row
+                // survives the refusal for any of them. A later legitimate
+                // record self-heals — the row upsert clears the
+                // condemnation, and the sweep's in-transaction
+                // re-verification spares re-referenced candidates.
+                db::gc_candidates_upsert(&tx, db::GC_SCOPE_BLOB, &ids, now_i)
+                    .map_err(ApiError::log_internal)?;
+                tx.commit().map_err(ApiError::log_internal)?;
+                return Err(object_redacted(&hexes.join(", "), &repo));
             }
             let present = BlobStore::has(cas.as_ref(), &ids).map_err(ApiError::log_internal)?;
             let swept: Vec<String> = rows
@@ -465,7 +511,7 @@ pub async fn record_batch(
 
 /// Batch fetch (any authenticated principal), membership-enforced: only ids
 /// with a `repo_blobs` row for this repo are served; the rest land in
-/// `missing`. Actively-tombstoned ids (M10b) are gated out of `objects` and
+/// `missing`. Tombstoned ids — active or purged (M10b) — are gated out of `objects` and
 /// reported in `redacted` — never served, never silently `missing`. More
 /// than 256 ids → 422; a non-hex id → 400.
 #[utoipa::path(
@@ -562,7 +608,7 @@ pub async fn get_batch(
 }
 
 /// Raw fetch (any authenticated principal), redaction-gated then
-/// membership-enforced: an actively-tombstoned id answers 410
+/// membership-enforced: a tombstoned id — active or purged — answers 410
 /// `object_redacted` (M10b — the tombstone wins over everything); no
 /// `repo_blobs` row for this repo → 404 `object_not_found` (a cross-repo
 /// id is indistinguishable from a nonexistent one). Serves the raw

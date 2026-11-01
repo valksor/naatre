@@ -102,7 +102,8 @@ TLS-terminating reverse proxy in front (see below).
   `docs/design.md`).
 - **`main` moves only via land** (monotonic, server-side rebase); other
   refs move via admin compare-and-swap; force-moves validate
-  fast-forward-only.
+  fast-forward-only. A ref write onto a tombstoned target answers 410
+  `object_redacted` — a ref would stall that changeset's purge forever.
 
 ## TLS and reverse proxies
 
@@ -247,9 +248,15 @@ object in one repo — every serving path then refuses it
 immediately (by-id fetches answer 410 `object_redacted`, `/log` and
 path-history drop the node, diff/file degrade structurally, blame
 degrades at the tombstone with the author withheld, a snapshot holding
-the blob becomes unrestorable inside its TTL, tree listings mask the
-redacted entry's pointer and size, and a land whose base
-chain crosses it answers 409 `redacted_base`) — while the GC's
+the blob serves its tree listing masked and restores only its available
+files — the redacted blob's own snapshot fetch answers 410
+`object_redacted` immediately, TTL irrelevant, and the content never
+returns — tree listings mask the redacted entry's pointer, size, and
+exec bit (the name serves by design; the entry's own size, exec bit,
+and hash do not, and a directory whose aggregate would embed a redacted
+file's byte length serves size-null — subtracting children from a
+parent listing recovers nothing), and a land whose base chain crosses
+it answers 409 `redacted_base`) — while the GC's
 redaction phase reclaims the bytes/rows later, and only when NO repo
 still references the content (two repos sharing a subtree redact
 independently; the other repo keeps serving).
@@ -260,15 +267,21 @@ addressed by hash, a same-content re-upload recreates the same id — so
 every write boundary refuses a tombstoned id (active or purged): blob
 PUTs (raw and batch), changeset creates naming the id or referencing the
 blob, snapshot blob uploads and snapshot POSTs carrying it in their tree
-closure, and git imports. The refusal is PER-REPO, like the gate: a
+closure, ref writes onto the id, a land whose rebase body reproduces the
+id or references the blob, and git imports. The refusal is PER-REPO, like
+the gate: a
 tombstone binds only the repo that marked it, so a repo that never
 redacted the content keeps serving it and may re-upload it after another
 repo's purge reclaimed the bytes (changeset ids cannot collide this way —
 they hash the repo id). `POST /objects/present` reports a tombstoned id
 as `redacted`, never `missing` — sync clients are never invited to
 re-upload. A re-mark on a purged tombstone RE-ARMS it (a fresh
-`marked_ns`, the purge state cleared, and a new `redact` audit row —
-never a silent no-op); a re-mark naming the other kind is refused. The
+`marked_ns` and a new `redact` audit row — never a silent no-op), and
+the purge state clears only while something remains to purge: a blob
+re-arm re-enters the purge work list, while a fully purged CHANGESET's
+re-arm keeps the tombstone purged (re-stamped — nothing remains to
+purge, the write gates stay armed); a re-mark naming the other kind is
+refused. The
 tombstone row itself — path + date only — is retained indefinitely as
 the redaction record; the purge stamps `purged_ns` but does not delete
 it.
@@ -278,7 +291,9 @@ goes through `POST/GET /v1/repos/{r}/redactions` (admin, audited):
 the tombstone ROW carries path + date only — never an author, no
 reason, no actor (free text can carry personal data; the actor and the
 reason live ONLY in the audited `redact` action, which is the
-accountability record).
+accountability record). Admins: do not put data-subject names in the
+free-text reason — the reason is retained indefinitely with the audit
+row, so name the content (path or id), not the person.
 
 `fsck` is read-only: dangling-reference anti-joins (a nonzero count
 anywhere is dirt), reachability counts (total vs marked), CAS presence
@@ -323,7 +338,12 @@ with native lands, refuses with `git_history_diverged` — no merge, no
 rewrite. An import into a repo that has redacted content the source still
 carries refuses too: a tombstoned blob or changeset id (active or purged)
 fails the import naming the id — redacted content never re-enters through
-the import door.
+the import door. Per-commit durability means the commits before the
+refusing one stay imported. Whether a re-run helps depends on the cause:
+transient failures (a lost race, a busy server) are resumable — re-run
+and the fast-forward continues from where the run stopped; a redaction
+refusal is PERMANENT — no un-mark exists, so the content must be removed
+from the source history itself before that commit can ever import.
 
 Import discloses its two content mutations and its skip behavior:
 
@@ -553,17 +573,24 @@ Personal-data carriers, explicitly:
   (the actor history stays linkable without keeping the name).
 - **`audit_log`** — `principal` plus the actor fields in `details_json`.
   The log is append-only and retained **indefinitely on a
-  security-accountability basis**, with ONE sanctioned rewrite: principal
-  deletion pseudonymizes the deleted principal's actor rows (the
-  `deleted:<random-id>` above) in place — the only UPDATE the log ever
-  takes. `details_json` payloads are otherwise history and stay, two
-  limits included: the `principal_delete` row's own details name the
-  deleted principal (the erasure receipt — the record that erasure
-  happened), and admin-supplied free text (redaction reasons) is never
-  scrubbed.
-- **Snapshot blob content** expires at the TTL (rows go with it) — and a
-  redacted blob id makes every snapshot holding it unrestorable
-  immediately, ahead of the TTL.
+  security-accountability basis**, with sanctioned in-place rewrites at
+  principal deletion only: the deleted principal's actor rows are
+  pseudonymized to the `deleted:<random-id>` token above, and that same
+  token replaces the NAME field in the principal's own `token_create`
+  rows' `details_json` (parsed and rewritten by key — the role and every
+  other key stay) — these are the only UPDATEs the log ever takes.
+  `details_json` payloads are otherwise history and stay, with exactly
+  what survives stated: the ROLE in the token_create rows, the per-event
+  pseudonym token in the `principal_delete` row's own details (the
+  erasure receipt — the record that erasure happened, linkable to the
+  rewritten actor rows without naming the principal), and admin-supplied
+  free text (redaction reasons), which is never scrubbed.
+- **Snapshot blob content** expires at the TTL (rows go with it). A
+  redacted blob id is gated ahead of the TTL: the snapshot's tree
+  listing serves the entry masked and a restore brings every available
+  file (reporting masked paths unavailable) — but the redacted blob's
+  own snapshot FETCH answers 410 `object_redacted` immediately, TTL
+  irrelevant; the content never returns.
 
 **The honest limit**: history attribution survives principal deletion —
 `changesets.principal`, `refs.last_principal`, and the lands rows keep the

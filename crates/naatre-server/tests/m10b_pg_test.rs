@@ -475,3 +475,123 @@ async fn pg_redaction_purge() {
     assert_eq!(report.redactions_purged, 1, "{report:?}");
     assert_eq!(report.redaction_purge_drift, 0);
 }
+
+/// The dir-aggregate mask leg on real Postgres (pre-commit correction):
+/// the recursive-CTE probe behind `/trees` listings must run on the PG
+/// dialect — the seed selects from `trees` (typed bytea), never bare
+/// VALUES params, which the recursion would reject as text-vs-bytea. A
+/// repo whose tree carries a dir with a redacted descendant plus a clean
+/// sibling dir: the dirty dir serves size-null, the sibling keeps its
+/// size, and the masked file entry serves object_id/size/exec null with
+/// `redacted: true`.
+#[tokio::test]
+async fn pg_tree_dir_aggregate_mask() {
+    let Some(ctx) = open_ctx() else {
+        return;
+    };
+    let root = ctx
+        .with_seed(|conn| {
+            let hex: Vec<u8> = conn
+                .query_row_map(
+                    &Sql::plain("SELECT target FROM refs WHERE name = 'main'"),
+                    &pv![],
+                    |r| r.get(0),
+                )
+                .expect("main target");
+            let arr: [u8; 32] = hex.try_into().expect("32 bytes");
+            Id(arr).to_hex()
+        })
+        .await;
+
+    let secret = b"pg-dir-secret!".to_vec();
+    let secret_hex = object_id(Kind::Blob, &secret).to_hex();
+    let clean = b"pg-dir-clean!".to_vec();
+    let clean_hex = object_id(Kind::Blob, &clean).to_hex();
+    for hex in [&secret_hex, &clean_hex] {
+        let content = if *hex == secret_hex { &secret } else { &clean };
+        let put = axum::http::Request::builder()
+            .method("PUT")
+            .uri(format!("/v1/repos/{REPO}/objects/{hex}"))
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", ctx.writer),
+            )
+            .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+            .body(axum::body::Body::from(content.clone()))
+            .unwrap();
+        let res = ctx.app.clone().oneshot(put).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+    let (status, body) = post_json_on(
+        &ctx.app,
+        &format!("/v1/repos/{REPO}/changesets"),
+        &ctx.writer,
+        &json!({
+            "parents": [root],
+            "author": "Agent <agent@naatre.dev>",
+            "message": "dirs",
+            "changes": [
+                {"path": "d/clean.txt", "op": "add", "blob": clean_hex, "size": clean.len(), "exec": false},
+                {"path": "d/secret.txt", "op": "add", "blob": secret_hex, "size": secret.len(), "exec": false},
+                {"path": "sib/other.txt", "op": "add", "blob": clean_hex, "size": clean.len(), "exec": false},
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let root_tree = body["root_tree_id"].as_str().unwrap().to_string();
+
+    let (status, body) = post_json_on(
+        &ctx.app,
+        &format!("/v1/repos/{REPO}/redactions"),
+        &ctx.admin,
+        &json!({ "id": secret_hex, "kind": "blob", "reason": "pg dir-aggregate leg" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // The listing itself: a PG-side statement failure would 500 here.
+    let (status, body) = get_on(
+        &ctx.app,
+        &format!("/v1/repos/{REPO}/trees/{root_tree}"),
+        &ctx.writer,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entries = body["entries"].as_array().unwrap();
+    let d = entries.iter().find(|e| e["name"] == "d").unwrap();
+    assert_eq!(d["kind"], "dir");
+    assert_eq!(d["size"], Value::Null, "the aggregate mask: {body}");
+    assert_eq!(
+        d["redacted"], false,
+        "the dir's own tree id is not redacted"
+    );
+    assert!(d["object_id"].is_string(), "the child tree pointer serves");
+    let sib = entries.iter().find(|e| e["name"] == "sib").unwrap();
+    assert_eq!(
+        sib["size"],
+        json!(clean.len()),
+        "the sibling keeps its size"
+    );
+    assert_eq!(sib["redacted"], false);
+
+    // Inside the dirty dir: the masked file entry, all three fields null.
+    let d_tree = d["object_id"].as_str().unwrap().to_string();
+    let (status, body) = get_on(
+        &ctx.app,
+        &format!("/v1/repos/{REPO}/trees/{d_tree}"),
+        &ctx.writer,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entries = body["entries"].as_array().unwrap();
+    let masked = entries.iter().find(|e| e["name"] == "secret.txt").unwrap();
+    assert_eq!(masked["object_id"], Value::Null, "{body}");
+    assert_eq!(masked["size"], Value::Null);
+    assert_eq!(masked["exec"], Value::Null);
+    assert_eq!(masked["redacted"], true);
+    let ok = entries.iter().find(|e| e["name"] == "clean.txt").unwrap();
+    assert_eq!(ok["size"], json!(clean.len()));
+    assert_eq!(ok["exec"], json!(false));
+    assert_eq!(ok["redacted"], false);
+}

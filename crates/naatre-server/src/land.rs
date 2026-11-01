@@ -447,24 +447,6 @@ fn land_in_txn(
             continue;
         }
 
-        // Merged blob contents go into the CAS before any row commits
-        // (files before rows; Cas::put fsyncs before returning).
-        for (blob_id, bytes) in &merged.new_blobs {
-            if written_blobs.contains(blob_id) {
-                continue;
-            }
-            let put = cas.put(bytes).map_err(ApiError::log_internal)?.id;
-            if put != *blob_id {
-                return Err(ApiError::log_internal(format!(
-                    "merged blob id mismatch: computed {}, CAS wrote {}",
-                    blob_id.to_hex(),
-                    put.to_hex()
-                )));
-            }
-            written_blobs.push(*blob_id);
-        }
-        crash_point("after_blob_write");
-
         // The rebased changeset: new parent, same delta content, original
         // author/message/timestamp, landing principal, bumped generation.
         let cs = Changeset {
@@ -483,6 +465,86 @@ fn land_in_txn(
             other => ApiError::log_internal(other),
         })?;
         let new_id = object_id(Kind::Changeset, &canonical);
+
+        let mut blobs: Vec<Id> = Vec::new();
+        for c in &cs.changes {
+            if let (Op::Add | Op::Mod, Some(blob)) = (c.op, c.blob)
+                && !blobs.contains(&blob)
+            {
+                blobs.push(blob);
+            }
+        }
+
+        // The rebase-body tombstone gate (M10b), INSIDE the land's write
+        // transaction and before any CAS write or row: a rebased changeset
+        // id — or any blob id the rebase writes or references — that is
+        // tombstoned in this repo (active or purged) refuses the whole
+        // land with 410 `object_redacted`, the same shape POST /changesets
+        // refuses. Without it a byte-identical rebase of a purged
+        // changeset (the original timestamp reproducing the exact id)
+        // would recreate its body, and a rebase carrying redacted content
+        // would write its bytes. The chain nodes themselves were probed on
+        // the walk above. One batched probe per node (the changesets
+        // route's masking probe; chunked IN-lists) over the new id and
+        // every written/referenced blob id — the kinds hash disjoint
+        // domains, so one probe answers for both arms.
+        let mut gate_ids: Vec<Id> = blobs.clone();
+        gate_ids.extend(merged.new_blobs.iter().map(|(id, _)| *id));
+        gate_ids.push(new_id);
+        let offenders = db::redactions_active_among(conn, repo_id, &gate_ids)
+            .map_err(ApiError::log_internal)?;
+        if !offenders.contains(&new_id)
+            && let Some(blob) = offenders.iter().copied().min_by_key(|id| id.to_hex())
+        {
+            let count = offenders.len();
+            return Err(ApiError::new(
+                ApiCode::ObjectRedacted,
+                if count == 1 {
+                    format!(
+                        "blob {} is redacted in {repo}; referencing it is refused",
+                        blob.to_hex(),
+                        repo = cmd.repo_name
+                    )
+                } else {
+                    format!(
+                        "blob {} is redacted in {repo}; referencing it is refused \
+                         (+{} more redacted ids)",
+                        blob.to_hex(),
+                        count - 1,
+                        repo = cmd.repo_name
+                    )
+                },
+            ));
+        }
+        if offenders.contains(&new_id) {
+            return Err(ApiError::new(
+                ApiCode::ObjectRedacted,
+                format!(
+                    "changeset {} is redacted in {repo}; recreating it is refused",
+                    new_id.to_hex(),
+                    repo = cmd.repo_name
+                ),
+            ));
+        }
+
+        // Merged blob contents go into the CAS before any row commits
+        // (files before rows; Cas::put fsyncs before returning).
+        for (blob_id, bytes) in &merged.new_blobs {
+            if written_blobs.contains(blob_id) {
+                continue;
+            }
+            let put = cas.put(bytes).map_err(ApiError::log_internal)?.id;
+            if put != *blob_id {
+                return Err(ApiError::log_internal(format!(
+                    "merged blob id mismatch: computed {}, CAS wrote {}",
+                    blob_id.to_hex(),
+                    put.to_hex()
+                )));
+            }
+            written_blobs.push(*blob_id);
+        }
+        crash_point("after_blob_write");
+
         if new_id == *node {
             // Fast-forward: the node is already exactly on top of the tip
             // (same parent, same bytes → same id). It IS the rebased node —
@@ -493,15 +555,6 @@ fn land_in_txn(
         }
         tip_gen += 1;
         let (root_tree_id, _, trees) = merged.node.collect().map_err(map_derive)?;
-
-        let mut blobs: Vec<Id> = Vec::new();
-        for c in &cs.changes {
-            if let (Op::Add | Op::Mod, Some(blob)) = (c.op, c.blob)
-                && !blobs.contains(&blob)
-            {
-                blobs.push(blob);
-            }
-        }
 
         db::changeset_insert_rows(
             conn,

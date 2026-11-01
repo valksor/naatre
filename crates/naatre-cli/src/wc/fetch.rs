@@ -49,19 +49,32 @@ pub struct TreeFile {
     pub exec: bool,
 }
 
+/// A tree walk's result: the cone's available files, and the paths the
+/// server reports redacted (masked file entries — unavailable by policy,
+/// never an abort).
+#[derive(Clone, Debug, Default)]
+pub struct TreeWalk {
+    pub files: Vec<TreeFile>,
+    /// Paths whose masked entry (`object_id: null, size: null,
+    /// redacted: true`) the walk met inside the cone: the blob is
+    /// tombstoned in this repo, the name serves, the content never will.
+    pub redacted: Vec<String>,
+}
+
 /// Walks the server tree rooted at `root`, fetching only the trees on the
 /// paths to the sparse `prefixes` (an empty list walks everything — full
 /// clone is allowed at this size). Blob ids arrive via each parent's entry
 /// listing: a chain of custody from the changeset's declared root id.
 ///
 /// Errors when a prefix does not exist in the tree (as a dir or file) —
-/// the strict form clone and `sparse add` widen through.
+/// the strict form clone and `sparse add` widen through. A masked file
+/// entry is not an error: it is recorded in [`TreeWalk::redacted`].
 pub fn walk_tree(
     client: &Client,
     repo: &str,
     root: &Id,
     prefixes: &[String],
-) -> Result<Vec<TreeFile>, FetchError> {
+) -> Result<TreeWalk, FetchError> {
     walk_tree_inner(
         client,
         &format!("/v1/repos/{repo}/trees"),
@@ -82,7 +95,7 @@ pub fn walk_tree_allowing_missing_prefixes(
     repo: &str,
     root: &Id,
     prefixes: &[String],
-) -> Result<Vec<TreeFile>, FetchError> {
+) -> Result<TreeWalk, FetchError> {
     walk_tree_inner(
         client,
         &format!("/v1/repos/{repo}/trees"),
@@ -102,7 +115,7 @@ pub fn walk_snapshot_tree(
     snap_id: &Id,
     root: &Id,
     prefixes: &[String],
-) -> Result<Vec<TreeFile>, FetchError> {
+) -> Result<TreeWalk, FetchError> {
     walk_tree_inner(
         client,
         &format!("/v1/repos/{repo}/snapshots/{}/trees", snap_id.to_hex()),
@@ -118,11 +131,11 @@ fn walk_tree_inner(
     root: &Id,
     prefixes: &[String],
     require_prefixes: bool,
-) -> Result<Vec<TreeFile>, FetchError> {
+) -> Result<TreeWalk, FetchError> {
     for p in prefixes {
         path::validate(p).map_err(|e| FetchError::Local(format!("sparse prefix {p:?}: {e}")))?;
     }
-    let mut files = Vec::new();
+    let mut walk = TreeWalk::default();
     let mut visited: HashSet<Id> = HashSet::new();
     let mut descended: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<(String, Id)> = VecDeque::from([(String::new(), *root)]);
@@ -139,22 +152,34 @@ fn walk_tree_inner(
                 return Err(FetchError::Local("tree entry without a name".into()));
             };
             let kind = e["kind"].as_str().unwrap_or("");
-            let Some(oid) = e["object_id"].as_str().and_then(Id::from_hex) else {
-                return Err(FetchError::Local(format!(
-                    "tree entry {name:?} has a malformed object id"
-                )));
-            };
+            let oid = e["object_id"].as_str().and_then(Id::from_hex);
             let full = if dir.is_empty() {
                 name.to_string()
             } else {
                 format!("{dir}/{name}")
             };
             if kind == "file" {
+                let Some(oid) = oid else {
+                    // A masked file entry is valid server data (M10b):
+                    // object_id null, size null, redacted true — the blob
+                    // is tombstoned in this repo. The path is recorded as
+                    // unavailable and the walk proceeds; a null object id
+                    // WITHOUT the mask is still malformed server data.
+                    if e["redacted"].as_bool() == Some(true) {
+                        if under(prefixes, &full) {
+                            walk.redacted.push(full);
+                        }
+                        continue;
+                    }
+                    return Err(FetchError::Local(format!(
+                        "tree entry {name:?} has a malformed object id"
+                    )));
+                };
                 if under(prefixes, &full) {
                     // Grammar enforcement of untrusted server data.
                     path::validate(&full)
                         .map_err(|e| FetchError::Local(format!("server path {full:?}: {e}")))?;
-                    files.push(TreeFile {
+                    walk.files.push(TreeFile {
                         path: full,
                         blob: oid,
                         size: e["size"].as_u64().unwrap_or(0),
@@ -162,6 +187,14 @@ fn walk_tree_inner(
                     });
                 }
             } else {
+                // A masked dir entry cannot exist (a dir's object id is a
+                // tree id, never tombstoned content) — keep the strict
+                // abort.
+                let Some(oid) = oid else {
+                    return Err(FetchError::Local(format!(
+                        "tree entry {name:?} has a malformed object id"
+                    )));
+                };
                 // Descend when the dir is ON the path to a prefix (prefix
                 // under dir) or UNDER a prefix (dir inside the prefix's
                 // subtree — its files materialize).
@@ -180,7 +213,12 @@ fn walk_tree_inner(
     }
     if require_prefixes {
         for p in prefixes {
-            let found = descended.contains(p) || files.iter().any(|f| f.path == *p);
+            // A masked file path EXISTS in the tree (the name serves by
+            // design) — it satisfies the prefix check even though its
+            // content will never materialize.
+            let found = descended.contains(p)
+                || walk.files.iter().any(|f| f.path == *p)
+                || walk.redacted.iter().any(|r| r == p);
             if !found {
                 return Err(FetchError::Local(format!(
                     "sparse prefix {p:?} does not exist in the tree"
@@ -188,7 +226,7 @@ fn walk_tree_inner(
             }
         }
     }
-    Ok(files)
+    Ok(walk)
 }
 
 fn under(prefixes: &[String], path: &str) -> bool {

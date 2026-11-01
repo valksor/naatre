@@ -5,7 +5,7 @@
 //! a changeset id or a ref name; the default for cat/blame/ls/diff's server
 //! mode is head.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
@@ -295,8 +295,8 @@ pub fn ls_value(
 /// head vs disk: local modifications as path-level add/mod/del against the
 /// head root tree, restricted to the sparse prefixes.
 pub fn diff(root: &Path, at: Option<(&str, &str)>, json_out: bool, net: &Net) -> i32 {
-    match diff_value(root, at, net) {
-        Ok(v) => {
+    match diff_parts(root, at, net) {
+        Ok((v, unavailable)) => {
             if json_out {
                 println!("{v}");
             } else {
@@ -310,6 +310,12 @@ pub fn diff(root: &Path, at: Option<(&str, &str)>, json_out: bool, net: &Net) ->
                     };
                     println!("{c} {path}");
                 }
+                // The masked head paths the diff omits (same wording as
+                // the sibling verbs) — human output only; the --json
+                // shape is untouched.
+                if !unavailable.is_empty() {
+                    println!("unavailable (redacted): {}", unavailable.join(", "));
+                }
             }
             0
         }
@@ -320,9 +326,20 @@ pub fn diff(root: &Path, at: Option<(&str, &str)>, json_out: bool, net: &Net) ->
 /// The diff core: `{"changes": [...]}` — the server's diff-entry shape for
 /// the two-changeset form (`--at A B`), or the local head-vs-disk diff.
 /// The same value `diff --json` prints; the MCP `diff` tool returns it.
+/// The second element lists the masked head paths the local diff silently
+/// omits (unavailable by policy) — surfaced by the human output, never
+/// part of the JSON shape.
 pub fn diff_value(root: &Path, at: Option<(&str, &str)>, net: &Net) -> Result<Value, VerbError> {
+    Ok(diff_parts(root, at, net)?.0)
+}
+
+fn diff_parts(
+    root: &Path,
+    at: Option<(&str, &str)>,
+    net: &Net,
+) -> Result<(Value, Vec<String>), VerbError> {
     let reader = open_reader(root, net)?;
-    let changes = match at {
+    match at {
         Some((a, b)) => {
             let cs_a = resolve_at(&reader, Some(a))?;
             let cs_b = resolve_at(&reader, Some(b))?;
@@ -330,19 +347,23 @@ pub fn diff_value(root: &Path, at: Option<(&str, &str)>, net: &Net) -> Result<Va
                 &format!("/v1/repos/{}/diff", uri_segment(&reader.repo)),
                 &[("a", cs_a.to_hex().as_str()), ("b", cs_b.to_hex().as_str())],
             )?;
-            v["changes"]
+            let changes = v["changes"]
                 .as_array()
                 .cloned()
-                .ok_or_else(|| VerbError::Local("server sent a malformed diff".into()))?
+                .ok_or_else(|| VerbError::Local("server sent a malformed diff".into()))?;
+            Ok((json!({ "changes": changes }), Vec::new()))
         }
-        None => local_diff(root, &reader)?,
-    };
-    Ok(json!({ "changes": changes }))
+        None => {
+            let (changes, redacted) = local_diff(root, &reader)?;
+            Ok((json!({ "changes": changes }), redacted))
+        }
+    }
 }
 
 /// Head vs disk, computed client-side: head root tree (sparse-filtered)
-/// against rehashed disk content.
-fn local_diff(root: &Path, reader: &Reader) -> Result<Vec<Value>, VerbError> {
+/// against rehashed disk content. Returns the changes and the masked head
+/// paths (unavailable by policy) the diff omits.
+fn local_diff(root: &Path, reader: &Reader) -> Result<(Vec<Value>, Vec<String>), VerbError> {
     let wc = Wc::open(root)?;
     let state = wc.load_state()?;
     let rootv = reader.client.get_json(
@@ -361,16 +382,21 @@ fn local_diff(root: &Path, reader: &Reader) -> Result<Vec<Value>, VerbError> {
     // a prefix the head tree no longer contains (the server deleted its
     // whole directory — normal history) is an EMPTY subtree, exactly as in
     // sync's target walk. The strict form would wedge diff forever.
-    let files = walk_tree_allowing_missing_prefixes(
+    let walk = walk_tree_allowing_missing_prefixes(
         &reader.client,
         &reader.repo,
         &head_root,
         &state.sparse,
     )?;
     let mut head_map: BTreeMap<String, (Id, bool)> = BTreeMap::new();
-    for f in files {
+    for f in walk.files {
         head_map.insert(f.path, (f.blob, f.exec));
     }
+    // Masked head entries (the blob is tombstoned in this repo) are
+    // unavailable by policy: no head side exists to diff against, so the
+    // path emits no change — never a phantom "add" of the disk copy nor a
+    // del naming content that cannot serve.
+    let redacted: BTreeSet<String> = walk.redacted.into_iter().collect();
 
     let mut disk_map: BTreeMap<String, (Id, bool)> = BTreeMap::new();
     let disk = crate::wc::scan::scan_disk(root)
@@ -405,14 +431,14 @@ fn local_diff(root: &Path, reader: &Reader) -> Result<Vec<Value>, VerbError> {
         }
     }
     for (path, (blob, _)) in &disk_map {
-        if !head_map.contains_key(path) {
+        if !head_map.contains_key(path) && !redacted.contains(path) {
             changes.push(json!({
                 "path": path, "kind": "add",
                 "a_blob": Value::Null, "b_blob": blob.to_hex(),
             }));
         }
     }
-    Ok(changes)
+    Ok((changes, redacted.into_iter().collect::<Vec<String>>()))
 }
 
 #[cfg(test)]

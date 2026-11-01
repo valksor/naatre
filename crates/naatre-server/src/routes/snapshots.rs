@@ -515,7 +515,7 @@ pub async fn get_blob(
         ("tid" = String, Path, description = "Tree id, 64 lowercase hex")
     ),
     responses(
-        (status = 200, description = "The tree's entries", body = crate::routes::trees::TreeResponse),
+        (status = 200, description = "The tree's entries. Entries whose blob is redacted in this repo serve with `redacted: true` and null object_id/size/exec; a dir entry with a redacted descendant serves size-null", body = crate::routes::trees::TreeResponse),
         (status = 400, description = "An id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo; or the snapshot does not exist for this principal, or the tree is not part of the snapshot's closure"),
@@ -536,32 +536,22 @@ pub async fn get_snapshot_tree(
     // the snapshot root itself and the trees reachable from it over dir
     // entries qualify. Entries whose blob is tombstoned in this repo mask
     // exactly as the repo tree route does — the plan's universal gate
-    // covers every serving path, owner-scoped ones included.
+    // covers every serving path, owner-scoped ones included (the shared
+    // [`crate::routes::trees::mask_tree_entries`], dir-aggregate rule
+    // included).
     let root = Id(row.tree_id.try_into().expect("tree id is 32 bytes"));
-    let rows = state
+    let entries = state
         .read(move |conn| {
             if !db::tree_in_closure(conn, &root, &tree_id).map_err(ApiError::log_internal)? {
                 return Ok(None);
             }
             let rows = db::tree_entries_load(conn, &tree_id).map_err(ApiError::log_internal)?;
-            let gated: std::collections::HashSet<Id> = db::redactions_active_among(
-                conn,
-                repo_id,
-                &rows
-                    .iter()
-                    .filter_map(|e| {
-                        let arr: [u8; 32] = e.object_id.clone().try_into().ok()?;
-                        Some(Id(arr))
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(ApiError::log_internal)?
-            .into_iter()
-            .collect();
-            Ok::<_, ApiError>(Some((rows, gated)))
+            Ok::<_, ApiError>(Some(crate::routes::trees::mask_tree_entries(
+                conn, repo_id, rows,
+            )?))
         })
         .await?;
-    let Some((rows, gated)) = rows else {
+    let Some(entries) = entries else {
         return Err(ApiError::new(
             ApiCode::NotFound,
             format!(
@@ -571,26 +561,7 @@ pub async fn get_snapshot_tree(
             ),
         ));
     };
-    Ok(Json(crate::routes::trees::TreeResponse {
-        entries: rows
-            .into_iter()
-            .map(|e| {
-                let object = Id(e.object_id.try_into().expect("object id is 32 bytes"));
-                let redacted = gated.contains(&object);
-                crate::routes::trees::TreeEntryOut {
-                    name: e.name,
-                    kind: match e.kind {
-                        0 => "file".into(),
-                        _ => "dir".into(),
-                    },
-                    object_id: (!redacted).then(|| object.to_hex()),
-                    size: (!redacted).then_some(e.size as u64),
-                    exec: e.exec,
-                    redacted,
-                }
-            })
-            .collect(),
-    }))
+    Ok(Json(crate::routes::trees::TreeResponse { entries }))
 }
 
 /// PUTs one blob into `ephemeral/<snap-id>/` (writer and above, repo-level):

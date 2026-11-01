@@ -89,10 +89,17 @@ pub struct ChangesetCreated {
 pub struct ChangesetChangeOut {
     pub path: String,
     pub op: String,
-    /// Hex blob id; null for deletes.
+    /// Hex blob id; null for deletes and for a redacted blob (the
+    /// path-level fact serves, the pointer to redacted content does not).
     pub blob: Option<String>,
     pub size: Option<u64>,
-    pub exec: bool,
+    /// Exec bit; null on a redacted change (a content attribute of
+    /// redacted content does not serve).
+    pub exec: Option<bool>,
+    /// True when this change's blob is tombstoned in this repo: `blob`,
+    /// `size`, and `exec` serve as null (the tombstone wins over the
+    /// stored row — active or purged).
+    pub redacted: bool,
 }
 
 /// A changeset fetch response.
@@ -558,10 +565,12 @@ fn map_derive(e: crate::tree_derive::DeriveError) -> ApiError {
 }
 
 /// Fetches one changeset with its parents and file changes (any
-/// authenticated principal; ids and path metadata are repo-visible). An
-/// actively-tombstoned changeset answers 410 `object_redacted` (M10b —
-/// attribution never serves after the mark; the row itself persists until
-/// the redaction purge).
+/// authenticated principal; ids and path metadata are repo-visible). A
+/// tombstoned changeset — active or purged — answers 410
+/// `object_redacted` (M10b — attribution never serves after the mark; the
+/// purge later reclaims the rows). Each change whose blob is tombstoned in
+/// this repo serves with `redacted: true` and null blob/size (the same
+/// masking rule the diff route applies to its sides).
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/changesets/{id}",
@@ -606,10 +615,26 @@ pub async fn get_changeset(
                 .unwrap_or_default();
             let changes =
                 db::file_changes_list(conn, repo_id, &id).map_err(ApiError::log_internal)?;
-            Ok(Some((row, parents, changes)))
+            // The delta mask (M10b): one batched tombstone probe over the
+            // changes' blob ids (the diff route's masking probe; chunked
+            // IN-lists). A tombstoned blob's hash and size never serve.
+            let gated: std::collections::HashSet<Id> = {
+                let blobs: Vec<Id> = changes
+                    .iter()
+                    .filter_map(|c| {
+                        let arr: [u8; 32] = c.blob_id.clone()?.try_into().ok()?;
+                        Some(Id(arr))
+                    })
+                    .collect();
+                db::redactions_active_among(conn, repo_id, &blobs)
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .collect()
+            };
+            Ok(Some((row, parents, changes, gated)))
         })
         .await?;
-    let Some((row, parents, changes)) = fetched else {
+    let Some((row, parents, changes, gated)) = fetched else {
         return Err(ApiError::new(
             ApiCode::NotFound,
             format!("no changeset {id_hex} in {repo:?}"),
@@ -625,18 +650,31 @@ pub async fn get_changeset(
         principal: row.principal,
         changes: changes
             .into_iter()
-            .map(|c| ChangesetChangeOut {
-                path: c.path,
-                op: match c.op {
-                    0 => "add".into(),
-                    1 => "mod".into(),
-                    _ => "del".into(),
-                },
-                blob: c
+            .map(|c| {
+                let blob: Option<Id> = c
                     .blob_id
-                    .map(|b| Id(b.try_into().expect("blob id is 32 bytes")).to_hex()),
-                size: c.size.map(|s| s as u64),
-                exec: c.exec,
+                    .map(|b| Id(b.try_into().expect("blob id is 32 bytes")));
+                let redacted = blob.as_ref().is_some_and(|b| gated.contains(b));
+                ChangesetChangeOut {
+                    path: c.path,
+                    op: match c.op {
+                        0 => "add".into(),
+                        1 => "mod".into(),
+                        _ => "del".into(),
+                    },
+                    blob: if redacted {
+                        None
+                    } else {
+                        blob.map(|b| b.to_hex())
+                    },
+                    size: if redacted {
+                        None
+                    } else {
+                        c.size.map(|s| s as u64)
+                    },
+                    exec: if redacted { None } else { Some(c.exec) },
+                    redacted,
+                }
             })
             .collect(),
     }))

@@ -124,7 +124,10 @@ pub fn repo_id_by_name(conn: &Db, name: &str) -> Result<Option<i64>, DbError> {
 }
 
 /// Repo-scoped counters for `GET /v1/repos/{r}/stats`.
-/// Returns `(changesets, objects, bytes, cbytes)`.
+/// Returns `(changesets, objects, bytes, cbytes)`. The object sums exclude
+/// THIS repo's tombstoned ids — active or purged (M10b): the counts are
+/// the repo's servable bytes, and polling the stats across a purge must
+/// not recover a redacted blob's exact byte length by subtraction.
 pub fn repo_stats(conn: &Db, repo_id: i64) -> Result<(i64, i64, i64, i64), DbError> {
     let changesets: i64 = conn.query_row_map(
         &Sql::plain("SELECT COUNT(*) FROM changesets WHERE repo_id = ?1"),
@@ -135,7 +138,9 @@ pub fn repo_stats(conn: &Db, repo_id: i64) -> Result<(i64, i64, i64, i64), DbErr
         &Sql::plain(
             "SELECT COUNT(*), COALESCE(SUM(o.size), 0), COALESCE(SUM(o.csize), 0) \
          FROM repo_blobs rb JOIN objects o ON o.object_id = rb.object_id \
-         WHERE rb.repo_id = ?1",
+         WHERE rb.repo_id = ?1 \
+           AND NOT EXISTS (SELECT 1 FROM redactions r \
+                           WHERE r.repo_id = ?1 AND r.object_id = rb.object_id)",
         ),
         &pv![repo_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -2957,11 +2962,20 @@ pub enum RedactionMarkOutcome {
     /// contract: the earliest `marked_ns` stands, no second audit row).
     Existing(RedactionRow),
     /// A PURGED tombstone stood and was RE-ARMED: `marked_ns` moved to
-    /// this call's stamp and `purged_ns` cleared (the tombstone re-enters
-    /// the purge work list). The audit row IS written for a re-arm — it
+    /// this call's stamp. The audit row IS written for a re-arm — it
     /// was a real admin action on a purged record, never a silent no-op.
     /// The recorded `path` stays (the tombstone's own record; the content
-    /// is gone, so a fresh derivation would answer NULL).
+    /// is gone, so a fresh derivation would answer NULL). The driven
+    /// shapes: a BLOB re-arm always re-queues (`purged_ns` cleared —
+    /// nothing remains to purge only until a re-upload or surviving row
+    /// re-enters the work list); a CHANGESET re-arm re-queues only while
+    /// its `changesets` row survives the purge — when the purge already
+    /// deleted the row (a fully purged changeset), `purged_ns` re-stamps
+    /// to this call's time and the tombstone STAYS PURGED: nothing
+    /// remains to purge, and leaving `purged_ns` NULL would strand the
+    /// tombstone OUTSIDE the work list's `purged_ns IS NULL` selectors
+    /// forever (the tombstone reports purged and the write gates stay
+    /// armed against the id).
     Rearmed(RedactionRow),
     /// The tombstone stands with the OTHER kind — the re-POST is refused,
     /// never answered 200 against a different kind than the row records.
@@ -3045,12 +3059,31 @@ fn redaction_mark_classify(
         return Ok(RedactionMarkOutcome::KindMismatch { existing });
     }
     if existing.purged_ns.is_some() {
+        // The convergence rule: a re-arm re-enters the purge work list
+        // ONLY when something remains to purge. A changeset tombstone
+        // whose row the purge already deleted has nothing left — its
+        // work-list selector (`redact_purgeable_cs`) JOINs `changesets`,
+        // so a purged_ns-less row would never be picked and never
+        // re-stamped: the state would lie ("awaiting purge") forever.
+        // Stamp purged_ns to this call's time instead; blob tombstones
+        // and surviving rows clear the stamp and re-queue as before.
+        let remains: bool = if kind == "changeset" {
+            let hit: Option<i64> = conn.query_opt_map(
+                &Sql::plain("SELECT 1 FROM changesets WHERE id = ?1"),
+                &pv![object_id.0.as_slice()],
+                |r| r.get(0),
+            )?;
+            hit.is_some()
+        } else {
+            true
+        };
+        let stamp: Option<i64> = if remains { None } else { Some(marked_ns) };
         conn.execute(
             &Sql::plain(
-                "UPDATE redactions SET marked_ns = ?3, purged_ns = NULL \
+                "UPDATE redactions SET marked_ns = ?3, purged_ns = ?4 \
                  WHERE repo_id = ?1 AND object_id = ?2",
             ),
-            &pv![repo_id, object_id.0.as_slice(), marked_ns],
+            &pv![repo_id, object_id.0.as_slice(), marked_ns, stamp],
         )?;
         let row = redaction_get(conn, repo_id, object_id)?.ok_or_else(|| {
             DbError::from(std::io::Error::other("redaction row vanished after re-arm"))
@@ -3179,6 +3212,62 @@ pub fn redactions_active_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Ve
             &Sql::plain_owned(format!(
                 "SELECT object_id FROM redactions \
              WHERE repo_id = ?1 AND object_id IN ({list})"
+            )),
+            &params,
+            |r| r.get(0),
+        )?;
+        for raw in rows {
+            if let Ok(arr) = <[u8; 32]>::try_from(raw) {
+                out.push(Id(arr));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The listing's dir-entry tree ids that have ANY tombstoned blob
+/// descendant in `repo_id` — the dir-aggregate mask's probe, ONE
+/// set-based recursive statement per chunk of dir ids (the
+/// [`gc_collectible_trees`] CTE's shape, with each closure node carrying
+/// the frontier dir it descended from, so dirty roots come back
+/// attributed). Dirs are chunked like every walk; the recursion is
+/// `UNION`-deduplicated and content-addressed trees cannot cycle.
+pub fn redactions_dirty_dirs(conn: &Db, repo_id: i64, dirs: &[Id]) -> Result<Vec<Id>, DbError> {
+    let mut out = Vec::new();
+    for chunk in dirs.chunks(GC_IN_CHUNK) {
+        if chunk.is_empty() {
+            continue;
+        }
+        // The seed SELECTS from `trees` so the bound ids are compared
+        // against a typed bytea/blob column: a bare VALUES seed would
+        // leave the recursive term's parameters untyped (text on
+        // Postgres) and the recursion would fail the bytea type check.
+        // `?1` is the repo; the dir ids bind from ?2 on, one param each —
+        // the seed row is `(id, id)`, the (root, self) pair the
+        // attribution carries down. Every dir entry's object id is a
+        // written `trees` row (history and snapshot writes both insert
+        // them), so the seed never drops a listing's dirs.
+        let list = (2..)
+            .map(|i| format!("?{i}"))
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut params = vec![P::I(repo_id)];
+        params.extend(id_params(chunk));
+        let rows: Vec<Vec<u8>> = conn.query_all_map(
+            &Sql::plain_owned(format!(
+                "WITH RECURSIVE walk(root, tree_id) AS ( \
+                     SELECT t.id, t.id FROM trees t WHERE t.id IN ({list}) \
+                     UNION \
+                     SELECT w.root, te.object_id FROM walk w \
+                     JOIN tree_entries te ON te.tree_id = w.tree_id AND te.kind = 1 \
+                 ) \
+                 SELECT DISTINCT root FROM walk w \
+                 WHERE EXISTS ( \
+                     SELECT 1 FROM tree_entries te \
+                     JOIN redactions r ON r.repo_id = ?1 AND r.object_id = te.object_id \
+                     WHERE te.tree_id = w.tree_id AND te.kind = 0 \
+                 )"
             )),
             &params,
             |r| r.get(0),
@@ -3565,13 +3654,21 @@ pub fn fsck_redactions(conn: &Db) -> Result<(i64, i64, i64), DbError> {
 /// actor history stays linkable (one principal ↔ one token) while the
 /// name itself is gone (the M10b compliance fix: `deleted:<name>` kept
 /// the name it claimed to erase). `details_json` payloads are append-only
-/// history and stay untouched — the `principal_delete` row's own details
-/// name the deleted principal (the erasure receipt; the README states
-/// this), and admin-supplied free text (redaction reasons) is never
-/// scrubbed (also stated). The tombstones the principal marked keep their
-/// `principal` value: they are the audit trail of admin actions, retained
-/// on the same security-accountability basis as the log itself. Returns
-/// `None` when no such principal exists, else the deleted token count.
+/// history and stay untouched, with exactly two sanctioned edits, both
+/// parsed-and-rewritten BY KEY never string-replaced: the deleted
+/// principal's own `token_create` rows have their `principal` field's
+/// VALUE swapped to the token (the role and every other key stay), and
+/// the `principal_delete` row's own details carry the per-event pseudonym
+/// token (the erasure receipt; the README states this — the same token
+/// the actor rows were rewritten to, so the receipt links to the erasure
+/// event and the token count without ever naming the principal). What
+/// survives, stated: the role in the token_create rows, the token in the
+/// receipt, and admin-supplied free text (redaction reasons) is never
+/// scrubbed (also stated). The tombstones the principal
+/// marked keep their `principal` value: they are the audit trail of admin
+/// actions, retained on the same security-accountability basis as the log
+/// itself. Returns `None` when no such principal exists, else the deleted
+/// token count.
 pub fn principal_delete(
     conn: &Db,
     name: &str,
@@ -3598,16 +3695,49 @@ pub fn principal_delete(
     let mut raw = [0u8; 8];
     getrandom::fill(&mut raw).expect("CSPRNG available");
     let pseudo = format!("deleted:{:016x}", u64::from_be_bytes(raw));
+    // The sanctioned in-place rewrite extends one key further: the deleted
+    // principal's token_create rows carry its NAME in `details_json`. Each
+    // row is PARSED, the `principal` field's value replaced with the
+    // per-event pseudonym token (the role and every other key kept), and
+    // the row updated — never a string replace over the JSON text (a
+    // shape-blind replace would corrupt any other occurrence of the
+    // name). Runs BEFORE the actor-column rewrite below, which is what
+    // makes `principal = name` stop matching.
+    let create_rows: Vec<(i64, String)> = tx.query_all_map(
+        &Sql::plain(
+            "SELECT id, details_json FROM audit_log \
+         WHERE principal = ?1 AND action = 'token_create'",
+        ),
+        &pv![name],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    for (id, details) in create_rows {
+        let mut value: serde_json::Value = serde_json::from_str(&details).map_err(|_| {
+            DbError::from(std::io::Error::other(
+                "audit_log.details_json is not valid JSON",
+            ))
+        })?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "principal".to_string(),
+                serde_json::Value::String(pseudo.clone()),
+            );
+        }
+        tx.execute(
+            &Sql::plain("UPDATE audit_log SET details_json = ?1 WHERE id = ?2"),
+            &pv![value.to_string(), id],
+        )?;
+    }
     tx.execute(
         &Sql::plain("UPDATE audit_log SET principal = ?1 WHERE principal = ?2"),
-        &pv![pseudo, name],
+        &pv![&pseudo, name],
     )?;
     audit_append(
         &tx,
         now_ns,
         actor,
         "principal_delete",
-        &serde_json::json!({ "principal": name, "tokens_deleted": tokens }).to_string(),
+        &serde_json::json!({ "principal": pseudo, "tokens_deleted": tokens }).to_string(),
     )?;
     tx.commit()?;
     Ok(Some(tokens))

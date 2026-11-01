@@ -436,6 +436,7 @@ fn s3_gc_record_step_answers_blob_swept_and_reput_lands() {
         .block_on(naatre_server::routes::objects::record_object(
             &f.state,
             1,
+            "m10s3",
             oid,
             content.len() as i64,
             1,
@@ -463,6 +464,7 @@ fn s3_gc_record_step_answers_blob_swept_and_reput_lands() {
         .block_on(naatre_server::routes::objects::record_object(
             &f.state,
             1,
+            "m10s3",
             oid,
             content.len() as i64,
             1,

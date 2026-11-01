@@ -112,7 +112,8 @@ pub struct LandStatusResponse {
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Without the writer role, or a rebase-chain path outside the token's scope (details.path names it)"),
         (status = 404, description = "No such repo, or head is not a changeset of this repo"),
-        (status = 409, description = "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head"),
+        (status = 409, description = "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head; or redacted_base: the base chain crosses a redacted changeset (details.redacted names it)"),
+        (status = 410, description = "The rebase body is tombstoned in this repo (`object_redacted`, active or purged): the reproduced changeset id, or a blob id the rebase writes or references — the key stays unsettled and no rows are written"),
         (status = 413, description = "A rebased changeset or merged tree exceeds the 16 MiB canonical cap"),
         (status = 422, description = "The repo has no main ref, or head shares no history with main"),
         (status = 503, description = "writer_busy: the single-writer slot is busy with another write (never a read — reads run on the read pool), or an in-flight same-key join outlived the join deadline; retry with backoff (Retry-After)")

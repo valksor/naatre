@@ -128,8 +128,12 @@ pub fn value(
         .and_then(Id::from_hex)
         .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
 
-    // Walk (sparse-filtered), then fetch and verify every blob.
-    let files = walk_tree(&client, &repo, &root_tree, sparse)?;
+    // Walk (sparse-filtered), then fetch and verify every blob. Masked
+    // entries (redacted server-side) are unavailable: they never reach the
+    // fetch and are reported.
+    let walk = walk_tree(&client, &repo, &root_tree, sparse)?;
+    let files = walk.files;
+    let unavailable = walk.redacted;
     let blob_ids: Vec<Id> = files.iter().map(|f| f.blob).collect();
     let blobs = fetch_blobs_verified(&client, &repo, &blob_ids)?;
 
@@ -172,6 +176,7 @@ pub fn value(
         "head": head.to_hex(),
         "dest": dest.display().to_string(),
         "files": files.len(),
+        "unavailable": unavailable,
         "sparse": sparse,
     }))
 }

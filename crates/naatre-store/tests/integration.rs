@@ -74,6 +74,25 @@ fn fresh_db_migrates_to_current() {
         )
         .unwrap();
     assert_eq!(indexes, 4);
+
+    // Migration 10 spot-check: the redaction tombstones exist.
+    conn.execute_batch(
+        "SELECT repo_id, object_id, kind, path, marked_ns, purged_ns \
+         FROM redactions LIMIT 0;",
+    )
+    .unwrap();
+
+    // Migration 11 spot-check: the tombstone probe index exists (it moved
+    // here from 010, whose shipped SQL is immutable).
+    let probe: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+             AND name = 'redactions_object_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(probe, 1);
 }
 
 #[test]
@@ -124,6 +143,7 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          DROP INDEX IF EXISTS idx_lands_base;
          DROP INDEX IF EXISTS idx_git_map_cs;
          DROP INDEX IF EXISTS idx_cs_parents_parent_id;
+         DROP INDEX IF EXISTS redactions_object_id;
          DROP TABLE IF EXISTS redactions;
          ALTER TABLE objects DROP COLUMN touched_ns;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
@@ -198,6 +218,162 @@ fn future_schema_refuses_to_start() {
         }
         other => panic!("expected SchemaFuture, got {other:?}"),
     }
+}
+
+/// Migration 011's forward pin (fix-m10b2): a version-10 database in 010's
+/// AS-SHIPPED form (the tombstones table, no `redactions_object_id` index —
+/// a shipped migration's SQL is immutable, so the index fix-m10b appended
+/// to 010 was reverted into 011) migrates forward to version 11 and gains
+/// the probe index, on BOTH dialects the suite exercises.
+#[test]
+fn migration11_forward_from_shipped_v10_recreates_the_probe_index() {
+    // SQLite: rewind a migrated database to the shipped-form v10 (drop the
+    // index, stamp 10), then forward.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = fresh_conn(&dir);
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "DROP INDEX redactions_object_id;
+             UPDATE meta SET value = '10' WHERE key = 'schema_version';",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, 11);
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+                 AND name = 'redactions_object_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1, "migration 11 recreates the tombstone probe index");
+    }
+
+    // Postgres: the same shipped-form rewind and forward on the real
+    // backend. `IF NOT EXISTS` is what lets a database the interim binary
+    // indexed under version 10 take migration 11 without a unique-violation
+    // 500 — this pin's fresh v10 form is the other side.
+    let Some((target, _store)) = open_pg() else {
+        return; // pg_provision already printed the skip notice
+    };
+    let cfg = target.config();
+    let schema = cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
+            .expect("pg store opens");
+        store
+            .conn()
+            .execute_batch(
+                "DROP INDEX redactions_object_id;
+                 UPDATE meta SET value = '10' WHERE key = 'schema_version';",
+            )
+            .unwrap();
+    }
+    let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
+        .expect("pg store reopens and migrates forward");
+    assert_eq!(store.schema_version(), 11);
+    let idx: i64 = store
+        .conn()
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT count(*) FROM pg_indexes \
+                 WHERE schemaname = current_schema() AND indexname = 'redactions_object_id'",
+            ),
+            &naatre_store::pv![],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(idx, 1, "migration 11 recreates the tombstone probe index");
+    drop(store);
+    // Drop the stamped schema so the scratch database does not grow one
+    // per run.
+    let cleanup = target.config();
+    let conn = naatre_store::Db::connect_postgres(cleanup.pg.as_ref().unwrap(), false).unwrap();
+    conn.execute_batch(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
+        .unwrap();
+}
+
+/// Migration 011 tolerates the INTERIM binary's databases (round 2): a
+/// version-10 stamp that already carries `redactions_object_id` — exactly
+/// what the cb4a5b2 interim binary left behind, having created the index
+/// inside its appended 010 — migrates forward to 11 with EXACTLY ONE
+/// index of that name (`IF NOT EXISTS` must never duplicate), on BOTH
+/// dialects the suite exercises.
+#[test]
+fn migration11_tolerates_the_interim_binary_index() {
+    // SQLite: the current schema has the index; stamping the version back
+    // to 10 reproduces the interim dir exactly.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = fresh_conn(&dir);
+        migrate(&conn).unwrap();
+        conn.execute_batch("UPDATE meta SET value = '10' WHERE key = 'schema_version';")
+            .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, 11);
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index'                  AND name = 'redactions_object_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1, "no duplicate index: {idx}");
+    }
+
+    // Postgres: the same interim shape on the real backend.
+    let Some((target, _store)) = open_pg() else {
+        return; // pg_provision already printed the skip notice
+    };
+    let cfg = target.config();
+    let schema = cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
+            .expect("pg store opens");
+        store
+            .conn()
+            .execute_batch("UPDATE meta SET value = '10' WHERE key = 'schema_version';")
+            .unwrap();
+    }
+    let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
+        .expect("pg store reopens and migrates forward");
+    assert_eq!(store.schema_version(), 11);
+    let idx: i64 = store
+        .conn()
+        .query_row_map(
+            &naatre_store::Sql::plain(
+                "SELECT count(*) FROM pg_indexes                  WHERE schemaname = current_schema() AND indexname = 'redactions_object_id'",
+            ),
+            &naatre_store::pv![],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(idx, 1, "no duplicate index: {idx}");
+    drop(store);
+    // Drop the stamped schema so the scratch database does not grow one
+    // per run.
+    let cleanup = target.config();
+    let conn = naatre_store::Db::connect_postgres(cleanup.pg.as_ref().unwrap(), false).unwrap();
+    conn.execute_batch(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
+        .unwrap();
 }
 
 #[test]

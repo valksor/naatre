@@ -4056,3 +4056,304 @@ fn repo_create_surfaced_not_replayed_on_request_timeout() {
         "writer_busy (pre-execution) IS replayed for repo create"
     );
 }
+
+// ---- masked server entries (fix-m10b2) --------------------------------------
+
+/// A masked server entry (the blob tombstoned in this repo: `object_id`
+/// null, `size` null, `redacted` true) is VALID server data, never a walk
+/// abort: clone succeeds over a tree carrying one, the redacted path is
+/// reported unavailable, and every other file lands. The sync whose delta
+/// carries the masked path reports it unavailable and applies the rest,
+/// and the local diff emits no phantom change for it. Doctor distinguishes
+/// the redacted blob from a missing one.
+#[test]
+fn masked_tree_entries_walk_as_unavailable() {
+    let server = start_server();
+    create_repo(&server, "masked");
+    let keep = b"kept content\n";
+    let gone = b"redacted content\n";
+    put_blob(&server, "masked", keep);
+    put_blob(&server, "masked", gone);
+    let c1 = changeset(
+        &server,
+        "masked",
+        &[],
+        vec![
+            change("add", "gone.txt", gone),
+            change("add", "keep.txt", keep),
+        ],
+        "c1",
+    );
+    seed_main(&server, "masked", c1["id"].as_str().unwrap());
+
+    // Clone the CLEAN tree (both files land, both tracked), then tombstone
+    // one tracked blob server-side.
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/masked", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let (status, body) = api(
+        &server,
+        "POST",
+        "/v1/repos/masked/redactions",
+        Some(json!({ "id": blob_id(gone), "kind": "blob", "reason": "takedown" })),
+    );
+    assert_eq!(status, 201, "{body}");
+
+    // Local diff over the now-masked head tree: exit 0, and gone.txt
+    // emits NO change — the head side cannot serve, so there is nothing
+    // to diff it against (never a phantom add of the disk copy, never a
+    // del naming content that cannot serve).
+    let v = verbs::reads::diff_value(&wc_dir, None, &net(&server)).unwrap();
+    assert_eq!(
+        v["changes"],
+        json!([]),
+        "the masked path emits no change and keep.txt stays clean: {v}"
+    );
+
+    // doctor on the still-tracking working copy: the redacted blob is its
+    // own finding — "unrecoverable by policy", DISTINCT from missing —
+    // and the healthy blob stays silent.
+    let out = run_binary(&server, &wc_dir, &["doctor"]);
+    let stdout = stdout_of(&out);
+    assert_ne!(out.status.code(), Some(0), "a redacted blob is a finding");
+    assert!(
+        stdout.contains(&format!(
+            "redacted on server: {} (referenced by gone.txt) — unrecoverable by policy",
+            blob_id(gone)
+        )),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains(&format!("blob not on server: {}", blob_id(gone))),
+        "redacted is never reported missing: {stdout}"
+    );
+    assert!(!stdout.contains("blob not on server"), "{stdout}");
+
+    // A FRESH clone of the same (now masked) tree: the verb succeeds, the
+    // redacted path is reported unavailable, every other file lands.
+    let wc2 = server._dir.path().join("wc2");
+    let v = verbs::clone::value(
+        &format!("{}/masked", server.base),
+        &[],
+        Some(wc2.to_str().unwrap()),
+        &net(&server),
+    )
+    .unwrap();
+    assert_eq!(v["files"], 1, "{v}");
+    assert_eq!(v["unavailable"], json!(["gone.txt"]), "{v}");
+    assert_eq!(std::fs::read(wc2.join("keep.txt")).unwrap(), keep);
+    assert!(!wc2.join("gone.txt").exists(), "masked content never lands");
+
+    // The sync-unavailable arm: a working copy one commit BEHIND a target
+    // whose tree carries the masked entry as an incoming ADD. The sync
+    // succeeds, reports the masked path unavailable, and applies the rest.
+    create_repo(&server, "masked2");
+    let seed = b"seed\n";
+    put_blob(&server, "masked2", seed);
+    let b0 = changeset(
+        &server,
+        "masked2",
+        &[],
+        vec![change("add", "seed.txt", seed)],
+        "c0",
+    );
+    seed_main(&server, "masked2", b0["id"].as_str().unwrap());
+    let wc3 = server._dir.path().join("wc3");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/masked2", server.base),
+            &[],
+            Some(wc3.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    // The next commit adds fresh.txt AND gone2.txt while wc3 sits on c0
+    // (the write gate demands the tombstone come AFTER: an entry's masked
+    // state always postdates its commit). main moves to c1, then the blob
+    // is tombstoned — the target tree carries the masked entry as an
+    // incoming ADD for the sync.
+    let fresh = b"fresh\n";
+    let gone2 = b"gone-2\n";
+    put_blob(&server, "masked2", fresh);
+    put_blob(&server, "masked2", gone2);
+    let b1 = changeset(
+        &server,
+        "masked2",
+        &[b0["id"].as_str().unwrap().to_string()],
+        vec![
+            change("add", "fresh.txt", fresh),
+            change("add", "gone2.txt", gone2),
+        ],
+        "c1",
+    );
+    seed_main(&server, "masked2", b1["id"].as_str().unwrap());
+    let (status, body) = api(
+        &server,
+        "POST",
+        "/v1/repos/masked2/redactions",
+        Some(json!({ "id": blob_id(gone2), "kind": "blob", "reason": "takedown" })),
+    );
+    assert_eq!(status, 201, "{body}");
+    let v = verbs::sync::value(&wc3, false, &net(&server)).unwrap();
+    assert_eq!(
+        v["applied"],
+        json!([{ "path": "fresh.txt", "kind": "add" }]),
+        "{v}"
+    );
+    assert_eq!(v["unavailable"], json!(["gone2.txt"]), "{v}");
+    assert_eq!(std::fs::read(wc3.join("fresh.txt")).unwrap(), fresh);
+    assert!(
+        !wc3.join("gone2.txt").exists(),
+        "the masked incoming path never materializes"
+    );
+    assert!(verbs::status::report(&wc3).unwrap().is_clean());
+}
+
+/// The remaining two TreeWalk arms (round 2): sparse add over a cone
+/// containing a masked entry succeeds treating the path as
+/// existing-but-unavailable, and restore over a masked snapshot tree
+/// brings every available file and reports the masked path unavailable.
+#[test]
+fn sparse_add_and_restore_treat_masked_paths_as_unavailable() {
+    use base64::Engine as _;
+    let server = start_server();
+    create_repo(&server, "sr");
+    let top = b"top\n";
+    let clean = b"clean\n";
+    let gone = b"gone\n";
+    put_blob(&server, "sr", top);
+    put_blob(&server, "sr", clean);
+    put_blob(&server, "sr", gone);
+    let c1 = changeset(
+        &server,
+        "sr",
+        &[],
+        vec![
+            change("add", "d/clean.txt", clean),
+            change("add", "d/gone.txt", gone),
+            change("add", "top.txt", top),
+        ],
+        "c1",
+    );
+    seed_main(&server, "sr", c1["id"].as_str().unwrap());
+
+    // Sparse clone with only top.txt (d/ sits outside the cone), then post
+    // a FULL-closure snapshot while every blob is still servable — a
+    // snapshot blob PUT of redacted content is refused, so the snapshot
+    // must predate the tombstone.
+    let wc = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/sr", server.base),
+            &["top.txt".to_string()],
+            Some(wc.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let snap_id = format!("{:062x}{:02x}", 0u128, 0xEF);
+    let file = |name: &str, data: &[u8]| naatre_core::tree::TreeEntry {
+        name: name.to_string(),
+        kind: naatre_core::tree::EntryKind::File,
+        object: object_id(naatre_core::ids::Kind::Blob, data),
+        size: data.len() as u64,
+        exec: false,
+    };
+    let d_tree = naatre_core::tree::Tree {
+        entries: vec![file("clean.txt", clean), file("gone.txt", gone)],
+    };
+    let d_id = naatre_core::tree::tree_id(&d_tree).unwrap();
+    let root_tree = naatre_core::tree::Tree {
+        entries: vec![
+            naatre_core::tree::TreeEntry {
+                name: "d".into(),
+                kind: naatre_core::tree::EntryKind::Dir,
+                object: d_id,
+                size: (clean.len() + gone.len()) as u64,
+                exec: false,
+            },
+            file("top.txt", top),
+        ],
+    };
+    let root_id = naatre_core::tree::tree_id(&root_tree).unwrap();
+    for data in [&clean[..], &gone[..], &top[..]] {
+        let res = agent()
+            .put(&format!(
+                "{}/v1/repos/sr/snapshots/{snap_id}/objects/{}",
+                server.base,
+                blob_id(data)
+            ))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .send(data)
+            .expect("snapshot blob put");
+        assert_eq!(res.status().as_u16(), 201, "snapshot put {data:?}");
+    }
+    let (status, body) = api(
+        &server,
+        "POST",
+        "/v1/repos/sr/snapshots",
+        Some(json!({
+            "snap_id": snap_id,
+            "tree_id": root_id.to_hex(),
+            "trees": [
+                base64::engine::general_purpose::STANDARD
+                    .encode(naatre_core::tree::encode(&root_tree).unwrap()),
+                base64::engine::general_purpose::STANDARD
+                    .encode(naatre_core::tree::encode(&d_tree).unwrap()),
+            ],
+            "ttl_secs": 3_600u64,
+        })),
+    );
+    assert_eq!(status, 201, "{body}");
+
+    // Tombstone d/gone.txt's blob.
+    let (status, body) = api(
+        &server,
+        "POST",
+        "/v1/repos/sr/redactions",
+        Some(json!({ "id": blob_id(gone), "kind": "blob", "reason": "takedown" })),
+    );
+    assert_eq!(status, 201, "{body}");
+
+    // SPARSE ADD "d": the walk meets the masked entry inside the cone. The
+    // verb succeeds, the clean file materializes, the masked path is
+    // reported existing-but-unavailable.
+    let v = verbs::sparse::value(
+        &wc,
+        verbs::sparse::Action::Add {
+            prefix: "d".into(),
+            force: false,
+        },
+        &net(&server),
+    )
+    .unwrap();
+    assert_eq!(v["materialized"], 1, "{v}");
+    assert_eq!(v["unavailable"], json!(["d/gone.txt"]), "{v}");
+    assert_eq!(std::fs::read(wc.join("d/clean.txt")).unwrap(), clean);
+    assert!(
+        !wc.join("d/gone.txt").exists(),
+        "masked content never lands"
+    );
+    assert!(verbs::status::report(&wc).unwrap().is_clean());
+
+    // RESTORE over the masked snapshot tree: every available file lands,
+    // the masked path is reported unavailable, status stays clean.
+    let v = verbs::restore::value(&wc, &snap_id, false, &net(&server)).unwrap();
+    assert_eq!(v["files"], 2, "{v}");
+    assert_eq!(v["unavailable"], json!(["d/gone.txt"]), "{v}");
+    assert_eq!(std::fs::read(wc.join("d/clean.txt")).unwrap(), clean);
+    assert_eq!(std::fs::read(wc.join("top.txt")).unwrap(), top);
+    assert!(
+        !wc.join("d/gone.txt").exists(),
+        "masked content never lands"
+    );
+    assert!(verbs::status::report(&wc).unwrap().is_clean());
+}

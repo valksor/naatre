@@ -25,10 +25,12 @@ pub struct PrincipalDeleted {
 
 /// Deletes a principal (admin, audited `principal_delete`): its token rows
 /// and principals row are deleted, and every `audit_log` row it acted on is
-/// pseudonymized to `deleted:<name>` (the log is append-only on a
+/// pseudonymized to `deleted:<opaque token>` — a fresh 16-hex-char token
+/// per deletion event (the log is append-only on a
 /// security-accountability basis — rows are rewritten in the actor column
-/// only; `details_json` payloads are history and stay). History attribution
-/// (`changesets.principal`, `refs.last_principal`, `lands.*`,
+/// only; `details_json` payloads are history and stay, the erasure
+/// receipt's own details carrying the token, never the name). History
+/// attribution (`changesets.principal`, `refs.last_principal`, `lands.*`,
 /// `snapshots.principal`) is left as-is: attribution survives unless the
 /// changesets are themselves tombstoned. Unknown principal → 404.
 #[utoipa::path(

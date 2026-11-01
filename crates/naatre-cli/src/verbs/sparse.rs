@@ -130,7 +130,9 @@ fn add(
         .ok_or_else(|| VerbError::Local("server returned a malformed root tree id".into()))?;
     let mut index = wc.load_index()?;
     let prefixes = vec![prefix.to_string()];
-    let files = walk_tree(&client, &state.server_repo, &head, &prefixes)?;
+    let walk = walk_tree(&client, &state.server_repo, &head, &prefixes)?;
+    let files = walk.files;
+    let unavailable = walk.redacted;
 
     // The preserve-everything gate, the same dirty_working_copy shape as
     // sync: local work at a path the widen would materialize — a dirty
@@ -251,6 +253,7 @@ fn add(
     wc.save_index(&index)?;
     Ok(json!({
         "action": "add", "prefix": prefix, "materialized": written, "already_listed": false,
+        "unavailable": unavailable,
     }))
 }
 

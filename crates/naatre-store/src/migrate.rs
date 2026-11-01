@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
-pub const MAX_SUPPORTED: i64 = 10;
+pub const MAX_SUPPORTED: i64 = 11;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -208,11 +208,21 @@ CREATE TABLE redactions(
     purged_ns INTEGER,
     PRIMARY KEY(repo_id, object_id)
 );
--- The tombstone probe by object id alone (no repo prefix): the purge
--- phase's per-id completion stamp (kind + object_id) and the reachability
--- sweep's NOT EXISTS tombstone arms probe this way per candidate; without
--- the index each probe scans every tombstone.
-CREATE INDEX redactions_object_id ON redactions(object_id);
+"#,
+    ),
+    // M10b fix (fix-m10b2): migration 010 shipped without this index; the
+    // fix-m10b commit's attempt to append it to 010 violated the
+    // immutability contract above and is reverted — the index moves here
+    // instead. `IF NOT EXISTS` because a database migrated by the interim
+    // binary already carries the index under version 10. The tombstone
+    // probe by object id alone (no repo prefix): the purge phase's per-id
+    // completion stamp (kind + object_id) and the reachability sweep's NOT
+    // EXISTS tombstone arms probe this way per candidate; without the index
+    // each probe scans every tombstone.
+    (
+        11,
+        r#"
+CREATE INDEX IF NOT EXISTS redactions_object_id ON redactions(object_id);
 "#,
     ),
 ];
@@ -232,6 +242,7 @@ const PG_MIGRATIONS: &[&str] = &[
     include_str!("../migrations/postgres/008_gc_pending.sql"),
     include_str!("../migrations/postgres/009_gc_probe_indexes.sql"),
     include_str!("../migrations/postgres/010_redactions.sql"),
+    include_str!("../migrations/postgres/011_redactions_index.sql"),
 ];
 
 const _: () = assert!(

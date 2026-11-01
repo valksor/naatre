@@ -66,7 +66,7 @@ fn audit(root: &Path, net: &Net) -> Result<Vec<String>, String> {
 
     // Server half: batched blob presence.
     let ids: Vec<Id> = index.rows.values().map(|r| Id(r.blob)).collect();
-    let missing = blob_presence(root, &state.server_repo, &ids, net)?;
+    let (missing, redacted) = blob_presence(root, &state.server_repo, &ids, net)?;
     for hex in &missing {
         let paths: Vec<String> = index
             .rows
@@ -80,14 +80,35 @@ fn audit(root: &Path, net: &Net) -> Result<Vec<String>, String> {
             paths.join(", ")
         ));
     }
+    for hex in &redacted {
+        let paths: Vec<String> = index
+            .rows
+            .values()
+            .filter(|r| Id(r.blob).to_hex() == *hex)
+            .map(|r| r.path.clone())
+            .collect();
+        findings.push(format!(
+            "redacted on server: {} (referenced by {}) — unrecoverable by policy",
+            hex,
+            paths.join(", ")
+        ));
+    }
     Ok(findings)
 }
 
-/// POSTs `/objects/present` in batches of 256; returns the missing ids.
-fn blob_presence(root: &Path, repo: &str, ids: &[Id], net: &Net) -> Result<Vec<String>, String> {
+/// POSTs `/objects/present` in batches of 256; returns the missing ids and
+/// the redacted ones (a tombstoned id is a distinct answer: the blob is
+/// gone by policy, not by loss — `missing` never covers it).
+fn blob_presence(
+    root: &Path,
+    repo: &str,
+    ids: &[Id],
+    net: &Net,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let wc = Wc::open(root)?;
     let client = wc.client(net)?;
     let mut missing = Vec::new();
+    let mut redacted = Vec::new();
     for chunk in ids.chunks(256) {
         let body = json!({ "ids": chunk.iter().map(Id::to_hex).collect::<Vec<_>>() });
         let (_status, v) = client
@@ -104,8 +125,13 @@ fn blob_presence(root: &Path, repo: &str, ids: &[Id], net: &Net) -> Result<Vec<S
                 missing.push(hex.to_string());
             }
         }
+        for r in v["redacted"].as_array().map_or(&[][..], Vec::as_slice) {
+            if let Some(hex) = r.as_str() {
+                redacted.push(hex.to_string());
+            }
+        }
     }
-    Ok(missing)
+    Ok((missing, redacted))
 }
 
 /// The recovery path: rescan + rehash + rewrite the index.

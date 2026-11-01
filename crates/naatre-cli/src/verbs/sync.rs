@@ -176,14 +176,23 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     // its whole directory) is an EMPTY subtree: the incoming dels below
     // remove the indexed files under it and the sync completes, instead of
     // failing forever on normal history.
-    let target_files =
+    let target_walk =
         walk_tree_allowing_missing_prefixes(&client, &repo, &target_root, &state.sparse)?;
+    let target_files = target_walk.files;
     let by_path: BTreeMap<&str, &_> = target_files.iter().map(|f| (f.path.as_str(), f)).collect();
 
     let mut to_fetch: Vec<Id> = Vec::new();
     let mut adds: Vec<(String, Id)> = Vec::new();
+    let mut unavailable: Vec<String> = Vec::new();
     for (path, kind) in &incoming {
         if !under_sparse(&state.sparse, path) || kind == "del" {
+            continue;
+        }
+        if target_walk.redacted.iter().any(|r| r == path) {
+            // The target tree masks this path (the blob is tombstoned in
+            // this repo): unavailable by policy — the sync proceeds
+            // without it and reports it.
+            unavailable.push(path.clone());
             continue;
         }
         let file = by_path.get(path.as_str()).ok_or_else(|| {
@@ -194,6 +203,8 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
         to_fetch.push(file.blob);
         adds.push((path.clone(), file.blob));
     }
+    unavailable.sort();
+    unavailable.dedup();
     let blobs = fetch_blobs_verified(&client, &repo, &to_fetch)?;
 
     // Every incoming blob is fetched and hash-verified, so --force can now
@@ -233,15 +244,17 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
 
     // Output honesty: only paths this sync actually applied (cone-included)
     // count as applied — an out-of-cone incoming path was NOT applied here
-    // and must not pose as one.
+    // and must not pose as one, and a redacted path was reported
+    // unavailable, never applied.
     let applied: Vec<Value> = incoming
         .iter()
-        .filter(|(p, _)| under_sparse(&new_state.sparse, p))
+        .filter(|(p, _)| under_sparse(&new_state.sparse, p) && !unavailable.contains(p))
         .map(|(path, kind)| json!({ "path": path, "kind": kind }))
         .collect();
     Ok(json!({
         "up_to_date": false,
         "head": target.to_hex(),
         "applied": applied,
+        "unavailable": unavailable,
     }))
 }

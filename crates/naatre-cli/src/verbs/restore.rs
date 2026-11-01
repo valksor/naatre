@@ -75,8 +75,11 @@ pub fn value(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<Value
     // The snapshot's files, within the sparse cone (a prefix the snapshot
     // lacks is an empty subtree — restore brings what it has). Walks the
     // owner-gated snapshot tree route: snapshot trees carry no repo_trees
-    // membership, so the bare-id repo tree route 404s them.
-    let files = walk_snapshot_tree(&client, repo, &sid, &tree_id, &state.sparse)?;
+    // membership, so the bare-id repo tree route 404s them. Masked entries
+    // (redacted server-side) are unavailable and reported.
+    let walk = walk_snapshot_tree(&client, repo, &sid, &tree_id, &state.sparse)?;
+    let files = walk.files;
+    let unavailable = walk.redacted;
 
     // The dirty gate (sync's, plus symlink colliders): local work at a
     // restored path would be clobbered by materialization — edited or
@@ -172,6 +175,7 @@ pub fn value(root: &Path, snap_id: &str, force: bool, net: &Net) -> Result<Value
     Ok(json!({
         "restored": sid.to_hex(),
         "files": files.len(),
+        "unavailable": unavailable,
         "head": state.head,
     }))
 }

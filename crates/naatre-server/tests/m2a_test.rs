@@ -301,7 +301,7 @@ async fn create_success_shape_location_and_audit() {
     );
     assert_eq!(
         resp.body["changes"],
-        json!([{ "path": "a.txt", "op": "add", "blob": b1, "size": 5, "exec": false }])
+        json!([{ "path": "a.txt", "op": "add", "blob": b1, "size": 5, "exec": false, "redacted": false }])
     );
     let resp = get(
         &f.t.app,

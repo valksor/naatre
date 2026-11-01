@@ -63,8 +63,12 @@ pub struct RedactionEntry {
 pub struct RedactionMarked {
     pub redaction: RedactionEntry,
     /// True when this call re-armed a PURGED tombstone (new `marked_ns`,
-    /// `purged_ns` cleared, a new `redact` audit row). Never true on the
-    /// 201 insert.
+    /// a new `redact` audit row). `purged_ns` cleared when something
+    /// remains to purge (the tombstone re-enters the work list); for a
+    /// changeset id whose row the purge already deleted, `purged_ns`
+    /// re-stamps to this call's time — nothing remains to purge, and the
+    /// tombstone reports purged with the write gates still armed. Never
+    /// true on the 201 insert.
     pub rearmed: bool,
 }
 
@@ -110,7 +114,7 @@ fn entry_of(row: db::RedactionRow) -> RedactionEntry {
         (status = 400, description = "The id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Authenticated without the admin role"),
-        (status = 404, description = "No such repo; or the target id is not an object of this repo"),
+        (status = 404, description = "No such repo; or the target is not a blob or changeset known to this repo, imported content included"),
         (status = 422, description = "kind is not `blob`/`changeset`, the reason is empty, or the id is already tombstoned with the other kind")
     )
 )]

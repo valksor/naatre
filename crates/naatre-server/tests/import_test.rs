@@ -1148,3 +1148,225 @@ fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
         1
     );
 }
+
+/// The import twin of the changeset-id resurrection pin (fix-m10b2): the
+/// ID-driven refusal. A native changeset whose canonical body the import
+/// reproduces exactly (same parents, author, message, author-date
+/// timestamp, same changes — the git fixture's identities and dates are
+/// deterministic) is tombstoned and purged; importing the equivalent git
+/// history into the same repo hashes to the same changeset id and refuses
+/// at the import's changeset boundary (the cs-id arm, import_commit's
+/// first check). No blob is tombstoned here, so the blob arm cannot be
+/// what fired.
+#[test]
+fn reimport_refuses_a_purged_changeset_id_from_the_cs_id_arm() {
+    if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
+        return;
+    }
+    let mut f = Fixture::new("redact-cs-import");
+    f.write("hello.txt", b"hello\n");
+    f.commit("root");
+    let e = Env::new();
+    let conn = e.conn();
+    // The repo row the import will find (repo_created: false).
+    conn.execute(
+        &naatre_store::Sql::plain("INSERT INTO repos(id, name, created_ns) VALUES (1, 'imp', 1)"),
+        &naatre_store::pv![],
+    )
+    .unwrap();
+    let repo_id = 1;
+
+    // The native twin of the git commit: same author, message, author-date
+    // stamp (the fixture pins 1_767_225_600 +0000), same content-derived
+    // change. Inserted through the db layer like a land would.
+    let content = b"hello\n".to_vec();
+    let blob = e.cas().put(&content).unwrap().id;
+    let mut node = MemNode::load(&conn, None).unwrap();
+    node.apply(&[FileChange {
+        path: "hello.txt".into(),
+        op: Op::Add,
+        blob: Some(blob),
+        size: Some(content.len() as u64),
+        exec: Some(false),
+    }])
+    .unwrap();
+    let (root_tree, _, trees) = node.collect().unwrap();
+    let cs = Changeset {
+        repo_id: repo_id as u64,
+        parents: vec![],
+        author: "Fix Tur e <fix@example.com>".into(),
+        message: "root\n".into(),
+        timestamp_ns: 1_767_225_600_000_000_000,
+        changes: vec![FileChange {
+            path: "hello.txt".into(),
+            op: Op::Add,
+            blob: Some(blob),
+            size: Some(content.len() as u64),
+            exec: Some(false),
+        }],
+    };
+    let canonical = naatre_core::changeset::encode(&cs).unwrap();
+    let cs_id = object_id(Kind::Changeset, &canonical);
+    db::changeset_insert(
+        &conn,
+        db::ChangesetInsert {
+            repo_id,
+            repo_name: "imp",
+            id: &cs_id,
+            canonical: &canonical,
+            author: &cs.author,
+            message: &cs.message,
+            timestamp_ns: cs.timestamp_ns as i64,
+            generation: 0,
+            principal: "admin",
+            root_tree_id: &root_tree,
+            parents: &cs.parents,
+            changes: &cs.changes,
+            blobs: &[blob],
+            trees: &trees,
+            now_ns: cs.timestamp_ns as i64,
+        },
+    )
+    .unwrap();
+
+    // Tombstone the changeset (immediate transaction, audited), then purge
+    // it with the GC redaction phase's exact db sequence (no ref, no land,
+    // no git_map row, no child: fully purgeable).
+    {
+        let tx = conn.transaction_immediate().unwrap();
+        match db::redaction_mark(&tx, repo_id, &cs_id, "changeset", 1_000).unwrap() {
+            db::RedactionMarkOutcome::Inserted(_) => {}
+            other => panic!("expected an insert, got {other:?}"),
+        }
+        db::audit_append(&tx, 1_000, "admin", "redact", "{\"reason\":\"cs-id pin\"}").unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let tx = conn.transaction_immediate().unwrap();
+        let batch = db::redact_purgeable_cs(&tx, 10).unwrap();
+        assert_eq!(batch.len(), 1, "the native changeset is purgeable");
+        assert_eq!(batch[0], cs_id);
+        assert_eq!(db::redact_collect_cs(&tx, &batch).unwrap(), 1);
+        assert_eq!(
+            db::redaction_stamp_purged(&tx, "changeset", &cs_id, 2_000).unwrap(),
+            1
+        );
+        tx.commit().unwrap();
+    }
+    assert_eq!(e.count("SELECT COUNT(*) FROM changesets"), 0);
+
+    // The import computes the same changeset id from the git history and
+    // refuses at the cs-id arm.
+    let opts = ImportOptions {
+        git_path: f.path.clone(),
+        into: Some("imp".into()),
+        skip_unsupported: false,
+    };
+    let err = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap_err();
+    match &err {
+        ImportError::Redacted(msg) => {
+            assert!(msg.contains(&cs_id.to_hex()), "{msg}");
+            assert!(
+                msg.starts_with("changeset "),
+                "the cs-id arm names the changeset: {msg}"
+            );
+        }
+        other => panic!("expected the redaction refusal, got {other:?}"),
+    }
+    // The refused import wrote nothing.
+    assert_eq!(e.count("SELECT COUNT(*) FROM changesets"), 0);
+}
+
+/// The resume pin (round 2): a multi-commit import that refuses at the
+/// SECOND commit leaves the first imported (per-commit durability), and
+/// once the cause is fixed — the redacted content removed from the source
+/// history, the non-redaction remedy since no un-mark exists — the re-run
+/// fast-forwards and completes.
+#[test]
+fn import_refusing_at_commit_two_leaves_commit_one_and_resumes() {
+    if !git_works() {
+        eprintln!("WARNING: git not found — import suite skipped");
+        return;
+    }
+    // Commit 1 alone imports clean; bad.txt (the future tombstone target)
+    // arrives with commit 2.
+    let mut f = Fixture::new("resume-import");
+    f.write("a.txt", b"one\n");
+    f.commit("first");
+    let e = Env::new();
+    let report = e.import(&f, "imp", false);
+    assert_eq!(report.imported, 1, "{report:?}");
+    let repo_id = e.repo_id("imp");
+    let conn = e.conn();
+    let main_at_commit_one = e.main_target("imp").unwrap();
+
+    // The source grows: commit 2 adds bad.txt, commit 3 adds c.txt.
+    let bad = b"bad-content\n";
+    f.write("bad.txt", bad);
+    f.commit("second");
+    f.write("c.txt", b"three\n");
+    f.commit("third");
+
+    // Tombstone bad.txt's blob in the target (an objects row makes the
+    // blob known — the mark surface's objects arm; audited like the mark
+    // route).
+    let bad_blob = object_id(naatre_core::ids::Kind::Blob, bad);
+    conn.execute(
+        &naatre_store::Sql::plain(
+            "INSERT INTO objects(object_id, size, csize, touched_ns) VALUES (?1, ?2, 1, 1)",
+        ),
+        &naatre_store::pv![bad_blob.0.as_slice(), bad.len() as i64],
+    )
+    .unwrap();
+    {
+        let tx = conn.transaction_immediate().unwrap();
+        match db::redaction_mark(&tx, repo_id, &bad_blob, "blob", 1_000).unwrap() {
+            db::RedactionMarkOutcome::Inserted(_) => {}
+            other => panic!("expected an insert, got {other:?}"),
+        }
+        db::audit_append(&tx, 1_000, "admin", "redact", "{\"reason\":\"resume pin\"}").unwrap();
+        tx.commit().unwrap();
+    }
+
+    // The re-import refuses at the SECOND commit — and only there: commit
+    // 1 stays imported, main unmoved.
+    let opts = ImportOptions {
+        git_path: f.path.clone(),
+        into: Some("imp".into()),
+        skip_unsupported: false,
+    };
+    let err = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap_err();
+    match &err {
+        ImportError::Redacted(msg) => {
+            assert!(msg.contains(&bad_blob.to_hex()), "{msg}");
+        }
+        other => panic!("expected the redaction refusal, got {other:?}"),
+    }
+    assert_eq!(e.count("SELECT COUNT(*) FROM changesets"), 1);
+    assert_eq!(
+        e.main_target("imp"),
+        Some(main_at_commit_one),
+        "the refusal left main at commit 1"
+    );
+
+    // The fix (non-redaction): the content leaves the SOURCE history —
+    // rebuild commits 2 and 3 without bad.txt. Commit 1 is untouched, so
+    // the source still fast-forwards from the imported state.
+    f.git(&["reset", "--hard", "HEAD~2"]);
+    f.write("good.txt", b"good\n");
+    f.commit("second");
+    f.write("c.txt", b"three\n");
+    f.commit("third");
+
+    let report = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap();
+    assert_eq!(report.status, "ok", "{report:?}");
+    assert_eq!(report.imported, 2, "commits 2' and 3': {report:?}");
+    assert_eq!(report.main, "fast-forwarded");
+    assert_eq!(e.count("SELECT COUNT(*) FROM changesets"), 3);
+    assert_ne!(
+        e.main_target("imp"),
+        Some(main_at_commit_one),
+        "main moved past commit 1"
+    );
+}
