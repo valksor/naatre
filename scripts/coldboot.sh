@@ -125,4 +125,36 @@ rm "$ROOT/dir3/demo/README.md"
 grep -qx 'hello from the cold boot' "$ROOT/dir3/demo/README.md" ||
 	fail "restore did not bring README.md back"
 
+# M11 (SQLite+fs is this script's environment): backup → wipe → restore →
+# fsck-clean, the safe order enforced by the verb. Backup and restore take
+# the data-dir flock, so serve stops first (stop-and-copy).
+step "backup the data dir (M11)"
+kill "$SERVE_PID"
+wait "$SERVE_PID" 2>/dev/null || true
+SERVE_PID=""
+"$BIN" backup --data "$DATA" "$ROOT/backup"
+[[ -f "$ROOT/backup/manifest.json" ]] || fail "backup wrote no manifest"
+[[ -f "$ROOT/backup/naatre.db" ]] || fail "backup wrote no SQLite snapshot"
+
+step "restore refuses a live data dir"
+if "$BIN" restore --data "$DATA" "$ROOT/backup" >/dev/null 2>&1; then
+	fail "restore ran against an initialized data dir"
+fi
+
+step "wipe"
+command rm -rf "$DATA"
+
+step "restore"
+"$BIN" restore --data "$DATA" "$ROOT/backup"
+
+step "fsck clean after restore"
+"$BIN" fsck --data "$DATA" >/dev/null ||
+	fail "fsck reported findings after the restore"
+
+step "the restored data dir still serves"
+start_serve
+(cd "$ROOT/dir2/demo" && "$BIN" cat README.md --at main) |
+	grep -qx 'hello from the cold boot' ||
+	fail "the restored data dir does not serve the landed content"
+
 step "cold boot OK"

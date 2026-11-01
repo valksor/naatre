@@ -1,16 +1,18 @@
 //! `naatre fsck` (M10a): the server-side consistency checker.
 //!
-//! Read-only: the mark runs cheaply over the primary tables (the same
-//! [`crate::gc::mark`] the sweep uses), every dangling-reference anti-join
-//! must come back zero (the never-dangling invariant), and the counts —
-//! total vs marked changesets and blobs, the ledger's pending candidates,
-//! the cumulative `gc` audit totals — go into one report. The CAS presence
-//! side differences the DB-known inventory against what the backend
-//! actually holds, per backend (fs directory walk; S3 `objects/` prefix
-//! listing), with the S3 external-drift note attached: bucket-side
+//! Read-only by default: the mark runs cheaply over the primary tables
+//! (the same [`crate::gc::mark`] the sweep uses), every dangling-reference
+//! anti-join must come back zero (the never-dangling invariant), and the
+//! counts — total vs marked changesets and blobs, the ledger's pending
+//! candidates, the cumulative `gc` audit totals — go into one report. The
+//! CAS presence side differences the DB-known inventory against what the
+//! backend actually holds, per backend (fs directory walk; S3 `objects/`
+//! prefix listing), with the S3 external-drift note attached: bucket-side
 //! lifecycle rules or versioning can delete or resurrect objects outside
 //! naatre's control, so a DB-known blob missing from the bucket is drift to
-//! investigate, not proof of local corruption.
+//! investigate, not proof of local corruption. The ONE write is the M11
+//! `--repair` arm ([`fsck_repair`]), scoped to the pre-M11 import's
+//! missing-record-row dirt class.
 //!
 //! Advisory mismatches (the `repo_blobs` membership index vs the repo's
 //! `file_changes` references; ledger rows for data that is reachable
@@ -114,6 +116,9 @@ pub struct FsckReport {
     pub redaction_purge_drift: usize,
     /// Set when `blob_backend` is "s3": the external-drift note.
     pub external_drift: Option<&'static str>,
+    /// The `--repair` arm (M11): the referenced blobs whose `objects`
+    /// record row was backfilled, sorted hex. Empty for a plain scan.
+    pub backfilled: Vec<String>,
 }
 
 impl FsckReport {
@@ -144,6 +149,105 @@ struct Inventory {
 /// only through presence reads and the id listing). The host-local verb and
 /// tests call this directly.
 pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
+    scan(state).await
+}
+
+/// The `--repair` arm (M11): the one write fsck can do, scoped to EXACTLY
+/// the dirt class the pre-M11 import left behind — blobs this store
+/// REFERENCES (membership or file_changes) whose CAS bytes are present but
+/// whose `objects` record row is missing. Each candidate is hash-verified
+/// through the blob store's read path, the row is upserted (the same
+/// idempotent statement the record step and import use), and ONE
+/// `fsck_repair` audit row names the count (nothing collected → no row,
+/// the gc-audit pattern). Anything else fsck flags is NOT touched — the
+/// candidate query is the whole work list. The scan re-runs after the
+/// backfill, so the report reflects the post-repair store.
+pub async fn fsck_repair(state: &AppState) -> Result<FsckReport, ApiError> {
+    let now_i = state.now_ns() as i64;
+    // The work list: referenced blobs without their record row.
+    let candidates = state
+        .read(|conn| db::fsck_repair_candidates(conn).map_err(ApiError::log_internal))
+        .await?;
+    let mut backfilled: Vec<Id> = Vec::new();
+    if !candidates.is_empty() {
+        let cas = std::sync::Arc::clone(&state.cas);
+        let candidates = candidates.clone();
+        backfilled = state
+            .write(move |store| {
+                let conn = store.conn();
+                // Hash-verified read first: a candidate whose bytes are
+                // ABSENT is not this dirt class (that is `bytes_missing`,
+                // a different finding) and is left alone.
+                let mut done: Vec<Id> = Vec::new();
+                let tx = conn
+                    .transaction_immediate()
+                    .map_err(ApiError::log_internal)?;
+                for id in &candidates {
+                    let present = {
+                        let cas = std::sync::Arc::clone(&cas);
+                        let ids = [*id];
+                        naatre_store::BlobStore::has(cas.as_ref(), &ids)
+                            .map_err(ApiError::log_internal)?
+                    };
+                    if !present[0] {
+                        continue;
+                    }
+                    let bytes = {
+                        let cas = std::sync::Arc::clone(&cas);
+                        let id = *id;
+                        state_blocking_get(&cas, &id)?
+                    };
+                    // The idempotent re-put returns the STORED size without
+                    // touching the existing object (the CAS put contract).
+                    let info = {
+                        let cas = std::sync::Arc::clone(&cas);
+                        state_blocking_put(&cas, &bytes)?
+                    };
+                    debug_assert_eq!(info.id, *id);
+                    db::object_row_upsert(&tx, id, bytes.len() as i64, info.csize as i64, now_i)
+                        .map_err(ApiError::log_internal)?;
+                    done.push(*id);
+                }
+                if !done.is_empty() {
+                    db::audit_append(
+                        &tx,
+                        now_i,
+                        "system",
+                        "fsck_repair",
+                        &serde_json::json!({ "backfilled_objects": done.len() }).to_string(),
+                    )
+                    .map_err(ApiError::log_internal)?;
+                }
+                tx.commit().map_err(ApiError::log_internal)?;
+                Ok(done)
+            })
+            .await?;
+    }
+    let mut report = scan(state).await?;
+    backfilled.sort_by_key(|id| id.to_hex());
+    report.backfilled = backfilled.iter().map(|id| id.to_hex()).collect();
+    Ok(report)
+}
+
+/// The blocking CAS get for the repair arm (the sync facade runs on the
+/// state's blocking pool, never a runtime thread).
+fn state_blocking_get(
+    cas: &std::sync::Arc<dyn naatre_store::BlobStore>,
+    id: &naatre_core::ids::Id,
+) -> Result<Vec<u8>, ApiError> {
+    naatre_store::BlobStore::get(cas.as_ref(), id).map_err(ApiError::log_internal)
+}
+
+/// The blocking CAS put for the repair arm.
+fn state_blocking_put(
+    cas: &std::sync::Arc<dyn naatre_store::BlobStore>,
+    bytes: &[u8],
+) -> Result<naatre_store::blob::PutInfo, ApiError> {
+    naatre_store::BlobStore::put(cas.as_ref(), bytes).map_err(ApiError::log_internal)
+}
+
+/// The full read-only scan behind [`fsck`] and [`fsck_repair`].
+async fn scan(state: &AppState) -> Result<FsckReport, ApiError> {
     let now_i = state.now_ns() as i64;
     let cut = now_i.saturating_sub(state.gc_grace.as_nanos() as i64);
 
@@ -295,5 +399,6 @@ pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
         redactions_purged: redactions.1.max(0) as usize,
         redaction_purge_drift: redactions.2.max(0) as usize,
         external_drift: (state.blob_backend == "s3").then_some(S3_DRIFT_NOTE),
+        backfilled: Vec::new(),
     })
 }

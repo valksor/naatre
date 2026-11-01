@@ -117,11 +117,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: x86_64-unknown-linux-musl
-      - run: rustup target add x86_64-unknown-linux-musl
-      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
-      # No binaries exist yet at M0, so the glob may match nothing; this job
-      # exists to prove the static musl build path early.
-      - run: sha256sum target/x86_64-unknown-linux-musl/release/naatre* > SHA256SUMS || true
+      # The M11 release step (scripts/release.sh): build the static musl
+      # binary, SHA256SUMS (the M0 behavior), and the CycloneDX SBOM.
+      # Signing stays OFFLINE — CI never holds any release key — so the
+      # --no-sign artifact set is what CI proves; the signature verify gate
+      # below runs for real against the CI TEST key on every push.
+      - run: cargo install cargo-cyclonedx --locked
+      - run: scripts/release.sh --no-sign release-artifacts x86_64-unknown-linux-musl
+      - run: test -f release-artifacts/naatre.cdx.json
+      # The signature verify gate (scripts/release-verify.sh): the fixture
+      # in scripts/release-fixture carries a REAL signature made by the CI
+      # TEST key (deploy/naatre-release-test.pub — NOT a release anchor;
+      # the production release key does not exist yet and arrives with the
+      # maintainer); CI verifies the fixture against that test key, then
+      # proves a tampered SHA256SUMS line FAILS verification. SECURITY.md
+      # documents the operator commands.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q minisign
+      - run: scripts/release-verify.sh --selftest scripts/release-fixture
       # THIRD_PARTY_LICENSES.md ships in the release artifacts (plan
       # "License": "in release + Docker"); it is the Cargo.lock-derived
       # approximation until a release step regenerates it with cargo-about.
@@ -129,5 +141,6 @@ jobs:
         with:
           name: release-checksums
           path: |
-            SHA256SUMS
-            THIRD_PARTY_LICENSES.md
+            release-artifacts/SHA256SUMS
+            release-artifacts/naatre.cdx.json
+            release-artifacts/THIRD_PARTY_LICENSES.md

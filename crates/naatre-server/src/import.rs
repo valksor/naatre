@@ -92,6 +92,10 @@ pub struct ImportOptions {
     /// Skip unsupported commits (and cascade to their descendants) instead
     /// of aborting the whole import.
     pub skip_unsupported: bool,
+    /// M11 `--sanitize`: escape author/message control-char/Cf content
+    /// LOSSLESSLY (the [`escape_text_lossless`] codec) instead of the
+    /// default's U+FFFD replacement, with a per-object `escaped` report.
+    pub sanitize: bool,
 }
 
 /// One skipped commit: the git oid plus the reason that disqualified it.
@@ -99,6 +103,22 @@ pub struct ImportOptions {
 pub struct Skipped {
     pub oid: String,
     pub reason: String,
+}
+
+/// One `--sanitize` escape (M11): the commit whose author or message was
+/// escaped, which field, and exactly which code points were escaped. The
+/// report joins the existing import report shape (a new `escaped` key
+/// beside `sanitized`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SanitizedObject {
+    /// The naatre changeset id the escape produced (what is stored).
+    pub id: String,
+    /// The source git commit oid.
+    pub commit: String,
+    /// `"author"` or `"message"`.
+    pub field: String,
+    /// The escaped code points, e.g. `["U+0007", "U+202E"]`.
+    pub chars: Vec<String>,
 }
 
 /// The outcome of one import run, rendered as the report's final JSON line.
@@ -115,6 +135,10 @@ pub struct Report {
     pub skipped: Vec<Skipped>,
     pub cascaded: Vec<String>,
     pub sanitized: Vec<String>,
+    /// `--sanitize` only: one entry per escaped field, naming the object
+    /// and the escaped code points. Always present in the JSON line;
+    /// empty when nothing was escaped.
+    pub escaped: Vec<SanitizedObject>,
     pub main: &'static str,
     pub reason: Option<String>,
 }
@@ -127,6 +151,7 @@ impl Report {
             "skipped": self.skipped,
             "cascaded": self.cascaded,
             "sanitized": self.sanitized,
+            "escaped": self.escaped,
             "main": self.main,
             "reason": self.reason,
         })
@@ -271,6 +296,7 @@ pub fn run_backend(
         skipped: Vec::new(),
         cascaded: Vec::new(),
         sanitized: Vec::new(),
+        escaped: Vec::new(),
         main: "unchanged",
         reason: None,
     };
@@ -316,10 +342,18 @@ pub fn run_backend(
     let mut offending: Vec<(ObjectId, String)> = Vec::new();
     let mut parent_missing: Vec<ObjectId> = Vec::new();
     for commit in &batch {
-        match prepare_commit(&git, &store, repo_id, commit, &git_map, &batch_cs)? {
+        match prepare_commit(
+            &git,
+            &store,
+            repo_id,
+            commit,
+            &git_map,
+            &batch_cs,
+            opts.sanitize,
+        )? {
             Prepared::Ready(p) => {
                 batch_cs.insert(commit.oid, (p.cs_id, p.generation));
-                importable.push(p);
+                importable.push(*p);
             }
             Prepared::Unsupported(reasons) => {
                 for reason in reasons {
@@ -378,6 +412,17 @@ pub fn run_backend(
         report.imported += 1;
         if p.sanitized {
             report.sanitized.push(p.git_oid.to_string());
+        }
+        for (field, chars) in &p.escaped {
+            report.escaped.push(SanitizedObject {
+                id: p.cs_id.to_hex(),
+                commit: p.git_oid.to_string(),
+                field: (*field).to_string(),
+                chars: chars
+                    .iter()
+                    .map(|c| format!("U+{:04X}", *c as u32))
+                    .collect(),
+            });
         }
     }
 
@@ -872,16 +917,24 @@ struct PreparedCommit {
     cs: Changeset,
     entries: Vec<PreparedEntry>,
     generation: i64,
-    /// The commit's message or author needed U+FFFD replacement.
+    /// The commit's message or author needed text sanitization (U+FFFD
+    /// replacement by default; the `--sanitize` lossless escape instead).
     sanitized: bool,
+    /// `--sanitize` only: per-field lists of the code points the escape
+    /// replaced (field name, escaped chars), for the report's `escaped`
+    /// entries.
+    escaped: Vec<(&'static str, Vec<char>)>,
 }
 
 /// The scan's verdict on one batch commit. `Unsupported` carries the
 /// commit's own content problems; `ParentMissing` marks the cascade case
 /// (a git parent that is neither mapped nor importable — in default mode
 /// this only ever sits under an `Unsupported` ancestor, which aborts).
+/// `Ready` boxes: the commit payload dwarfs the other variants (clippy's
+/// large-variant-difference lint), and the box costs nothing on the scan
+/// path.
 enum Prepared {
-    Ready(PreparedCommit),
+    Ready(Box<PreparedCommit>),
     Unsupported(Vec<String>),
     ParentMissing,
 }
@@ -899,6 +952,7 @@ fn prepare_commit(
     commit: &GitCommit,
     git_map: &HashMap<ObjectId, Id>,
     batch_cs: &HashMap<ObjectId, (Id, i64)>,
+    sanitize: bool,
 ) -> Result<Prepared, ImportError> {
     let mut reasons: Vec<String> = Vec::new();
 
@@ -1023,9 +1077,34 @@ fn prepare_commit(
     }
 
     // Cc+Cf cleanup on author/message (never a skip): naatre's own validator
-    // is the oracle; each reported character becomes U+FFFD until clean.
-    let (author, message, text_sanitized) = sanitize_pair(author, message);
-    sanitized |= text_sanitized;
+    // is the oracle. Default mode replaces each reported character with
+    // U+FFFD until clean; --sanitize instead escapes the text LOSSLESSLY
+    // (the escape_text_lossless codec, recorded per field for the report).
+    let mut escaped: Vec<(&'static str, Vec<char>)> = Vec::new();
+    let (author, message) = if sanitize {
+        let (author, author_chars) = escape_text_lossless(&author);
+        let (message, message_chars) = escape_text_lossless(&message);
+        if !author_chars.is_empty() {
+            escaped.push(("author", author_chars));
+        }
+        if !message_chars.is_empty() {
+            escaped.push(("message", message_chars));
+        }
+        // The escape must leave the text clean — the validator is still the
+        // gate; a miss here is rule drift (a broken invariant), never a
+        // silent pass.
+        if let Err(e) = changeset::validate(&carrier_changeset(&author, &message)) {
+            return Err(ImportError::Internal(format!(
+                "the --sanitize escape left author/message text invalid: {e}"
+            )));
+        }
+        sanitized |= !escaped.is_empty();
+        (author, message)
+    } else {
+        let (author, message, text_sanitized) = sanitize_pair(author, message);
+        sanitized |= text_sanitized;
+        (author, message)
+    };
 
     // Merge-join order is already byte-sorted; the sort is a cheap pin.
     entries.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
@@ -1060,7 +1139,7 @@ fn prepare_commit(
         generation = generation.max(parent_gen + 1);
     }
 
-    Ok(Prepared::Ready(PreparedCommit {
+    Ok(Prepared::Ready(Box::new(PreparedCommit {
         git_oid: commit.oid,
         git_tree: commit.tree,
         cs_id,
@@ -1068,7 +1147,8 @@ fn prepare_commit(
         entries,
         generation,
         sanitized,
-    }))
+        escaped,
+    })))
 }
 
 /// Validates one diff entry: path must be grammar-valid (UTF-8 by
@@ -1150,6 +1230,113 @@ fn map_derive(e: tree_derive::DeriveError) -> ImportError {
 
 // ---- sanitization ----------------------------------------------------------
 
+/// The `--sanitize` text codec (M11): a LOSSLESS escape for author/message
+/// content the character rule refuses (Unicode Cc except `\n`/`\t`, plus
+/// the Cf set — `changeset::check_text`'s rule). Every offending character
+/// becomes `\u{hex}` (lowercase hex, the standard escape shape) and every
+/// literal `\` in a string that contains offenders becomes `\\`, so the
+/// escape is unambiguously invertible. A string WITHOUT offenders passes
+/// through byte-identical — a clean commit is never rewritten. The inverse
+/// is [`unescape_text_lossless`]; the report's `escaped` entries name each
+/// escaped object and code point.
+pub fn escape_text_lossless(s: &str) -> (String, Vec<char>) {
+    if !s.chars().any(text_offender) {
+        return (s.to_string(), Vec::new());
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut escaped: Vec<char> = Vec::new();
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if text_offender(c) {
+            escaped.push(c);
+            out.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    (out, escaped)
+}
+
+/// The inverse of [`escape_text_lossless`]: `\\` → `\` and
+/// `\u{hex}` → the character. A malformed escape (a lone backslash, a bad
+/// hex body, a non-scalar code point) is an error — this codec only ever
+/// decodes text [`escape_text_lossless`] wrote.
+pub fn unescape_text_lossless(s: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('u') => {
+                let mut hex = String::new();
+                let mut closed = false;
+                for h in chars.by_ref() {
+                    match h {
+                        '{' if hex.is_empty() => {}
+                        '}' => {
+                            closed = true;
+                            break;
+                        }
+                        _ if h.is_ascii_hexdigit() => hex.push(h),
+                        _ => return Err(format!("malformed \\u escape near {h:?}")),
+                    }
+                }
+                if !closed {
+                    return Err("unterminated \\u escape".to_string());
+                }
+                let cp = u32::from_str_radix(&hex, 16)
+                    .map_err(|_| "malformed \\u escape: bad hex".to_string())?;
+                out.push(
+                    char::from_u32(cp)
+                        .ok_or_else(|| format!("\\u{{{hex}}} is not a Unicode scalar value"))?,
+                );
+            }
+            other => return Err(format!("a lone backslash before {other:?}")),
+        }
+    }
+    Ok(out)
+}
+
+/// Mirrors `changeset::check_text`'s character rule: Unicode Cc except
+/// `\n`/`\t`, plus the Cf set (`path::is_cc`/`is_cf` are crate-private to
+/// naatre-core). The carrier validation after the escape is the actual
+/// gate — this predicate only decides whether the cheap pass-through
+/// applies and which characters get escaped.
+fn text_offender(c: char) -> bool {
+    if c == '\n' || c == '\t' {
+        return false;
+    }
+    c.is_control()
+        || matches!(c as u32,
+            0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+        )
+}
+
 /// Replaces every Cc/Cf character of author and message (after the
 /// `\r\n`→`\n` mutation) with U+FFFD, using naatre's own validator as the
 /// oracle: a carrier changeset isolates the char rule, and each reported
@@ -1207,6 +1394,29 @@ fn replace_with_replacement_char(s: &mut String, index: usize) {
 
 // ---- naatre side: import one commit ----------------------------------------
 
+/// One CAS put plus its `objects` record row — the upload record step's
+/// statement ([`db::object_row_upsert`], idempotent), run right after the
+/// put and before the referencing rows. Import used to skip the record
+/// ("import records no rows"): a referenced blob without its row is fsck
+/// DIRT under the M10a dangling checks, which left every imported store
+/// fsck-dirty and made the M11 backup→wipe→restore→fsck-clean check
+/// unsatisfiable on the import seeding path.
+fn put_recorded(
+    cas: &dyn naatre_store::BlobStore,
+    conn: &Db,
+    content: &[u8],
+) -> Result<naatre_store::blob::PutInfo, ImportError> {
+    let put = cas.put(content)?;
+    db::object_row_upsert(
+        conn,
+        &put.id,
+        content.len() as i64,
+        put.csize as i64,
+        now_ns(),
+    )?;
+    Ok(put)
+}
+
 /// Imports one prepared commit: puts every referenced blob (diff and full
 /// tree), then commits the changeset (via [`db::changeset_insert_rows`] —
 /// the single changeset-row writer — with the import extras: the git_map
@@ -1245,7 +1455,7 @@ fn import_commit(
                 )));
             }
             let content = read_blob(git, git_blob)?;
-            let put = cas.put(&content)?.id;
+            let put = put_recorded(cas, conn, &content)?.id;
             if put != id {
                 return Err(ImportError::Internal(format!(
                     "blob id mismatch for path {:?}: scan computed {}, CAS put {}",
@@ -1348,7 +1558,7 @@ fn build_tree_node(
                         blob.to_hex()
                     )));
                 }
-                let put = cas.put(&content)?.id;
+                let put = put_recorded(cas, conn, &content)?.id;
                 if put != blob {
                     return Err(ImportError::Internal(format!(
                         "blob id mismatch for tree path {path:?}: computed {}, CAS put {}",

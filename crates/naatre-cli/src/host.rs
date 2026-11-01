@@ -240,14 +240,21 @@ pub fn new_admin_token(data: &Path) -> i32 {
 }
 
 /// `naatre import --data <dir> [--into <name>] [--skip-unsupported]
-/// <git-path>`: one-way git import, offline, under the data dir flock.
-/// Prints plain progress lines and the final JSON report line; exits 0 on
-/// success and 1 on a hard error or an aborted import.
-pub fn import(data: &Path, into: Option<&str>, skip_unsupported: bool, git_path: &str) -> i32 {
+/// [--sanitize] <git-path>`: one-way git import, offline, under the data
+/// dir flock. Prints plain progress lines and the final JSON report line;
+/// exits 0 on success and 1 on a hard error or an aborted import.
+pub fn import(
+    data: &Path,
+    into: Option<&str>,
+    skip_unsupported: bool,
+    sanitize: bool,
+    git_path: &str,
+) -> i32 {
     let opts = ImportOptions {
         git_path: git_path.into(),
         into: into.map(str::to_string),
         skip_unsupported,
+        sanitize,
     };
     println!("import: source {}", opts.git_path.display());
     // No derived-data kinds are registered in the offline import process
@@ -283,6 +290,15 @@ fn print_report(report: &Report) {
     }
     for oid in &report.sanitized {
         println!("sanitized: {oid}");
+    }
+    for e in &report.escaped {
+        println!(
+            "escaped: {} {} ({}): {}",
+            e.commit,
+            e.id,
+            e.field,
+            e.chars.join(", ")
+        );
     }
     match &report.reason {
         Some(reason) => println!("main: {} — {reason}", report.main),
@@ -511,13 +527,19 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
     }
 }
 
-/// `naatre fsck --data <dir> [--json]`: the consistency checker —
-/// dangling references, reachability counts, CAS presence vs the DB
-/// inventory — read-only under the data dir flock. Exit 0 clean, 1
-/// findings, 2 error.
-pub fn fsck(data: &Path, json: bool) -> i32 {
+/// `naatre fsck --data <dir> [--json] [--repair]`: the consistency checker
+/// — dangling references, reachability counts, CAS presence vs the DB
+/// inventory — read-only under the data dir flock, except the `--repair`
+/// arm: backfilling the `objects` record row for referenced blobs whose
+/// bytes are present (the dirt pre-M11 imports left; audited, scoped to
+/// exactly that class). Exit 0 clean, 1 findings, 2 error.
+pub fn fsck(data: &Path, json: bool, repair: bool) -> i32 {
     match block_on_state(data, |state| async move {
-        naatre_server::fsck::fsck(&state).await
+        if repair {
+            naatre_server::fsck::fsck_repair(&state).await
+        } else {
+            naatre_server::fsck::fsck(&state).await
+        }
     }) {
         Ok(Ok(report)) => {
             let clean = report.clean();
@@ -564,8 +586,15 @@ pub fn fsck(data: &Path, json: bool) -> i32 {
                 }
                 if report.cas_unrecorded > 0 {
                     println!(
-                        "fsck: {} cas-present blob(s) without an objects row (orphaned uploads; import records no rows)",
+                        "fsck: {} cas-present blob(s) without an objects row (orphaned uploads)",
                         report.cas_unrecorded
+                    );
+                }
+                if !report.backfilled.is_empty() {
+                    println!(
+                        "fsck: repair backfilled {} objects record row(s): {}",
+                        report.backfilled.len(),
+                        report.backfilled.join(", ")
                     );
                 }
                 if report.stale_candidates > 0 {
@@ -604,5 +633,109 @@ pub fn fsck(data: &Path, json: bool) -> i32 {
             fail(e);
             2
         }
+    }
+}
+
+/// `naatre backup --data <dir> <dest>`: snapshot the whole data dir (every
+/// backend combo) into ONE new backup directory — manifest.json, the
+/// consistent DB snapshot FIRST (`VACUUM INTO` for SQLite, one `pg_dump`
+/// run for Postgres), then the immutable objects — under the data-dir
+/// flock. Exit 0 on success, 1 on error.
+pub fn backup(data: &Path, dest: &Path) -> i32 {
+    println!("backup: data {}", data.display());
+    let cfg = match load_backend_or_fail(data) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    match naatre_server::backup::backup(data, &cfg, dest) {
+        Ok(report) => {
+            println!("backup: wrote {}", report.dest.display());
+            println!(
+                "backup: meta {}, blob {} (schema v{})",
+                report.meta.as_str(),
+                report.blob.as_str(),
+                report.schema_version
+            );
+            println!(
+                "backup: changesets {}, objects {}",
+                report.counts.changesets, report.counts.objects
+            );
+            if let Some(dump) = report.dump_file {
+                println!("backup: DB snapshot {dump} (pg_dump ran first — the safe order)");
+            } else {
+                println!("backup: DB snapshot naatre.db (VACUUM INTO ran first — the safe order)");
+            }
+            if report.bucket_copy_duty {
+                println!(
+                    "backup: S3 — copy the BUCKET per manifest.json's object ids \
+                     (README \"Backup\"); objects are immutable, so incremental \
+                     syncs between backups work"
+                );
+            }
+            if !report.missing.is_empty() {
+                println!(
+                    "backup: WARNING — {} object(s) vanished between the DB snapshot and \
+                     the copy (a redaction purge raced the snapshot): {}",
+                    report.missing.len(),
+                    report.missing.join(", ")
+                );
+                println!(
+                    "backup: the manifest lists only the captured objects; a restore of \
+                     this backup needs the redactions re-applied and a GC pass (the \
+                     documented operator duty)"
+                );
+            }
+            if report.past_grace {
+                println!(
+                    "backup: WARNING — the copy phase started past gc_grace_secs after the \
+                     DB snapshot; GC could have reclaimed snapshot-reachable bytes (see \
+                     the missing list above, if any)"
+                );
+            }
+            0
+        }
+        Err(e) => fail(e),
+    }
+}
+
+/// `naatre restore --data <target-dir> <backup-dir>`: restore one backup
+/// directory into a data dir for the configured backend. Verifies the
+/// manifest and every artifact's SHA256 into staging BEFORE any write to
+/// the target; refuses a combo mismatch and a non-empty target unless
+/// `--force`; restores DB then objects; checks object PRESENCE (not
+/// reachability) and points the operator at fsck. Exit 0 on success, 1 on
+/// error.
+pub fn restore_backup(target: &Path, backup_dir: &Path, force: bool) -> i32 {
+    println!("restore: target {}", target.display());
+    let cfg = match load_backend_or_fail(target) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    match naatre_server::backup::restore(target, &cfg, backup_dir, force) {
+        Ok(report) => {
+            println!(
+                "restore: manifest format 1 (naatre backup, schema v{}, meta {}, blob {})",
+                report.schema_version,
+                report.meta.as_str(),
+                report.blob.as_str()
+            );
+            if report.forced {
+                println!("restore: --force overrode the non-empty-target refusal");
+            }
+            println!(
+                "restore: artifacts SHA256-verified, then DB restored first, objects second (the safe order)"
+            );
+            println!(
+                "restore: changesets {}, objects {} present in the target CAS",
+                report.counts.changesets, report.objects_present
+            );
+            println!(
+                "restore: now run `naatre fsck --data {}` — restore does not \
+                 silently skip verification",
+                target.display()
+            );
+            0
+        }
+        Err(e) => fail(e),
     }
 }

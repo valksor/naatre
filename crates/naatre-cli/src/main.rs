@@ -16,6 +16,26 @@ use naatre_cli::verbs::{self, Net};
 use naatre_cli::wc::lock as verbs_lock;
 use naatre_cli::{client, host};
 
+/// `naatre backup --help`'s safe-ordering restatement, per backend combo
+/// (plan M11: the argument travels with the verb, not just the README).
+const BACKUP_AFTER_HELP: &str = "\
+SAFE ORDER (per combo): the consistent DB snapshot is always taken FIRST,
+then the immutable objects — blob fsync precedes every referencing row
+commit, so a DB snapshot older than the object copy leaves at most harmless
+orphans, never dangling references.
+
+  sqlite + fs    VACUUM INTO (a consistent single-file snapshot — NEVER an
+                 in-place file copy of the WAL database), then objects/
+                 is copied per the manifest.
+  postgres + fs  one pg_dump run (a documented external dependency, the
+                 same convention as git for import), then objects/.
+  * + s3         the DB snapshot first; manifest.json then lists the
+                 object ids for the operator's BUCKET COPY (README
+                 \"Backup\" — incremental sync between backups works:
+                 objects are immutable).
+
+The DB-per-repo coordinated snapshot lands with M13a.";
+
 /// naatre: a self-hosted, single-binary Scion-style VCS.
 #[derive(Parser)]
 #[command(
@@ -88,8 +108,27 @@ enum Cmd {
         /// instead of aborting the whole import.
         #[arg(long)]
         skip_unsupported: bool,
+        /// Escape control-char/Cf author and message content LOSSLESSLY
+        /// (\\u{hex} escapes + a per-object `escaped` report entry naming
+        /// each escaped commit and code point) instead of the default's
+        /// U+FFFD replacement.
+        #[arg(long)]
+        sanitize: bool,
         /// Path of the local git repository to import.
         git_path: String,
+    },
+    /// Snapshot a whole data dir (every backend combo) into ONE new backup
+    /// directory: manifest.json + a consistent DB snapshot + the objects.
+    /// Host-local, under the data-dir flock (stop-and-copy: a running
+    /// server holds the lock).
+    #[command(after_help = BACKUP_AFTER_HELP)]
+    Backup {
+        /// Existing data directory (uninitialized → run naatre init first).
+        #[arg(long)]
+        data: PathBuf,
+        /// Backup directory to create (must not exist; restore refuses a
+        /// directory without its manifest).
+        dest: PathBuf,
     },
     /// Write this working copy's .naatre/config.toml (server_url + token).
     Login {
@@ -234,6 +273,12 @@ enum Cmd {
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
+        /// The ONE repair fsck can do: backfill the `objects` record row
+        /// for blobs this store REFERENCES whose CAS bytes are present
+        /// (the dirt pre-M11 imports left). Audited; nothing else is
+        /// touched — every other finding stays a finding.
+        #[arg(long)]
+        repair: bool,
     },
     /// Mark an object redacted in a repo (host-local admin verb, M10b: the
     /// tombstone drops the object from every serving path at mark time;
@@ -267,14 +312,31 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
-    /// Restore a snapshot's files into this working copy (head unchanged).
+    /// Restore a snapshot's files into this working copy (head unchanged) —
+    /// or, with --data, restore a DATA-DIR BACKUP (M11) into a data dir.
     Restore {
-        /// Snapshot id (64 hex, printed by `naatre snapshot`).
+        /// Snapshot id (64 hex, printed by `naatre snapshot`) — or, with
+        /// --data, the path of the backup directory (`naatre backup`)
+        /// whose manifest drives the restore.
         snap_id: String,
-        /// Discard local edits and colliding untracked files on the
-        /// snapshot's paths (symlinks on them are unlinked).
+        /// Snapshot mode: discard local edits and colliding untracked
+        /// files on the snapshot's paths (symlinks on them are unlinked).
+        /// Backup mode (--data): overwrite a NON-EMPTY target data dir
+        /// (an initialized Postgres schema is still refused — dropping it
+        /// is the wipe).
         #[arg(long)]
         force: bool,
+        /// Data-dir backup restore: <arg> is the backup directory, and
+        /// this is the target data dir. Every artifact is SHA256-verified
+        /// into staging BEFORE any write to the target; a non-empty target
+        /// is refused without --force. Postgres targets are refused while
+        /// the schema is initialized EVEN WITH --force (dropping the
+        /// schema is the wipe) — because the refusal happens before any
+        /// psql write, a failed Postgres restore can never strand a live
+        /// store half-replaced. Run `naatre fsck --data <dir>`
+        /// afterwards (restore checks object presence, not reachability).
+        #[arg(long)]
+        data: Option<PathBuf>,
         #[command(flatten)]
         net: NetOpts,
     },
@@ -470,8 +532,16 @@ fn main() {
             data,
             into,
             skip_unsupported,
+            sanitize,
             git_path,
-        } => host::import(&data, into.as_deref(), skip_unsupported, &git_path),
+        } => host::import(
+            &data,
+            into.as_deref(),
+            skip_unsupported,
+            sanitize,
+            &git_path,
+        ),
+        Cmd::Backup { data, dest } => host::backup(&data, &dest),
         Cmd::Login { server, token } => wc_locked(cwd, || verbs::login::run(cwd, &server, &token)),
         Cmd::Clone {
             url,
@@ -536,7 +606,7 @@ fn main() {
             wc_locked(cwd, || verbs::doctor::run(cwd, rebuild, &net.net()))
         }
         Cmd::Gc { data, json } => host::gc(&data, json),
-        Cmd::Fsck { data, json } => host::fsck(&data, json),
+        Cmd::Fsck { data, json, repair } => host::fsck(&data, json, repair),
         Cmd::Redact {
             kind,
             id,
@@ -553,10 +623,14 @@ fn main() {
         Cmd::Restore {
             snap_id,
             force,
+            data,
             net,
-        } => wc_locked(cwd, || {
-            verbs::restore::run(cwd, &snap_id, force, &net.net())
-        }),
+        } => match data {
+            Some(data) => host::restore_backup(&data, std::path::Path::new(&snap_id), force),
+            None => wc_locked(cwd, || {
+                verbs::restore::run(cwd, &snap_id, force, &net.net())
+            }),
+        },
         Cmd::Mcp { token, read_only } => verbs::mcp::run(cwd, read_only, token),
         Cmd::Mount {
             repo,

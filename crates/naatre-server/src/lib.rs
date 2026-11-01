@@ -21,6 +21,7 @@ pub mod api_code;
 pub mod api_error;
 pub mod auth;
 pub mod authz;
+pub mod backup;
 pub mod db;
 pub mod derive;
 pub mod derived;

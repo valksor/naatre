@@ -1128,6 +1128,7 @@ async fn every_history_subtree_is_junctioned_across_write_paths() {
             git_path: g.clone(),
             into: Some("m2a".to_string()),
             skip_unsupported: false,
+            sanitize: false,
         },
         &Default::default(),
     )

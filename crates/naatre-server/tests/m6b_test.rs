@@ -765,6 +765,7 @@ fn import_fixture(git: &GitFixture) -> tempfile::TempDir {
             git_path: git.path.clone(),
             into: Some(REPO.into()),
             skip_unsupported: false,
+            sanitize: false,
         },
         &Default::default(),
     )

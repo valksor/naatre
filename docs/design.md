@@ -253,9 +253,13 @@ bump).
 One documented content mutation on import: `\r\n` → `\n` in commit
 messages. Author and message strings go through the same closed character
 rule as changeset create (Unicode Cc + Cf), but on import a violation is
-**never a skip**: every offending character is replaced with U+FFFD
-(always-on; the escaped-verbatim `--sanitize` mode is an M11 item) and the
-commit is listed in the import report's `sanitized` array.
+**never a skip**: by default every offending character is replaced with
+U+FFFD and the commit is listed in the import report's `sanitized` array;
+with `--sanitize` (M11) the text is instead escaped losslessly (`\u{hex}`
+per offending character, literal backslashes doubled — the inverse codec
+decodes to the original bytes), with per-object `escaped` report entries
+naming each escaped field and code point. The `\r\n` normalization
+applies before either mode.
 `--skip-unsupported` skips a commit **and all its descendants** (the
 `cascaded` list reports the cascade) — one offending early commit skips
 everything after it.

@@ -257,6 +257,7 @@ impl Env {
             git_path: f.path.clone(),
             into: Some(into.into()),
             skip_unsupported: skip,
+            sanitize: false,
         };
         naatre_server::import::run(&self.data, &opts, &Default::default()).unwrap()
     }
@@ -314,8 +315,9 @@ fn clean_import_full_parity() {
     assert_eq!(json["skipped"], serde_json::json!([]));
     assert_eq!(json["cascaded"], serde_json::json!([]));
     assert_eq!(json["sanitized"], serde_json::json!([]));
+    assert_eq!(json["escaped"], serde_json::json!([]));
     assert!(json["reason"].is_null());
-    assert_eq!(json.as_object().unwrap().len(), 6, "report keys: {json:?}");
+    assert_eq!(json.as_object().unwrap().len(), 7, "report keys: {json:?}");
 
     let repo_id = env.repo_id("imp");
     let map = env.git_map(repo_id);
@@ -800,6 +802,7 @@ fn import_while_serving_is_refused_by_the_flock() {
             git_path: f.path.clone(),
             into: Some("imp".into()),
             skip_unsupported: false,
+            sanitize: false,
         },
         &Default::default(),
     )
@@ -1000,6 +1003,7 @@ fn import_enqueues_registered_derive_kinds() {
             git_path: f.path.clone(),
             into: Some("imp".into()),
             skip_unsupported: false,
+            sanitize: false,
         },
         &registry,
     )
@@ -1055,11 +1059,11 @@ fn import_enqueues_registered_derive_kinds() {
 
 // ---- 8. the redaction boundary (M10b SD-B1) ---------------------------------
 
-/// An imported blob carries `repo_blobs` membership but NO `objects` row
-/// (the import writes CAS bytes + membership only) — the mark surface must
-/// still accept it as a tombstone target, and a re-import whose tree
-/// carries the redacted blob refuses: the import is a write boundary, and
-/// a tombstone outlives the purge.
+/// An imported blob carries CAS bytes, the `objects` record row (M11: a
+/// referenced blob without it is fsck dirt), and `repo_blobs` membership —
+/// the mark surface must accept it as a tombstone target, and a re-import
+/// whose tree carries the redacted blob refuses: the import is a write
+/// boundary, and a tombstone outlives the purge.
 #[test]
 fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
     if !git_works() {
@@ -1075,7 +1079,7 @@ fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
     let repo_id = e.repo_id("imp");
     let conn = e.conn();
 
-    // The SD-B1 premise: membership WITHOUT an objects row.
+    // The record step's row rides along with the membership (M11).
     let blob_raw: Vec<u8> = conn
         .query_row_map(
             &naatre_store::Sql::plain(
@@ -1092,8 +1096,8 @@ fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
             "SELECT COUNT(*) FROM objects WHERE object_id = x'{}'",
             blob.to_hex()
         )),
-        0,
-        "import writes no objects row (the SD blocker's premise)"
+        1,
+        "import records the objects row (a referenced blob without it is fsck dirt)"
     );
     assert_eq!(
         e.count(&format!(
@@ -1134,6 +1138,7 @@ fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
         git_path: f.path.clone(),
         into: Some("imp".into()),
         skip_unsupported: false,
+        sanitize: false,
     };
     let err = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap_err();
     match &err {
@@ -1262,6 +1267,7 @@ fn reimport_refuses_a_purged_changeset_id_from_the_cs_id_arm() {
         git_path: f.path.clone(),
         into: Some("imp".into()),
         skip_unsupported: false,
+        sanitize: false,
     };
     let err = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap_err();
     match &err {
@@ -1335,6 +1341,7 @@ fn import_refusing_at_commit_two_leaves_commit_one_and_resumes() {
         git_path: f.path.clone(),
         into: Some("imp".into()),
         skip_unsupported: false,
+        sanitize: false,
     };
     let err = naatre_server::import::run(&e.data, &opts, &Default::default()).unwrap_err();
     match &err {

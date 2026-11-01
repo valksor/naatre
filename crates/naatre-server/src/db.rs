@@ -2911,6 +2911,38 @@ pub fn fsck_danglings(conn: &Db) -> Result<Vec<(&'static str, i64)>, DbError> {
         .collect()
 }
 
+/// The fsck `--repair` arm's candidate set (M11): blobs REFERENCED by this
+/// store — `repo_blobs` membership or a `file_changes` reference — whose
+/// `objects` record row is missing, EXCLUDING every id with a redactions
+/// row in ANY repo (active or purged): the objects table is global, and a
+/// tombstoned or purged id must NEVER gain an objects row back — that
+/// would resurrect purge drift or a condemned-bytes state. Otherwise
+/// exactly the dirt class the pre-M11 import left behind (it wrote CAS
+/// bytes + references but skipped the record step's row); every OTHER fsck
+/// finding is out of the repair's scope by construction, because this
+/// query is the whole work list.
+pub fn fsck_repair_candidates(conn: &Db) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT DISTINCT object_id FROM repo_blobs rb \
+             WHERE NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = rb.object_id) \
+               AND NOT EXISTS (SELECT 1 FROM redactions r WHERE r.object_id = rb.object_id) \
+             UNION \
+             SELECT DISTINCT blob_id FROM file_changes f \
+             WHERE f.blob_id IS NOT NULL \
+               AND NOT EXISTS (SELECT 1 FROM objects o WHERE o.object_id = f.blob_id) \
+               AND NOT EXISTS (SELECT 1 FROM redactions r WHERE r.object_id = f.blob_id)",
+        ),
+        &[],
+        |r| {
+            let b: Vec<u8> = r.get(0)?;
+            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
+                DbError::from(std::io::Error::other("referenced blob id is not 32 bytes"))
+            })?))
+        },
+    )
+}
+
 /// One repo's `repo_blobs` membership rows (fsck's advisory comparison:
 /// the index vs the blob references the repo's `file_changes` carry).
 pub fn gc_repo_blobs(conn: &Db, repo_id: i64) -> Result<Vec<Id>, DbError> {
@@ -3095,14 +3127,15 @@ fn redaction_mark_classify(
 
 /// The redact-mark surface's target-presence probe: is `id` a valid
 /// tombstone target of `kind` in this repo? For a blob the server must
-/// hold it in ANY form — an `objects` row (a PUT upload), `repo_blobs`
-/// membership or a `file_changes` row in THIS repo (an import writes
-/// membership without an objects row — the M10b SD blocker: imported
-/// personal data must be markable), a blob entry in any written tree
-/// (content-addressed trees are shared) — or a tombstone row already
-/// stands (the re-arm target: active or purged). For a changeset the row
-/// must exist, or a tombstone row already stands (a purged changeset's
-/// row is gone; the re-arm keeps the gate armed against recreation).
+/// hold it in ANY form — an `objects` row (a PUT upload; imports record
+/// the same row since M11), `repo_blobs` membership or a `file_changes`
+/// row in THIS repo (the M10b SD blocker's rule: imported personal data
+/// must be markable in whatever form it is held), a blob entry in any
+/// written tree (content-addressed trees are shared) — or a tombstone row
+/// already stands (the re-arm target: active or purged). For a changeset
+/// the row must exist, or a tombstone row already stands (a purged
+/// changeset's row is gone; the re-arm keeps the gate armed against
+/// recreation).
 pub fn redaction_target_present(
     conn: &Db,
     repo_id: i64,

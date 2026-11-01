@@ -307,26 +307,101 @@ S3 backend it attaches the external-drift note: bucket-side lifecycle
 rules or versioning can delete or resurrect objects outside naatre's
 control — that is drift to investigate, never silently repaired.
 
-## Backup
+## Backup and restore (M11)
 
 The data dir is `naatre.db` (SQLite, WAL) + `objects/` (immutable
 content-addressed blobs) + `ephemeral/` (snapshot blobs, TTL'd) + `tmp/`.
 
-- **Stop-and-copy** (simplest): stop the server, copy the whole data dir.
-- **Live**: order matters, because a plain file copy of a live WAL database
-  (`naatre.db` alone) can be torn. Take a **consistent DB snapshot first**,
-  then the objects:
-  ```sh
-  sqlite3 naatre.db ".backup '/backups/naatre-db.db'"    # or: VACUUM INTO
-  rsync -a objects/ /backups/objects/                    # immutable → incremental
-  ```
-  Blob fsync precedes every referencing row commit (see design notes), so
-  a DB snapshot that is older than the `objects/` copy is always safe:
-  orphans are harmless, dangling references never happen.
-- `ephemeral/` need not be backed up — snapshots expire by design.
-- Dedicated `naatre backup`/`restore` verbs land in M11.
-Backup copies and the TLS proxy's own access logs are outside the data
-dir's erasure guarantee — they are the operator's to handle.
+**The verbs** — `naatre backup --data <dir> <dest>` and
+`naatre restore --data <target> <backup-dir>` — snapshot the whole data
+dir for every backend combo into ONE backup directory: `manifest.json`
+(format, naatre version, backend combo as enum strings, schema version,
+timestamp, counts, every history-CAS object id, and the SHA256 of every
+artifact) plus the artifacts below. **The manifest carries no credentials
+and no connection config** — the combo is `sqlite|postgres` × `fs|s3`
+strings only; `pg_dump`/`psql` get their password via the `PGPASSWORD`
+environment (or the operator's connection service file), never on a
+command line. The backup directory is created **0700** and every artifact
+is **0600** — it holds the whole instance's personal data. Both verbs take
+the data-dir flock, so they are stop-and-copy by construction — a running
+`naatre serve` holds the same lock; stop it first. `dest` must not exist
+(a backup is never overwritten), and a torn backup (no manifest — it is
+written last) is refused at restore time.
+
+**The safe order: consistent DB snapshot FIRST, then the immutable
+objects.** The verb enforces it; the argument is the same on every combo:
+blob fsync precedes every referencing row commit (durability invariant 1),
+so a DB snapshot older than the object copy leaves at most harmless
+orphans, never dangling references.
+
+- **sqlite + fs**: a consistent single-file snapshot via `VACUUM INTO`,
+  then `objects/` copied per the manifest. **Never an in-place file copy
+  of a WAL database** — a plain `cp` of a live `naatre.db` can be torn;
+  the snapshot is a fresh, self-contained file.
+- **postgres + fs**: one `pg_dump` run — a single MVCC-consistent
+  snapshot — then `objects/`. `pg_dump` (and restore's `psql`) are
+  **documented external dependencies of Postgres deployments** (the same
+  convention as git for import); a missing binary is a clean operator
+  error naming the tool. A missing/mismatched `pg_dump` is refused before
+  anything is written; on a dump failure the tool's stderr lands in
+  `tool-error.log` inside the backup dir (connection errors can name the
+  host and user, so naatre's own error carries the exit status only).
+- **sqlite + s3 / postgres + s3**: the DB snapshot first; `manifest.json`
+  then lists the
+  object ids and **the bucket copy is the operator's duty** — naatre does
+  not duplicate a bucket into the backup dir (out-of-band S3 tooling,
+  e.g. `aws s3 sync`/`mc mirror`; incremental syncs between backups work
+  because objects are immutable). The same caveat as the erasure section
+  below applies: external bucket lifecycle/versioning policies can
+  violate invariants naatre cannot see — that note lives in "Erasure",
+  and restore's presence gate is the tripwire that catches an incomplete
+  bucket copy.
+- `ephemeral/` is never backed up — snapshots expire by design (TTL),
+  and fsck does not scan that namespace.
+- The **DB-per-repo coordinated snapshot** (one backup spanning several
+  repos' databases atomically) lands with M13a; these verbs back up one
+  data dir's store.
+
+**Restore** validates the manifest, refuses a backend-combo mismatch with
+the target's config (naming both sides), and refuses a non-empty target —
+naming what it found — unless `--force` is given. **Postgres targets** are
+refused while the database already holds the naatre schema, and that
+refusal holds **even with `--force`**: dropping the schema IS the wipe,
+and because the refusal happens *before any psql write*, a failed Postgres
+restore can never strand a live store half-replaced — the worst a failed
+psql leaves is the uninitialized target it started on. **S3 targets**: the
+presence gate is the refusal — restore answers only when the target holds
+every manifest object (an incomplete bucket copy names the duty), and an
+S3-configured target whose local `objects/` holds data is the backend
+mismatch, refused regardless of `--force`. It is **all-or-nothing**: every
+artifact is copied into a staging directory and SHA256-verified against
+the manifest BEFORE any write to the target — a corrupt or tampered backup
+(one flipped byte) is refused and the target is left untouched — then the
+verified DB snapshot is moved into place and the objects follow. It checks
+every manifest id is PRESENT in the target CAS (not reachability) and
+points the operator at `naatre fsck` — restore never silently skips
+verification.
+
+**GC, purges, and the copy phase**: plain GC cannot race a fresh backup
+within `gc_grace_secs` (bytes reachable at snapshot time survive the
+grace window), and the flock keeps host-local GC/fsck/import out
+entirely. A **redaction purge** between the DB snapshot and the object
+copy CAN delete bytes immediately — per backend: on fs the copy phase
+records the vanished id in the report (the backup does not fail; the
+manifest lists only what it carries, and restore of it succeeds with the
+store dirty until the duty below runs); on S3 the bucket copy is the
+operator's and restore's presence gate names any gap. The report flags a
+copy phase that started past `gc_grace_secs`.
+
+**Operator duty — restore of a pre-redaction backup**: a backup taken
+before a redaction carries the content and NOT the tombstones, so
+restoring it brings redacted content back. Re-apply the redactions
+(`naatre redact …`, the audit trail lists them): the tombstones gate again
+immediately (every serving path and the import boundary refuse the
+content), and the next GC pass re-purges the bytes. Backups taken AFTER a
+redaction carry the tombstones and re-purge (or stay gated) on their own.
+Backup copies — and the TLS proxy's own access logs — are outside the
+data dir's erasure guarantee; they are the operator's to handle.
 
 ## Git interop
 
@@ -351,12 +426,33 @@ Import discloses its two content mutations and its skip behavior:
   mutation.
 - Author/message text violating the closed character rule (Unicode Cc/Cf —
   see the path grammar table's sibling rule in `docs/format.md` §3) is
-  never a skip: each offending character becomes U+FFFD and the commit is
-  listed in the report's `sanitized` array.
+  never a skip: by default each offending character becomes U+FFFD and the
+  commit is listed in the report's `sanitized` array. With `--sanitize`
+  the escape is **lossless** instead: every offending character becomes a
+  `\u{hex}` escape (literal backslashes doubled), the report's `escaped`
+  entries name each escaped field and code point, and decoding the stored
+  text (the same codec, invertible) returns the original bytes — modulo
+  the `\r\n` normalization above, which applies before sanitization in
+  both modes.
 - Unsupported content (octopus parents, symlinks, gitlinks, …) aborts the
   import by default with a per-object report; `--skip-unsupported` skips
   the commit **and all its descendants** (the `cascaded` list) — one
   offending early commit skips everything after it.
+
+**Legacy imported stores**: imports older than the M11 record step left
+referenced blobs without their `objects` row — fsck reports them as
+dangling (`membership_row_object_missing`, `file_change_blob_row_missing`,
+`tree_blob_row_missing`). The one-time repair is
+`naatre fsck --data <dir> --repair`: for each blob the store REFERENCES
+whose CAS bytes are present, it backfills the row (sizes verified through
+the blob store's read path) and writes ONE audited `fsck_repair` row
+naming the count (the count only — no ids, no paths, no content). Two
+exclusions, pinned: an id with a redactions row in ANY repo (active or
+purged) NEVER gains a row — the objects table is global, and backfilling a
+tombstoned id would resurrect purge drift; an id whose CAS bytes are
+absent gains no row (the size comes from the bytes) and stays a finding.
+The repair is scoped to exactly that dirt class — every other fsck finding
+stays a finding — and a second run is a no-op.
 
 ## MCP server
 
@@ -635,6 +731,21 @@ follow, and they are the price of the backend, not bugs:
 
 The same framing as the Postgres case: destroying a data dir is complete
 erasure only on the zero-config SQLite+fs deployment.
+
+## Release artifacts
+
+Releases ship as static binaries with `SHA256SUMS`, a minisign signature
+of those checksums, and a CycloneDX SBOM (`scripts/release.sh`; the SBOM
+generator `cargo-cyclonedx` is a documented tool dependency, not a
+runtime dep). **No production release key exists yet** — the repo carries
+only the CI TEST key for the signature selftest, so signatures are
+untrusted-by-default until the maintainer publishes the production
+public key (see [`SECURITY.md`](SECURITY.md), "Verifying release
+artifacts"). Once it exists, verify a download with it:
+
+```sh
+minisign -Vm naatre-<ver>-x86_64-unknown-linux-musl -p <the published release public key>
+```
 
 ## Distribution note (conditional)
 
