@@ -2797,6 +2797,7 @@ async fn land_refuses_a_tombstoned_rebase_body() {
             size: Some(h_content.len() as u64),
             exec: Some(false),
         }],
+        conflicts: Vec::new(),
     })
     .unwrap();
     let rebased = object_id(Kind::Changeset, &canonical);

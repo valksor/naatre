@@ -152,6 +152,7 @@ impl TestApp {
             message: message.into(),
             timestamp_ns: BASE_NS + 7,
             changes: vec![delta.clone()],
+            conflicts: Vec::new(),
         };
         let canonical = changeset::encode(&cs).unwrap();
         let id = object_id(Kind::Changeset, &canonical);

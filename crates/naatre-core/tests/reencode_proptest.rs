@@ -1,9 +1,12 @@
 //! Property tests: re-encode identity, normalization round-trips, decoder
-//! fuzzing, and the author/message character rule.
+//! fuzzing, the author/message character rule, and the M12 conflict
+//! representation rules (v2 id domain, rebasing carry, marker
+//! materialization — the generator covers >=3-side conflicts).
 
 use naatre_core::changeset::{self, Changeset, FileChange, Op};
+use naatre_core::conflict::{self, ConflictRep};
 use naatre_core::error::CoreError;
-use naatre_core::ids::{Id, Kind, object_id};
+use naatre_core::ids::{Id, Kind, object_id, object_id_v2};
 use naatre_core::tree::{self, EntryKind, Tree, TreeEntry};
 use proptest::prelude::*;
 use unicode_normalization::UnicodeNormalization;
@@ -73,11 +76,20 @@ proptest! {
             match changeset::encode(&back) {
                 Ok(reencoded) => prop_assert_eq!(reencoded.as_slice(), mutated.as_slice()),
                 // A flip inside a path byte can break sort order; the decode
-                // is structural, and re-encoding must catch that.
+                // is structural, and re-encoding must catch that. In the v2
+                // conflict section the same flip can break the rep path's
+                // sort or grammar, or a side id's ordering — encode refuses
+                // those with the conflict-specific errors.
                 Err(e) => {
                     prop_assert_eq!(mutation, 1);
                     prop_assert!(
-                        matches!(e, CoreError::EncodeUnsorted),
+                        matches!(
+                            e,
+                            CoreError::EncodeUnsorted
+                                | CoreError::EncodeUnsortedConflicts
+                                | CoreError::EncodeConflictSides
+                                | CoreError::Path(_)
+                        ),
                         "unexpected re-encode error {e:?}",
                     );
                 }
@@ -86,6 +98,68 @@ proptest! {
         if mutation != 1 {
             prop_assert!(changeset::decode(&mutated).is_err());
         }
+    }
+
+    /// A conflicted changeset hashes under the v2 domain; a conflict-free
+    /// one under v1 — and the two domains never produce the same id.
+    #[test]
+    fn id_domain_follows_conflicts(cs in arb_changeset()) {
+        let bytes = changeset::encode(&cs).expect("encode");
+        let id = changeset::changeset_id(&cs).expect("id");
+        if cs.conflicts.is_empty() {
+            prop_assert_eq!(id, object_id(Kind::Changeset, &bytes));
+        } else {
+            prop_assert_eq!(id, object_id_v2(Kind::Changeset, &bytes));
+            prop_assert_ne!(id, object_id(Kind::Changeset, &bytes));
+        }
+    }
+
+    /// Rebasing carry: a rebase with no new conflicts preserves the
+    /// conflict set verbatim (>=3-side cases included), and re-conflicted
+    /// paths take exactly the new sides while every other path survives,
+    /// sorted by path whatever the input order.
+    #[test]
+    fn carry_preserves_and_replaces(existing in arb_conflict_reps(), fresh in arb_conflict_reps()) {
+        let kept = conflict::carry(&existing, &[]);
+        prop_assert_eq!(&kept, &existing);
+
+        let merged = conflict::carry(&existing, &fresh);
+        let mut expect: Vec<ConflictRep> = existing
+            .iter()
+            .filter(|r| !fresh.iter().any(|f| f.path == r.path))
+            .cloned()
+            .collect();
+        expect.extend(fresh.iter().cloned());
+        expect.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+        prop_assert_eq!(&merged, &expect);
+    }
+
+    /// Markers: every side renders behind its divider, the closer names the
+    /// path, and the rendering is a pure function of the rep — the same
+    /// contents give the same bytes.
+    #[test]
+    fn marker_bytes_deterministic_and_framed(rep in arb_conflict_rep()) {
+        let contents: std::collections::HashMap<[u8; 32], Vec<u8>> = rep
+            .sides
+            .iter()
+            .chain(rep.base.iter())
+            .map(|id| (id.0, id.0.to_vec()))
+            .collect();
+        let fetch = |id: &Id| contents.get(&id.0).cloned().ok_or_else(|| "missing".into());
+        let a = conflict::marker_bytes(&rep, fetch).expect("markers");
+        let contents2 = contents.clone();
+        let fetch2 = move |id: &Id| contents2.get(&id.0).cloned().ok_or_else(|| "missing".into());
+        let b = conflict::marker_bytes(&rep, fetch2).expect("markers");
+        prop_assert!(a.ends_with(b"\n"), "markers end at a line end");
+        prop_assert!(
+            windows_contain(&a, b">>>>>>> naatre conflict: "),
+            "closer present"
+        );
+        prop_assert!(windows_contain(&a, rep.path.as_bytes()), "closer names the path");
+        for side in &rep.sides {
+            prop_assert!(windows_contain(&a, side.to_hex().as_bytes()), "side renders");
+        }
+        prop_assert_eq!(a, b);
     }
 
     /// Same fuzz guarantee for trees.
@@ -198,6 +272,11 @@ fn arb_id() -> impl Strategy<Value = Id> {
     proptest::array::uniform32(any::<u8>()).prop_map(Id)
 }
 
+/// Byte-subset search over a slice.
+fn windows_contain(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
 fn arb_changeset() -> impl Strategy<Value = Changeset> {
     (
         any::<u64>(),
@@ -206,58 +285,112 @@ fn arb_changeset() -> impl Strategy<Value = Changeset> {
         arb_text(),
         any::<u64>(),
         arb_sorted_paths(),
+        arb_conflict_reps(),
     )
-        .prop_flat_map(|(repo_id, parents, author, message, timestamp_ns, paths)| {
-            let changes = paths
-                .into_iter()
-                .map(|path| {
-                    (Just(path.clone()), 0u8..3, any::<bool>(), any::<u64>()).prop_map(
-                        move |(path, op, exec, size)| {
-                            let (op, blob, size, exec) = match op {
-                                0 => (
-                                    Op::Add,
-                                    Some(object_id(Kind::Blob, path.as_bytes())),
-                                    Some(size),
-                                    Some(exec),
-                                ),
-                                1 => (
-                                    Op::Mod,
-                                    Some(object_id(Kind::Blob, path.as_bytes())),
-                                    Some(size),
-                                    Some(exec),
-                                ),
-                                _ => (Op::Del, None, None, None),
-                            };
-                            FileChange {
-                                path,
-                                op,
-                                blob,
-                                size,
-                                exec,
+        .prop_flat_map(
+            |(repo_id, parents, author, message, timestamp_ns, paths, conflicts)| {
+                let changes = paths
+                    .into_iter()
+                    .map(|path| {
+                        (Just(path.clone()), 0u8..3, any::<bool>(), any::<u64>()).prop_map(
+                            move |(path, op, exec, size)| {
+                                let (op, blob, size, exec) = match op {
+                                    0 => (
+                                        Op::Add,
+                                        Some(object_id(Kind::Blob, path.as_bytes())),
+                                        Some(size),
+                                        Some(exec),
+                                    ),
+                                    1 => (
+                                        Op::Mod,
+                                        Some(object_id(Kind::Blob, path.as_bytes())),
+                                        Some(size),
+                                        Some(exec),
+                                    ),
+                                    _ => (Op::Del, None, None, None),
+                                };
+                                FileChange {
+                                    path,
+                                    op,
+                                    blob,
+                                    size,
+                                    exec,
+                                }
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    Just(repo_id),
+                    Just(parents),
+                    Just(author),
+                    Just(message),
+                    Just(timestamp_ns),
+                    changes,
+                    Just(conflicts),
+                )
+                    .prop_map(
+                        |(repo_id, parents, author, message, timestamp_ns, changes, conflicts)| {
+                            Changeset {
+                                repo_id,
+                                parents,
+                                author,
+                                message,
+                                timestamp_ns,
+                                changes,
+                                conflicts,
                             }
                         },
                     )
-                })
-                .collect::<Vec<_>>();
-            (
-                Just(repo_id),
-                Just(parents),
-                Just(author),
-                Just(message),
-                Just(timestamp_ns),
-                changes,
-            )
-                .prop_map(
-                    |(repo_id, parents, author, message, timestamp_ns, changes)| Changeset {
-                        repo_id,
-                        parents,
-                        author,
-                        message,
-                        timestamp_ns,
-                        changes,
-                    },
-                )
-        })
+            },
+        )
+}
+
+/// One conflict rep: 2–5 distinct strictly-ascending sides (>=3-side cases
+/// exercise the N-way shape), optional base distinct from every side.
+fn arb_conflict_rep() -> impl Strategy<Value = ConflictRep> {
+    (arb_path(), 2usize..=5).prop_flat_map(|(path, n)| {
+        (
+            Just(path),
+            proptest::collection::vec(arb_id(), n),
+            any::<bool>(),
+            proptest::collection::vec(arb_id(), 1),
+        )
+            .prop_map(|(path, mut sides, with_base, base_candidate)| {
+                sides.sort_by_key(|s| s.0);
+                sides.dedup();
+                // A random draw can collide below the two-side minimum;
+                // pad with deterministic out-of-band ids, re-sorting after.
+                let mut pad = 0u8;
+                while sides.len() < 2 {
+                    let mut b = [0u8; 32];
+                    b[0] = 0xfe;
+                    b[1] = pad;
+                    pad += 1;
+                    let cand = Id(b);
+                    if !sides.contains(&cand) {
+                        sides.push(cand);
+                    }
+                }
+                sides.sort_by_key(|s| s.0);
+                // The base must differ from every side.
+                let base = if with_base {
+                    base_candidate.into_iter().find(|c| !sides.contains(c))
+                } else {
+                    None
+                };
+                ConflictRep { path, base, sides }
+            })
+    })
+}
+
+/// A canonical (strictly ascending, duplicate-free) rep list.
+fn arb_conflict_reps() -> impl Strategy<Value = Vec<ConflictRep>> {
+    proptest::collection::vec(arb_conflict_rep(), 0..=3).prop_map(|mut reps| {
+        reps.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+        reps.dedup_by(|a, b| a.path == b.path);
+        reps
+    })
 }
 
 fn arb_tree() -> impl Strategy<Value = Tree> {
@@ -336,6 +469,7 @@ proptest! {
             author: c.to_string(),
             message: "m".into(),
             timestamp_ns: 0,
+            conflicts: vec![],
             changes: vec![FileChange {
                 path: "x".into(),
                 op: Op::Add,
@@ -344,9 +478,12 @@ proptest! {
                 exec: Some(false),
             }],
         };
+        // `allowed` is the codec's "needs sanitizing" answer: special
+        // (Cc/Cf) unless it is the excepted '\n'/'\t'. Validate must agree
+        // in the other direction — accept exactly what needs no sanitizing.
         let allowed = (naatre_core::path::is_cc(c) || naatre_core::path::is_cf(c))
             == (c != '\n' && c != '\t');
         let validates = changeset::validate(&carrier).is_ok();
-        prop_assert_eq!(allowed, validates, "predicate/enforcer disagree on U+{:04X}", cp);
+        prop_assert_eq!(validates, !allowed, "predicate/enforcer disagree on U+{:04X}", cp);
     }
 }

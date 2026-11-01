@@ -1,4 +1,4 @@
-# naatre object formats (v1)
+# naatre object formats (v1/v2)
 
 Byte-exact specification of naatre's content-addressed objects. The reference
 implementation is `crates/naatre-core`; the golden fixtures under
@@ -29,6 +29,12 @@ Example: `object_id(blob, "")` =
 (the input being `"naatre\0v1\0blob\0"` followed by nine zero bytes). This
 value is pinned by a unit test; any change to the separator, kind labels, or
 length framing breaks it.
+
+A changeset carrying first-class conflict representations (§8, format v2)
+hashes under the v2 domain instead — `"naatre\0" + "v2" + "\0" + …`. Only
+changesets ever use it: a v1 id is never recomputed under v2, and the two
+domains never collide (the version bytes are part of the hashed input).
+Blobs, trees, and conflict-free changesets always hash under v1.
 
 ## 2. Path grammar
 
@@ -83,6 +89,12 @@ Each entry:
 
 `Del` entries carry no blob, size, or exec bytes. A chmod-only change is a
 `Mod` with the same blob id and only `exec` flipped.
+
+A changeset with an empty conflict list (§8) encodes to exactly the v1 bytes
+above — the v1 format is frozen, and every pre-M12 decoder parses every v1
+object ever written. A changeset carrying conflict representations begins
+with the magic `naatre-changeset\x02` instead, appends the §8 conflict
+section after the entry list, and hashes under the v2 domain (§1).
 
 ### Worked example
 
@@ -178,7 +190,95 @@ The empty tree referenced by the Dir entry has canonical bytes
 
 ## 7. Versioning
 
-The `v1` in the id domain separator is part of the format contract. Future
-format changes take a new version (`v2`) with its own domain separator; `v1`
-ids keep their meaning forever and are never reused under a different
-interpretation. Data written under `v1` stays readable as `v1`.
+The `v1` in the id domain separator is part of the format contract. Format
+v2 (M12) is a strictly additive extension for exactly one payload kind:
+changesets carrying first-class conflict representations (§8) hash under
+the `naatre\0v2\0` domain and encode with the `naatre-changeset\x02` magic.
+`v1` ids keep their meaning forever, are never recomputed under v2, and
+every conflict-free changeset still encodes to its exact v1 bytes.
+
+**Schema guard.** The guard is store-level and fires AT OPEN: format v2
+stamps every store this binary creates or touches at `schema_version` 12
+(migration 012 — an EMPTY version-bump marker; conflict representations
+need no schema change, because v2 rows live in the existing tables and the
+`lands.state` column is a free-form string). A pre-M12 binary (max 11)
+refuses the whole store at open — its migrator's `current > max` check —
+before reading any row, exactly as it already refuses a store stamped by a
+still-newer binary. **The lockout is one-way and store-wide:** after this
+binary has opened a data dir, an older binary can never open it again,
+even if the store holds only v1 data; rollback after the first upgrade
+means restoring a pre-upgrade backup. The per-frame v2 magic is
+defense-in-depth for bytes that get past that guard (a row copied
+store-to-store without its version): a v1-era decoder handed such a frame
+errors at the magic check — the final byte differs, and the decoder's
+trailing-byte and length strictness make any partial reading impossible —
+never a misparse. Ids cannot be confused either: the version bytes are
+hash input, so a v2 id never equals a v1 id of the same bytes.
+
+**Mixed-fleet skew.** A v2-ignorant binary and a v2-aware binary cannot
+share a data dir: the old binary refuses the store at open (the guard
+above), and `naatre restore` refuses a v12 backup under a v11 binary by
+the same comparison (`staged_version > MAX_SUPPORTED`). The client-side
+case: a v2-ignorant client against a v2-aware server sees a conflicted
+node as opaque/version-skewed — it refuses rather than guessing at
+content it cannot interpret, and points at `GET /version` (which reports
+the protocol version clients warn on skew about). It never receives v2
+content reinterpreted under v1. The client-side conflicted-node refusals
+(sync, `status`) land with the M12 client slice.
+
+## 8. Conflict representations (format v2)
+
+A changeset can carry logical conflicts inside its payload (jj-style: the
+conflict is data, not marker text in a blob). The conflict section is
+appended after the v1 entry list, under the `\x02` magic:
+
+| Field | Encoding |
+|---|---|
+| conflicts | u32le count, then conflict reps sorted by path **bytes** strictly ascending |
+
+Each conflict rep:
+
+| Field | Encoding |
+|---|---|
+| path | `str` (a legal path, the conflict's location) |
+| base tag | u8: 0 = no common base (add/add), 1 = base present |
+| base | 32-byte blob id, present only when the tag is 1 |
+| sides | u32le count (>= 2), then that many 32-byte blob ids in ascending byte order |
+
+A side is a competing version's blob id — content-addressed, the bytes live
+in the CAS. The base is the common ancestor version where one exists. A
+deletion side has no blob id and cannot be represented: a conflict with
+fewer than two content sides is not recordable (the server refuses it
+instead of silently resolving). Validation rejects a base that equals any
+side (that side did not change — not a conflict).
+
+The node's `root_tree_id` is then the markers-materialized tree: each
+conflicted path holds the deterministic rendering of its rep:
+
+```
+<<<<<<< naatre side 1/<N>: <side-1 id>
+<side-1 content>
+||||||| naatre base: <base id>          (only when a base exists)
+<base content>
+======= naatre side 2/<N>: <side-2 id>
+<side-2 content>
+…                                       (one divider per further side)
+>>>>>>> naatre conflict: <path>
+```
+
+Every content block ends in a newline (one is appended to non-empty content
+that lacks it), so dividers always start at line beginnings. The rendering
+is a pure function of the rep plus the referenced contents: the recording
+server and any later client derive byte-identical markers.
+
+Rebasing a conflicted changeset carries its representations: paths the
+rebase did not re-conflict keep their reps verbatim; a re-conflicted path
+takes the new sides (the conflict composes — the previous materialization
+is itself a side of the new conflict). A changeset with reps may record an
+empty delta (the parent already held the same markers). The v2 magic
+appears exactly when the conflict list is non-empty — never under a v1
+changeset.
+
+The golden fixtures `changeset-conflict-v2` and
+`changeset-conflict-v2-three-sides` pin this section byte for byte,
+including their v2-domain ids; the v1 fixtures are unchanged.

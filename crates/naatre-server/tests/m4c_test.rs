@@ -537,6 +537,7 @@ async fn cancelled_leader_that_lands_anyway_heals_via_status_and_retry() {
                 "main": r["landed"],
                 "rebased": r["rebased"],
                 "note": Value::Null,
+                "conflicts": r["conflicts"],
             }))
             .unwrap()
     );

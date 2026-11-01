@@ -104,6 +104,29 @@ TLS-terminating reverse proxy in front (see below).
   refs move via admin compare-and-swap; force-moves validate
   fast-forward-only. A ref write onto a tombstoned target answers 410
   `object_redacted` — a ref would stall that changeset's purge forever.
+- **Conflicts can be recorded, not only refused (M12).** Default land is
+  unchanged: a rebase conflict still answers the structured 409 with the
+  resolution recipe (which names the opt-in). Explicitly setting
+  `record_conflict` in the land request body (the CLI's
+  `naatre land --record-conflict` flag arrives with the M12 client slice)
+  instead records the conflict on `main` as a conflicted changeset — a
+  logical conflict stored inside the changeset payload (format v2), whose
+  tree holds conflict markers; the land still settles exactly once, with
+  land status `conflicted`. Conflicted nodes rebase like any node and the
+  conflict travels; a conflict with a deletion side is not recordable and
+  still refuses. Formats: `docs/format.md` §8; semantics:
+  `docs/design.md` ("First-class conflicts").
+- **Deploy note for format v2 (M12a): the schema upgrade is a ONE-WAY,
+  store-wide lockout.** The first boot of a format-v2 binary upgrades the
+  data dir to `schema_version` 12; no older binary can ever open that
+  data dir again — even one holding only v1 data. Rollback after the
+  first upgrade means restoring a pre-upgrade backup (`naatre backup`
+  first). **Take a backup before upgrading.** No release ships between
+  M12a and M12b: the GC walker does not yet traverse conflict
+  representations (losing-side blobs of a recorded conflict are kept only
+  by their writing changesets until M12b closes the loop), so a conflicted
+  land must not be followed by an interim downgrade or a pre-M12b GC
+  rollout.
 
 ## TLS and reverse proxies
 

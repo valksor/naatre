@@ -1,0 +1,7 @@
+-- M12a (format v2): EMPTY migration carrying only the version bump.
+-- First-class conflict representations need no schema change: v2 changeset
+-- rows live in the existing tables (canonical is a bytea column, and
+-- lands.state is a free-form text column). The bump to version 12 is the
+-- old-binary lockout: a pre-M12 binary (max 11) refuses this store at
+-- open. No statement runs here; the migrator stamps schema_version = 12
+-- in the same transaction.

@@ -16,6 +16,8 @@
       "size": null
     }
   ],
+  "conflicts": [],
+  "domain": "v1",
   "id": "e88e70dae53ed0b97eded72c284017a128c48e95155a02edeafa844581ca3b17",
   "message": "merge-ish\nsecond line",
   "parents": [

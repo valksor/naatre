@@ -32,14 +32,29 @@
 //! `after_cas_main`, `after_commit` (end of transaction, just before the
 //! response), and `after_conflict_rollback` (after a conflict rolled
 //! back). M4b's crash-matrix runner walks this enum.
+//!
+//! First-class conflicts (M12): the default land keeps the M4 contract —
+//! any path conflict rolls everything back and answers the structured 409
+//! with the resolution recipe. The explicit `--record-conflict` opt-in
+//! (`LandCommand::record_conflict`) instead materializes every
+//! representable conflict's markers into the rebased node: the node is a
+//! format-v2 changeset (its payload carries the [`naatre_core::conflict`]
+//! representations, its id hashes under the `naatre\0v2\0` domain, its
+//! `root_tree_id` is the markers-materialized tree), and the land settles
+//! ONCE with `lands.state = 'conflicted'` — the conflicted node IS the
+//! settlement. Rebasing a chain that contains conflicted nodes succeeds:
+//! they rebase like any node and their representations travel
+//! ([`naatre_core::conflict::carry`]) — a path that re-conflicts under
+//! `--record-conflict` takes the new sides (the conflict composes).
 
 use std::sync::OnceLock;
 
 use naatre_store::Db;
 
 use naatre_core::changeset::{self, Changeset, Op};
+use naatre_core::conflict::{self, ConflictRep};
 use naatre_core::error::CoreError;
-use naatre_core::ids::{Id, Kind, object_id};
+use naatre_core::ids::Id;
 
 use naatre_store::BlobStore;
 use naatre_store::store::Store;
@@ -48,7 +63,7 @@ use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::authz;
 use crate::db;
-use crate::merge::{PathConflict, delta_between, merge_trees};
+use crate::merge::{PathConflict, content_rep, delta_between, merge_trees, merge_trees_recording};
 use crate::tree_derive::{DeriveError, MemNode};
 
 /// The closed crash-point enum (checked against `NAATRE_CRASH_POINT`).
@@ -78,9 +93,13 @@ pub fn crash_point(name: &str) {
 pub fn crash_point(_name: &str) {}
 
 /// The resolution recipe carried in every land-conflict 409 `details`
-/// (plan "Merge"; `naatre land` prints it verbatim).
+/// (plan "Merge"; `naatre land` prints it verbatim). Since M12 the recipe
+/// also names the explicit record-conflict opt-in so agents can choose it.
 pub const RESOLUTION_RECIPE: &str = "fetch the conflict blobs (GET /v1/repos/{r}/objects/{id}), \
-build a resolution changeset on head's parent, re-land with the same key";
+build a resolution changeset on head's parent, re-land with the same key — \
+or, to record the conflict on main as a conflicted changeset instead, re-land \
+with the same key and --record-conflict set (API request field \
+\"record_conflict\": true; the recorded node's tree materializes conflict markers)";
 
 /// One land request, resolved by the route (role + hex checks done). The
 /// repo id resolves INSIDE the write closure: any store touch before
@@ -96,6 +115,10 @@ pub(crate) struct LandCommand {
     /// Advisory base hint from the request body (ignored for the rebase
     /// itself; a mismatch with head's parent becomes a response note).
     pub base_hint: Option<Id>,
+    /// M12: record conflicts on main as a conflicted (format-v2) changeset
+    /// instead of refusing with the M4 409. The land still settles once;
+    /// `lands.state = 'conflicted'`.
+    pub record_conflict: bool,
     pub now_ns: i64,
     /// The state's injectable wall clock, carried for the eager-derive
     /// path's wall-clock deadline ([`crate::derive::DERIVE_WALK_DEADLINE_NS`]).
@@ -113,6 +136,12 @@ pub(crate) struct LandDone {
     pub rebased: u64,
     /// Present when the advisory `base` disagreed with head's actual parent.
     pub note: Option<String>,
+    /// Paths the LANDED node records as conflicted (format v2). Non-empty
+    /// exactly when the settlement node is a conflicted node — the land
+    /// then settles with `lands.state = 'conflicted'`, whether the reps
+    /// were minted by this land's `--record-conflict` or carried through a
+    /// clean rebase of a conflicted chain.
+    pub conflicts: Vec<String>,
 }
 
 /// `BEGIN IMMEDIATE` … `COMMIT` with rollback-on-drop: every early return
@@ -214,12 +243,13 @@ fn land_in_txn(
     // 1. Idempotency: a settled key replays its recorded result; a
     // different head under the same key is a 409 with the settled state
     // pointer. (A committed pending row is unobservable — see the module
-    // doc.)
+    // doc.) Both settled states replay: `done` and M12's `conflicted`
+    // (a recorded conflicted node IS a single settlement).
     if let Some(row) =
         db::land_get(conn, repo_id, &cmd.principal, &cmd.key).map_err(ApiError::log_internal)?
     {
         match row.state.as_str() {
-            "done" => {
+            "done" | "conflicted" => {
                 let settled = row
                     .head
                     .as_deref()
@@ -316,14 +346,16 @@ fn land_in_txn(
 
     // 3. head == main → idempotent success.
     if cmd.head == old_main {
-        return settle(conn, cmd, repo_id, old_main, old_main, 0, None);
+        let reps = rep_paths_of(conn, repo_id, &old_main)?;
+        return settle(conn, cmd, repo_id, old_main, old_main, 0, None, &reps);
     }
 
     // 4. Already contained (merge-base(head, main) == head): settled, no
     // new changesets — rebased ids may differ, containment is by
     // reachability.
     if in_main.contains(&cmd.head) {
-        return settle(conn, cmd, repo_id, old_main, old_main, 0, None);
+        let reps = rep_paths_of(conn, repo_id, &old_main)?;
+        return settle(conn, cmd, repo_id, old_main, old_main, 0, None, &reps);
     }
 
     // Advisory base note: the request's base is ignored for the rebase; if
@@ -426,29 +458,58 @@ fn land_in_txn(
             None => MemNode::empty(),
         };
 
+        // M12: the conflict reps this node already carries (a v1 node
+        // carries none). They travel through the rebase — see `carry`
+        // below.
+        let node_reps = changeset::decode(&node_row.canonical)
+            .map_err(ApiError::log_internal)?
+            .conflicts;
+
         // Path-level 3-way: base = original parent, ours = the evolving
         // rebased side, theirs = the node's own tree. Any path conflict
         // aborts the whole land — nothing below has been written yet, and
-        // the guard rolls the (pending-row) transaction back.
+        // the guard rolls the (pending-row) transaction back — unless the
+        // land opted into recording, where every representable conflict
+        // materializes its markers into the merged tree instead and the
+        // unrepresentable ones (a deletion side) still refuse.
         let fetch_blob = |id: &Id| -> Result<Vec<u8>, String> {
             cas.get(id)
                 .map_err(|e| format!("blob {} unavailable: {e}", id.to_hex()))
         };
-        let merged =
-            merge_trees(&parent_tree, &tip_tree, &node_tree, fetch_blob).map_err(conflict_error)?;
+        let (merged, reconflicted) = if cmd.record_conflict {
+            let rec = merge_trees_recording(&parent_tree, &tip_tree, &node_tree, fetch_blob)
+                .map_err(conflict_error)?;
+            (rec.tree, rec.conflicts)
+        } else {
+            let merged = merge_trees(&parent_tree, &tip_tree, &node_tree, fetch_blob)
+                .map_err(conflict_error)?;
+            (merged, Vec::new())
+        };
+
+        // The reps the rebased changeset carries: this node's reps for
+        // paths the rebase did not re-conflict, plus one rep per
+        // re-conflicted path — the new sides (the conflict composes: the
+        // previous materialization is itself a side of the new conflict).
+        let new_reps: Vec<ConflictRep> = reconflicted
+            .iter()
+            .map(|c| content_rep(c).expect("recorded conflicts are representable"))
+            .collect();
+        let reps = conflict::carry(&node_reps, &new_reps);
 
         // The rebased node's stored delta: rebased parent tree → merged
         // tree. A node whose change is already contained produces an empty
         // delta, and the canonical format cannot encode an empty changeset
         // — it is dropped from the chain (its content is on main either
-        // way; descendants parent onto the surviving tip).
+        // way; descendants parent onto the surviving tip). A node carrying
+        // conflict reps is never dropped: the reps ARE its payload.
         let delta = delta_between(&tip_tree, &merged.node);
-        if delta.is_empty() {
+        if delta.is_empty() && reps.is_empty() {
             continue;
         }
 
         // The rebased changeset: new parent, same delta content, original
         // author/message/timestamp, landing principal, bumped generation.
+        // Non-empty `conflicts` makes it a format-v2 node.
         let cs = Changeset {
             repo_id: repo_id as u64,
             parents: vec![tip_id],
@@ -456,6 +517,7 @@ fn land_in_txn(
             message: node_row.message.clone(),
             timestamp_ns: node_row.timestamp_ns as u64,
             changes: delta,
+            conflicts: reps,
         };
         let canonical = changeset::encode(&cs).map_err(|e| match e {
             CoreError::EncodeTooLarge => ApiError::new(
@@ -464,7 +526,9 @@ fn land_in_txn(
             ),
             other => ApiError::log_internal(other),
         })?;
-        let new_id = object_id(Kind::Changeset, &canonical);
+        // The id domain follows the content: conflicted nodes hash under
+        // the `naatre\0v2\0` domain; v1 ids are never recomputed.
+        let new_id = changeset::id_for_encoded(&canonical, !cs.conflicts.is_empty());
 
         let mut blobs: Vec<Id> = Vec::new();
         for c in &cs.changes {
@@ -614,12 +678,27 @@ fn land_in_txn(
     }
     crash_point("after_cas_main");
 
-    settle(conn, cmd, repo_id, old_main, tip_id, rebased, note)
+    // The settlement node's conflict paths decide `lands.state` (see
+    // `settle`): the landed node IS the settlement, whether its reps were
+    // minted here or carried through.
+    let landed_reps = rep_paths_of(conn, repo_id, &tip_id)?;
+    settle(
+        conn,
+        cmd,
+        repo_id,
+        old_main,
+        tip_id,
+        rebased,
+        note,
+        &landed_reps,
+    )
 }
 
-/// Records the done row + the `land` audit entry, and returns the response
-/// payload. `base` is the `main` target the land rebased onto. Runs inside
-/// the caller's transaction.
+/// Records the settled row (`done`, or M12's `conflicted` when the landed
+/// node itself is a conflicted node — still ONE settlement: the conflicted
+/// node IS the settlement) + the `land` audit entry, and returns the
+/// response payload. `base` is the `main` target the land rebased onto.
+/// Runs inside the caller's transaction.
 #[allow(clippy::too_many_arguments)]
 fn settle(
     conn: &Db,
@@ -629,11 +708,18 @@ fn settle(
     landed: Id,
     rebased: u64,
     note: Option<String>,
+    conflicts: &[String],
 ) -> Result<LandDone, ApiError> {
+    let state = if conflicts.is_empty() {
+        "done"
+    } else {
+        "conflicted"
+    };
     let result = serde_json::json!({
         "landed": landed.to_hex(),
         "rebased": rebased,
         "note": note,
+        "conflicts": conflicts,
     });
     db::land_settle(
         conn,
@@ -642,6 +728,7 @@ fn settle(
         &cmd.key,
         &cmd.head,
         &base,
+        state,
         &result.to_string(),
     )
     .map_err(ApiError::log_internal)?;
@@ -657,6 +744,7 @@ fn settle(
             "landed": landed.to_hex(),
             "rebased": rebased,
             "via": "land",
+            "conflicts": conflicts,
         })
         .to_string(),
     )
@@ -666,11 +754,13 @@ fn settle(
         main: landed,
         rebased,
         note,
+        conflicts: conflicts.to_vec(),
     })
 }
 
 /// Idempotent replay of a settled land's recorded result. Also the join
-/// fallback's replay (`routes::land::settled_replay`).
+/// fallback's replay (`routes::land::settled_replay`). Rows recorded
+/// before M12 carry no `conflicts` key — replayed as empty.
 pub(crate) fn replay(result_json: Option<String>) -> Result<LandDone, ApiError> {
     let Some(json) = result_json else {
         return Err(ApiError::internal());
@@ -682,12 +772,34 @@ pub(crate) fn replay(result_json: Option<String>) -> Result<LandDone, ApiError> 
         .ok_or_else(ApiError::internal)?;
     let rebased = value["rebased"].as_u64().ok_or_else(ApiError::internal)?;
     let note = value["note"].as_str().map(str::to_string);
+    let conflicts = value["conflicts"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
     Ok(LandDone {
         landed,
         main: landed,
         rebased,
         note,
+        conflicts,
     })
+}
+
+/// The conflict paths a changeset carries (empty for every v1 node).
+fn rep_paths_of(conn: &Db, repo_id: i64, id: &Id) -> Result<Vec<String>, ApiError> {
+    let reps = match db::changeset_get(conn, repo_id, id).map_err(ApiError::log_internal)? {
+        Some(row) => {
+            changeset::decode(&row.canonical)
+                .map_err(ApiError::log_internal)?
+                .conflicts
+        }
+        None => Vec::new(),
+    };
+    Ok(reps.iter().map(|r| r.path.clone()).collect())
 }
 
 /// The 409 payload: every path conflict plus the resolution recipe.

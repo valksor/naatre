@@ -146,6 +146,8 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          DROP INDEX IF EXISTS redactions_object_id;
          DROP TABLE IF EXISTS redactions;
          ALTER TABLE objects DROP COLUMN touched_ns;
+         -- Migration 012 (M12a, format v2) is an empty version-bump
+         -- marker: no objects to drop, nothing to rewind.
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
          -- One tree shared by both repos (content-addressed id), containing
@@ -220,10 +222,105 @@ fn future_schema_refuses_to_start() {
     }
 }
 
+/// The M12a store-level pin, the smallest future version, driven through
+/// the SHIPPED open path (not a test-local comparison): `Store::open`
+/// (store.rs) runs `migrate::migrate`, whose `current > MAX_SUPPORTED`
+/// arm returns `SchemaFuture` before any row is read. This is the exact
+/// code path a pre-M12 binary (max 11) meets on a v12 store — migration
+/// 012 is an empty version-bump marker, so every store this binary
+/// creates or upgrades stamps 12, and the 11-binary's guard fires at
+/// open. Same guard, adjacent numbers: 13 > 12 here, 12 > 11 there.
+#[test]
+fn future_by_one_refuses_at_open_the_11_binary_12_store_path() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("naatre.db"), b"").unwrap();
+    // The shipped open migrates the fresh store to 12 (the empty 012 bump).
+    let store = Store::open(DataDir::open(dir.path()).unwrap())
+        .expect("the shipped open migrates a fresh store");
+    assert_eq!(store.schema_version(), MAX_SUPPORTED);
+    drop(store);
+    // The smallest stamp past this binary's max — the version an 11-era
+    // binary's guard trips on, one step adjacent.
+    {
+        let conn = Connection::open(dir.path().join("naatre.db")).unwrap();
+        conn.execute(
+            &format!(
+                "UPDATE meta SET value = '{}' WHERE key = 'schema_version'",
+                MAX_SUPPORTED + 1
+            ),
+            [],
+        )
+        .unwrap();
+    }
+    match Store::open(DataDir::open(dir.path()).unwrap()) {
+        Err(StoreError::SchemaFuture { found, supported }) => {
+            assert_eq!(found, MAX_SUPPORTED + 1);
+            assert_eq!(supported, MAX_SUPPORTED);
+        }
+        other => panic!("expected SchemaFuture from the shipped open, got {other:?}"),
+    }
+}
+
+/// Migration 012 (M12a, format v2) is an EMPTY version-bump marker: a
+/// version-11 database forward-migrates to 12 on both dialects with no
+/// schema change — the bump itself is the old-binary lockout (see
+/// `future_by_one_refuses_at_open_the_11_binary_12_store_path`).
+#[test]
+fn migration12_forward_from_v11_is_a_pure_version_bump() {
+    // SQLite: migrate to full, rewind ONLY the stamp to 11 (012 creates
+    // nothing, so no objects need dropping), forward.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = fresh_conn(&dir);
+        migrate(&conn).unwrap();
+        conn.execute_batch("UPDATE meta SET value = '11' WHERE key = 'schema_version';")
+            .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, MAX_SUPPORTED, "the empty 012 lands at the max");
+    }
+
+    // Postgres: the same rewind-and-forward on the real backend.
+    let Some((target, _store)) = open_pg() else {
+        return; // pg_provision already printed the skip notice
+    };
+    let cfg = target.config();
+    let schema = cfg.pg.as_ref().unwrap().schema.clone().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
+            .expect("pg store opens");
+        assert_eq!(store.schema_version(), MAX_SUPPORTED);
+        store
+            .conn()
+            .execute_batch("UPDATE meta SET value = '11' WHERE key = 'schema_version';")
+            .unwrap();
+    }
+    let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
+        .expect("pg store reopens and migrates forward");
+    assert_eq!(
+        store.schema_version(),
+        MAX_SUPPORTED,
+        "the empty 012 lands at the max"
+    );
+    drop(store);
+    let cleanup = target.config();
+    let conn = naatre_store::Db::connect_postgres(cleanup.pg.as_ref().unwrap(), false).unwrap();
+    conn.execute_batch(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
+        .unwrap();
+}
+
 /// Migration 011's forward pin (fix-m10b2): a version-10 database in 010's
 /// AS-SHIPPED form (the tombstones table, no `redactions_object_id` index —
 /// a shipped migration's SQL is immutable, so the index fix-m10b appended
-/// to 010 was reverted into 011) migrates forward to version 11 and gains
+/// to 010 was reverted into 011) migrates forward to the current version
+/// (12 — the empty 012 format-v2 marker rides along) and gains
 /// the probe index, on BOTH dialects the suite exercises.
 #[test]
 fn migration11_forward_from_shipped_v10_recreates_the_probe_index() {
@@ -246,7 +343,10 @@ fn migration11_forward_from_shipped_v10_recreates_the_probe_index() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(v, 11);
+        assert_eq!(
+            v, MAX_SUPPORTED,
+            "forward through the empty 012 lands at the max"
+        );
         let idx: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
@@ -281,7 +381,7 @@ fn migration11_forward_from_shipped_v10_recreates_the_probe_index() {
     }
     let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
         .expect("pg store reopens and migrates forward");
-    assert_eq!(store.schema_version(), 11);
+    assert_eq!(store.schema_version(), MAX_SUPPORTED);
     let idx: i64 = store
         .conn()
         .query_row_map(
@@ -327,7 +427,10 @@ fn migration11_tolerates_the_interim_binary_index() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(v, 11);
+        assert_eq!(
+            v, MAX_SUPPORTED,
+            "forward through the empty 012 lands at the max"
+        );
         let idx: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type = 'index'                  AND name = 'redactions_object_id'",
@@ -355,7 +458,7 @@ fn migration11_tolerates_the_interim_binary_index() {
     }
     let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
         .expect("pg store reopens and migrates forward");
-    assert_eq!(store.schema_version(), 11);
+    assert_eq!(store.schema_version(), MAX_SUPPORTED);
     let idx: i64 = store
         .conn()
         .query_row_map(

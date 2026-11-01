@@ -1,0 +1,30 @@
+{
+  "author": "Ada <ada@example.com>",
+  "changes": [
+    {
+      "blob": "a7bf262321836f2a297372f6b43c3a0a4297b31f4216c1fa9fcd69b3dd916044",
+      "exec": false,
+      "op": "mod",
+      "path": "src/main.rs",
+      "size": 24
+    }
+  ],
+  "conflicts": [
+    {
+      "base": "7e1ef3918f598c59304d9f99af0d07b730a7a80837478bf07256f73523ba0481",
+      "path": "src/main.rs",
+      "sides": [
+        "16d83afd06df9a33bffd68fd033167ecec23aeb63f097c699852c81f05872bdd",
+        "ff8c5bca8586fc07d70242aa6e662f78d7b281b3675180761dd47eb257ae094a"
+      ]
+    }
+  ],
+  "domain": "v2",
+  "id": "e19d640a03420b72a7e0e076279b05adc5b693e87c9c0f65cc526b82e8b3e43b",
+  "message": "conflicted\n",
+  "parents": [
+    "27d43104ecd19721311cfe5086305770d0b095e38a363516f8eeb68991f4abf2"
+  ],
+  "repo_id": 1,
+  "timestamp_ns": 4000000004
+}

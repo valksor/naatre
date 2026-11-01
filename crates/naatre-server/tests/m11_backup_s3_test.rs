@@ -78,6 +78,7 @@ fn seed(data: &std::path::Path, cfg: &BackendConfig) -> Seed {
             size: Some(content.len() as u64),
             exec: Some(false),
         }],
+        conflicts: Vec::new(),
     };
     let canonical = changeset::encode(&cs).unwrap();
     let cs_id = object_id(Kind::Changeset, &canonical);

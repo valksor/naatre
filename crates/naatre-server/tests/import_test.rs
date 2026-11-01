@@ -680,6 +680,7 @@ fn graft_b_native_lands_refuse_main_move() {
             size: Some(content.len() as u64),
             exec: Some(false),
         }],
+        conflicts: Vec::new(),
     };
     let canonical = naatre_core::changeset::encode(&cs).unwrap();
     let cs_id = object_id(Kind::Changeset, &canonical);
@@ -1210,6 +1211,7 @@ fn reimport_refuses_a_purged_changeset_id_from_the_cs_id_arm() {
             size: Some(content.len() as u64),
             exec: Some(false),
         }],
+        conflicts: Vec::new(),
     };
     let canonical = naatre_core::changeset::encode(&cs).unwrap();
     let cs_id = object_id(Kind::Changeset, &canonical);

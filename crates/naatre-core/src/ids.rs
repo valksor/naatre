@@ -71,9 +71,20 @@ pub fn is_hex_id(s: &str) -> bool {
 
 /// Computes the id of a payload under the versioned, kind-tagged domain.
 pub fn object_id(kind: Kind, payload: &[u8]) -> Id {
+    object_id_in(crate::FORMAT_VERSION, kind, payload)
+}
+
+/// Computes the id of a payload under the `naatre\0v2\0` domain. Used only
+/// for changesets that carry conflict representations (format v2); a v1 id
+/// is never recomputed under it.
+pub fn object_id_v2(kind: Kind, payload: &[u8]) -> Id {
+    object_id_in(crate::FORMAT_VERSION_V2, kind, payload)
+}
+
+fn object_id_in(version: &str, kind: Kind, payload: &[u8]) -> Id {
     let mut h = Hasher::new();
     h.update(b"naatre\x00");
-    h.update(crate::FORMAT_VERSION.as_bytes());
+    h.update(version.as_bytes());
     h.update(b"\x00");
     h.update(kind.label());
     h.update(b"\x00");

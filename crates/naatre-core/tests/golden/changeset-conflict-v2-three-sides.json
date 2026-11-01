@@ -1,0 +1,29 @@
+{
+  "author": "Bob <bob@example.com>",
+  "changes": [
+    {
+      "blob": "2a279a3a62e34b3cfaae7d3bd0cced2af1c20c2ec3fda38a1da0b2b61dcd236b",
+      "exec": false,
+      "op": "add",
+      "path": "notes.txt",
+      "size": 24
+    }
+  ],
+  "conflicts": [
+    {
+      "base": null,
+      "path": "notes.txt",
+      "sides": [
+        "189650925a908d2f68c09a689ed584bfaea9db06a5cdfaedffdda61e292462be",
+        "4f77fff53838c48d0941b5e13e7fb65a9a2bbe83d500d1475d732a5e57850b67",
+        "77cf043b8daa7ceb6a2035df830c88e8ae9b7a56311949016d28b248f34c16d2"
+      ]
+    }
+  ],
+  "domain": "v2",
+  "id": "37cabe0c7df36ca4d3d64e2ca154cce6ad0330e784bfaa072f6a0e971f6c325c",
+  "message": "three-way conflict",
+  "parents": [],
+  "repo_id": 7,
+  "timestamp_ns": 5000000005
+}

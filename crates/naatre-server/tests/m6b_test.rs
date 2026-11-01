@@ -2836,6 +2836,8 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
              DROP TABLE IF EXISTS redactions;
              DROP INDEX IF EXISTS idx_file_changes_blob;
              ALTER TABLE objects DROP COLUMN touched_ns;
+             -- Migration 012 (M12a, format v2) is an empty version-bump
+             -- marker: no objects to drop, nothing to rewind.
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
         )
         .unwrap();
@@ -3021,6 +3023,8 @@ async fn upgrade_ab_ctx(dir: &Path) -> (Ctx, String, String, String) {
              DROP TABLE IF EXISTS redactions;
              DROP INDEX IF EXISTS idx_file_changes_blob;
              ALTER TABLE objects DROP COLUMN touched_ns;
+             -- Migration 012 (M12a, format v2) is an empty version-bump
+             -- marker: no objects to drop, nothing to rewind.
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
         )
         .unwrap();

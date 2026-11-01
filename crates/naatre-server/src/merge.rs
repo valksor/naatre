@@ -19,13 +19,19 @@
 //! sides, or one-sided, wins; both-modified-different files go through
 //! `merge_lines`; delete-vs-modify and add-vs-add-different conflict. The
 //! result is a [`MemNode`] built from the merged file map plus the list of
-//! newly created blob contents.
+//! newly created blob contents. M12 adds the record mode
+//! (`merge_trees_recording`, the `--record-conflict` land): every
+//! representable conflict materializes its markers into the merged tree
+//! instead of failing it, and the conflict list comes back alongside — a
+//! conflict with fewer than two content sides (a deletion side has no blob
+//! id) stays fatal, refusing loudly rather than silently resolving.
 
 use std::collections::BTreeMap;
 
 use similar::{DiffOp, TextDiff};
 
 use naatre_core::changeset::{FileChange, Op};
+use naatre_core::conflict::{ConflictRep, marker_bytes};
 use naatre_core::ids::{Id, Kind, object_id};
 
 use crate::tree_derive::{ApplyError, MemNode};
@@ -207,6 +213,25 @@ pub struct PathConflict {
     pub theirs_blob: Option<Id>,
 }
 
+/// What a tree merge does at a conflicting path: refuse the merge with the
+/// conflict list (the M4 land contract), or record — materialize the
+/// conflict's markers into the merged tree and report the conflict
+/// alongside it (the `--record-conflict` land).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnConflict {
+    Refuse,
+    Record,
+}
+
+/// A recording merge ([`merge_trees_recording`]): the merged tree — with
+/// marker content at every conflicting path — plus the conflict list the
+/// markers were materialized from.
+#[derive(Debug, Default)]
+pub struct RecordedMerge {
+    pub tree: MergedTree,
+    pub conflicts: Vec<PathConflict>,
+}
+
 /// A successful tree merge: the merged node and the blob contents that are
 /// new to this merge (content-addressed; the caller puts them into the CAS
 /// and records `repo_blobs` rows before its transaction commits).
@@ -258,15 +283,132 @@ pub fn merge_trees(
     base: &MemNode,
     ours: &MemNode,
     theirs: &MemNode,
-    mut fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
+    fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
 ) -> Result<MergedTree, Vec<PathConflict>> {
+    merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Refuse).map(|(tree, _)| tree)
+}
+
+/// The recording variant of [`merge_trees`]: every representable conflict
+/// materializes its marker content (the representation's deterministic
+/// rendering) into the merged tree, and [`RecordedMerge::conflicts`] lists
+/// them all. `Err` is reserved for refusals: blob fetch failures, tree
+/// duality violations, and conflicts with fewer than two content sides (a
+/// deletion side has no blob id to carry — the v2 representation cannot
+/// encode it, so the land refuses instead of silently resolving).
+pub fn merge_trees_recording(
+    base: &MemNode,
+    ours: &MemNode,
+    theirs: &MemNode,
+    fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
+) -> Result<RecordedMerge, Vec<PathConflict>> {
+    merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Record)
+        .map(|(tree, conflicts)| RecordedMerge { tree, conflicts })
+}
+
+/// The representation of a path conflict, when both competing sides carry
+/// content (a deletion side has no blob id and cannot be represented).
+/// The sides are the sorted (ours, theirs) ids — a rep is orderless. Also
+/// the land's rep builder for recorded conflicts.
+pub(crate) fn content_rep(c: &PathConflict) -> Option<ConflictRep> {
+    let mut sides = vec![c.ours_blob?, c.theirs_blob?];
+    sides.sort_by_key(|id| id.0);
+    Some(ConflictRep {
+        path: c.path.clone(),
+        base: c.base_blob,
+        sides,
+    })
+}
+
+/// The exec bit of a merged or materialized file: agreeing sides win, one
+/// side matching the base defers to the other, otherwise ours. A deleted
+/// side (None) leaves the surviving side's bit.
+fn resolve_exec(b: Option<FileMeta>, o: Option<FileMeta>, t: Option<FileMeta>) -> bool {
+    match (o, t) {
+        (Some(om), Some(tm)) => {
+            if om.exec == tm.exec {
+                om.exec
+            } else if b.is_some_and(|bm| om.exec == bm.exec) {
+                tm.exec
+            } else {
+                om.exec
+            }
+        }
+        (Some(om), None) | (None, Some(om)) => om.exec,
+        // Unreachable in the both-changed table: both-deleted is handled by
+        // the sides-agree branch before any conflict is raised.
+        (None, None) => false,
+    }
+}
+
+/// Routes one path conflict per the mode: `Refuse` collects it to fail the
+/// merge; `Record` materializes the sides' markers into the merged map. A
+/// fetch failure under `Record` returns the fetcher's error (corruption,
+/// not a conflict).
+#[allow(clippy::too_many_arguments)]
+fn take_conflict(
+    on: OnConflict,
+    c: PathConflict,
+    b: Option<FileMeta>,
+    o: Option<FileMeta>,
+    t: Option<FileMeta>,
+    recorded: &mut Vec<PathConflict>,
+    refused: &mut Vec<PathConflict>,
+    merged_files: &mut BTreeMap<String, FileMeta>,
+    new_blobs: &mut Vec<(Id, Vec<u8>)>,
+    fetch_blob: &mut impl FnMut(&Id) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    match on {
+        OnConflict::Refuse => {
+            refused.push(c);
+            Ok(())
+        }
+        OnConflict::Record => match content_rep(&c) {
+            Some(rep) => {
+                let bytes = marker_bytes(&rep, |id| fetch_blob(id))?;
+                let blob = object_id(Kind::Blob, &bytes);
+                let meta = FileMeta {
+                    blob,
+                    size: bytes.len() as u64,
+                    exec: resolve_exec(b, o, t),
+                };
+                if !new_blobs.iter().any(|(id, _)| *id == blob) {
+                    new_blobs.push((blob, bytes));
+                }
+                merged_files.insert(c.path.clone(), meta);
+                recorded.push(c);
+                Ok(())
+            }
+            // Fewer than two content sides (a deletion side has no blob
+            // id): refuse rather than record a lossy non-resolution — the
+            // v2 representation cannot encode it.
+            None => {
+                refused.push(c);
+                Ok(())
+            }
+        },
+    }
+}
+
+/// The mode-parameterized merge core (see the two wrappers). Ok carries the
+/// merged tree plus the conflicts materialized in record mode (empty in
+/// refuse mode — those come back as Err instead).
+fn merge_trees_mode(
+    base: &MemNode,
+    ours: &MemNode,
+    theirs: &MemNode,
+    mut fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
+    on: OnConflict,
+) -> Result<(MergedTree, Vec<PathConflict>), Vec<PathConflict>> {
     let base_files = flatten_files(base);
     let ours_files = flatten_files(ours);
     let theirs_files = flatten_files(theirs);
 
     let mut merged_files: BTreeMap<String, FileMeta> = BTreeMap::new();
     let mut new_blobs: Vec<(Id, Vec<u8>)> = Vec::new();
+    // Refuse mode: every conflict (the Err). Record mode: materialized
+    // conflicts (Ok) and refusals (Err) respectively.
     let mut conflicts: Vec<PathConflict> = Vec::new();
+    let mut recorded: Vec<PathConflict> = Vec::new();
 
     let paths: BTreeMap<&String, ()> = base_files
         .keys()
@@ -325,13 +467,7 @@ pub fn merge_trees(
                         MergeOutcome::Conflict => Ok(None),
                         MergeOutcome::Merged(bytes) => {
                             let blob = object_id(Kind::Blob, &bytes);
-                            let exec = if om.exec == tm.exec {
-                                om.exec
-                            } else if om.exec == bm.exec {
-                                tm.exec
-                            } else {
-                                om.exec
-                            };
+                            let exec = resolve_exec(b, o, t);
                             Ok(Some((
                                 FileMeta {
                                     blob,
@@ -350,15 +486,51 @@ pub fn merge_trees(
                         }
                         merged_files.insert(path.clone(), meta);
                     }
-                    Ok(None) => conflicts.push(conflict("both modified, line merge conflict")),
+                    Ok(None) => take_conflict(
+                        on,
+                        conflict("both modified, line merge conflict"),
+                        b,
+                        o,
+                        t,
+                        &mut recorded,
+                        &mut conflicts,
+                        &mut merged_files,
+                        &mut new_blobs,
+                        &mut fetch_blob,
+                    )
+                    .map_err(|e| vec![conflict(&e)])?,
                     Err(e) => return Err(vec![conflict(&e)]),
                 }
             }
             (None, Some(_), Some(_)) => {
-                conflicts.push(conflict("both added, different content"));
+                take_conflict(
+                    on,
+                    conflict("both added, different content"),
+                    b,
+                    o,
+                    t,
+                    &mut recorded,
+                    &mut conflicts,
+                    &mut merged_files,
+                    &mut new_blobs,
+                    &mut fetch_blob,
+                )
+                .map_err(|e| vec![conflict(&e)])?;
             }
             (Some(_), None, Some(_)) | (Some(_), Some(_), None) => {
-                conflicts.push(conflict("deleted by one side, modified by the other"));
+                take_conflict(
+                    on,
+                    conflict("deleted by one side, modified by the other"),
+                    b,
+                    o,
+                    t,
+                    &mut recorded,
+                    &mut conflicts,
+                    &mut merged_files,
+                    &mut new_blobs,
+                    &mut fetch_blob,
+                )
+                .map_err(|e| vec![conflict(&e)])?;
             }
             // o == t == None with b present is both-deleted: absent, handled
             // by the o == t branch above.
@@ -400,7 +572,7 @@ pub fn merge_trees(
             path,
         }]);
     }
-    Ok(MergedTree { node, new_blobs })
+    Ok((MergedTree { node, new_blobs }, recorded))
 }
 
 /// The delta between two trees, sorted by path — the file changes a rebased

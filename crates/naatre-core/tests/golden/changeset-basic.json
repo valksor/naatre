@@ -9,6 +9,8 @@
       "size": 13
     }
   ],
+  "conflicts": [],
+  "domain": "v1",
   "id": "acfe2618d7f73ad5bb84ca051a18c584242df195f765dec8ad5841b73721a927",
   "message": "first",
   "parents": [],

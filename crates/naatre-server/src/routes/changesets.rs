@@ -274,6 +274,9 @@ async fn create_inner(
         message: body.message,
         timestamp_ns,
         changes,
+        // The public create mints plain v1 changesets only; conflict
+        // representations are minted by the recording land (M12).
+        conflicts: Vec::new(),
     };
 
     // Exact duplicate paths first (core validation would otherwise report

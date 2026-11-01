@@ -209,6 +209,58 @@ closure (dir entries point at child trees); re-running is impossible by
 construction (each migration applies once, atomically with its version
 bump).
 
+## First-class conflicts (M12)
+
+A conflict is data inside the changeset, not marker text in a blob
+(jj-style). The representation (see docs/format.md §8: sides' blob ids,
+optional base, path — >= 2 sides, generator covers >= 3) lives in the
+changeset payload; such changesets are format v2 (`naatre\0v2\0` id domain,
+`\x02` magic) and their `root_tree_id` is the markers-materialized tree —
+the v2 encoding itself is the flag that says "materialized", so blame and
+the client slice can rely on it without a separate marker column.
+
+**Land contract preserved.** The default land keeps the M4 shape: any path
+conflict rolls the transaction back, the key stays unsettled, and the 409
+carries every conflicting path plus the resolution recipe. The recipe now
+ALSO names the explicit opt-in — `--record-conflict` (API request field
+`record_conflict`, default false) — so an agent can choose it from the 409
+alone. Opting in does NOT relax the settlement: the land still settles
+exactly once, and the conflicted changeset IS the settlement. Its land row
+records `lands.state = 'conflicted'` (a free-form string column — no
+schema change, no migration; the v1 values `pending`/`done` are
+unchanged), and both settled states replay idempotently.
+
+**Rebase semantics.** Conflicted nodes rebase like any node: their markers
+are ordinary tree content to the 3-way, and their representations travel —
+paths the rebase did not re-conflict keep their reps verbatim, and a
+path that re-conflicts under `--record-conflict` takes the new sides (the
+conflict composes: the previous materialization is itself a side of the
+new conflict). `lands.state` is `conflicted` exactly when the settlement
+node (main's new tip) is a conflicted node; a land that merely carries a
+conflicted ancestor through settles `done`. Conflicts with fewer than two
+content sides (a deletion side has no blob id to carry) are not
+representable in v2 and refuse under the opt-in too — loudly, never
+silently "resolved" by recording.
+
+**Sequencing (honest scope).** This slice owns the format, the land
+semantics, and the pins (golden fixtures, commute/rebase proptest). The
+GC walker's traversal of conflict representations (losing-side blobs stay
+reachable) and blame's conflicted-region reporting arrive with their
+owners in M12b, as does the client surface (`--record-conflict` flag in
+`land --help`, marker materialization on sync, `status` conflict marks,
+`naatre resolve`, the version-skew refusal on conflicted nodes).
+**HOLD-BEFORE-DEPLOY: no release between M12a and M12b.** Two standing
+hazards close together in M12b: (1) until the GC walker traverses
+conflict representations, a losing-side blob of a landed conflicted node
+stays reachable only while some reachable node's delta references it —
+recorded here as a decision, not an oversight; (2) migration 012's
+version bump is a ONE-WAY, store-wide lockout — the first boot of a
+format-v2 binary upgrades the data dir to schema_version 12 and no older
+binary can ever open it again, even holding only v1 data, so the only
+rollback is a pre-upgrade backup (`naatre backup`). The flag itself is
+not gated: `--record-conflict` is an explicit opt-in per land, and its
+opt-in nature is unchanged by the hold.
+
 ## Honest-scope boundaries
 
 - **Path scopes gate writes and filter listings; by-id fetches are

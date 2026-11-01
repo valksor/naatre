@@ -1115,6 +1115,9 @@ fn prepare_commit(
         message,
         timestamp_ns,
         changes: entries.iter().map(PreparedEntry::to_file_change).collect(),
+        // Git history has no first-class conflicts to carry (M12 reps are
+        // minted only by the recording land).
+        conflicts: Vec::new(),
     };
     let canonical = changeset::encode(&cs)
         .map_err(|e| ImportError::Source(format!("canonical encoding: {e}")))?;
@@ -1354,6 +1357,7 @@ fn carrier_changeset(author: &str, message: &str) -> Changeset {
             size: Some(0),
             exec: Some(false),
         }],
+        conflicts: Vec::new(),
     }
 }
 

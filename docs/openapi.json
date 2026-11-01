@@ -771,6 +771,10 @@
           "key": {
             "description": "Idempotency key, scoped to (repo, principal). A settled key with the\nsame head replays its recorded result; with a different head → 409\n`idempotency_key_settled`. After a conflict (which leaves the key\nunsettled) the same key re-lands. While a land with this key is in\nflight, a concurrent request joins it (see the module doc).",
             "type": "string"
+          },
+          "record_conflict": {
+            "description": "M12 opt-in (default false): instead of the default 409 + recipe on\na rebase conflict, record the conflict on main as a conflicted\nchangeset (format v2, markers materialized in its tree) and settle\nONCE with `lands.state = 'conflicted'`. Unrepresentable conflicts\n(a deletion side) still refuse.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -782,6 +786,13 @@
       "LandResponse": {
         "description": "Response of a successful land.",
         "properties": {
+          "conflicts": {
+            "description": "Paths the landed node records as conflicted (format v2). Non-empty\nexactly when the settlement node is a conflicted node (`lands.state\n= 'conflicted'`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "landed": {
             "description": "The changeset main points at after the land (the rebased head when\nthe chain was rewritten).",
             "type": "string"
@@ -807,7 +818,8 @@
         "required": [
           "landed",
           "main",
-          "rebased"
+          "rebased",
+          "conflicts"
         ],
         "type": "object"
       },
@@ -835,7 +847,7 @@
             ]
           },
           "state": {
-            "description": "`done` (a committed pending row is unobservable — single writer).",
+            "description": "`done`, or `conflicted` (M12: the land settled a conflicted\nchangeset onto main). A committed pending row is unobservable —\nsingle writer.",
             "type": "string"
           }
         },
@@ -848,6 +860,13 @@
       "LandStatusResult": {
         "description": "The recorded result of a settled land.",
         "properties": {
+          "conflicts": {
+            "description": "Paths the landed node records as conflicted (format v2).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "landed": {
             "type": "string"
           },
@@ -859,7 +878,8 @@
         },
         "required": [
           "landed",
-          "rebased"
+          "rebased",
+          "conflicts"
         ],
         "type": "object"
       },
@@ -2191,7 +2211,7 @@
                 }
               }
             },
-            "description": "Land settled (a fresh land, an idempotent replay, or an already-contained head)"
+            "description": "Land settled (a fresh land, an idempotent replay, an already-contained head, or a `record_conflict` settlement of a conflicted node — `lands.state = 'conflicted'`)"
           },
           "400": {
             "description": "head/base is not 64 lowercase hex, or the body is not readable JSON"
@@ -2206,7 +2226,7 @@
             "description": "No such repo, or head is not a changeset of this repo"
           },
           "409": {
-            "description": "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head; or redacted_base: the base chain crosses a redacted changeset (details.redacted names it)"
+            "description": "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe — the recipe names `--record-conflict`, the request field `record_conflict`, to record the conflict on main instead) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head; or redacted_base: the base chain crosses a redacted changeset (details.redacted names it)"
           },
           "410": {
             "description": "The rebase body is tombstoned in this repo (`object_redacted`, active or purged): the reproduced changeset id, or a blob id the rebase writes or references — the key stays unsettled and no rows are written"

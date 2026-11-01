@@ -972,10 +972,13 @@ pub fn land_insert_pending(
     Ok(())
 }
 
-/// Settles the land row to state='done': `head` is the requested head (the
-/// idempotency payload), `base` the main target the land rebased onto, and
-/// `result_json` the recorded `{landed, rebased, note}`. Upsert form, so
-/// the pending row inside the same transaction is overwritten.
+/// Settles the land row: `state` is `'done'` or M12's `'conflicted'`
+/// (the landed node is itself a conflicted changeset — `lands.state` is a
+/// free-form string column, no schema change), `head` the requested head
+/// (the idempotency payload), `base` the main target the land rebased
+/// onto, and `result_json` the recorded `{landed, rebased, note,
+/// conflicts}`. Upsert form, so the pending row inside the same
+/// transaction is overwritten.
 #[allow(clippy::too_many_arguments)]
 pub fn land_settle(
     conn: &Db,
@@ -984,20 +987,22 @@ pub fn land_settle(
     key: &str,
     head: &Id,
     base: &Id,
+    state: &str,
     result_json: &str,
 ) -> Result<(), DbError> {
     conn.execute(
         &Sql::plain(
             "INSERT INTO lands(repo_id, principal, key, state, head, base, result_json) \
-         VALUES (?1, ?2, ?3, 'done', ?4, ?5, ?6) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
          ON CONFLICT(repo_id, principal, key) DO UPDATE SET \
-           state = 'done', head = excluded.head, base = excluded.base, \
+           state = excluded.state, head = excluded.head, base = excluded.base, \
            result_json = excluded.result_json",
         ),
         &pv![
             repo_id,
             principal,
             key,
+            state,
             head.0.as_slice(),
             base.0.as_slice(),
             result_json

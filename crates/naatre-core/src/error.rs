@@ -19,6 +19,14 @@ pub enum CoreError {
     EncodeTooLarge,
     #[error("encode: more than 100000 entries")]
     EncodeTooManyEntries,
+    #[error("encode: conflicts not sorted by strictly ascending path bytes")]
+    EncodeUnsortedConflicts,
+    #[error(
+        "encode: a conflict needs >= 2 distinct strictly-ascending sides, its base distinct from every side"
+    )]
+    EncodeConflictSides,
+    #[error("decode: a conflict carries fewer than 2 sides")]
+    DecodeConflictSides,
     #[error("encode: directory entry carries an exec bit")]
     EncodeExecOnDir,
     #[error("decode: bad magic bytes")]

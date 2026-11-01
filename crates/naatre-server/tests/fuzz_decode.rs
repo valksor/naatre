@@ -90,6 +90,7 @@ fn arb_changeset() -> impl Strategy<Value = Changeset> {
                 })
                 .collect();
             Changeset {
+                conflicts: Vec::new(),
                 repo_id: 7,
                 parents,
                 author: author.unwrap_or_else(|| "A <a@b>".to_string()),
@@ -319,6 +320,7 @@ fn swap_mutation_breaks_order_and_entry_spans_walk_the_layout() {
                 exec: None,
             },
         ],
+        conflicts: Vec::new(),
     };
     let bytes = changeset::encode(&cs).unwrap();
     let spans = entry_spans(&bytes).expect("spans parse");

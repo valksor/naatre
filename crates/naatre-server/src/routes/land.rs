@@ -64,6 +64,13 @@ pub struct LandRequest {
     /// rebases onto head's merge-base with main); when present and not
     /// head's parent, the response carries a note.
     pub base: Option<String>,
+    /// M12 opt-in (default false): instead of the default 409 + recipe on
+    /// a rebase conflict, record the conflict on main as a conflicted
+    /// changeset (format v2, markers materialized in its tree) and settle
+    /// ONCE with `lands.state = 'conflicted'`. Unrepresentable conflicts
+    /// (a deletion side) still refuse.
+    #[serde(default)]
+    pub record_conflict: bool,
 }
 
 /// Response of a successful land.
@@ -78,6 +85,10 @@ pub struct LandResponse {
     pub rebased: u64,
     /// Present when the advisory `base` was not head's parent.
     pub note: Option<String>,
+    /// Paths the landed node records as conflicted (format v2). Non-empty
+    /// exactly when the settlement node is a conflicted node (`lands.state
+    /// = 'conflicted'`).
+    pub conflicts: Vec<String>,
 }
 
 /// The recorded result of a settled land.
@@ -85,13 +96,17 @@ pub struct LandResponse {
 pub struct LandStatusResult {
     pub landed: String,
     pub rebased: u64,
+    /// Paths the landed node records as conflicted (format v2).
+    pub conflicts: Vec<String>,
 }
 
 /// Response of the land status read.
 #[derive(Serialize, ToSchema)]
 pub struct LandStatusResponse {
     pub key: String,
-    /// `done` (a committed pending row is unobservable — single writer).
+    /// `done`, or `conflicted` (M12: the land settled a conflicted
+    /// changeset onto main). A committed pending row is unobservable —
+    /// single writer.
     pub state: String,
     /// The head the key was landed with.
     pub head: Option<String>,
@@ -107,12 +122,12 @@ pub struct LandStatusResponse {
     params(("r" = String, Path, description = "Repo name")),
     request_body = LandRequest,
     responses(
-        (status = 200, description = "Land settled (a fresh land, an idempotent replay, or an already-contained head)", body = LandResponse),
+        (status = 200, description = "Land settled (a fresh land, an idempotent replay, an already-contained head, or a `record_conflict` settlement of a conflicted node — `lands.state = 'conflicted'`)", body = LandResponse),
         (status = 400, description = "head/base is not 64 lowercase hex, or the body is not readable JSON"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 403, description = "Without the writer role, or a rebase-chain path outside the token's scope (details.path names it)"),
         (status = 404, description = "No such repo, or head is not a changeset of this repo"),
-        (status = 409, description = "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head; or redacted_base: the base chain crosses a redacted changeset (details.redacted names it)"),
+        (status = 409, description = "ref_conflict: the rebase hit conflicting paths (details.conflicts + details.recipe — the recipe names `--record-conflict`, the request field `record_conflict`, to record the conflict on main instead) — the key stays unsettled; or idempotency_key_settled: the key is settled with a different head; or redacted_base: the base chain crosses a redacted changeset (details.redacted names it)"),
         (status = 410, description = "The rebase body is tombstoned in this repo (`object_redacted`, active or purged): the reproduced changeset id, or a blob id the rebase writes or references — the key stays unsettled and no rows are written"),
         (status = 413, description = "A rebased changeset or merged tree exceeds the 16 MiB canonical cap"),
         (status = 422, description = "The repo has no main ref, or head shares no history with main"),
@@ -168,6 +183,7 @@ pub async fn land(
         head,
         key: body.key.clone(),
         base_hint,
+        record_conflict: body.record_conflict,
         now_ns: state.now_ns() as i64,
         clock: Arc::clone(&state.clock),
         walk_deadline: state.derive_walk_deadline.as_nanos() as u64,
@@ -268,9 +284,10 @@ async fn settled_replay(
             db::land_get(conn, repo_id, &principal, &key).map_err(ApiError::log_internal)
         })
         .await?;
-    let Some(row) =
-        row.filter(|row| row.state == "done" && row.head.as_deref() == Some(head.0.as_ref()))
-    else {
+    let Some(row) = row.filter(|row| {
+        (row.state == "done" || row.state == "conflicted")
+            && row.head.as_deref() == Some(head.0.as_ref())
+    }) else {
         return Err(ApiError::internal());
     };
     land::replay(row.result_json).map(|done| Json(LandResponse::from(done)))
@@ -330,7 +347,11 @@ pub async fn land_status(
         row.result_json
             .as_deref()
             .and_then(parse_result)
-            .map(|(landed, rebased)| LandStatusResult { landed, rebased }),
+            .map(|(landed, rebased, conflicts)| LandStatusResult {
+                landed,
+                rebased,
+                conflicts,
+            }),
         row.head.as_deref().and_then(id_hex),
     );
     Ok(Json(LandStatusResponse {
@@ -348,6 +369,7 @@ impl From<LandDone> for LandResponse {
             main: done.main.to_hex(),
             rebased: done.rebased,
             note: done.note,
+            conflicts: done.conflicts,
         }
     }
 }
@@ -357,12 +379,21 @@ fn parse_id(hex: &str) -> Result<Id, ApiError> {
         .ok_or_else(|| ApiError::new(ApiCode::Malformed, "id must be 64 lowercase hex characters"))
 }
 
-/// `(landed, rebased)` out of a recorded result JSON.
-fn parse_result(json: &str) -> Option<(String, u64)> {
+/// `(landed, rebased, conflicts)` out of a recorded result JSON. Rows
+/// recorded before M12 carry no `conflicts` key — read as empty.
+fn parse_result(json: &str) -> Option<(String, u64, Vec<String>)> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let landed = value["landed"].as_str()?.to_string();
     let rebased = value["rebased"].as_u64()?;
-    Some((landed, rebased))
+    let conflicts = value["conflicts"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((landed, rebased, conflicts))
 }
 
 fn id_hex(bytes: &[u8]) -> Option<String> {
