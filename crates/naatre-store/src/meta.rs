@@ -580,7 +580,12 @@ pub const PG_LOCK_TIMEOUT_MS: u64 = 5000;
 /// mapping, contention retry). Any other code — and any non-DB error —
 /// classifies as `None`; the Display text never differs by code beyond
 /// this, so nothing else leaks.
-const PG_STATES_CARRIED: [&str; 4] = ["23505", "40001", "40P01", "55P03"];
+// Carried: unique-violation, serialization, deadlock, lock-not-available —
+// and the STRUCTURAL states (undefined_table 42P01, invalid_schema 3F000):
+// callers discriminate "genuinely uninitialized" from broken/authorized
+// (e.g. the backup probe's init check — a missing meta table IS the
+// uninitialized answer; anything else must propagate, never misdiagnose).
+const PG_STATES_CARRIED: [&str; 6] = ["23505", "40001", "40P01", "55P03", "42P01", "3F000"];
 
 /// Classifies a driver error, keeping only a recognized SQLSTATE code —
 /// never the driver's message text (which can embed connection parameters).

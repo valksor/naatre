@@ -121,12 +121,15 @@ TLS-terminating reverse proxy in front (see below).
   data dir to `schema_version` 12; no older binary can ever open that
   data dir again — even one holding only v1 data. Rollback after the
   first upgrade means restoring a pre-upgrade backup (`naatre backup`
-  first). **Take a backup before upgrading.** No release ships between
-  M12a and M12b: the GC walker does not yet traverse conflict
-  representations (losing-side blobs of a recorded conflict are kept only
-  by their writing changesets until M12b closes the loop), so a conflicted
-  land must not be followed by an interim downgrade or a pre-M12b GC
-  rollout.
+  first). **Take a backup before upgrading.** While the hold marker is present
+  (removed at M12b): **signed releases are refused; GC withholds
+  non-redacted reclaim on v2-bearing stores; unsigned artifact builds
+  still run for CI and do not constitute a release** (unsigned artifacts
+  are untrusted-by-default per SECURITY.md; the release gate is signing).
+  The GC walker does not yet traverse conflict representations
+  (losing-side blobs of a recorded conflict are kept only by their
+  writing changesets until M12b closes the loop), so a conflicted land
+  must not be followed by an interim downgrade or a pre-M12b GC rollout.
 
 ## TLS and reverse proxies
 

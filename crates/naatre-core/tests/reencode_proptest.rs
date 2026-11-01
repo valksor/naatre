@@ -478,12 +478,12 @@ proptest! {
                 exec: Some(false),
             }],
         };
-        // `allowed` is the codec's "needs sanitizing" answer: special
-        // (Cc/Cf) unless it is the excepted '\n'/'\t'. Validate must agree
-        // in the other direction — accept exactly what needs no sanitizing.
-        let allowed = (naatre_core::path::is_cc(c) || naatre_core::path::is_cf(c))
+        // `needs_sanitizing` is the codec's predicate answer: special
+        // (Cc/Cf) unless it is the excepted '\n'/'\t'. Validate must agree:
+        // accept exactly what needs no sanitizing.
+        let needs_sanitizing = (naatre_core::path::is_cc(c) || naatre_core::path::is_cf(c))
             == (c != '\n' && c != '\t');
         let validates = changeset::validate(&carrier).is_ok();
-        prop_assert_eq!(validates, !allowed, "predicate/enforcer disagree on U+{:04X}", cp);
+        prop_assert_eq!(validates, !needs_sanitizing, "predicate/enforcer disagree on U+{:04X}", cp);
     }
 }

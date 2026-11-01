@@ -380,9 +380,18 @@ fn backup_wipe_restore_fsck_clean_postgres_fs() {
         match result {
             Err(backup::BackupError::ToolFailed { tool, log, .. }) => {
                 assert_eq!(tool, "psql", "{name}");
+                // Both failures log beside the target. The second one
+                // side-steps to tool-error-1.log (M12a-fix: an existing
+                // tool-error.log is never truncated — the first failure's
+                // log survives).
+                let expected = if name == "first" {
+                    "tool-error.log"
+                } else {
+                    "tool-error-1.log"
+                };
                 assert_eq!(
                     log.as_deref(),
-                    Some(ctx._root.path().join("tool-error.log").as_path()),
+                    Some(ctx._root.path().join(expected).as_path()),
                     "{name}: the log lands beside the target, not in the backup"
                 );
             }

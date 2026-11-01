@@ -113,6 +113,11 @@ pub struct ChangesetResponse {
     pub generation: u64,
     pub principal: String,
     pub changes: Vec<ChangesetChangeOut>,
+    /// M12: true when the canonical frame is format v2 — the payload
+    /// carries first-class conflict representations (the root tree
+    /// materializes their markers). An O(1) peek of the canonical magic
+    /// byte; the read path never decodes the frame.
+    pub conflicted: bool,
 }
 
 /// The root-tree pointer of a changeset.
@@ -643,6 +648,11 @@ pub async fn get_changeset(
             format!("no changeset {id_hex} in {repo:?}"),
         ));
     };
+    // The M12 read-side conflicted flag: an O(1) peek at the canonical
+    // frame's version byte (v2 = the conflict-bearing magic) — no decode
+    // in the read path.
+    let conflicted = row.canonical.len() >= naatre_core::changeset::MAGIC_V2.len()
+        && row.canonical[16] == naatre_core::changeset::MAGIC_V2[16];
     Ok(Json(ChangesetResponse {
         id: id.to_hex(),
         parents: parents.iter().map(Id::to_hex).collect(),
@@ -651,6 +661,7 @@ pub async fn get_changeset(
         timestamp_ns: row.timestamp_ns as u64,
         generation: row.generation as u64,
         principal: row.principal,
+        conflicted,
         changes: changes
             .into_iter()
             .map(|c| {

@@ -27,6 +27,8 @@ pub enum CoreError {
     EncodeConflictSides,
     #[error("decode: a conflict carries fewer than 2 sides")]
     DecodeConflictSides,
+    #[error("decode: a v2 frame with an empty conflict section")]
+    DecodeEmptyConflictSection,
     #[error("encode: directory entry carries an exec bit")]
     EncodeExecOnDir,
     #[error("decode: bad magic bytes")]

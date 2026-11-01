@@ -280,12 +280,12 @@ pub enum BackupError {
         "{note}the target CAS is missing {} of the manifest's object(s): {ids}. For blob = \
          \"s3\" restore the bucket copy FIRST — restore checks presence, then the operator \
          runs fsck. If a redaction purge already ate these bytes, re-run with \
-         `--allow-missing {waiver}` (or `--allow-missing` with the comma-separated id list \
-         above) to accept EXACTLY these ids: the waiver is void the moment the missing set \
-         changes. Waived ids land in the report and the restore audit row, and the redaction \
-         duty applies to them",
+         `--allow-missing {waiver}` to accept EXACTLY these ids: the waiver is void the \
+         moment the missing set changes. The id print above is a bounded sample — the \
+         structured error field carries every id. Waived ids land in the report and the \
+         restore audit row, and the redaction duty applies to them",
         missing.len(),
-        ids = missing.join(", "),
+        ids = bounded_sample(missing),
         note = if *rejected_waiver {
             "the --allow-missing argument does not match the currently-missing set (the \
              missing set changed since it was issued; nothing was waived). "
@@ -359,6 +359,23 @@ pub fn waiver_digest(missing_sorted: &[String]) -> String {
         hasher.update(b"\n");
     }
     format!("{:x}", hasher.finalize())[..16].to_string()
+}
+
+/// A bounded sample for the error text: the first 8 sorted ids, a count
+/// for the rest, and the set's waiver digest. The exact set travels in the
+/// structured field and the waiver argument — never in an unbounded line.
+fn bounded_sample(missing: &[String]) -> String {
+    const SAMPLE: usize = 8;
+    match missing.len() {
+        0 => String::new(),
+        n if n <= SAMPLE => missing.join(", "),
+        n => format!(
+            "{}, … (+{} more; set digest {})",
+            missing[..SAMPLE].join(", "),
+            n - SAMPLE,
+            waiver_digest(missing)
+        ),
+    }
 }
 
 /// Whether an `--allow-missing` argument (the digest, or a comma-separated
@@ -597,10 +614,19 @@ fn postgres_store_initialized(pg: &PgConnect, target: &Path) -> Result<bool, Bac
         }
         None => Sql::plain("SELECT value FROM meta WHERE key = 'schema_version'"),
     };
-    Ok(conn
-        .query_opt(&sql, &[])
-        .map(|row| row.is_some())
-        .unwrap_or(false))
+    // The query discriminates: a missing meta table/schema (42P01/3F000)
+    // IS the genuinely-uninitialized answer; ANY other query error is a
+    // broken or unauthorized store and PROPAGATES — the `Uninitialized`
+    // remedy (`naatre init`) must never fire for a connection or
+    // permissions problem.
+    match conn.query_opt(&sql, &[]) {
+        Ok(row) => Ok(row.is_some()),
+        Err(naatre_store::DbError::Postgres {
+            kind: naatre_store::meta::PgErrKind::Query,
+            state: Some(state),
+        }) if state == "42P01" || state == "3F000" => Ok(false),
+        Err(other) => Err(BackupError::Store(StoreError::Db(other))),
+    }
 }
 
 /// The CAS shard path under `root` — `root/<2hex>/<2hex>/<62hex>`, the
@@ -980,19 +1006,24 @@ pub fn restore(
     }
     // The target dir itself may be gone (a wiped data dir usually is);
     // it is created AFTER staging — a refused restore leaves the target
-    // untouched, not even created.
-    let not_empty: Option<&'static str> = if objects_dir_has_entries(target) {
-        Some("objects/ holds data")
+    // untouched, not even created. Each finding carries its own on-disk
+    // rendering: the S3-arm mismatch names what was ACTUALLY found
+    // (objects/ data vs a WAL/SHM sidecar), never the fixed fs string.
+    let not_empty: Option<(&'static str, &'static str)> = if objects_dir_has_entries(target) {
+        Some(("objects/ holds data", "fs (objects/ holds data)"))
     } else if sidecar_present {
-        Some("a SQLite WAL/SHM sidecar sits beside a missing naatre.db")
+        Some((
+            "a SQLite WAL/SHM sidecar sits beside a missing naatre.db",
+            "fs (a SQLite WAL/SHM sidecar sits beside a missing naatre.db)",
+        ))
     } else {
         None
     };
-    if let Some(found) = not_empty {
+    if let Some((found, on_disk)) = not_empty {
         match cfg.blob {
             BlobKind::S3 => {
                 return Err(StoreError::Backend(BackendError::Mismatch {
-                    on_disk: "fs (objects/ has data)",
+                    on_disk,
                     configured: "s3",
                 })
                 .into());
@@ -1378,9 +1409,13 @@ fn run_pg_tool(
 /// Runs `program` as `tool`. On failure the tool's stderr is written to
 /// `<context>/tool-error.log` (0600) and the error carries the exit status
 /// only. `context` is a directory the caller can write: restore passes the
-/// target's parent, never the backup dir. A failed log write is reported
-/// APPENDED to the error (`log: None`); it never replaces the real tool
-/// status.
+/// target's parent, never the backup dir. Two hard rules: the log NEVER
+/// lands in the process CWD (a relative single-component context resolves
+/// the bare filename against "" — the write is refused instead), and an
+/// existing file at the target is never truncated — the write side-steps
+/// to `tool-error-<k>.log` (an earlier log, or something foreign, is
+/// preserved). A failed log write is reported APPENDED to the error
+/// (`log: None`); it never replaces the real tool status.
 fn run_tool(
     program: &Path,
     tool: &'static str,
@@ -1391,10 +1426,8 @@ fn run_tool(
     let mut cmd = pg_command(program, pg, args);
     let out = cmd.output().map_err(|e| BackupError::io(context, e))?;
     if !out.status.success() {
-        let log_path = context.join(TOOL_LOG);
-        let log = write_private(&log_path, &out.stderr)
-            .ok()
-            .map(|()| log_path);
+        let log =
+            tool_log_path(context).and_then(|p| write_private(&p, &out.stderr).ok().map(|()| p));
         return Err(BackupError::ToolFailed {
             tool,
             status: out.status,
@@ -1402,6 +1435,23 @@ fn run_tool(
         });
     }
     Ok(())
+}
+
+/// The log target for a failed tool run: `None` when the context would
+/// resolve against the CWD (relative parent "") — the log is refused, not
+/// scattered — or when no free name exists; otherwise the unused
+/// `tool-error.log`, or the first free `tool-error-<k>.log` beside it.
+fn tool_log_path(context: &Path) -> Option<PathBuf> {
+    let base = context.join(TOOL_LOG);
+    if base.parent()?.as_os_str().is_empty() {
+        return None;
+    }
+    if !base.exists() {
+        return Some(base);
+    }
+    (1..)
+        .map(|k| context.join(format!("tool-error-{k}.log")))
+        .find(|p| !p.exists())
 }
 
 /// Writes `bytes` to `path`, created 0600 (never widened from a umask).

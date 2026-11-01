@@ -93,13 +93,25 @@ pub fn crash_point(name: &str) {
 pub fn crash_point(_name: &str) {}
 
 /// The resolution recipe carried in every land-conflict 409 `details`
-/// (plan "Merge"; `naatre land` prints it verbatim). Since M12 the recipe
-/// also names the explicit record-conflict opt-in so agents can choose it.
-pub const RESOLUTION_RECIPE: &str = "fetch the conflict blobs (GET /v1/repos/{r}/objects/{id}), \
-build a resolution changeset on head's parent, re-land with the same key — \
-or, to record the conflict on main as a conflicted changeset instead, re-land \
-with the same key and --record-conflict set (API request field \
-\"record_conflict\": true; the recorded node's tree materializes conflict markers)";
+/// (plan "Merge"; `naatre land` prints it verbatim). It LEADS with the API
+/// field — the opt-in that exists today — and names the CLI flag as
+/// arriving with the client slice.
+pub const RESOLUTION_RECIPE: &str = "to record the conflict on main as a conflicted changeset, \
+re-land with the same key and the API request field \"record_conflict\": true \
+(the CLI --record-conflict flag arrives with the client slice) — or fetch the \
+conflict blobs (GET /v1/repos/{r}/objects/{id}), build a resolution changeset \
+on head's parent, and re-land with the same key";
+
+/// The recipe variant for the refused-under-opt-in case: the rebase hit a
+/// conflict the v2 representation cannot record (a deletion side has no
+/// blob id to carry), so `record_conflict: true` cannot answer this 409 —
+/// the recipe names the conflict class and advises only the resolution
+/// path, never the flag just used.
+pub const RESOLUTION_RECIPE_REFUSED: &str = "this conflict cannot be recorded: a deletion side \
+has no blob id to carry in the conflict representation — resolve it instead: \
+fetch the conflict blobs (GET /v1/repos/{r}/objects/{id}), build a resolution \
+changeset on head's parent, and re-land with the same key \
+(record_conflict: true does not apply here)";
 
 /// One land request, resolved by the route (role + hex checks done). The
 /// repo id resolves INSIDE the write closure: any store touch before
@@ -478,11 +490,23 @@ fn land_in_txn(
         };
         let (merged, reconflicted) = if cmd.record_conflict {
             let rec = merge_trees_recording(&parent_tree, &tip_tree, &node_tree, fetch_blob)
-                .map_err(conflict_error)?;
+                .map_err(|c| conflict_error(c, RESOLUTION_RECIPE_REFUSED))?;
+            // Pre-sized marker overflow: refuse 413 BEFORE any CAS write
+            // (the marker bytes existed only in memory so far).
+            if let Some((path, size)) = rec.oversized.first() {
+                return Err(ApiError::new(
+                    ApiCode::TooLarge,
+                    format!(
+                        "materialized conflict markers for {path:?} would be {size} bytes — \
+                         over the blob limit; resolve the conflict instead"
+                    ),
+                )
+                .with_details(serde_json::json!({ "path": path, "size": size })));
+            }
             (rec.tree, rec.conflicts)
         } else {
             let merged = merge_trees(&parent_tree, &tip_tree, &node_tree, fetch_blob)
-                .map_err(conflict_error)?;
+                .map_err(|c| conflict_error(c, RESOLUTION_RECIPE))?;
             (merged, Vec::new())
         };
 
@@ -554,25 +578,65 @@ fn land_in_txn(
         // domains, so one probe answers for both arms.
         let mut gate_ids: Vec<Id> = blobs.clone();
         gate_ids.extend(merged.new_blobs.iter().map(|(id, _)| *id));
+        // M12a-fix (the blocker): every blob id whose CONTENT flows into
+        // what this rebase produces joins the batch — the clean line-merge
+        // inputs (base + both sides; the merged blob is new bytes the gate
+        // cannot recognize by output id) and every conflict-representation
+        // id, minted AND carried (record mode fetches side/base bytes raw
+        // and embeds them into a fresh servable marker blob; a carried rep
+        // re-records its ids on every rebase). A tombstoned one refuses
+        // 410 BEFORE the marker write below — nothing reaches the CAS or
+        // repo_blobs first.
+        gate_ids.extend(merged.input_ids.iter().copied());
+        for rep in &cs.conflicts {
+            if let Some(base) = rep.base {
+                gate_ids.push(base);
+            }
+            gate_ids.extend(rep.sides.iter().copied());
+        }
         gate_ids.push(new_id);
+        gate_ids.sort_by_key(|id| id.0);
+        gate_ids.dedup();
         let offenders = db::redactions_active_among(conn, repo_id, &gate_ids)
             .map_err(ApiError::log_internal)?;
         if !offenders.contains(&new_id)
             && let Some(blob) = offenders.iter().copied().min_by_key(|id| id.to_hex())
         {
             let count = offenders.len();
+            // The guidance fires when ANY offender is content that flows
+            // into a conflict representation or a merged blob — a rep
+            // side/base or a merge_lines input — NOT just the single
+            // lowest-hex id this message names: a mixed-offender land (a
+            // delta blob AND a rep side both tombstoned) must not silently
+            // lose the redacted-side remedy because the pick landed on the
+            // delta blob. The message still names the lowest-hex id; the
+            // remedy is the same either way.
+            let conflicted_content = offenders.iter().any(|id| {
+                merged.input_ids.contains(id)
+                    || cs
+                        .conflicts
+                        .iter()
+                        .any(|rep| rep.base == Some(*id) || rep.sides.contains(id))
+            });
+            let guidance = if conflicted_content {
+                " A side of this conflict is redacted in this repo, so the land can \
+                 neither record nor merge it — remove or rewrite the conflicting edit \
+                 at that path, or resolve with the admin who holds the redaction."
+            } else {
+                ""
+            };
             return Err(ApiError::new(
                 ApiCode::ObjectRedacted,
                 if count == 1 {
                     format!(
-                        "blob {} is redacted in {repo}; referencing it is refused",
+                        "blob {} is redacted in {repo}; referencing it is refused{guidance}",
                         blob.to_hex(),
                         repo = cmd.repo_name
                     )
                 } else {
                     format!(
                         "blob {} is redacted in {repo}; referencing it is refused \
-                         (+{} more redacted ids)",
+                         (+{} more redacted ids){guidance}",
                         blob.to_hex(),
                         count - 1,
                         repo = cmd.repo_name
@@ -802,8 +866,10 @@ fn rep_paths_of(conn: &Db, repo_id: i64, id: &Id) -> Result<Vec<String>, ApiErro
     Ok(reps.iter().map(|r| r.path.clone()).collect())
 }
 
-/// The 409 payload: every path conflict plus the resolution recipe.
-fn conflict_error(conflicts: Vec<PathConflict>) -> ApiError {
+/// The 409 payload: every path conflict plus the resolution recipe —
+/// [`RESOLUTION_RECIPE`] for the default contract, [`RESOLUTION_RECIPE_REFUSED`]
+/// for the record-mode refusal of an unrecordable conflict.
+fn conflict_error(conflicts: Vec<PathConflict>, recipe: &'static str) -> ApiError {
     let list: Vec<serde_json::Value> = conflicts
         .iter()
         .map(|c| {
@@ -824,7 +890,7 @@ fn conflict_error(conflicts: Vec<PathConflict>) -> ApiError {
             list.len()
         ),
     )
-    .with_details(serde_json::json!({ "conflicts": list, "recipe": RESOLUTION_RECIPE }))
+    .with_details(serde_json::json!({ "conflicts": list, "recipe": recipe }))
 }
 
 fn load_tree(conn: &Db, root_tree_id: Option<Vec<u8>>) -> Result<MemNode, ApiError> {

@@ -28,9 +28,14 @@ pub struct ConflictRep {
 }
 
 /// Validates a conflict list: strictly ascending paths without duplicates,
-/// grammar-valid paths, and per rep at least two distinct strictly
-/// ascending sides with the base distinct from every side.
+/// grammar-valid paths, per rep at least two distinct strictly ascending
+/// sides with the base distinct from every side, and the same entry caps
+/// the file-change list carries (rep list and per-rep side count at
+/// [`MAX_ENTRIES`] — parity with what the frame format implies).
 pub fn validate(reps: &[ConflictRep]) -> Result<(), CoreError> {
+    if reps.len() > crate::changeset::MAX_ENTRIES {
+        return Err(CoreError::EncodeTooManyEntries);
+    }
     if reps
         .windows(2)
         .any(|w| w[0].path.as_bytes() >= w[1].path.as_bytes())
@@ -39,6 +44,9 @@ pub fn validate(reps: &[ConflictRep]) -> Result<(), CoreError> {
     }
     for rep in reps {
         path::validate(&rep.path)?;
+        if rep.sides.len() > crate::changeset::MAX_ENTRIES {
+            return Err(CoreError::EncodeTooManyEntries);
+        }
         if rep.sides.len() < 2
             || rep.sides.windows(2).any(|w| w[0].0 >= w[1].0)
             || rep.base.is_some_and(|b| rep.sides.contains(&b))

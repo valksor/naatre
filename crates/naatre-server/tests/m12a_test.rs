@@ -20,9 +20,10 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use naatre_core::changeset;
-use naatre_core::conflict::marker_bytes;
+use naatre_core::conflict::{ConflictRep, marker_bytes};
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_server::state::ServerState;
+use naatre_server::merge::{MergeOutcome, merge_lines};
+use naatre_server::state::{AppState, ServerState};
 use naatre_store::DataDir;
 
 /// Fixed-step clock base: ns for 2023-11-14.
@@ -35,6 +36,10 @@ struct TestApp {
     _dir: tempfile::TempDir,
     app: Router,
     db_path: PathBuf,
+    /// Kept reachable for the CAS oracle (`state.cas.has`) — the nothing-
+    /// written pins assert the CAS holds no bytes the refusal should have
+    /// prevented.
+    state: AppState,
 }
 
 fn build_app() -> TestApp {
@@ -55,6 +60,7 @@ fn build_app() -> TestApp {
         _dir: dir,
         app,
         db_path,
+        state,
     }
 }
 
@@ -143,6 +149,12 @@ impl TestApp {
             )
             .unwrap();
         Id(bytes.try_into().expect("root tree id is 32 bytes"))
+    }
+
+    fn count_with_param(&self, sql: &str, param: &[u8]) -> i64 {
+        self.db()
+            .query_row(sql, rusqlite::params![param], |r| r.get(0))
+            .unwrap()
     }
 
     fn land_state(&self, key: &str) -> String {
@@ -611,4 +623,570 @@ async fn record_conflict_still_refuses_a_deletion_side() {
     );
     assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
     assert_eq!(main_target(&f).await, c_mod);
+}
+
+// ---- 5. recipe shapes (M12a-fix) -------------------------------------------
+
+#[tokio::test]
+async fn recipes_lead_with_the_api_field_and_name_the_refusal() {
+    let f = fixture();
+    let base = b"a\n".to_vec();
+    let bb = put_blob(&f, &base).await;
+    let c1 = create_ok(
+        &f,
+        cs_body(json!([]), json!([add("f.txt", &bb, base.len())]), "c1"),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    let modified = b"b\n".to_vec();
+    let bm = put_blob(&f, &modified).await;
+    let c_mod = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([mod_("f.txt", &bm, modified.len())]),
+            "c-mod",
+        ),
+    )
+    .await;
+    let c_del = create_ok(
+        &f,
+        cs_body(json!([c1.clone()]), json!([del("f.txt")]), "c-del"),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c_mod);
+
+    // The DEFAULT 409 recipe leads with the API field (the opt-in that
+    // exists today) and names the CLI flag as arriving with the slice.
+    let resp = land(&f, &c_del, "k-def").await;
+    assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
+    let recipe = resp.body["error"]["details"]["recipe"].as_str().unwrap();
+    assert!(
+        recipe.starts_with(
+            "to record the conflict on main as a conflicted changeset, re-land with the \
+             same key and the API request field \"record_conflict\": true"
+        ),
+        "{recipe}"
+    );
+    assert!(
+        recipe.contains("--record-conflict flag arrives with the client slice"),
+        "{recipe}"
+    );
+
+    // The REFUSED-under-opt-in recipe: a deletion side is unrecordable —
+    // it names that, and advises only the resolution path.
+    let resp = land_opt(&f, &c_del, "k-ref", true).await;
+    assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
+    let recipe = resp.body["error"]["details"]["recipe"].as_str().unwrap();
+    assert!(recipe.contains("cannot be recorded"), "{recipe}");
+    assert!(recipe.contains("deletion side"), "{recipe}");
+    assert!(recipe.contains("fetch the conflict blobs"), "{recipe}");
+    assert!(
+        !recipe.contains("record_conflict: true does apply"),
+        "{recipe}"
+    );
+}
+
+// ---- 6/7. gate coverage: rep arms and the clean-merge sibling ---------------
+
+/// Marks `blob` actively tombstoned in the repo (the gate refuses active
+/// and purged alike; the pins DELETE the row for the positive direction).
+fn tombstone(t: &TestApp, repo_id: i64, blob: &str) {
+    let conn = t.db();
+    conn.execute(
+        "INSERT INTO redactions(repo_id, object_id, kind, path, marked_ns) \
+         VALUES (?1, ?2, 'blob', NULL, ?3)",
+        rusqlite::params![
+            repo_id,
+            Id::from_hex(blob).unwrap().0.as_slice(),
+            BASE_NS as i64
+        ],
+    )
+    .unwrap();
+}
+
+async fn nothing_written(f: &Fixture, marker: &Id) {
+    assert_eq!(
+        f.t.state.cas.has(&[*marker]).unwrap(),
+        vec![false],
+        "the blob's bytes must not be in the CAS"
+    );
+    assert_eq!(
+        f.t.count_with_param(
+            "SELECT COUNT(*) FROM repo_blobs WHERE object_id = ?1",
+            marker.0.as_slice(),
+        ),
+        0,
+        "no membership row for the unwritten blob"
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0, "key unsettled");
+}
+
+#[tokio::test]
+async fn tombstoned_rep_side_refuses_the_record_before_any_write() {
+    let f = fixture();
+    let (_, c2, _) = diverged(&f, vec![]).await;
+    // Tombstone THEIRS (the landing side's content): the minted rep would
+    // embed it verbatim in a fresh servable marker blob.
+    tombstone(&f.t, f.repo_id, &blob_hex(b"X1-main\nl2\nl3\n"));
+
+    let changesets_before = f.t.count("SELECT COUNT(*) FROM changesets");
+    let resp = land_opt(&f, &c2, "k-gate", true).await;
+    assert_eq!(resp.status, StatusCode::GONE, "body: {}", resp.body);
+    assert_eq!(code_of(&resp), "object_redacted", "{}", resp.body);
+    // The rep-arm guidance: the agent's way out is named in the refusal.
+    let message = resp.body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(
+            "A side of this conflict is redacted in this repo, so the land can neither \
+             record nor merge it"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains("resolve with the admin who holds the redaction"),
+        "{message}"
+    );
+
+    // NOTHING was written: no CAS bytes, no repo_blobs, no settlement, no
+    // node — the refusal happened before the marker put.
+    let mut sides = vec![
+        Id::from_hex(&blob_hex(b"L1-ours\nl2\nl3\n")).unwrap(),
+        Id::from_hex(&blob_hex(b"X1-main\nl2\nl3\n")).unwrap(),
+    ];
+    sides.sort_by_key(|id| id.0);
+    let rep = ConflictRep {
+        path: "same.txt".into(),
+        base: Some(Id::from_hex(&blob_hex(b"l1\nl2\nl3\n")).unwrap()),
+        sides,
+    };
+    let marker = object_id(
+        Kind::Blob,
+        &marker_bytes(
+            &rep,
+            fetch_known(b"l1\nl2\nl3\n", b"L1-ours\nl2\nl3\n", b"X1-main\nl2\nl3\n"),
+        )
+        .unwrap(),
+    );
+    nothing_written(&f, &marker).await;
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM changesets"),
+        changesets_before
+    );
+
+    // Positive direction: the tombstone removed, the SAME key records.
+    f.t.db().execute("DELETE FROM redactions", []).unwrap();
+    let resp = land_opt(&f, &c2, "k-gate", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    assert_eq!(f.t.land_state("k-gate"), "conflicted");
+}
+
+#[tokio::test]
+async fn tombstoned_carried_side_refuses_the_rebase_before_any_write() {
+    let f = fixture();
+    let other = b"other-side\n".to_vec();
+    let bo = put_blob(&f, &other).await;
+    let (_, c2, c2p) = diverged(&f, vec![add("other.txt", &bo, other.len())]).await;
+    let resp = land_opt(&f, &c2, "k-record", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let m1 = resp.body["landed"].as_str().unwrap().to_string();
+
+    // Tombstone one of the CARRIED rep's sides: every rebase that carries
+    // the rep re-records those ids — the gate must see them.
+    tombstone(&f.t, f.repo_id, &blob_hex(b"L1-ours\nl2\nl3\n"));
+
+    // A child of the conflicted node; main rewound off m1's ancestry.
+    let fifth = b"fifth\n".to_vec();
+    let bf = put_blob(&f, &fifth).await;
+    let c5 = create_ok(
+        &f,
+        cs_body(
+            json!([c2p.clone()]),
+            json!([add("fifth.txt", &bf, fifth.len())]),
+            "c5",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c5);
+    let third = b"third\n".to_vec();
+    let bt = put_blob(&f, &third).await;
+    let c3 = create_ok(
+        &f,
+        cs_body(
+            json!([m1.clone()]),
+            json!([add("third.txt", &bt, third.len())]),
+            "c3",
+        ),
+    )
+    .await;
+
+    let changesets_before = f.t.count("SELECT COUNT(*) FROM changesets");
+    let resp = land(&f, &c3, "k-travel").await;
+    assert_eq!(resp.status, StatusCode::GONE, "body: {}", resp.body);
+    assert_eq!(code_of(&resp), "object_redacted");
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM changesets"),
+        changesets_before,
+        "no rebased node was written"
+    );
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM lands WHERE key = 'k-travel'"),
+        0,
+        "the key is unsettled"
+    );
+}
+
+#[tokio::test]
+async fn tombstoned_merge_base_refuses_the_clean_merge_before_any_write() {
+    let f = fixture();
+    // A CLEAN modify/modify: base "l1\nl2\nl3\n", ours edits line 1,
+    // theirs edits line 3 — the lines merge to the union.
+    let base = b"l1\nl2\nl3\n".to_vec();
+    let ours = b"L1-ours\nl2\nl3\n".to_vec();
+    let theirs = b"l1\nl2\nL3-theirs\n".to_vec();
+    let (bb, bo, bt) = (
+        put_blob(&f, &base).await,
+        put_blob(&f, &ours).await,
+        put_blob(&f, &theirs).await,
+    );
+    let c1 = create_ok(
+        &f,
+        cs_body(json!([]), json!([add("same.txt", &bb, base.len())]), "c1"),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    let c2 = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([mod_("same.txt", &bo, ours.len())]),
+            "c2",
+        ),
+    )
+    .await;
+    let c2p = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([mod_("same.txt", &bt, theirs.len())]),
+            "c2p",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c2p);
+
+    // Tombstone the merge BASE: merge_lines reads it and its content
+    // flows into the clean union blob — the gate must refuse by INPUT id.
+    tombstone(&f.t, f.repo_id, &blob_hex(&base));
+    let resp = land(&f, &c2, "k-base").await;
+    assert_eq!(resp.status, StatusCode::GONE, "body: {}", resp.body);
+    assert_eq!(code_of(&resp), "object_redacted");
+    // The clean-merge base IS a merge_lines input: content flowed toward
+    // a merged blob, so the guidance fires here too.
+    assert!(
+        resp.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("neither record nor merge"),
+        "{}",
+        resp.body
+    );
+
+    // The union blob the clean merge would have written: absent.
+    let union = merge_lines(&base, &ours, &theirs);
+    let MergeOutcome::Merged(bytes) = union else {
+        panic!("the edits merge cleanly");
+    };
+    let merged_blob = object_id(Kind::Blob, &bytes);
+    nothing_written(&f, &merged_blob).await;
+
+    // Positive direction: untombstoned base — the same land settles.
+    f.t.db().execute("DELETE FROM redactions", []).unwrap();
+    let resp = land(&f, &c2, "k-base").await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    assert_eq!(
+        cat(&f, resp.body["landed"].as_str().unwrap(), "same.txt").await,
+        bytes
+    );
+}
+
+// ---- mixed offenders keep the redacted-side remedy --------------------------
+
+#[tokio::test]
+async fn mixed_offenders_still_name_the_redacted_side_remedy() {
+    let f = fixture();
+    // A delta blob (extra.txt, clean theirs-wins) AND both rep sides
+    // tombstoned. The delta content is CHOSEN to sort BELOW both side
+    // hexes: the lowest-hex offender the message names is provably the
+    // DELTA blob, so the guidance can only have come from the OTHER
+    // offenders — exactly the mixed case the pick-only rule got wrong.
+    let l1 = blob_hex(b"L1-ours\nl2\nl3\n");
+    let x1 = blob_hex(b"X1-main\nl2\nl3\n");
+    let min_side = if l1 < x1 { l1.clone() } else { x1.clone() };
+    let mut delta = b"extra-delta-0\n".to_vec();
+    let mut bd = blob_hex(&delta);
+    let mut i = 0u32;
+    while bd.as_str() >= min_side.as_str() {
+        i += 1;
+        delta = format!("extra-delta-{i}\n").into_bytes();
+        bd = blob_hex(&delta);
+    }
+    let _uploaded = put_blob(&f, &delta).await;
+    // The delta blob rides in the LANDING chain's own delta: c2 changes
+    // same.txt (the future rep side L1) AND adds extra.txt (the delta).
+    let base = b"l1\nl2\nl3\n".to_vec();
+    let ours = b"L1-ours\nl2\nl3\n".to_vec();
+    let theirs = b"X1-main\nl2\nl3\n".to_vec();
+    let (bc, bo, bt) = (
+        put_blob(&f, &base).await,
+        put_blob(&f, &ours).await,
+        put_blob(&f, &theirs).await,
+    );
+    let c1 = create_ok(
+        &f,
+        cs_body(json!([]), json!([add("same.txt", &bc, base.len())]), "c1"),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    let c2 = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([
+                add("extra.txt", &bd, delta.len()),
+                mod_("same.txt", &bo, ours.len()),
+            ]),
+            "c2",
+        ),
+    )
+    .await;
+    let c2p = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([mod_("same.txt", &bt, theirs.len())]),
+            "c2p",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c2p);
+    tombstone(&f.t, f.repo_id, &bd);
+    tombstone(&f.t, f.repo_id, &l1);
+
+    let resp = land_opt(&f, &c2, "k-mixed", true).await;
+    assert_eq!(resp.status, StatusCode::GONE, "body: {}", resp.body);
+    assert_eq!(code_of(&resp), "object_redacted");
+    let message = resp.body["error"]["message"].as_str().unwrap();
+    // The named offender is the delta blob (it sorts lowest)…
+    assert!(message.contains(&bd), "names the delta blob: {message}");
+    // …and the redacted-side remedy still fires off the OTHER offender.
+    assert!(
+        message.contains("neither record nor merge"),
+        "guidance survives the mixed set: {message}"
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
+}
+
+// ---- 8. marker overflow refuses 413 ----------------------------------------
+
+#[tokio::test]
+async fn marker_overflow_refuses_413_before_any_write() {
+    let f = fixture();
+    // Two ~40 MiB sides: the marker would carry both plus framing — over
+    // the 64 MiB blob limit. Pre-sized by the recording merge; 413, not a
+    // CAS-put 500.
+    let big_a = vec![b'a'; 40 * 1024 * 1024];
+    let big_b = vec![b'b'; 40 * 1024 * 1024];
+    let base = b"seed\n".to_vec();
+    let bbase = put_blob(&f, &base).await;
+    let c1 = create_ok(
+        &f,
+        cs_body(json!([]), json!([add("big.txt", &bbase, base.len())]), "c1"),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    let ba = put_blob(&f, &big_a).await;
+    let c2 = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([mod_("big.txt", &ba, big_a.len())]),
+            "c2",
+        ),
+    )
+    .await;
+    let bb = put_blob(&f, &big_b).await;
+    let c2p = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([mod_("big.txt", &bb, big_b.len())]),
+            "c2p",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c2p);
+
+    let blobs_before = f.t.count("SELECT COUNT(*) FROM repo_blobs");
+    let resp = land_opt(&f, &c2, "k-big", true).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "body: {}",
+        resp.body
+    );
+    assert_eq!(
+        resp.body["error"]["details"]["path"],
+        json!("big.txt"),
+        "{}",
+        resp.body
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
+    assert_eq!(
+        f.t.count("SELECT COUNT(*) FROM repo_blobs"),
+        blobs_before,
+        "no membership rows written by the refused land"
+    );
+}
+
+// ---- 9. read-side conflicted flag -------------------------------------------
+
+#[tokio::test]
+async fn changeset_read_reports_conflicted() {
+    let f = fixture();
+    let (_, c2, c2p) = diverged(&f, vec![]).await;
+    // v1 nodes answer conflicted: false.
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets/{c2p}"),
+        &f.reader,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["conflicted"], json!(false));
+    // The recorded v2 node answers true.
+    let resp = land_opt(&f, &c2, "k-flag", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let landed = resp.body["landed"].as_str().unwrap().to_string();
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/changesets/{landed}"),
+        &f.reader,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.body["conflicted"], json!(true));
+}
+
+// ---- 10. composition and the negative direction -----------------------------
+
+#[tokio::test]
+async fn carried_rep_and_same_path_reconflict_compose() {
+    let f = fixture();
+    // theirs adds other.txt so the re-conflicted rebase has a clean
+    // difference to carry.
+    let other = b"other-side\n".to_vec();
+    let bo = put_blob(&f, &other).await;
+    let (_, c2, c2p) = diverged(&f, vec![add("other.txt", &bo, other.len())]).await;
+    let resp = land_opt(&f, &c2, "k-record", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let m1 = resp.body["landed"].as_str().unwrap().to_string();
+    let m1_marker = cat(&f, &m1, "same.txt").await;
+    let m1_marker_blob = object_id(Kind::Blob, &m1_marker);
+
+    // A divergent main that INSERTS a line at the top of same.txt (W1):
+    // m1 leaves main's ancestry, so the next land rebases [c3, m1] with
+    // ours inserting at base position 0 — the same position the marker
+    // block inserts at, different content: the carried path RE-CONFLICTS
+    // (a plain line-1 replace would compose cleanly with the marker's
+    // insertion-only diff).
+    let w = b"W1-pre\nX1-main\nl2\nl3\n".to_vec();
+    let bw = put_blob(&f, &w).await;
+    let cw = create_ok(
+        &f,
+        cs_body(
+            json!([c2p.clone()]),
+            json!([mod_("same.txt", &bw, w.len())]),
+            "cw",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &cw);
+    let third = b"third\n".to_vec();
+    let bt = put_blob(&f, &third).await;
+    let c3 = create_ok(
+        &f,
+        cs_body(
+            json!([m1.clone()]),
+            json!([add("third.txt", &bt, third.len())]),
+            "c3",
+        ),
+    )
+    .await;
+
+    let resp = land_opt(&f, &c3, "k-compose", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let landed = resp.body["landed"].as_str().unwrap().to_string();
+
+    // The rebased m1' (the landed node's parent) carries EXACTLY ONE rep:
+    // the new sides (ours W1, theirs m1's markers), the base theirs' old
+    // common version (X1) — the carried rep is REPLACED, not duplicated.
+    let landed_cs = changeset::decode(&f.t.canonical_of(f.repo_id, &landed)).unwrap();
+    let m1_rebased = landed_cs.parents[0];
+    let carried = changeset::decode(&f.t.canonical_of(f.repo_id, &m1_rebased.to_hex())).unwrap();
+    assert_eq!(carried.conflicts.len(), 1, "replaced, not duplicated");
+    let rep = &carried.conflicts[0];
+    assert_eq!(rep.path, "same.txt");
+    let mut expect_sides = vec![Id::from_hex(&blob_hex(&w)).unwrap(), m1_marker_blob];
+    expect_sides.sort_by_key(|id| id.0);
+    assert_eq!(
+        rep.base,
+        Some(Id::from_hex(&blob_hex(b"X1-main\nl2\nl3\n")).unwrap())
+    );
+    assert_eq!(rep.sides, expect_sides);
+    // The recomposed markers materialize on main.
+    let expected = marker_bytes(rep, fetch_known2(&w, &m1_marker, b"X1-main\nl2\nl3\n")).unwrap();
+    assert_eq!(cat(&f, &landed, "same.txt").await, expected);
+}
+
+/// Fetch closure over exactly three contents.
+fn fetch_known2(a: &[u8], b: &[u8], c: &[u8]) -> impl FnMut(&Id) -> Result<Vec<u8>, String> {
+    let mut map = std::collections::HashMap::new();
+    map.insert(blob_hex(a), a.to_vec());
+    map.insert(blob_hex(b), b.to_vec());
+    map.insert(blob_hex(c), c.to_vec());
+    move |id: &Id| {
+        map.get(&id.to_hex())
+            .cloned()
+            .ok_or_else(|| format!("unexpected blob {}", id.to_hex()))
+    }
+}
+
+#[tokio::test]
+async fn record_conflict_true_on_a_clean_land_is_done() {
+    let f = fixture();
+    let base = b"a\n".to_vec();
+    let bb = put_blob(&f, &base).await;
+    let c1 = create_ok(
+        &f,
+        cs_body(json!([]), json!([add("f.txt", &bb, base.len())]), "c1"),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    let c2 = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([add("g.txt", &bb, base.len())]),
+            "c2",
+        ),
+    )
+    .await;
+
+    // The flag's negative direction: no conflict anywhere — the land
+    // settles DONE with an empty conflicts list, whatever the flag says.
+    let resp = land_opt(&f, &c2, "k-clean", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    assert_eq!(resp.body["conflicts"].as_array().unwrap(), &[] as &[Value]);
+    assert_eq!(f.t.land_state("k-clean"), "done");
 }

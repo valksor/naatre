@@ -1,0 +1,14 @@
+RELEASE HOLD — do not remove until M12b.
+
+Set by M12a (first-class conflicts, format v2). While this file exists,
+scripts/release.sh refuses SIGNED releases. Unsigned artifact builds
+(--no-sign) still run for CI and do not constitute a release — unsigned
+artifacts are untrusted-by-default per SECURITY.md; the release gate is
+signing.
+
+What the hold protects: the GC walker does not yet traverse conflict
+representations, and gc_pass withholds non-redacted reclaim on any store
+holding a v2 changeset — a stopgap until M12b.
+
+Remove this file ONLY with the M12b commit that lands the rep-traversing
+walker and replaces the hold.

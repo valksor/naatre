@@ -357,6 +357,10 @@
             },
             "type": "array"
           },
+          "conflicted": {
+            "description": "M12: true when the canonical frame is format v2 — the payload\ncarries first-class conflict representations (the root tree\nmaterializes their markers). An O(1) peek of the canonical magic\nbyte; the read path never decodes the frame.",
+            "type": "boolean"
+          },
           "generation": {
             "format": "int64",
             "minimum": 0,
@@ -391,7 +395,8 @@
           "timestamp_ns",
           "generation",
           "principal",
-          "changes"
+          "changes",
+          "conflicted"
         ],
         "type": "object"
       },

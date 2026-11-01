@@ -235,7 +235,11 @@ are ordinary tree content to the 3-way, and their representations travel —
 paths the rebase did not re-conflict keep their reps verbatim, and a
 path that re-conflicts under `--record-conflict` takes the new sides (the
 conflict composes: the previous materialization is itself a side of the
-new conflict). `lands.state` is `conflicted` exactly when the settlement
+new conflict). A redacted side or base refuses the land 410 — the tombstone
+gate sees rep ids — because the land can neither record (the rep would
+embed redacted bytes in a fresh marker blob) nor merge (the content flows
+into the markers): remove or rewrite the conflicting edit at that path, or
+resolve with the admin who holds the redaction. `lands.state` is `conflicted` exactly when the settlement
 node (main's new tip) is a conflicted node; a land that merely carries a
 conflicted ancestor through settles `done`. Conflicts with fewer than two
 content sides (a deletion side has no blob id to carry) are not
@@ -249,11 +253,24 @@ reachable) and blame's conflicted-region reporting arrive with their
 owners in M12b, as does the client surface (`--record-conflict` flag in
 `land --help`, marker materialization on sync, `status` conflict marks,
 `naatre resolve`, the version-skew refusal on conflicted nodes).
-**HOLD-BEFORE-DEPLOY: no release between M12a and M12b.** Two standing
-hazards close together in M12b: (1) until the GC walker traverses
+**HOLD-BEFORE-DEPLOY (until M12b): SIGNED releases are refused while the
+marker is present; GC withholds non-redacted reclaim on v2-bearing
+stores; unsigned artifact builds still run for CI and do not constitute a
+release.** The COST, stated plainly: on any store holding a v2 changeset, non-redacted garbage
+ACCUMULATES until M12b — the hold cannot lift before then, because the v2
+changeset itself is collectible and withheld by the same arm (pin (d)'s
+natural lift is impossible for exactly that reason; the pin deletes the
+row by hand to prove the lift works). Redaction purge is unaffected
+throughout. Two standing hazards close together in M12b: (1) until the GC walker traverses
 conflict representations, a losing-side blob of a landed conflicted node
 stays reachable only while some reachable node's delta references it —
-recorded here as a decision, not an oversight; (2) migration 012's
+recorded here as a decision, not an oversight; the interim is a
+MECHANICAL GC HOLD in `gc_pass` (the canonical v2-magic probe): it gates
+ONLY the collectible arms and withholds non-redacted garbage reclaim
+while any v2 changeset exists — the redaction purge phase runs UNTOUCHED
+(erasure is never held; tombstoned blobs purge exactly as before), and
+the hold reports itself as `GcReport.conflict_hold` with withheld
+counts; (2) migration 012's
 version bump is a ONE-WAY, store-wide lockout — the first boot of a
 format-v2 binary upgrades the data dir to schema_version 12 and no older
 binary can ever open it again, even holding only v1 data, so the only

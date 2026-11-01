@@ -243,7 +243,7 @@ CREATE INDEX IF NOT EXISTS redactions_object_id ON redactions(object_id);
     (12, ""),
 ];
 
-/// The Postgres migration set: one file per SQLite migration, 1–7, in
+/// The Postgres migration set: one file per SQLite migration, 1–12, in
 /// order (see `migrations/postgres/001_init.sql` for the translation
 /// rules). Once shipped, a migration's SQL is immutable — fixes go in a
 /// new, higher version on BOTH backends.

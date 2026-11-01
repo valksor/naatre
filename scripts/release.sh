@@ -24,25 +24,130 @@
 
 set -euo pipefail
 
-NO_SIGN=0
-if [[ "${1:-}" == "--no-sign" ]]; then
-	NO_SIGN=1
-	shift
-fi
-[[ $# -ge 1 ]] || {
-	printf 'usage: %s [--no-sign] <dest-dir> [target-triple]\n' "$0" >&2
-	exit 3
-}
-DEST=$1
-TARGET=${2:-$(rustc -vV | sed -n 's/^host: //p')}
-BIN="target/$TARGET/release/naatre"
-SBOM_SRC="crates/naatre-cli/naatre_bin.cdx.json"
-
 step() { printf '\n== %s\n' "$*"; }
 fail() {
 	printf 'release: %s\n' "$*" >&2
 	exit 1
 }
+
+# M12a RELEASE HOLD (removed by m12b): SIGNING releases refuse while the
+# hold marker exists — the GC walker does not yet traverse conflict
+# representations and the gc_pass hold is a stopgap. The gate runs BEFORE
+# any build work, so a held release refuses in milliseconds, and it is
+# anchored to the script's own directory: no CWD or environment choice can
+# steer or skip it (there is deliberately NO override hook — the selftest
+# exercises the gate through the real path, creating the marker only when
+# the hold is not live).
+HOLD_MARKER="$(cd "$(dirname "$0")" && pwd)/../deploy/HOLD-UNTIL-M12B"
+hold_gate() {
+	local marker="$HOLD_MARKER"
+	[[ -f "$marker" ]] || return 0
+	printf 'release: HOLD — %s is present; SIGNED releases are held until M12b\n' "$marker" >&2
+	printf 'release: (the GC walker withholds non-redacted reclaim on v2-bearing stores;\n' >&2
+	printf 'release:  unsigned artifact builds still run for CI and do not constitute a release —\n' >&2
+	printf 'release:  unsigned artifacts are untrusted-by-default per SECURITY.md; the release gate is signing;\n' >&2
+	printf 'release:  remove the marker only with the M12b commit that replaces the hold)\n' >&2
+	return 1
+}
+
+if [[ "${1:-}" == "--selftest-hold" ]]; then
+	step "selftest: signing mode refuses with the hold; --no-sign runs (CI's shape)"
+	TMP=$(mktemp -d)
+	cleanup() {
+		rm -f "$TMP/err" "$TMP/out2" "$TMP/out3"
+		rmdir "$TMP/dest" "$TMP/dest2" "$TMP/dest3" 2>/dev/null
+		rmdir "$TMP"
+	}
+	trap cleanup EXIT
+	# The gate reads the REAL, script-anchored marker — no override to
+	# exercise. When the hold is not live (post-m12b), the selftest
+	# creates the marker for its own run and removes it after; while the
+	# hold IS live, the real marker is used and left untouched.
+	CREATED=0
+	if [[ ! -f "$HOLD_MARKER" ]]; then
+		mkdir -p "$(dirname "$HOLD_MARKER")"
+		printf 'selftest marker\n' >"$HOLD_MARKER"
+		CREATED=1
+	fi
+	# (a) Signing mode, hold present: refuses before any build work (fast,
+	# no artifacts, no dest).
+	if "$0" "$TMP/dest" >/dev/null 2>"$TMP/err"; then
+		fail "selftest: the signing-mode release proceeded with the hold present"
+	fi
+	grep -q "HOLD —" "$TMP/err" ||
+		fail "selftest: the refusal did not name the hold ($(cat "$TMP/err"))"
+	[[ ! -e "$TMP/dest" ]] ||
+		fail "selftest: the held release created the dest before refusing"
+	# (b) --no-sign, hold present: CI's unsigned build still RUNS — that is
+	# not a release (unsigned artifacts are untrusted-by-default per
+	# SECURITY.md; the release gate is signing). The build step line must
+	# appear (bounded wait, then the build is killed; its partial output
+	# lands in the cargo target dir, gitignored).
+	"$0" --no-sign "$TMP/dest2" >"$TMP/out2" 2>&1 &
+	BUILD_PID=$!
+	PROCEEDED=0
+	for _ in $(seq 1 120); do
+		if grep -q "build (--release" "$TMP/out2"; then
+			PROCEEDED=1
+			break
+		fi
+		kill -0 "$BUILD_PID" 2>/dev/null || break
+		sleep 0.5
+	done
+	kill "$BUILD_PID" 2>/dev/null || true
+	wait "$BUILD_PID" 2>/dev/null || true
+	[[ "$PROCEEDED" == 1 ]] ||
+		fail "selftest: --no-sign did not proceed past the hold (CI's unsigned build must run)"
+	# (c) The exemption is positional-agnostic: --no-sign NOT first also
+	# proceeds (bounded wait, then the build is killed).
+	"$0" "$TMP/dest3" --no-sign >"$TMP/out3" 2>&1 &
+	BUILD_PID=$!
+	PROCEEDED=0
+	for _ in $(seq 1 120); do
+		if grep -q "build (--release" "$TMP/out3"; then
+			PROCEEDED=1
+			break
+		fi
+		kill -0 "$BUILD_PID" 2>/dev/null || break
+		sleep 0.5
+	done
+	kill "$BUILD_PID" 2>/dev/null || true
+	wait "$BUILD_PID" 2>/dev/null || true
+	[[ "$PROCEEDED" == 1 ]] ||
+		fail "selftest: a non-first --no-sign did not proceed past the hold"
+	[[ "$CREATED" == 1 ]] && rm -f "$HOLD_MARKER"
+	printf 'release: selftest ok — signing refuses, unsigned CI runs (any position)\n'
+	exit 0
+fi
+
+# --no-sign is honored in ANY argument position (CI passes it first, but
+# the exemption must not depend on argument order).
+NO_SIGN=0
+ARGS=()
+for arg in "$@"; do
+	if [[ "$arg" == "--no-sign" ]]; then
+		NO_SIGN=1
+	else
+		ARGS+=("$arg")
+	fi
+done
+set -- "${ARGS[@]}"
+[[ $# -ge 1 ]] || {
+	printf 'usage: %s [--no-sign anywhere] <dest-dir> [target-triple]\n' "$0" >&2
+	exit 3
+}
+DEST=$1
+# The hold gates every mode EXCEPT --no-sign: CI's unsigned build keeps
+# running while the marker exists, and that does not authorize a release —
+# unsigned artifacts are untrusted-by-default per SECURITY.md; the release
+# gate is signing. Removed by m12b.
+if [[ "$NO_SIGN" != 1 ]]; then
+	hold_gate || exit 1
+fi
+TARGET=${2:-$(rustc -vV | sed -n 's/^host: //p')}
+BIN="target/$TARGET/release/naatre"
+SBOM_SRC="crates/naatre-cli/naatre_bin.cdx.json"
+
 # sha256sum everywhere but macOS; shasum -a 256 is the same digest.
 sum() {
 	if command -v sha256sum >/dev/null 2>&1; then

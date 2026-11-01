@@ -33,6 +33,7 @@ use similar::{DiffOp, TextDiff};
 use naatre_core::changeset::{FileChange, Op};
 use naatre_core::conflict::{ConflictRep, marker_bytes};
 use naatre_core::ids::{Id, Kind, object_id};
+use naatre_store::cas::BLOB_LIMIT;
 
 use crate::tree_derive::{ApplyError, MemNode};
 
@@ -225,11 +226,13 @@ pub enum OnConflict {
 
 /// A recording merge ([`merge_trees_recording`]): the merged tree — with
 /// marker content at every conflicting path — plus the conflict list the
-/// markers were materialized from.
+/// markers were materialized from, and any marker whose bytes would exceed
+/// the blob limit (pre-sized; the caller refuses 413 before any write).
 #[derive(Debug, Default)]
 pub struct RecordedMerge {
     pub tree: MergedTree,
     pub conflicts: Vec<PathConflict>,
+    pub oversized: Vec<(String, usize)>,
 }
 
 /// A successful tree merge: the merged node and the blob contents that are
@@ -239,6 +242,11 @@ pub struct RecordedMerge {
 pub struct MergedTree {
     pub node: MemNode,
     pub new_blobs: Vec<(Id, Vec<u8>)>,
+    /// Every input blob id whose CONTENT flowed into a merged or marker
+    /// blob (line-merge base + both sides; marker sides + base): the
+    /// caller's tombstone gate probes these — new bytes are not
+    /// recognizable by output id alone.
+    pub input_ids: Vec<Id>,
 }
 
 /// Flattens a tree node to `full path → file meta` (directories are
@@ -285,7 +293,7 @@ pub fn merge_trees(
     theirs: &MemNode,
     fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
 ) -> Result<MergedTree, Vec<PathConflict>> {
-    merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Refuse).map(|(tree, _)| tree)
+    merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Refuse).map(|(tree, _, _)| tree)
 }
 
 /// The recording variant of [`merge_trees`]: every representable conflict
@@ -294,15 +302,23 @@ pub fn merge_trees(
 /// them all. `Err` is reserved for refusals: blob fetch failures, tree
 /// duality violations, and conflicts with fewer than two content sides (a
 /// deletion side has no blob id to carry — the v2 representation cannot
-/// encode it, so the land refuses instead of silently resolving).
+/// encode it, so the land refuses instead of silently resolving). A marker
+/// whose bytes would exceed the blob limit is PRE-SIZED here and reported
+/// in [`RecordedMerge::oversized`] — the caller refuses 413 before any
+/// bytes reach the CAS.
 pub fn merge_trees_recording(
     base: &MemNode,
     ours: &MemNode,
     theirs: &MemNode,
     fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
 ) -> Result<RecordedMerge, Vec<PathConflict>> {
-    merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Record)
-        .map(|(tree, conflicts)| RecordedMerge { tree, conflicts })
+    merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Record).map(
+        |(tree, conflicts, oversized)| RecordedMerge {
+            tree,
+            conflicts,
+            oversized,
+        },
+    )
 }
 
 /// The representation of a path conflict, when both competing sides carry
@@ -343,7 +359,10 @@ fn resolve_exec(b: Option<FileMeta>, o: Option<FileMeta>, t: Option<FileMeta>) -
 /// Routes one path conflict per the mode: `Refuse` collects it to fail the
 /// merge; `Record` materializes the sides' markers into the merged map. A
 /// fetch failure under `Record` returns the fetcher's error (corruption,
-/// not a conflict).
+/// not a conflict). Every input blob id whose content flows into the
+/// result (marker sides + base) is recorded for the caller's tombstone
+/// gate; an over-limit marker is pre-sized into `oversized` instead of
+/// recorded.
 #[allow(clippy::too_many_arguments)]
 fn take_conflict(
     on: OnConflict,
@@ -355,6 +374,8 @@ fn take_conflict(
     refused: &mut Vec<PathConflict>,
     merged_files: &mut BTreeMap<String, FileMeta>,
     new_blobs: &mut Vec<(Id, Vec<u8>)>,
+    input_ids: &mut Vec<Id>,
+    oversized: &mut Vec<(String, usize)>,
     fetch_blob: &mut impl FnMut(&Id) -> Result<Vec<u8>, String>,
 ) -> Result<(), String> {
     match on {
@@ -364,7 +385,20 @@ fn take_conflict(
         }
         OnConflict::Record => match content_rep(&c) {
             Some(rep) => {
+                // The sides' and base's CONTENT flows into the fresh
+                // marker blob: their ids join the gate batch.
+                if let Some(base) = rep.base {
+                    input_ids.push(base);
+                }
+                input_ids.extend(rep.sides.iter().copied());
                 let bytes = marker_bytes(&rep, |id| fetch_blob(id))?;
+                // Pre-size: a would-be blob-limit overflow refuses 413 at
+                // the caller (before any CAS write), not a 500 from a
+                // rejected CAS put.
+                if bytes.len() > BLOB_LIMIT {
+                    oversized.push((c.path.clone(), bytes.len()));
+                    return Ok(());
+                }
                 let blob = object_id(Kind::Blob, &bytes);
                 let meta = FileMeta {
                     blob,
@@ -389,22 +423,32 @@ fn take_conflict(
     }
 }
 
+/// Pre-sized over-limit markers: (path, byte size) — the caller refuses
+/// 413 before any CAS write.
+type OversizedMarkers = Vec<(String, usize)>;
+
 /// The mode-parameterized merge core (see the two wrappers). Ok carries the
-/// merged tree plus the conflicts materialized in record mode (empty in
-/// refuse mode — those come back as Err instead).
+/// merged tree, the conflicts materialized in record mode (empty in refuse
+/// mode — those come back as Err instead), and any pre-sized over-limit
+/// markers (record mode only).
 fn merge_trees_mode(
     base: &MemNode,
     ours: &MemNode,
     theirs: &MemNode,
     mut fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
     on: OnConflict,
-) -> Result<(MergedTree, Vec<PathConflict>), Vec<PathConflict>> {
+) -> Result<(MergedTree, Vec<PathConflict>, OversizedMarkers), Vec<PathConflict>> {
     let base_files = flatten_files(base);
     let ours_files = flatten_files(ours);
     let theirs_files = flatten_files(theirs);
 
     let mut merged_files: BTreeMap<String, FileMeta> = BTreeMap::new();
     let mut new_blobs: Vec<(Id, Vec<u8>)> = Vec::new();
+    // Every input blob id whose content flowed into a merged or marker
+    // blob: the caller's tombstone gate probes these alongside the delta
+    // blobs (the gate cannot recognize new bytes by output id alone).
+    let mut input_ids: Vec<Id> = Vec::new();
+    let mut oversized: OversizedMarkers = Vec::new();
     // Refuse mode: every conflict (the Err). Record mode: materialized
     // conflicts (Ok) and refusals (Err) respectively.
     let mut conflicts: Vec<PathConflict> = Vec::new();
@@ -458,11 +502,14 @@ fn merge_trees_mode(
             (Some(bm), Some(om), Some(tm)) => {
                 // modify/modify: line-merge the blob contents.
                 let merged = (|| -> Result<Option<(FileMeta, Vec<u8>)>, String> {
-                    let outcome = merge_lines(
-                        &fetch_blob(&bm.blob)?,
-                        &fetch_blob(&om.blob)?,
-                        &fetch_blob(&tm.blob)?,
-                    );
+                    let base_bytes = fetch_blob(&bm.blob)?;
+                    let ours_bytes = fetch_blob(&om.blob)?;
+                    let theirs_bytes = fetch_blob(&tm.blob)?;
+                    // The inputs' content flowed into the merged blob
+                    // (clean merge) or would have (conflict): their ids
+                    // join the gate batch either way.
+                    input_ids.extend_from_slice(&[bm.blob, om.blob, tm.blob]);
+                    let outcome = merge_lines(&base_bytes, &ours_bytes, &theirs_bytes);
                     match outcome {
                         MergeOutcome::Conflict => Ok(None),
                         MergeOutcome::Merged(bytes) => {
@@ -496,6 +543,8 @@ fn merge_trees_mode(
                         &mut conflicts,
                         &mut merged_files,
                         &mut new_blobs,
+                        &mut input_ids,
+                        &mut oversized,
                         &mut fetch_blob,
                     )
                     .map_err(|e| vec![conflict(&e)])?,
@@ -513,6 +562,8 @@ fn merge_trees_mode(
                     &mut conflicts,
                     &mut merged_files,
                     &mut new_blobs,
+                    &mut input_ids,
+                    &mut oversized,
                     &mut fetch_blob,
                 )
                 .map_err(|e| vec![conflict(&e)])?;
@@ -528,6 +579,8 @@ fn merge_trees_mode(
                     &mut conflicts,
                     &mut merged_files,
                     &mut new_blobs,
+                    &mut input_ids,
+                    &mut oversized,
                     &mut fetch_blob,
                 )
                 .map_err(|e| vec![conflict(&e)])?;
@@ -572,7 +625,15 @@ fn merge_trees_mode(
             path,
         }]);
     }
-    Ok((MergedTree { node, new_blobs }, recorded))
+    Ok((
+        MergedTree {
+            node,
+            new_blobs,
+            input_ids,
+        },
+        recorded,
+        oversized,
+    ))
 }
 
 /// The delta between two trees, sorted by path — the file changes a rebased

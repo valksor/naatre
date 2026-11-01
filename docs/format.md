@@ -243,7 +243,7 @@ Each conflict rep:
 | path | `str` (a legal path, the conflict's location) |
 | base tag | u8: 0 = no common base (add/add), 1 = base present |
 | base | 32-byte blob id, present only when the tag is 1 |
-| sides | u32le count (>= 2), then that many 32-byte blob ids in ascending byte order |
+| sides | u32le count (>= 2), then that many 32-byte blob ids in strictly ascending byte order |
 
 A side is a competing version's blob id — content-addressed, the bytes live
 in the CAS. The base is the common ancestor version where one exists. A
@@ -267,7 +267,11 @@ conflicted path holds the deterministic rendering of its rep:
 ```
 
 Every content block ends in a newline (one is appended to non-empty content
-that lacks it), so dividers always start at line beginnings. The rendering
+that lacks it), so dividers always start at line beginnings. The
+materialized file's exec bit: agreeing sides win; a side matching the base
+defers to the other; a bare disagreement (neither side matches the base —
+possible only for add/add) takes OURS' bit — a deterministic, documented
+tie-break, never a refusal. The rendering
 is a pure function of the rep plus the referenced contents: the recording
 server and any later client derive byte-identical markers.
 

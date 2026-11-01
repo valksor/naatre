@@ -1478,3 +1478,153 @@ async fn gc_collects_while_derive_queue_holds_leases() {
     let report = fsck::fsck(&f.t.state).await.unwrap();
     assert!(report.clean(), "{report:?}");
 }
+
+// ---- M12a-fix: the mechanical GC hold ---------------------------------------
+
+/// The hold is erasure-safe and mechanical: (a) a pure-v1 store reclaims
+/// garbage exactly as before (`conflict_hold` false); (b) a store holding
+/// a v2 changeset withholds NON-REDACTED garbage — the report names the
+/// hold and the withheld counts; (c) the SAME store still purges a
+/// tombstoned blob (the redaction purge phase is untouched); (d) the
+/// withheld garbage reclaims on the first sweep after the v2 changeset is
+/// gone. Detection is the canonical v2-magic probe — never lands.state
+/// (carried reps have no settlement row), no new column.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gc_conflict_hold_withholds_non_redacted_garbage_only() {
+    let f = fixture();
+    let (root, _) = seed_base(&f).await;
+
+    // (a) v1-only: the orphan is garbage; ledgered at the base clock, it
+    // reclaims on the first past-grace sweep, no hold.
+    let _orphan1 = f.commit(json!([root.clone()]), "o1.txt", b"orphan-1").await;
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert!(!report.conflict_hold, "{report:?}");
+    f.tick_to(BASE_NS + GRACE_NS);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert!(!report.conflict_hold, "{report:?}");
+    assert!(report.cs_collected >= 1, "v1 garbage reclaims: {report:?}");
+
+    // The v2 changeset: a record-conflict land settles a conflicted node
+    // on main.
+    let ours = b"L1-gc\nl2\nl3\n".to_vec();
+    let theirs = b"X1-gc\nl2\nl3\n".to_vec();
+    let base = b"l1\nl2\nl3\n".to_vec();
+    let (bc, bo, bt) = (
+        f.put_blob(&base).await,
+        f.put_blob(&ours).await,
+        f.put_blob(&theirs).await,
+    );
+    let c1 = f
+        .create_ok(&cs_body(
+            json!([]),
+            json!([m4b_common::add("s.txt", &bc, base.len())]),
+            "c1",
+        ))
+        .await
+        .0;
+    let c2 = f
+        .create_ok(&cs_body(
+            json!([c1.clone()]),
+            json!([m4b_common::mod_("s.txt", &bo, ours.len())]),
+            "c2",
+        ))
+        .await
+        .0;
+    let c2p = f
+        .create_ok(&cs_body(
+            json!([c1.clone()]),
+            json!([m4b_common::mod_("s.txt", &bt, theirs.len())]),
+            "c2p",
+        ))
+        .await
+        .0;
+    // Rewind scaffold: main onto the theirs side (test scaffolding — land
+    // is main's only writer, the m4a pattern).
+    m4b_common::conn_at(&f.t.db_path)
+        .execute(
+            "UPDATE refs SET target = ?2 WHERE repo_id = ?1 AND name = 'main'",
+            rusqlite::params![f.repo_id, hex_id(&c2p).0.as_slice()],
+        )
+        .unwrap();
+    let resp = post_json_on(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/land"),
+        &f.writer,
+        &json!({ "head": c2, "key": "k-hold", "record_conflict": true }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let v2 = resp.body["landed"].as_str().unwrap().to_string();
+    let canonical: Vec<u8> = m4b_common::conn_at(&f.t.db_path)
+        .query_row(
+            "SELECT canonical FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            rusqlite::params![f.repo_id, hex_id(&v2).0.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(canonical[16], 0x02, "the settlement is a v2 node");
+
+    // (b) + (c): fresh v1 garbage is WITHHELD while the v2 node exists,
+    // and a tombstoned blob still purges in the same sweep.
+    let doomed = f.put_blob(b"doomed-blob").await;
+    m4b_common::conn_at(&f.t.db_path)
+        .execute(
+            "INSERT INTO redactions(repo_id, object_id, kind, path, marked_ns) \
+             VALUES (?1, ?2, 'blob', NULL, ?3)",
+            rusqlite::params![f.repo_id, hex_id(&doomed).0.as_slice(), BASE_NS as i64],
+        )
+        .unwrap();
+    let _orphan2 = f.commit(json!([root.clone()]), "o2.txt", b"orphan-2").await;
+    // The ledger pass at BASE+GRACE stamps the orphan's first-seen (the
+    // hold already gates the collection arms — nothing reclaims).
+    f.tick_to(BASE_NS + GRACE_NS);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert!(report.conflict_hold, "{report:?}");
+    assert!(
+        report.cs_collected + report.blobs_collected + report.trees_collected == 0,
+        "{report:?}"
+    );
+    // Past the orphan's grace: the arms WOULD take it — the hold withholds.
+    f.tick_to(BASE_NS + 2 * GRACE_NS);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert!(report.conflict_hold, "{report:?}");
+    assert!(
+        report.withheld_cs >= 1,
+        "the orphan is withheld: {report:?}"
+    );
+    assert!(report.withheld_blobs >= 1, "{report:?}");
+    assert!(
+        report.cs_collected + report.blobs_collected + report.trees_collected == 0,
+        "nothing non-redacted reclaims under the hold: {report:?}"
+    );
+    assert!(
+        report.redactions_purged_blobs >= 1,
+        "the tombstoned blob purged under the hold: {report:?}"
+    );
+    assert_eq!(
+        f.count_params(
+            "SELECT COUNT(*) FROM objects WHERE object_id = ?1",
+            &[&hex_id(&doomed).0.as_slice()]
+        ),
+        0,
+        "the doomed blob's rows went with the purge"
+    );
+
+    // (d) the v2 changeset gone (the row deleted, main rewound off it):
+    // the withheld garbage reclaims on the FIRST sweep, no hold.
+    let conn = m4b_common::conn_at(&f.t.db_path);
+    conn.execute(
+        "UPDATE refs SET target = ?2 WHERE repo_id = ?1 AND name = 'main'",
+        rusqlite::params![f.repo_id, hex_id(&c2p).0.as_slice()],
+    )
+    .unwrap();
+    conn.execute(
+        "DELETE FROM changesets WHERE repo_id = ?1 AND id = ?2",
+        rusqlite::params![f.repo_id, hex_id(&v2).0.as_slice()],
+    )
+    .unwrap();
+    drop(conn);
+    let report = gc_pass(&f.t.state).await.unwrap();
+    assert!(!report.conflict_hold, "{report:?}");
+    assert!(report.cs_collected >= 1, "the orphan reclaims: {report:?}");
+}

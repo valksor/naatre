@@ -20,8 +20,12 @@ pub const MAX_PARENTS: usize = 2;
 /// Maximum entries per changeset or tree.
 pub const MAX_ENTRIES: usize = 100_000;
 
-const MAGIC_V1: &[u8] = b"naatre-changeset\x01";
-const MAGIC_V2: &[u8] = b"naatre-changeset\x02";
+/// The v1 frame magic (17 bytes). Public so storage and route layers can
+/// probe the version byte without a decode.
+pub const MAGIC_V1: &[u8; 17] = b"naatre-changeset\x01";
+/// The v2 frame magic (17 bytes): the format-v2 marker the GC hold and the
+/// read-side `conflicted` peek test in O(1).
+pub const MAGIC_V2: &[u8; 17] = b"naatre-changeset\x02";
 
 /// What happened to a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +243,12 @@ pub fn decode(bytes: &[u8]) -> Result<Changeset, CoreError> {
     let mut conflicts = Vec::new();
     if is_v2 {
         let conflict_count = r.u32_le()? as usize;
+        // Strict canonical acceptance: a v2 frame ALWAYS carries at least
+        // one conflict (encode only picks the v2 magic when the list is
+        // non-empty); zero is not a canonical shape and never parses.
+        if conflict_count == 0 {
+            return Err(CoreError::DecodeEmptyConflictSection);
+        }
         // Every conflict occupies at least 77 bytes (a u64le path length, 1
         // base tag, a u32le side count, and the two minimum 32-byte sides).
         if conflict_count.saturating_mul(77) > r.remaining() {
@@ -484,5 +494,80 @@ mod tests {
         let bytes = encode(&cs).unwrap();
         assert!(bytes.starts_with(MAGIC_V1));
         assert_eq!(decode(&bytes).unwrap(), cs);
+    }
+
+    /// Decoder strictness (M12a-fix): encode only picks the v2 magic when
+    /// the conflict list is non-empty, so a v2 frame with an empty
+    /// conflict section is not a canonical shape — the strict decoder
+    /// refuses it instead of accepting a zero-conflict v2 frame.
+    #[test]
+    fn v2_frame_with_empty_conflict_section_is_a_decode_error() {
+        let bytes = encode(&base_cs()).unwrap();
+        let mut forged = bytes.clone();
+        // The forged frame carries a well-formed (empty) conflict section:
+        // count 0 — exactly the shape encode never produces.
+        forged.extend_from_slice(&0u32.to_le_bytes());
+        forged[16] = 0x02; // the version byte: v1 -> v2, zero conflicts
+        assert_eq!(decode(&forged), Err(CoreError::DecodeEmptyConflictSection));
+        // The genuine v2 frame (non-empty section) decodes fine.
+        let mut cs = base_cs();
+        cs.conflicts = vec![ConflictRep {
+            path: "a.txt".into(),
+            base: Some(side(1)),
+            sides: vec![side(2), side(3)],
+        }];
+        assert!(decode(&encode(&cs).unwrap()).is_ok());
+    }
+
+    /// Cap parity (M12a-fix): the conflict list and each rep's sides carry
+    /// the same MAX_ENTRIES cap the file-change list does.
+    #[test]
+    fn conflict_caps_match_the_entries_cap() {
+        let side = |t: u8| {
+            let mut b = [0u8; 32];
+            b[0] = t;
+            Id(b)
+        };
+        // Rep list over the cap.
+        let mut cs = base_cs();
+        cs.conflicts = (0..=MAX_ENTRIES)
+            .map(|i| ConflictRep {
+                path: format!("p{i}"),
+                base: None,
+                sides: vec![side(1), side(2)],
+            })
+            .collect();
+        cs.conflicts
+            .sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+        assert_eq!(validate(&cs), Err(CoreError::EncodeTooManyEntries));
+        // Per-rep side count over the cap.
+        let mut cs = base_cs();
+        cs.conflicts = vec![ConflictRep {
+            path: "a.txt".into(),
+            base: None,
+            sides: (0..=MAX_ENTRIES)
+                .map(|i| {
+                    let mut id = side(1);
+                    id.0[1] = (i % 251) as u8;
+                    id.0[2] = (i / 251) as u8;
+                    id
+                })
+                .collect(),
+        }];
+        cs.conflicts[0].sides.sort_by_key(|s| s.0);
+        assert_eq!(validate(&cs), Err(CoreError::EncodeTooManyEntries));
+        // One over the cap in the OTHER direction still encodes (parity:
+        // the cap is MAX_ENTRIES, not anything tighter).
+        let mut cs = base_cs();
+        cs.conflicts = (0..MAX_ENTRIES)
+            .map(|i| ConflictRep {
+                path: format!("p{i}"),
+                base: None,
+                sides: vec![side(1), side(2)],
+            })
+            .collect();
+        cs.conflicts
+            .sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+        assert_eq!(validate(&cs), Ok(()));
     }
 }
