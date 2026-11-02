@@ -13,7 +13,6 @@ use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::AuthedPrincipal;
 use crate::db;
-use crate::routes::repo_id_or_404;
 use crate::state::AppState;
 
 /// One entry of a tree listing.
@@ -82,9 +81,10 @@ pub async fn get_tree(
     let id = Id::from_hex(&id_hex).ok_or_else(|| {
         ApiError::new(ApiCode::Malformed, "id must be 64 lowercase hex characters")
     })?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let entries = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             if !db::repo_has_tree(conn, repo_id, &id).map_err(ApiError::log_internal)? {
                 return Ok(None);
             }

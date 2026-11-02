@@ -1,6 +1,7 @@
 //! Open handle to the store: the metadata connection (SQLite or Postgres)
 //! with its durability setup applied and migrations run.
 
+use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -39,17 +40,24 @@ impl Store {
     /// (WAL, `synchronous=FULL`, busy timeout 5000 ms, foreign keys on),
     /// and brings the schema up to date. The zero-config SQLite path.
     pub fn open(data: DataDir) -> Result<Store, StoreError> {
-        let conn = Connection::open(data.db_path())?;
-
-        // journal_mode returns a row, so it is queried rather than set
-        // via pragma_update.
-        let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))?;
-
+        let conn = open_sqlite_file(&data.db_path())?;
         migrate(&conn)?;
+        Ok(Store {
+            db: Db::Sqlite(conn),
+            data,
+        })
+    }
 
+    /// Opens (creating if absent) the CATALOG database for the
+    /// `DbPerRepo` layout ([`crate::layout`]) inside `data`, applying the
+    /// same durability pragmas and the catalog's own migration list
+    /// ([`crate::catalog`]). The `Store` handle wraps the catalog
+    /// connection: the server's global-statement paths (`state.write` /
+    /// `state.read`) run against it, while the per-repo connections come
+    /// from [`open_repo_db`] via the server's routing layer.
+    pub fn open_catalog(data: DataDir) -> Result<Store, StoreError> {
+        let conn = open_sqlite_file(&data.path().join(crate::layout::CATALOG_FILE))?;
+        crate::catalog::migrate_catalog(&conn)?;
         Ok(Store {
             db: Db::Sqlite(conn),
             data,
@@ -127,6 +135,47 @@ pub fn schema_version(db: &Db) -> i64 {
             .expect("schema_version parses: migrate wrote it")
     })
     .expect("schema_version row exists: migrate guarantees it")
+}
+
+/// Opens one SQLite metadata file with the store's durability setup: WAL,
+/// `synchronous=FULL`, busy timeout [`BUSY_TIMEOUT_MS`], foreign keys on.
+/// Shared by [`Store::open`] (`naatre.db`), [`Store::open_catalog`]
+/// (`catalog.db`), and [`open_repo_db`] (the per-repo files) — every
+/// SQLite connection the store family opens carries the same pragmas.
+fn open_sqlite_file(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open(path)?;
+
+    // journal_mode returns a row, so it is queried rather than set
+    // via pragma_update.
+    let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))?;
+    Ok(conn)
+}
+
+/// Opens (creating if absent) ONE per-repo database file for the
+/// `DbPerRepo` layout and brings its schema up to date with the SHARED
+/// SQLite `MIGRATIONS` list, verbatim (a fresh per-repo file runs the
+/// same 1..=12 the single-DB file runs; the global tables exist in it but
+/// stay empty — the catalog owns the global rows). The server's routing
+/// layer keeps one of these open per repo (write) plus a small read-only
+/// pool; the file's WAL + busy settings come from the same pragma helper
+/// as every other store connection.
+pub fn open_repo_db(path: &Path) -> Result<Db, StoreError> {
+    let conn = open_sqlite_file(path)?;
+    migrate(&conn)?;
+    Ok(Db::Sqlite(conn))
+}
+
+/// [`open_repo_db`] WITHOUT the migration run: an additional read-write
+/// connection to an already-migrated store file (the routing layer's aux
+/// catalog connection). A file that was never migrated must not be
+/// silently created by an aux open — callers open migrated files only
+/// (the catalog exists because the layout check passed).
+pub fn open_repo_conn(path: &Path) -> Result<Db, StoreError> {
+    let conn = open_sqlite_file(path)?;
+    Ok(Db::Sqlite(conn))
 }
 
 #[cfg(test)]

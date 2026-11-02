@@ -86,10 +86,24 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
     let now = state.now_ns();
 
     // Expired rows and rowless dir candidates, both by the injected clock.
-    let expired = {
+    // The expired union walks every repo's file through the registry
+    // (the M13a aggregation shape; the single-DB pass reads the one file).
+    let expired: Vec<Id> = {
         let now_i = now as i64;
         state
-            .read(move |conn| db::snapshots_expired(conn, now_i).map_err(ApiError::log_internal))
+            .read_all(move |cx| {
+                let mut out = Vec::new();
+                for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                    cx.with_repo(repo_id, |conn| {
+                        out.extend(
+                            db::snapshots_expired(conn, now_i).map_err(ApiError::log_internal)?,
+                        );
+                        Ok(())
+                    })
+                    .map_err(ApiError::log_internal)?;
+                }
+                Ok(out)
+            })
             .await?
     };
     let candidates = {
@@ -114,7 +128,23 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
     } else {
         let ids = hex_ids.clone();
         let exists = state
-            .read(move |conn| db::snapshots_exist(conn, &ids).map_err(ApiError::log_internal))
+            .read_all(move |cx| {
+                let mut any = vec![false; ids.len()];
+                for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                    cx.with_repo(repo_id, |conn| {
+                        for (i, hit) in db::snapshots_exist(conn, &ids)
+                            .map_err(ApiError::log_internal)?
+                            .into_iter()
+                            .enumerate()
+                        {
+                            any[i] = any[i] || hit;
+                        }
+                        Ok(())
+                    })
+                    .map_err(ApiError::log_internal)?;
+                }
+                Ok(any)
+            })
             .await?;
         hex_ids
             .iter()
@@ -168,27 +198,63 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
     // tree rows exist.
     let needs_write = !purgable.is_empty() || rowless_swept > 0 || {
         state
-            .read(|conn| db::any_junctionless_trees(conn).map_err(ApiError::log_internal))
+            .read_all(move |cx| {
+                let mut any = false;
+                for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                    cx.with_repo(repo_id, |conn| {
+                        if db::any_junctionless_trees(conn).map_err(ApiError::log_internal)? {
+                            any = true;
+                        }
+                        Ok(())
+                    })
+                    .map_err(ApiError::log_internal)?;
+                }
+                Ok(any)
+            })
             .await?
     };
     let (rows_purged, trees_purged) = if !needs_write {
         (0, 0)
     } else {
         let now_i = now as i64;
+        // The sweep runs under the coordinated batch: the mark (the
+        // unprotected-tree selection) and the deletes must be atomic
+        // against a snapshot POST reusing a shared subtree — the property
+        // the single-DB write slot provided, now the catalog + repo slots
+        // with the sweep flag up.
+        let purgable = purgable.clone();
         state
-            .write(move |store| {
-                let conn = store.conn();
-                let tx = conn.transaction().map_err(ApiError::log_internal)?;
-                let rows_purged =
-                    db::snapshots_purge(&tx, &purgable).map_err(ApiError::log_internal)?;
-                let garbage = db::unprotected_trees(&tx, now_i).map_err(ApiError::log_internal)?;
-                let trees_purged =
-                    db::delete_tree_rows(&tx, &garbage).map_err(ApiError::log_internal)?;
-                // One audit row per collecting pass, atomic with its DB
-                // effects. A pass that reached the slot but collected
+            .write_all(move |cx| {
+                // Per-repo: the expired-row purge AND the tree sweep in
+                // this repo's file (its own transaction — the repo file is
+                // the atomicity unit in the split; single-DB every repo
+                // routes to the one connection and the last transaction's
+                // audit row rides it).
+                let mut total_rows = 0usize;
+                let mut total_trees = 0usize;
+                for repo_id in cx.repo_ids().collect::<Vec<_>>() {
+                    let conn = cx.repo(repo_id)?;
+                    let tx = conn.transaction().map_err(ApiError::log_internal)?;
+                    let rows_purged =
+                        db::snapshots_purge(&tx, &purgable).map_err(ApiError::log_internal)?;
+                    let garbage =
+                        db::unprotected_trees(&tx, now_i).map_err(ApiError::log_internal)?;
+                    let trees_purged =
+                        db::delete_tree_rows(&tx, &garbage).map_err(ApiError::log_internal)?;
+                    tx.commit().map_err(ApiError::log_internal)?;
+                    total_rows += rows_purged;
+                    total_trees += trees_purged;
+                }
+                // One audit row per collecting pass, committed with the
+                // catalog-side delete bookkeeping (the loop's last
+                // transaction). A pass that reached the slots but collected
                 // nothing (only protected junction-less rows alive) writes
                 // none — a quiet server must not spam the append-only log.
-                if !purgable.is_empty() || rowless_swept > 0 || trees_purged > 0 {
+                if !purgable.is_empty() || rowless_swept > 0 || total_trees > 0 {
+                    let tx = cx
+                        .cat()
+                        .transaction_immediate()
+                        .map_err(ApiError::log_internal)?;
                     db::audit_append(
                         &tx,
                         now_i,
@@ -197,15 +263,15 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
                         &serde_json::json!({
                             "expired": purgable.len(),
                             "rowless": rowless_swept,
-                            "rows_purged": rows_purged,
-                            "trees_purged": trees_purged,
+                            "rows_purged": total_rows,
+                            "trees_purged": total_trees,
                         })
                         .to_string(),
                     )
                     .map_err(ApiError::log_internal)?;
+                    tx.commit().map_err(ApiError::log_internal)?;
                 }
-                tx.commit().map_err(ApiError::log_internal)?;
-                Ok((rows_purged, trees_purged))
+                Ok((total_rows, total_trees))
             })
             .await?
     };

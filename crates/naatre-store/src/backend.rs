@@ -23,6 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::StoreError;
+use crate::layout::Layout;
 
 /// The backend.toml file name inside the data dir.
 pub const BACKEND_FILE: &str = "backend.toml";
@@ -173,6 +174,10 @@ pub struct S3Connect {
 pub struct BackendConfig {
     pub meta: MetaKind,
     pub blob: BlobKind,
+    /// The metadata layout (M13a): `Single` (the zero-config default) or
+    /// `DbPerRepo` (catalog.db + one SQLite file per repo; SQLite meta
+    /// only — the parser refuses it under Postgres).
+    pub layout: Layout,
     /// Present when `meta = "postgres"`.
     pub pg: Option<PgConnect>,
     /// Present when `blob = "s3"`.
@@ -235,6 +240,7 @@ impl BackendConfig {
         BackendConfig {
             meta: MetaKind::Sqlite,
             blob: BlobKind::S3,
+            layout: Layout::Single,
             pg: None,
             s3: Some(connect),
             allow_plaintext: false,
@@ -261,6 +267,7 @@ impl BackendConfig {
         Ok(BackendConfig {
             meta: MetaKind::Postgres,
             blob: BlobKind::Fs,
+            layout: Layout::Single,
             pg: Some(PgConnect {
                 host: parsed.host,
                 port: parsed.port,
@@ -290,12 +297,12 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
         .map_err(|_| BackendError::NotToml)?;
 
     let table = value.as_table().ok_or(BackendError::NotATable)?;
-    // Top level: only the [backend] table.
+    // Top level: [backend] and (M13a) the optional [layout] table.
     for key in table.keys() {
-        if key != "backend" {
+        if key != "backend" && key != "layout" {
             return Err(BackendError::UnknownKey {
                 key: format!("[{key}]"),
-                allowed: "[backend]".to_string(),
+                allowed: "[backend], [layout]".to_string(),
             });
         }
     }
@@ -366,6 +373,44 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
             want: "true or false".to_string(),
         })?,
     };
+    // ---- [layout] table (M13a) ---------------------------------------------
+    // Optional; an absent table is the zero-config `single-db`. The mode
+    // key is the only key, and `db-per-repo` is SQLite-only: the per-repo
+    // files are SQLite, so a Postgres metadata backend never splits.
+    let layout = match table.get("layout") {
+        None => Layout::Single,
+        Some(v) => {
+            let t = v.as_table().ok_or(BackendError::BadValue {
+                key: "[layout]".to_string(),
+                want: "a table".to_string(),
+            })?;
+            const LAYOUT_ALLOWED: &[&str] = &["mode"];
+            for key in t.keys() {
+                if !LAYOUT_ALLOWED.contains(&key.as_str()) {
+                    return Err(BackendError::UnknownKey {
+                        key: format!("layout.{key}"),
+                        allowed: LAYOUT_ALLOWED.join(", "),
+                    });
+                }
+            }
+            match t.get("mode") {
+                None => Layout::Single,
+                Some(v) => {
+                    let s = v.as_str().ok_or(BackendError::BadValue {
+                        key: "layout.mode".to_string(),
+                        want: "\"single-db\" or \"db-per-repo\"".to_string(),
+                    })?;
+                    Layout::parse(s).ok_or(BackendError::BadValue {
+                        key: "layout.mode".to_string(),
+                        want: "\"single-db\" or \"db-per-repo\"".to_string(),
+                    })?
+                }
+            }
+        }
+    };
+    if layout == Layout::DbPerRepo && meta == MetaKind::Postgres {
+        return Err(BackendError::LayoutNeedsSqlite);
+    }
     // The M10a GC knobs: seconds; 0 for the interval switches the serve-side
     // background task off (the host-local `naatre gc` verb still runs).
     let gc_interval_secs = match backend.get("gc_interval_secs") {
@@ -525,6 +570,7 @@ pub fn parse(text: &str) -> Result<BackendConfig, BackendError> {
     Ok(BackendConfig {
         meta,
         blob,
+        layout,
         pg,
         s3,
         allow_plaintext,
@@ -882,6 +928,22 @@ pub enum BackendError {
          re-initialize — naatre never re-mints an initialized store"
     )]
     AlreadyInitialized,
+
+    #[error(
+        "layout mode \"db-per-repo\" requires meta = \"sqlite\": the per-repo \
+         files are SQLite, so a Postgres metadata backend never splits"
+    )]
+    LayoutNeedsSqlite,
+
+    #[error(
+        "data dir layout is {on_disk} but the config selects {configured}: \
+         refusing to open — {remedy}"
+    )]
+    LayoutMismatch {
+        on_disk: &'static str,
+        configured: &'static str,
+        remedy: &'static str,
+    },
 }
 
 /// The mismatch guard (plan M9): refuses a data dir whose existing
@@ -898,6 +960,13 @@ pub enum BackendError {
 ///   auto-migrated into a bucket (M9b); the operator starts a fresh data
 ///   dir or migrates out-of-band. An EMPTY `objects/` (created by a mere
 ///   open) is not a marker and passes.
+/// * layout (M13a): `layout.mode = "db-per-repo"` requires `catalog.db`
+///   (run `naatre migrate-db-per-repo` first — the config flip without the
+///   migration is refused); `single-db` (the default) refuses a data dir
+///   where `catalog.db` exists — the migration ran and the config was not
+///   flipped. A stale `naatre.db` BESIDE a migrated catalog is accepted:
+///   the cutover steps leave the original single DB in place for the
+///   operator to delete after verifying the split serves.
 ///
 /// The reverse (a bucket holding data + `blob = fs`) cannot be checked
 /// locally: there is no on-disk marker for a remote bucket, and the bucket
@@ -906,17 +975,38 @@ pub enum BackendError {
 /// fresh data dir at a used bucket.
 pub fn check_data_dir_backend(data: &Path, cfg: &BackendConfig) -> Result<(), StoreError> {
     let db = data.join(crate::data_dir::DB_FILE);
-    match (db.exists(), cfg.meta) {
-        (true, MetaKind::Postgres) => {
-            return Err(StoreError::Backend(BackendError::Mismatch {
-                on_disk: "sqlite (naatre.db present)",
-                configured: "postgres",
-            }));
+    match cfg.meta {
+        MetaKind::Sqlite => {
+            // The layout guards run FIRST (M13a): post-cutover a
+            // db-per-repo data dir has no naatre.db, so the
+            // single-DB-presence rule below must not fire there.
+            let on_disk = crate::layout::detect(data);
+            match (cfg.layout, on_disk) {
+                (Layout::DbPerRepo, Layout::Single) => {
+                    return Err(crate::layout::layout_mismatch(on_disk, cfg.layout));
+                }
+                (Layout::Single, Layout::DbPerRepo) => {
+                    return Err(crate::layout::layout_mismatch(on_disk, cfg.layout));
+                }
+                // db-per-repo on disk: catalog.db present; naatre.db may
+                // sit beside it (pre-cutover, the migrate tool leaves it)
+                // or be gone (post-cutover) — both open.
+                (Layout::DbPerRepo, Layout::DbPerRepo) => {}
+                (Layout::Single, Layout::Single) => {
+                    if !db.exists() {
+                        return Err(StoreError::DataDirUninitialized(data.to_path_buf()));
+                    }
+                }
+            }
         }
-        (false, MetaKind::Sqlite) => {
-            return Err(StoreError::DataDirUninitialized(data.to_path_buf()));
+        MetaKind::Postgres => {
+            if db.exists() {
+                return Err(StoreError::Backend(BackendError::Mismatch {
+                    on_disk: "sqlite (naatre.db present)",
+                    configured: "postgres",
+                }));
+            }
         }
-        _ => {}
     }
     if cfg.blob == BlobKind::S3 && fs_cas_has_data(data) {
         return Err(StoreError::Backend(BackendError::Mismatch {

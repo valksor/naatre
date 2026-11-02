@@ -21,7 +21,6 @@ use crate::api_error::ApiError;
 use crate::auth::AuthedPrincipal;
 use crate::db::{self, TreeEntryRow};
 use crate::derived::BlameLayer;
-use crate::routes::repo_id_or_404;
 use crate::state::AppState;
 
 fn parse_id(hex: &str) -> Result<Id, ApiError> {
@@ -130,9 +129,10 @@ pub async fn log(
         Start::Default
     };
 
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let rows = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             let from = match start {
                 Start::Id(id) => {
                     // An unknown `from` is the same 404 as an unknown
@@ -277,7 +277,6 @@ async fn path_log(
         limit: limit_raw.map(str::to_string),
         cursor: None,
     })?;
-    let repo_id = repo_id_or_404(state, repo).await?;
     // The cursor resumes after a (generation, cs) row: resolve the cursor
     // id's generation. Unknown cursor → the same 404 as the plain log.
     let cursor = match cursor_raw {
@@ -285,10 +284,11 @@ async fn path_log(
         Some(raw) => {
             let hex = raw.strip_prefix("after:").ok_or_else(bad_cursor)?;
             let id = parse_id_hex(hex, bad_cursor())?;
+            let repo_for_slot = repo.to_string();
             let cursor_gen = state
-                .read(move |conn| {
+                .read_repo(repo_for_slot, move |cx| {
                     Ok::<_, ApiError>(
-                        db::changeset_graph(conn, repo_id, &id)
+                        db::changeset_graph(cx.db, cx.id, &id)
                             .map_err(ApiError::log_internal)?
                             .map(|g| g.generation),
                     )
@@ -303,16 +303,30 @@ async fn path_log(
         }
     };
     let path = path.to_string();
+    let repo_for_slot = repo.to_string();
     let page = state
-        .read(move |conn| {
+        .read_repo(repo_for_slot, move |cx| {
             let after = cursor.map(|(id, g)| (g, id.0.to_vec()));
-            match db::derive_kind_id(conn, crate::derived::KIND_PATH_HISTORY)
+            match db::derive_kind_id(&cx.cat(), crate::derived::KIND_PATH_HISTORY)
                 .map_err(ApiError::log_internal)?
             {
                 Some(kind_id) => {
-                    if db::derive_any_pending(conn, kind_id, repo_id)
+                    // The read-during-backlog gate, split across the two
+                    // connections: the kind's completion marker is
+                    // catalog-side (meta), the pending/deriving probe is
+                    // this repo's derive_state.
+                    let gated = match db::derive_kind_name(&cx.cat(), kind_id)
                         .map_err(ApiError::log_internal)?
                     {
+                        Some(name) => {
+                            !db::derive_backfill_done_get(&cx.cat(), &name)
+                                .map_err(ApiError::log_internal)?
+                                || db::derive_repo_pending(cx.db, kind_id, cx.id)
+                                    .map_err(ApiError::log_internal)?
+                        }
+                        None => true,
+                    };
+                    if gated {
                         return Err(derivation_pending("path history"));
                     }
                     // Degraded exactly when a quarantined node's PRIMARY
@@ -320,17 +334,17 @@ async fn path_log(
                     // the index may be missing, and no others (an untouched
                     // branch is never flagged).
                     let poisoned: Vec<String> =
-                        db::derive_poison_touching_path(conn, kind_id, repo_id, &path)
+                        db::derive_poison_touching_path(cx.db, kind_id, cx.id, &path)
                             .map_err(ApiError::log_internal)?
                             .iter()
                             .map(Id::to_hex)
                             .collect();
-                    let rows = db::path_history_page(conn, repo_id, &path, after, limit + 1)
+                    let rows = db::path_history_page(cx.db, cx.id, &path, after, limit + 1)
                         .map_err(ApiError::log_internal)?;
                     Ok::<_, ApiError>((rows, !poisoned.is_empty(), poisoned))
                 }
                 None => {
-                    let rows = db::path_history_scan(conn, repo_id, &path, after, limit + 1)
+                    let rows = db::path_history_scan(cx.db, cx.id, &path, after, limit + 1)
                         .map_err(ApiError::log_internal)?;
                     Ok((rows, false, Vec::new()))
                 }
@@ -435,9 +449,10 @@ pub async fn diff(
 ) -> Result<Json<DiffResponse>, ApiError> {
     let a = parse_id(&q.a)?;
     let b = parse_id(&q.b)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let entries = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             for (name, cs) in [("a", &a), ("b", &b)] {
                 if db::redaction_active(conn, repo_id, cs).map_err(ApiError::log_internal)? {
                     return Err(ApiError::new(
@@ -600,9 +615,12 @@ pub async fn merge_base(
 ) -> Result<Json<MergeBaseResponse>, ApiError> {
     let a = parse_id(&q.a)?;
     let b = parse_id(&q.b)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let base = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
+            let cat = &cx.cat();
+            let _ = cat;
             // Both endpoints must exist before the walk (404 contract).
             for id in [&a, &b] {
                 if db::changeset_graph(conn, repo_id, id)
@@ -1069,10 +1087,15 @@ pub async fn blame(
     Query(q): Query<BlameQuery>,
 ) -> Result<Response, ApiError> {
     let at = parse_id(&q.at)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let path = q.path.clone();
+    let repo_in_walk = repo.clone();
     let walk = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
+            let repo = &repo_in_walk;
+            let cat = &cx.cat();
+            let _ = cat;
             // Naming a tombstoned changeset directly is the same 410 as the
             // changeset fetch.
             if db::redaction_active(conn, repo_id, &at).map_err(ApiError::log_internal)? {
@@ -1308,7 +1331,9 @@ pub async fn blame(
     blob_ids.dedup();
     let ids_for_check = blob_ids.clone();
     let (missing, redacted_blobs) = state
-        .read(move |conn| {
+        .read_repo(repo, move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             let redacted: std::collections::HashSet<Id> =
                 db::redactions_active_among(conn, repo_id, &ids_for_check)
                     .map_err(ApiError::log_internal)?
@@ -1493,10 +1518,11 @@ pub async fn file(
     Query(q): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, ApiError> {
     let at = parse_id(&q.at)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let path = q.path.clone();
     let found = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             let path = q.path;
             if db::redaction_active(conn, repo_id, &at).map_err(ApiError::log_internal)? {
                 return Err(ApiError::new(

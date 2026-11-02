@@ -188,6 +188,66 @@ gc_interval_secs = 3600   # reachability GC background-pass interval; 0 disables
 gc_grace_secs = 2592000   # collection grace window (the 30-day default)
 ```
 
+## Layout: one DB or one per repo (M13a)
+
+The metadata layout is also config-selected, defaulting to `single-db`
+(today's shape: every table in `naatre.db`, still **single-writer** —
+documented profile limit). The alternative splits the metadata across
+SQLite files: a **catalog** (`catalog.db`) holding the global tables —
+principals, tokens, the audit log, the repo registry (each repo's db
+path), the global `objects/` CAS ledger and the GC's `gc_pending` ledger —
+plus **one SQLite file per repo** (`repos/<id>.db`) holding that repo's
+changesets, trees, refs, lands, snapshots, derived rows, and its
+redactions. The `objects/` CAS itself is untouched by the split: bytes
+stay global, refcounts stay cross-repo, and the GC mark walks every repo
+file through the registry and unions reachability before sweeping the
+shared CAS once (the never-dangling invariant holds across files).
+
+```toml
+[backend]
+meta = "sqlite"
+[layout]
+mode = "db-per-repo"     # or "single-db" (the default)
+```
+
+**When to choose it**: many repos on one server whose write bursts contend
+for the single writer — with `db-per-repo` each repo lands on its own
+write slot, so two repos commit concurrently (same-repo writes stay
+serialized, exactly the single-DB behavior per repo). SQLite-only: a
+Postgres metadata backend never splits (the config parser refuses the
+combination). Per-repo connections carry WAL + the same durability
+pragmas; each repo file holds a small read pool, the catalog a larger one
+(the cost rows live in `docs/design.md`). Repo create/delete serialize on
+the catalog — under live lands that is the documented contention point.
+
+**Adopting it on an existing single-DB store** — the offline migration:
+
+```
+naatre migrate-db-per-repo --data /var/lib/naatre
+```
+
+Run with the server STOPPED (the flock refuses a live data dir). The tool
+copies each repo's rows into fresh per-repo files, builds the catalog,
+verifies row-count parity per table per repo, and runs a full `fsck`
+against the new layout (refusing to leave anything but a clean verdict),
+then prints the cutover steps:
+
+1. add `[layout] mode = "db-per-repo"` to `backend.toml`;
+2. delete the old `naatre.db` (keep a `naatre backup` copy until the
+   post-cutover fsck passes);
+3. start naatre — the startup banner names `layout db-per-repo`.
+
+Until the config flip the server keeps serving from the single DB: a
+crashed or abandoned migration leaves a consistent, servable store, and
+the original `naatre.db` is never touched by the tool. Backups cover the
+split: `naatre backup` snapshots the catalog and every repo file (the
+coordinated snapshot under the same flock) plus the objects, and
+`naatre restore` refuses a layout-combo mismatch (a single-DB backup into
+a db-per-repo target and vice versa). Where erasure data lives per
+layout: `redactions` rows follow their repo's file; `audit_log` and the
+`objects` ledger stay in the catalog — the erasure enumeration below
+applies unchanged, with tombstones deleted with their repo's file.
+
 - **Postgres 16+** uses the same schema via its own migration set (applied
   at boot, same version guard). Migration parity is a tested property.
 - **TLS by default.** The DSN's `sslmode` defaults to `require`;
@@ -793,6 +853,15 @@ Personal-data carriers, explicitly:
   erasure receipt — the record that erasure happened, linkable to the
   rewritten actor rows without naming the principal), and admin-supplied
   free text (redaction reasons), which is never scrubbed.
+- **Where the rows live per layout (M13a)**: in the `db-per-repo` layout
+  the carriers split with the metadata — `changesets.*`, `lands.*`,
+  `snapshots.*`, and the `redactions` tombstones live in the REPO's file
+  (`repos/<id>.db`; deleting a repo's file is the repo's erasure), while
+  `principals`, `tokens`, and `audit_log` (with the pseudonymization
+  rules above) stay in the catalog and outlive any single repo. The
+  `objects` ledger row is catalog-side too; the CAS bytes are global —
+  a purged blob's bytes leave the shared CAS only when NO repo references
+  remain (the cross-repo refcount rule, unchanged by the layout).
 - **Snapshot blob content** expires at the TTL (rows go with it). A
   redacted blob id is gated ahead of the TTL: the snapshot's tree
   listing serves the entry masked and a restore brings every available

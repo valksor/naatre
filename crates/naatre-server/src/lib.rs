@@ -17,6 +17,7 @@
 //! with specifics kept in server logs under the same id; request logs are
 //! `debug`-level, i.e. access logs are off by default.
 
+pub mod adopt;
 pub mod api_code;
 pub mod api_error;
 pub mod auth;
@@ -34,6 +35,7 @@ pub mod land_join;
 pub mod merge;
 pub mod middleware;
 pub mod openapi;
+pub mod router;
 pub mod routes;
 pub mod serve;
 pub mod snapshots_gc;

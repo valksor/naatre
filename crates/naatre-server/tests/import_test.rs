@@ -711,6 +711,7 @@ fn graft_b_native_lands_refuse_main_move() {
         .version;
     let outcome = db::ref_cas(
         &conn,
+        &conn,
         db::RefMove {
             repo_id,
             repo_name: "imp",
@@ -1113,11 +1114,15 @@ fn imported_blob_is_markable_and_reimport_refuses_redacted_content() {
     // The mark surface accepts the imported blob (the membership arm), and
     // an unknown id is still refused.
     assert!(
-        db::redaction_target_present(&conn, repo_id, &blob, "blob").unwrap(),
+        db::redaction_target_present_repo(&conn, repo_id, &blob, "blob").unwrap()
+            || db::object_row_exists(&conn, &blob).unwrap(),
         "an imported blob is a valid tombstone target"
     );
     let unknown = Id([0xEE; 32]);
-    assert!(!db::redaction_target_present(&conn, repo_id, &unknown, "blob").unwrap());
+    assert!(
+        !(db::redaction_target_present_repo(&conn, repo_id, &unknown, "blob").unwrap()
+            || db::object_row_exists(&conn, &unknown).unwrap())
+    );
 
     // Mark exactly the way the mark surface does (immediate transaction,
     // audited).
@@ -1251,10 +1256,14 @@ fn reimport_refuses_a_purged_changeset_id_from_the_cs_id_arm() {
     }
     {
         let tx = conn.transaction_immediate().unwrap();
-        let batch = db::redact_purgeable_cs(&tx, 10).unwrap();
+        let batch = db::redact_purgeable_cs_repo(&tx, repo_id, 10).unwrap();
         assert_eq!(batch.len(), 1, "the native changeset is purgeable");
         assert_eq!(batch[0], cs_id);
-        assert_eq!(db::redact_collect_cs(&tx, &batch).unwrap(), 1);
+        assert_eq!(
+            db::gc_collect_cs_repo(&tx, &batch).unwrap(),
+            1,
+            "the changeset count (the report's unit)"
+        );
         assert_eq!(
             db::redaction_stamp_purged(&tx, "changeset", &cs_id, 2_000).unwrap(),
             1

@@ -31,7 +31,6 @@ use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
 use crate::db;
 use crate::extract::AppJson;
-use crate::routes::repo_id_or_404;
 use crate::state::AppState;
 
 /// Max entries per batch request (present / batch PUT / batch fetch).
@@ -147,12 +146,12 @@ pub async fn present(
     body: AppJson<PresentRequest>,
 ) -> Result<Json<PresentResponse>, ApiError> {
     let ids = parse_id_batch(&body.0.ids)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let tombstoned: std::collections::HashSet<Id> = {
         let ids = ids.clone();
+        let repo_name = repo.clone();
         state
-            .read(move |conn| {
-                db::redactions_active_among(conn, repo_id, &ids).map_err(ApiError::log_internal)
+            .read_repo(repo_name.clone(), move |cx| {
+                db::redactions_active_among(cx.db, cx.id, &ids).map_err(ApiError::log_internal)
             })
             .await?
             .into_iter()
@@ -218,7 +217,6 @@ pub async fn put_raw(
 ) -> Result<Response, ApiError> {
     require_role(&auth, Role::Writer)?;
     let id = parse_single_id(&id_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     verify_addressed(&id, &payload)?;
     if payload.len() > BLOB_LIMIT {
         return Err(too_large(payload.len()));
@@ -229,9 +227,10 @@ pub async fn put_raw(
     // so a re-PUT would resurrect purged content's bytes. The authoritative
     // check re-runs inside the record step's immediate transaction.
     {
+        let repo_name = repo.clone();
         let redacted = state
-            .read(move |conn| {
-                db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)
+            .read_repo(repo_name.clone(), move |cx| {
+                db::redaction_active(cx.db, cx.id, &id).map_err(ApiError::log_internal)
             })
             .await?;
         if redacted {
@@ -245,7 +244,7 @@ pub async fn put_raw(
         .blocking(move || put_and_size(cas.as_ref(), &id, &payload_owned))
         .await?;
 
-    let existed = record_object(&state, repo_id, &repo, id, payload.len() as i64, csize).await?;
+    let existed = record_object(&state, &repo, id, payload.len() as i64, csize).await?;
     let status = if existed {
         StatusCode::OK
     } else {
@@ -295,7 +294,6 @@ fn object_redacted(id_hex: &str, repo: &str) -> ApiError {
 /// after a full sweep).
 pub async fn record_object(
     state: &AppState,
-    repo_id: i64,
     repo: &str,
     id: Id,
     size: i64,
@@ -303,25 +301,25 @@ pub async fn record_object(
 ) -> Result<bool, ApiError> {
     let cas = Arc::clone(&state.cas);
     let now_i = state.now_ns() as i64;
-    let repo = repo.to_string();
+    let repo_name = repo.to_string();
+    let repo_for_slot = repo_name.clone();
     state
-        .write(move |store| {
-            let tx = store
-                .conn()
-                .transaction_immediate()
-                .map_err(ApiError::log_internal)?;
-            if db::redaction_active(&tx, repo_id, &id).map_err(ApiError::log_internal)? {
-                // Commit the ledger condemnation BEFORE the refusal
-                // unwinds: the error return drops this transaction with a
-                // ROLLBACK, and the row must survive it — it is the only
-                // record naming the bytes the CAS step already wrote.
-                // Nothing else has been written at this point (the
-                // refusal precedes the presence check and the upsert), so
-                // the early commit carries the condemnation alone.
-                db::gc_candidates_upsert(&tx, db::GC_SCOPE_BLOB, &[id], now_i)
+        .write_repo(repo_for_slot, move |cx| {
+            let repo = &repo_name;
+            let repo_id = cx.id;
+            if db::redaction_active(cx.db, repo_id, &id).map_err(ApiError::log_internal)? {
+                // The ledger condemnation is catalog-side and committed
+                // BEFORE the refusal unwinds: the statement commits
+                // immediately (its own auto-commit — the old single-DB
+                // transaction's early-commit semantics were for the
+                // rollback the shared connection would have issued), and
+                // the row survives the error — it is the only record
+                // naming the bytes the CAS step already wrote. Nothing
+                // else has been written at this point (the refusal
+                // precedes the presence check and the upsert).
+                db::gc_candidates_upsert(&cx.cat(), db::GC_SCOPE_BLOB, &[id], now_i)
                     .map_err(ApiError::log_internal)?;
-                tx.commit().map_err(ApiError::log_internal)?;
-                return Err(object_redacted(&id.to_hex(), &repo));
+                return Err(object_redacted(&id.to_hex(), repo));
             }
             if !BlobStore::has(cas.as_ref(), &[id]).map_err(ApiError::log_internal)?[0] {
                 return Err(ApiError::new(
@@ -330,10 +328,12 @@ pub async fn record_object(
                 )
                 .retryable(true));
             }
-            let existed = db::object_row_upsert(&tx, &id, size, csize, now_i)
-                .map_err(ApiError::log_internal)?;
-            tx.commit().map_err(ApiError::log_internal)?;
-            Ok(existed)
+            // The record row is catalog-side (the ledger); the coordinated
+            // sweep batches hold the repo slot + the sweep flag, so this
+            // statement cannot interleave with a delete batch's probe
+            // window — the isolation the old shared transaction provided.
+            db::object_row_upsert(&cx.cat(), &id, size, csize, now_i)
+                .map_err(ApiError::log_internal)
         })
         .await
 }
@@ -369,8 +369,6 @@ pub async fn create_batch(
             format!("objects batch is capped at {BATCH_CAP} entries"),
         ));
     }
-    let repo_id = repo_id_or_404(&state, &repo).await?;
-
     // Verify every entry first: rejected entries never touch the CAS.
     let mut verified: Vec<(Id, Vec<u8>)> = Vec::with_capacity(entries.len());
     let mut rejected: Vec<RejectedEntry> = Vec::new();
@@ -386,13 +384,13 @@ pub async fn create_batch(
 
     // The tombstone boundary probe (before ANY CAS write): a redacted id —
     // active or purged — is rejected per entry, the batch's other entries
-    // proceed. The authoritative re-check runs in [`record_batch`]'s
-    // transaction.
+    // proceed. The authoritative re-check runs in [`record_batch`].
     {
         let ids: Vec<Id> = verified.iter().map(|(id, _)| *id).collect();
+        let repo_name = repo.clone();
         let tombstoned: std::collections::HashSet<Id> = state
-            .read(move |conn| {
-                db::redactions_active_among(conn, repo_id, &ids).map_err(ApiError::log_internal)
+            .read_repo(repo_name.clone(), move |cx| {
+                db::redactions_active_among(cx.db, cx.id, &ids).map_err(ApiError::log_internal)
             })
             .await?
             .into_iter()
@@ -428,7 +426,7 @@ pub async fn create_batch(
     // …then the rows, in one single-writer transaction — the batch form of
     // [`record_object`]'s contract ([`record_batch`]).
     if !rows.is_empty() {
-        record_batch(&state, repo_id, &repo, rows).await?;
+        record_batch(&state, &repo, rows).await?;
     }
 
     Ok(Json(BatchPutResponse { stored, rejected }))
@@ -452,37 +450,33 @@ pub async fn create_batch(
 /// `pub` for the M10a race pin.
 pub async fn record_batch(
     state: &AppState,
-    repo_id: i64,
     repo: &str,
     rows: Vec<(Id, i64, i64)>,
 ) -> Result<(), ApiError> {
     let cas = Arc::clone(&state.cas);
     let now_i = state.now_ns() as i64;
-    let repo = repo.to_string();
+    let repo_name = repo.to_string();
+    let repo_for_slot = repo_name.clone();
     state
-        .write(move |store| {
-            let tx = store
-                .conn()
-                .transaction_immediate()
-                .map_err(ApiError::log_internal)?;
+        .write_repo(repo_for_slot, move |cx| {
+            let repo = &repo_name;
+            let repo_id = cx.id;
             let ids: Vec<Id> = rows.iter().map(|(id, _, _)| *id).collect();
-            let redacted =
-                db::redactions_active_among(&tx, repo_id, &ids).map_err(ApiError::log_internal)?;
+            let redacted = db::redactions_active_among(cx.db, repo_id, &ids)
+                .map_err(ApiError::log_internal)?;
             if !redacted.is_empty() {
                 let hexes: Vec<String> = redacted.iter().map(Id::to_hex).collect();
-                // Committed before the refusal unwinds (the error return
-                // rolls this transaction back — the condemnation must
-                // survive it; nothing else has been written yet). EVERY
-                // written id is condemned, not only the redacted ones: the
-                // whole batch's bytes are already in the CAS and no row
-                // survives the refusal for any of them. A later legitimate
-                // record self-heals — the row upsert clears the
-                // condemnation, and the sweep's in-transaction
-                // re-verification spares re-referenced candidates.
-                db::gc_candidates_upsert(&tx, db::GC_SCOPE_BLOB, &ids, now_i)
+                // Committed before the refusal unwinds (its own
+                // auto-commit — the condemnation must survive the error).
+                // EVERY written id is condemned, not only the redacted
+                // ones: the whole batch's bytes are already in the CAS and
+                // no row survives the refusal for any of them. A later
+                // legitimate record self-heals — the row upsert clears the
+                // condemnation, and the sweep's re-verification spares
+                // re-referenced candidates.
+                db::gc_candidates_upsert(&cx.cat(), db::GC_SCOPE_BLOB, &ids, now_i)
                     .map_err(ApiError::log_internal)?;
-                tx.commit().map_err(ApiError::log_internal)?;
-                return Err(object_redacted(&hexes.join(", "), &repo));
+                return Err(object_redacted(&hexes.join(", "), repo));
             }
             let present = BlobStore::has(cas.as_ref(), &ids).map_err(ApiError::log_internal)?;
             let swept: Vec<String> = rows
@@ -499,11 +493,15 @@ pub async fn record_batch(
                 .retryable(true)
                 .with_details(serde_json::json!({ "missing_blobs": swept })));
             }
+            // The record rows are catalog-side (the ledger); the coordinated
+            // sweep batches hold the repo slot + the sweep flag, so these
+            // statements cannot interleave with a delete batch's probe
+            // window.
+            let cat = cx.cat();
             for (id, size, csize) in &rows {
-                db::object_row_upsert(&tx, id, *size, *csize, now_i)
+                db::object_row_upsert(&cat, id, *size, *csize, now_i)
                     .map_err(ApiError::log_internal)?;
             }
-            tx.commit().map_err(ApiError::log_internal)?;
             Ok(())
         })
         .await
@@ -534,18 +532,18 @@ pub async fn get_batch(
     body: AppJson<BatchGetRequest>,
 ) -> Result<Json<BatchGetResponse>, ApiError> {
     let ids = parse_id_batch(&body.0.ids)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
 
     // The redaction gate first (the tombstone wins over membership), then
     // membership: this is the cross-repo isolation gate.
     let ids_for_gates = ids.clone();
+    let repo_name = repo.clone();
     let (redacted_ids, member) = state
-        .read(move |conn| {
-            let redacted = db::redactions_active_among(conn, repo_id, &ids_for_gates)
+        .read_repo(repo_name.clone(), move |cx| {
+            let redacted = db::redactions_active_among(cx.db, cx.id, &ids_for_gates)
                 .map_err(ApiError::log_internal)?;
             let member = ids_for_gates
                 .iter()
-                .map(|id| db::repo_blob_check(conn, repo_id, id).map_err(ApiError::log_internal))
+                .map(|id| db::repo_blob_check(cx.db, cx.id, id).map_err(ApiError::log_internal))
                 .collect::<Result<Vec<bool>, ApiError>>()?;
             Ok((redacted, member))
         })
@@ -634,15 +632,15 @@ pub async fn get_raw(
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let id = parse_single_id(&id_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
 
     // The redaction gate first (the tombstone wins over membership), then
     // the cross-repo isolation gate.
+    let repo_name = repo.clone();
     let (is_redacted, is_member) = state
-        .read(move |conn| {
+        .read_repo(repo_name.clone(), move |cx| {
             Ok::<_, ApiError>((
-                db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)?,
-                db::repo_blob_check(conn, repo_id, &id).map_err(ApiError::log_internal)?,
+                db::redaction_active(cx.db, cx.id, &id).map_err(ApiError::log_internal)?,
+                db::repo_blob_check(cx.db, cx.id, &id).map_err(ApiError::log_internal)?,
             ))
         })
         .await?;

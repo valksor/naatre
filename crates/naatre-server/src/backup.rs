@@ -466,6 +466,14 @@ fn valid_artifact_path(path: &str) -> bool {
     if path == SQLITE_DUMP || path == PG_DUMP {
         return true;
     }
+    // The db-per-repo coordinated snapshot (M13a): one artifact per repo
+    // file, `repos/<id>.db` (the id-keyed per-repo file names).
+    if let Some(rest) = path.strip_prefix("repos/") {
+        let Some(name) = rest.strip_suffix(".db") else {
+            return false;
+        };
+        return !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit());
+    }
     let Some(rest) = path.strip_prefix("objects/") else {
         return false;
     };
@@ -724,19 +732,72 @@ pub fn backup_begin(
         let cas = naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?;
         let mut ids = cas.ids().map_err(BackupError::Store)?;
         ids.sort_by_key(|id| id.to_hex());
-        let store = Store::open_backend(data_dir, cfg).map_err(BackupError::Store)?;
-        let changesets: i64 = store
-            .conn()
-            .query_row_map(&Sql::plain("SELECT COUNT(*) FROM changesets"), &[], |r| {
-                r.get(0)
-            })
-            .map_err(store_db)?;
+        // Layout-aware open (the ServerState rule): db-per-repo backs up
+        // the CATALOG here (the per-repo files dump below); single-DB backs
+        // up naatre.db.
+        let store = if cfg.layout == naatre_store::Layout::DbPerRepo {
+            Store::open_catalog(data_dir)
+        } else {
+            Store::open_backend(data_dir, cfg)
+        }
+        .map_err(BackupError::Store)?;
+        // The changeset count for the report: single-DB it is the store's
+        // count; the split sums the repo files' counts (the catalog's own
+        // changesets table is empty — the per-repo files own the rows).
+        let repo_ids: Vec<i64> = if cfg.layout == naatre_store::Layout::DbPerRepo {
+            store
+                .conn()
+                .query_all_map(
+                    &Sql::plain("SELECT id FROM repos ORDER BY id ASC"),
+                    &[],
+                    |r| r.get(0),
+                )
+                .map_err(store_db)?
+        } else {
+            Vec::new()
+        };
+        let changesets: i64 = if cfg.layout == naatre_store::Layout::DbPerRepo {
+            let mut total = 0i64;
+            for id in &repo_ids {
+                let path = root.join(format!("{}/{id}.db", naatre_store::layout::REPOS_DIR));
+                let conn = rusqlite::Connection::open(&path).map_err(BackupError::Sqlite)?;
+                total += conn
+                    .query_row("SELECT COUNT(*) FROM changesets", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .map_err(BackupError::Sqlite)?;
+            }
+            total
+        } else {
+            store
+                .conn()
+                .query_row_map(&Sql::plain("SELECT COUNT(*) FROM changesets"), &[], |r| {
+                    r.get(0)
+                })
+                .map_err(store_db)?
+        };
 
-        // 1. The consistent DB snapshot FIRST — per meta backend.
+        // 1. The consistent DB snapshot FIRST — per meta backend. The
+        // flock makes the whole set consistent (the M13a coordinated
+        // snapshot: catalog + every per-repo file, then the objects).
         match cfg.meta {
             MetaKind::Sqlite => {
                 dump_sqlite(store.sqlite_conn(), &dest.join(SQLITE_DUMP))?;
                 chmod(&dest.join(SQLITE_DUMP), 0o600)?;
+                if cfg.layout == naatre_store::Layout::DbPerRepo {
+                    for id in &repo_ids {
+                        let src = root.join(format!("{}/{id}.db", naatre_store::layout::REPOS_DIR));
+                        let rel = format!("{}/{id}.db", naatre_store::layout::REPOS_DIR);
+                        let dst = dest.join(&rel);
+                        if let Some(parent) = dst.parent() {
+                            std::fs::create_dir_all(parent)
+                                .map_err(|e| BackupError::io(parent, e))?;
+                        }
+                        let conn = rusqlite::Connection::open(&src).map_err(BackupError::Sqlite)?;
+                        dump_sqlite(&conn, &dst)?;
+                        chmod(&dst, 0o600)?;
+                    }
+                }
             }
             MetaKind::Postgres => {
                 let pg = cfg.pg.as_ref().ok_or(BackupError::Manifest {
@@ -852,6 +913,30 @@ pub fn backup_finish(
             path: db_artifact.to_string(),
             sha256: sha256_file(&dest.join(db_artifact))?,
         });
+        // The db-per-repo coordinated snapshot: one artifact per repo file.
+        if cfg.layout == naatre_store::Layout::DbPerRepo {
+            let repos_dir = dest.join(naatre_store::layout::REPOS_DIR);
+            let mut entries: Vec<PathBuf> = repos_dir
+                .read_dir()
+                .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+                .unwrap_or_default();
+            entries.sort();
+            for path in entries {
+                if path.extension().is_some_and(|e| e == "db") {
+                    let rel = format!(
+                        "{}/{}",
+                        naatre_store::layout::REPOS_DIR,
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or_default()
+                    );
+                    artifacts.push(ArtifactChecksum {
+                        path: rel,
+                        sha256: sha256_file(&path)?,
+                    });
+                }
+            }
+        }
         artifacts.sort_by(|a, b| a.path.cmp(&b.path));
 
         // 3. The manifest LAST: an interrupted run leaves no manifest, and
@@ -1107,6 +1192,30 @@ pub fn restore(
         BlobKind::Fs => None,
     };
 
+    // The layout combo guard (M13a): a split backup (repos/ artifacts)
+    // restores only into a db-per-repo-configured target, a single-DB
+    // backup only into a single-DB target — the artifact set names the
+    // backup's layout as surely as the config names the target's.
+    let backup_is_split = manifest
+        .artifacts
+        .iter()
+        .any(|a| a.path.starts_with("repos/"));
+    match (cfg.layout, backup_is_split) {
+        (naatre_store::Layout::DbPerRepo, false) => {
+            return Err(BackupError::Manifest {
+                path: backup_dir.to_path_buf(),
+                why: "the backup is a single-DB snapshot but the target config selects                       layout = \"db-per-repo\" — set [layout] mode = \"single-db\" (or take                       the backup again after the migration)",
+            });
+        }
+        (naatre_store::Layout::Single, true) => {
+            return Err(BackupError::Manifest {
+                path: backup_dir.to_path_buf(),
+                why: "the backup is a db-per-repo snapshot but the target config selects                       the single-DB layout — set [layout] mode = \"db-per-repo\"",
+            });
+        }
+        _ => {}
+    }
+
     // STAGE + VERIFY: every manifest artifact is copied into the staging
     // directory and the STAGED bytes are SHA256-checked against the
     // manifest (streaming — no whole-file reads). Any refusal up to and
@@ -1168,14 +1277,39 @@ pub fn restore(
                 }
             }
             let staged = stage.path.join(SQLITE_DUMP);
-            let dst = root.join(DB_FILE);
+            let dst = if cfg.layout == naatre_store::Layout::DbPerRepo {
+                // The split snapshot's catalog: restored under its own
+                // name; the repo files move below (the write path's
+                // durability convention applies to each).
+                root.join(naatre_store::layout::CATALOG_FILE)
+            } else {
+                root.join(DB_FILE)
+            };
             std::fs::rename(&staged, &dst).map_err(|e| BackupError::io(&dst, e))?;
             chmod(&dst, 0o600)?;
-            // The write path's durability convention: the renamed DB hits
-            // the disk before the run reports success.
             std::fs::File::open(&dst)
                 .and_then(|f| f.sync_all())
                 .map_err(|e| BackupError::io(&dst, e))?;
+            if cfg.layout == naatre_store::Layout::DbPerRepo {
+                for artifact in &manifest.artifacts {
+                    let Some(name) = artifact
+                        .path
+                        .strip_prefix("repos/")
+                        .and_then(|r| r.strip_suffix(".db"))
+                    else {
+                        continue;
+                    };
+                    let src = stage.path.join(&artifact.path);
+                    let dir = root.join(naatre_store::layout::REPOS_DIR);
+                    std::fs::create_dir_all(&dir).map_err(|e| BackupError::io(&dir, e))?;
+                    let dst = dir.join(format!("{name}.db"));
+                    std::fs::rename(&src, &dst).map_err(|e| BackupError::io(&dst, e))?;
+                    chmod(&dst, 0o600)?;
+                    std::fs::File::open(&dst)
+                        .and_then(|f| f.sync_all())
+                        .map_err(|e| BackupError::io(&dst, e))?;
+                }
+            }
         }
         MetaKind::Postgres => {
             let pg = cfg.pg.as_ref().ok_or(BackupError::Manifest {
@@ -1212,7 +1346,14 @@ pub fn restore(
         Some(cas) => cas,
         None => naatre_store::blob::history_cas(&data_dir, cfg).map_err(BackupError::Store)?,
     };
-    let store = Store::open_backend(data_dir, cfg).map_err(BackupError::Store)?;
+    // Layout-aware open (the ServerState rule): the split target's audit
+    // row lands in the restored catalog.
+    let store = if cfg.layout == naatre_store::Layout::DbPerRepo {
+        Store::open_catalog(data_dir)
+    } else {
+        Store::open_backend(data_dir, cfg)
+    }
+    .map_err(BackupError::Store)?;
 
     // 2. THEN the objects — moved out of verified staging, each fsynced
     // (the write path's durability convention).

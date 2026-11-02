@@ -395,6 +395,13 @@ fn s3_gc_record_step_answers_blob_swept_and_reput_lands() {
         .build()
         .unwrap();
 
+    // The record step resolves its repo (the route's contract); seed the
+    // registry row the probes bind to.
+    f.exec(
+        "INSERT OR IGNORE INTO repos(id, name, created_ns) VALUES (1, 'm10s3', 1)",
+        &[],
+    );
+
     let content = b"s3-record-step-blob".to_vec();
     let oid = object_id(Kind::Blob, &content);
     f.state.cas.put(&content).unwrap();
@@ -435,7 +442,6 @@ fn s3_gc_record_step_answers_blob_swept_and_reput_lands() {
     let err = rt
         .block_on(naatre_server::routes::objects::record_object(
             &f.state,
-            1,
             "m10s3",
             oid,
             content.len() as i64,
@@ -463,7 +469,6 @@ fn s3_gc_record_step_answers_blob_swept_and_reput_lands() {
     let existed = rt
         .block_on(naatre_server::routes::objects::record_object(
             &f.state,
-            1,
             "m10s3",
             oid,
             content.len() as i64,

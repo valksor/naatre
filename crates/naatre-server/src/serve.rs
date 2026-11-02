@@ -17,7 +17,6 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::api_error::ApiError;
 use crate::state::AppState;
 
 /// The default background snapshot GC interval (60 s). The pass itself is
@@ -56,11 +55,10 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
     let addr = cfg.listener.local_addr()?;
-    let schema_version = cfg
-        .state
-        .read(|conn| Ok::<i64, ApiError>(naatre_store::store::schema_version(conn)))
-        .await
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    // The schema version the store's files run (the per-repo schema in the
+    // db-per-repo layout — the catalog's own version is separate), resolved
+    // at state open.
+    let schema_version = cfg.state.schema_version;
 
     // Startup banner: one info line per fact (grep- and diff-friendly).
     // Facts are name/version/paths only — never credentials (see
@@ -80,6 +78,7 @@ pub async fn serve(
     // endpoint/credential text; the README's "metadata backend: postgres"
     // promise is this line).
     tracing::info!(backend = cfg.state.meta_backend, "metadata backend");
+    tracing::info!(layout = cfg.state.layout.as_str(), "metadata layout");
     tracing::info!(
         protocol_version = crate::PROTOCOL_VERSION,
         "protocol version"

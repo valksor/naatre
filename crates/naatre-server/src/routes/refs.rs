@@ -15,7 +15,6 @@ use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
 use crate::db::{self, RefCas};
 use crate::extract::AppJson;
-use crate::routes::repo_id_or_404;
 use crate::state::AppState;
 
 /// A ref read or move result.
@@ -64,11 +63,11 @@ pub async fn get_ref(
     Extension(_auth): Extension<AuthedPrincipal>,
     Path((repo, name)): Path<(String, String)>,
 ) -> Result<Json<RefResponse>, ApiError> {
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let name_for_lookup = name.clone();
+    let repo_name = repo.clone();
     let row = state
-        .read(move |conn| {
-            db::ref_get(conn, repo_id, &name_for_lookup).map_err(ApiError::log_internal)
+        .read_repo(repo_name.clone(), move |cx| {
+            db::ref_get(cx.db, cx.id, &name_for_lookup).map_err(ApiError::log_internal)
         })
         .await?;
     let row = row.ok_or_else(|| {
@@ -149,16 +148,9 @@ pub async fn cas_ref(
     let repo_name = repo.clone();
     let ref_name = name.clone();
     let outcome = state
-        .write(move |store| {
-            let conn = store.conn();
-            let repo_id = db::repo_id_by_name(conn, &repo_name)
-                .map_err(ApiError::log_internal)?
-                .ok_or_else(|| {
-                    ApiError::new(
-                        ApiCode::RepoNotFound,
-                        format!("no repo named {repo_name:?} on this server"),
-                    )
-                })?;
+        .write_repo(repo.clone(), move |cx| {
+            let conn = cx.db;
+            let repo_id = cx.id;
 
             // The tombstone gate (M10b): a ref whose target is tombstoned
             // in this repo — active or purged — is refused with 410
@@ -203,6 +195,7 @@ pub async fn cas_ref(
 
             db::ref_cas_via(
                 conn,
+                &cx.cat(),
                 db::RefMove {
                     repo_id,
                     repo_name: &repo_name,

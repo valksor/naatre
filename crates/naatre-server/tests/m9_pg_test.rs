@@ -189,6 +189,7 @@ fn open_ctx_blocking_cfg(
         .expect("root changeset");
         db::ref_cas(
             &conn,
+            &conn,
             db::RefMove {
                 repo_id,
                 repo_name: REPO,
@@ -630,6 +631,7 @@ async fn backfill_cursor_batches_on_postgres() {
         .unwrap();
         db::ref_cas(
             &seed,
+            &seed,
             db::RefMove {
                 repo_id,
                 repo_name: REPO,
@@ -1047,8 +1049,13 @@ async fn repo_stats_parses_large_numeric_sums_on_postgres() {
     })
     .await;
 
-    let (changesets, objects, bytes, _cbytes) =
-        with_seed(&ctx, move |conn| db::repo_stats(conn, repo_id).unwrap()).await;
+    let (changesets, objects, bytes, _cbytes) = with_seed(&ctx, move |conn| {
+        let changesets = db::repo_changeset_count(conn, repo_id).unwrap();
+        let members = db::gc_repo_blobs(conn, repo_id).unwrap();
+        let (objects, bytes, cbytes) = db::repo_object_sums(conn, &members).unwrap();
+        (changesets, objects, bytes, cbytes)
+    })
+    .await;
     assert_eq!(
         bytes,
         40_000_000 + 10_000 + 9_999,

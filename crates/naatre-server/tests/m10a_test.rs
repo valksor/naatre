@@ -1160,7 +1160,6 @@ async fn gc_record_step_after_full_sweep_answers_blob_swept() {
     // written.
     let err = naatre_server::routes::objects::record_object(
         &f.t.state,
-        f.repo_id,
         REPO,
         oid,
         content.len() as i64,
@@ -1255,7 +1254,6 @@ async fn gc_batch_put_after_sweep_answers_blob_swept() {
     gc_pass(&f.t.state).await.unwrap(); // delete
     let err = naatre_server::routes::objects::record_batch(
         &f.t.state,
-        f.repo_id,
         REPO,
         vec![(oid, content.len() as i64, 1)],
     )

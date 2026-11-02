@@ -57,13 +57,13 @@ use naatre_core::error::CoreError;
 use naatre_core::ids::Id;
 
 use naatre_store::BlobStore;
-use naatre_store::store::Store;
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::authz;
 use crate::db;
 use crate::merge::{PathConflict, content_rep, delta_between, merge_trees, merge_trees_recording};
+use crate::router::RepoCx;
 use crate::tree_derive::{DeriveError, MemNode};
 
 /// The closed crash-point enum (checked against `NAATRE_CRASH_POINT`).
@@ -213,26 +213,25 @@ fn id_of(bytes: &[u8]) -> Option<Id> {
     <[u8; 32]>::try_from(bytes).ok().map(Id)
 }
 
-/// Runs one land inside its single write transaction.
+/// Runs one land inside its single write transaction (the REPO's
+/// transaction; the route resolved the repo and holds the repo's write
+/// slot). The incidental CATALOG writes — the merged blobs' `objects`
+/// rows and the `land` audit row — run through `cx.cat()` at their old
+/// sequence points: the object rows BEFORE the repo rows that reference
+/// them (the orphan direction — a crash leaves orphan rows the GC
+/// collects, never rows naming absent bytes), the audit row inside the
+/// settlement (in single-DB mode still one atomic transaction with the
+/// repo rows; in db-per-repo mode a separate commit AFTER the repo
+/// transaction commits — a crash in that window loses the audit row for a
+/// landed key, the documented split-mode atomicity boundary).
 pub(crate) fn execute(
-    store: &mut Store,
+    cx: &RepoCx<'_>,
     cas: &dyn BlobStore,
     derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
 ) -> Result<LandDone, ApiError> {
-    let conn = store.conn();
-    // Repo resolution first (plain read, no txn): the 404 answer does not
-    // depend on the transaction's work.
-    let repo_id = db::repo_id_by_name(conn, &cmd.repo_name)
-        .map_err(ApiError::log_internal)?
-        .ok_or_else(|| {
-            ApiError::new(
-                ApiCode::RepoNotFound,
-                format!("no repo named {:?} on this server", cmd.repo_name),
-            )
-        })?;
-    let guard = TxnGuard::begin(conn)?;
-    match land_in_txn(conn, cas, derive, cmd, repo_id) {
+    let guard = TxnGuard::begin(cx.db)?;
+    match land_in_txn(cx, cas, derive, cmd) {
         Ok(done) => {
             guard.commit()?;
             crash_point("after_commit");
@@ -250,12 +249,13 @@ pub(crate) fn execute(
 }
 
 fn land_in_txn(
-    conn: &Db,
+    cx: &RepoCx<'_>,
     cas: &dyn BlobStore,
     derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
-    repo_id: i64,
 ) -> Result<LandDone, ApiError> {
+    let repo_id = cx.id;
+    let conn = cx.db;
     // 1. Idempotency: a settled key replays its recorded result; a
     // different head under the same key is a 409 with the settled state
     // pointer. (A committed pending row is unobservable — see the module
@@ -363,7 +363,7 @@ fn land_in_txn(
     // 3. head == main → idempotent success.
     if cmd.head == old_main {
         let reps = rep_paths_of(conn, repo_id, &old_main)?;
-        return settle(conn, cmd, repo_id, old_main, old_main, 0, None, &reps);
+        return settle(cx, conn, cmd, repo_id, old_main, old_main, 0, None, &reps);
     }
 
     // 4. Already contained (merge-base(head, main) == head): settled, no
@@ -371,7 +371,7 @@ fn land_in_txn(
     // reachability.
     if in_main.contains(&cmd.head) {
         let reps = rep_paths_of(conn, repo_id, &old_main)?;
-        return settle(conn, cmd, repo_id, old_main, old_main, 0, None, &reps);
+        return settle(cx, conn, cmd, repo_id, old_main, old_main, 0, None, &reps);
     }
 
     // Advisory base note: the request's base is ignored for the rebase; if
@@ -680,8 +680,10 @@ fn land_in_txn(
                     put.id.to_hex()
                 )));
             }
+            // The ledger row is catalog-side, written BEFORE the repo rows
+            // that reference it (the orphan direction; see `execute`).
             db::object_row_upsert(
-                conn,
+                &cx.cat(),
                 blob_id,
                 bytes.len() as i64,
                 put.csize as i64,
@@ -766,6 +768,7 @@ fn land_in_txn(
     // minted here or carried through.
     let landed_reps = rep_paths_of(conn, repo_id, &tip_id)?;
     settle(
+        cx,
         conn,
         cmd,
         repo_id,
@@ -784,6 +787,7 @@ fn land_in_txn(
 /// Runs inside the caller's transaction.
 #[allow(clippy::too_many_arguments)]
 fn settle(
+    cx: &RepoCx<'_>,
     conn: &Db,
     cmd: &LandCommand,
     repo_id: i64,
@@ -816,7 +820,7 @@ fn settle(
     )
     .map_err(ApiError::log_internal)?;
     db::audit_append(
-        conn,
+        &cx.cat(),
         cmd.now_ns,
         &cmd.principal,
         "land",

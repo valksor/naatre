@@ -586,16 +586,10 @@ pub async fn status(
         return Ok(None);
     };
     let kind_id = registered.id;
-    let repo_name = repo_name.to_string();
+    let repo_for_slot = repo_name.to_string();
     state
-        .read(move |conn| {
-            let Some(repo_id) =
-                db::repo_id_by_name(conn, &repo_name).map_err(ApiError::log_internal)?
-            else {
-                return Ok(None);
-            };
-            let row =
-                db::derive_get(conn, kind_id, repo_id, &cs).map_err(ApiError::log_internal)?;
+        .read_repo_opt(repo_for_slot, move |cx| {
+            let row = db::derive_get(cx.db, kind_id, cx.id, &cs).map_err(ApiError::log_internal)?;
             Ok(row.map(|row| match row.state.as_str() {
                 "pending" => DeriveStatus::Pending,
                 "deriving" => DeriveStatus::Deriving,
@@ -605,6 +599,7 @@ pub async fn status(
             }))
         })
         .await
+        .map(|inner| inner.flatten())
 }
 
 /// Boot-time backfill (the plan's deferred-backfill check): for every
@@ -649,46 +644,63 @@ pub async fn backfill(state: &AppState) -> Result<(), ApiError> {
         .iter()
         .map(|k| (k.id, k.name))
         .collect();
-    for (kind_id, kind_name) in kinds {
-        let mut cursor = db::BackfillCursor::start();
-        loop {
-            let (inserted, next) = backfill_step(|| async move {
-                state
-                    .write(move |store| {
-                        db::derive_backfill_batch(store.conn(), kind_id, cursor, batch_limit)
-                            .map_err(ApiError::log_internal)
-                    })
-                    .await
-            })
-            .await?;
-            cursor = next;
-            if inserted == 0 {
-                break;
-            }
-        }
-        // The marker's honesty check: the marker lands only when the
-        // anti-join is EMPTY. A zero-insert batch means the cursor range is
-        // exhausted; this probe proves no changeset anywhere lacks its row
-        // (it would catch a one-batch loop exit or a dropped cursor, which
-        // would otherwise set the marker over unrowed changesets and let
-        // reads answer 200 over a hole). Fail-safe direction: no marker,
-        // reads stay 503 until a boot completes the backfill.
-        let rowless = backfill_step(|| async move {
-            state
-                .read(move |conn| {
-                    db::derive_backfill_rowless_exists(conn, kind_id)
-                        .map_err(ApiError::log_internal)
-                })
-                .await
+    let repos: Vec<(i64, String)> = state
+        .read(|conn| {
+            db::repos_list(conn, 0, i64::MAX / 2)
+                .map_err(ApiError::log_internal)
+                .map(|rows| rows.into_iter().map(|r| (r.id, r.name)).collect())
         })
         .await?;
-        if rowless {
-            return Err(ApiError::log_internal(format!(
-                "backfill for kind {kind_name:?} finished with unrowed changesets; \
-                 the completion marker is withheld"
-            )));
+    for (kind_id, kind_name) in kinds {
+        // Per-repo (M13a): the changesets and their derive rows live in the
+        // repo's file, so the cursor advances per repo; the completion
+        // marker is catalog-side and stays GLOBAL (a marker covers every
+        // repo — the reads gate on it once).
+        for (_repo_id, repo_name) in &repos {
+            let mut cursor = db::BackfillCursor::start();
+            loop {
+                let repo_for_slot = repo_name.clone();
+                let (inserted, next) = backfill_step(move || {
+                    let repo_for_slot = repo_for_slot.clone();
+                    async move {
+                        state
+                            .write_repo(repo_for_slot, move |cx| {
+                                db::derive_backfill_batch(cx.db, kind_id, cursor, batch_limit)
+                                    .map_err(ApiError::log_internal)
+                            })
+                            .await
+                    }
+                })
+                .await?;
+                cursor = next;
+                if inserted == 0 {
+                    break;
+                }
+            }
+            // The honesty check per repo: no changeset in this repo lacks
+            // its row before the next repo (or the marker) proceeds.
+            let repo_for_probe = repo_name.clone();
+            let rowless = backfill_step(move || {
+                let repo_for_probe = repo_for_probe.clone();
+                async move {
+                    state
+                        .read_repo(repo_for_probe, move |cx| {
+                            db::derive_backfill_rowless_exists(cx.db, kind_id)
+                                .map_err(ApiError::log_internal)
+                        })
+                        .await
+                }
+            })
+            .await?;
+            if rowless {
+                return Err(ApiError::log_internal(format!(
+                    "backfill for kind {kind_name:?} finished with unrowed changesets; \
+                     the completion marker is withheld"
+                )));
+            }
         }
-        // The anti-join is empty: publish the marker the reads gate on.
+        // The anti-join is empty everywhere: publish the marker the reads
+        // gate on (catalog-side).
         let completed_ns = state.now_ns() as i64;
         backfill_step(|| async {
             state
@@ -810,9 +822,23 @@ impl std::ops::AddAssign for PassReport {
 /// idempotent by contract).
 pub async fn derive_pass(state: &AppState) -> Result<PassReport, ApiError> {
     let mut report = PassReport::default();
+    // The registry ids resolve per repo (M13a): the sweep and the drain
+    // walk every repo's file; within a repo the pick stays oldest-first,
+    // across repos the walk is ascending-repo order.
+    let repos: Vec<(i64, String)> = state
+        .read(|conn| {
+            db::repos_list(conn, 0, i64::MAX / 2)
+                .map_err(ApiError::log_internal)
+                .map(|rows| rows.into_iter().map(|r| (r.id, r.name)).collect())
+        })
+        .await?;
     for kind in state.derive.kinds() {
-        report += sweep_expired(state, kind).await?;
-        drain(state, kind, &mut report).await?;
+        for (_repo_id, repo_name) in &repos {
+            report += sweep_expired(state, kind, repo_name).await?;
+        }
+        for (_repo_id, repo_name) in &repos {
+            drain(state, kind, repo_name, &mut report).await?;
+        }
     }
     Ok(report)
 }
@@ -826,15 +852,17 @@ pub async fn derive_pass(state: &AppState) -> Result<PassReport, ApiError> {
 async fn sweep_expired(
     state: &AppState,
     kind: &Arc<RegisteredKind>,
+    repo_name: &str,
 ) -> Result<PassReport, ApiError> {
     let now = state.now_ns() as i64;
     let probe_kind = Arc::clone(kind);
+    let repo_for_probe = repo_name.to_string();
     let has_expired = {
         let kind_id = probe_kind.id;
         state
-            .read(move |conn| {
+            .read_repo(repo_for_probe, move |cx| {
                 Ok::<bool, ApiError>(
-                    !db::derive_expired_leases(conn, kind_id, now)
+                    !db::derive_expired_leases(cx.db, kind_id, now)
                         .map_err(ApiError::log_internal)?
                         .is_empty(),
                 )
@@ -845,9 +873,10 @@ async fn sweep_expired(
         return Ok(PassReport::default());
     }
     let kind = Arc::clone(kind);
+    let repo_for_write = repo_name.to_string();
     state
-        .write(move |store| {
-            let conn = store.conn();
+        .write_repo(repo_for_write, move |cx| {
+            let conn = cx.db;
             let tx = conn.transaction().map_err(ApiError::log_internal)?;
             let expired =
                 db::derive_expired_leases(&tx, kind.id, now).map_err(ApiError::log_internal)?;
@@ -900,7 +929,7 @@ const LEASE_RELEASE_BUSY_RETRIES: u32 = 100;
 async fn release_lease_after_busy(
     state: &AppState,
     kind: &Arc<RegisteredKind>,
-    repo_id: i64,
+    repo_name: &str,
     cs: &Id,
     lease_expires: i64,
 ) {
@@ -909,8 +938,9 @@ async fn release_lease_after_busy(
         let kind = Arc::clone(kind);
         let cs = *cs;
         let busy_release = Arc::clone(&state.derive_test_busy_abort);
+        let repo_for_release = repo_name.to_string();
         match state
-            .write(move |store| {
+            .write_repo(repo_for_release, move |cx| {
                 // Test-only one-shot busy injection on the release itself
                 // (the `BusyAbort::Release` shot armed by
                 // `DeriveThenRelease`): the helper's own retry loop is the
@@ -930,7 +960,7 @@ async fn release_lease_after_busy(
                 if fire {
                     return Err(ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true));
                 }
-                db::derive_release_lease(store.conn(), kind.id, repo_id, &cs, lease_expires)
+                db::derive_release_lease(cx.db, kind.id, cx.id, &cs, lease_expires)
                     .map_err(ApiError::log_internal)
             })
             .await
@@ -957,15 +987,23 @@ async fn release_lease_after_busy(
 async fn drain(
     state: &AppState,
     kind: &Arc<RegisteredKind>,
+    repo_name: &str,
     report: &mut PassReport,
 ) -> Result<(), ApiError> {
     let lease_ns = (state.derive_queue_interval * 2).as_nanos() as i64;
     loop {
-        // Pick on the read pool: no write-slot contention for the scan.
+        // Pick on the repo's read pool: no write-slot contention for the
+        // scan (the repo's own queue; the pass walks repos in ascending
+        // order).
         let kind_for_pick = Arc::clone(kind);
-        let Some((repo_id, cs)) = state
-            .read(move |conn| {
-                db::derive_pick_next(conn, kind_for_pick.id).map_err(ApiError::log_internal)
+        let repo_for_pick = repo_name.to_string();
+        let Some(cs) = state
+            .read_repo(repo_for_pick, move |cx| {
+                Ok::<_, ApiError>(
+                    db::derive_pick_next(cx.db, kind_for_pick.id)
+                        .map_err(ApiError::log_internal)?
+                        .map(|(_, cs)| cs),
+                )
             })
             .await?
         else {
@@ -977,9 +1015,11 @@ async fn drain(
         let now = state.now_ns() as i64;
         let lease_expires = now.saturating_add(lease_ns);
         let kind_for_lease = Arc::clone(kind);
+        let repo_for_lease = repo_name.to_string();
+        let repo_id_for_lease = repo_for_lease.clone();
         let leased = match state
-            .write(move |store| {
-                db::derive_lease(store.conn(), kind_for_lease.id, repo_id, &cs, lease_expires)
+            .write_repo(repo_id_for_lease, move |cx| {
+                db::derive_lease(cx.db, kind_for_lease.id, cx.id, &cs, lease_expires)
                     .map_err(ApiError::log_internal)
             })
             .await
@@ -1002,8 +1042,9 @@ async fn drain(
         let busy_abort = Arc::clone(&state.derive_test_busy_abort);
         let clock_for_derive = Arc::clone(&state.clock);
         let deadline_window = state.derive_walk_deadline.as_nanos() as u64;
+        let repo_for_derive = repo_name.to_string();
         let derived = state
-            .write(move |store| {
+            .write_repo(repo_for_derive, move |cx| {
                 // Test-only one-shot writer_busy injection (see
                 // `ServerState::derive_test_busy_abort`): the pass sees
                 // exactly what a lost write-slot race produces, lease held.
@@ -1029,7 +1070,8 @@ async fn drain(
                 if fire {
                     return Err(ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true));
                 }
-                let conn = store.conn();
+                let repo_id = cx.id;
+                let conn = cx.db;
                 let parents = db::changeset_graph(conn, repo_id, &cs)
                     .map_err(ApiError::log_internal)?
                     .map(|g| g.parents)
@@ -1064,7 +1106,7 @@ async fn drain(
                 // Contention, not a derivation failure: release the lease
                 // straight back to pending (no attempt burned) and end the
                 // pass — the next tick re-picks the node.
-                release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                release_lease_after_busy(state, kind, repo_name, &cs, lease_expires).await;
                 return Ok(());
             }
             // A deriver PANIC lands here as a join error: the lease stays
@@ -1089,13 +1131,13 @@ async fn drain(
                     DeriveFailure::WalkBudget => {
                         let reason = walk_budget_reason(kind_for_fail.deriver.walk_budget());
                         state
-                            .write(move |store| {
-                                let conn = store.conn();
+                            .write_repo(repo_name.to_string(), move |cx| {
+                                let conn = cx.db;
                                 let tx = conn.transaction().map_err(ApiError::log_internal)?;
                                 db::derive_poison_now(
                                     &tx,
                                     kind_for_fail.id,
-                                    repo_id,
+                                    cx.id,
                                     &cs,
                                     &reason,
                                     now,
@@ -1116,13 +1158,13 @@ async fn drain(
                         };
                         let is_deadline_row = is_deadline;
                         state
-                            .write(move |store| {
-                                let conn = store.conn();
+                            .write_repo(repo_name.to_string(), move |cx| {
+                                let conn = cx.db;
                                 let tx = conn.transaction().map_err(ApiError::log_internal)?;
                                 let poisoned = db::derive_fail_attempt(
                                     &tx,
                                     kind_for_fail.id,
-                                    repo_id,
+                                    cx.id,
                                     &cs,
                                     &reason,
                                     now,
@@ -1137,7 +1179,7 @@ async fn drain(
                                     db::derive_report(
                                         &tx,
                                         kind_for_fail.id,
-                                        repo_id,
+                                        cx.id,
                                         &cs,
                                         &reason,
                                         now,
@@ -1179,7 +1221,7 @@ async fn drain(
                         // only the mid-derivation write; this arm is the
                         // same `release_lease_after_busy` call that pin
                         // exercises, at a different write.)
-                        release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                        release_lease_after_busy(state, kind, repo_name, &cs, lease_expires).await;
                         return Ok(());
                     }
                     Err(e) => return Err(e),
@@ -1197,10 +1239,10 @@ async fn drain(
             let reason = size_cap_reason(out.as_bytes().len());
             let kind_for_poison = Arc::clone(kind);
             match state
-                .write(move |store| {
-                    let conn = store.conn();
+                .write_repo(repo_name.to_string(), move |cx| {
+                    let conn = cx.db;
                     let tx = conn.transaction().map_err(ApiError::log_internal)?;
-                    db::derive_poison_now(&tx, kind_for_poison.id, repo_id, &cs, &reason, now)
+                    db::derive_poison_now(&tx, kind_for_poison.id, cx.id, &cs, &reason, now)
                         .map_err(ApiError::log_internal)?;
                     tx.commit().map_err(ApiError::log_internal)?;
                     Ok(())
@@ -1215,7 +1257,7 @@ async fn drain(
                     // hook aborts only the mid-derivation write; this arm
                     // is the same `release_lease_after_busy` call that pin
                     // exercises, at a different write.)
-                    release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                    release_lease_after_busy(state, kind, repo_name, &cs, lease_expires).await;
                     return Ok(());
                 }
                 Err(e) => return Err(e),
@@ -1229,11 +1271,11 @@ async fn drain(
         // the (idempotent) derivation and records then.
         let kind_for_record = Arc::clone(kind);
         let recorded = match state
-            .write(move |store| {
+            .write_repo(repo_name.to_string(), move |cx| {
                 db::derive_record_done(
-                    store.conn(),
+                    cx.db,
                     kind_for_record.id,
-                    repo_id,
+                    cx.id,
                     &cs,
                     out.as_bytes(),
                     taint.0,
@@ -1252,7 +1294,7 @@ async fn drain(
                 // pin: the hook aborts only the mid-derivation write; this
                 // arm is the same `release_lease_after_busy` call that pin
                 // exercises, at a different write.)
-                release_lease_after_busy(state, kind, repo_id, &cs, lease_expires).await;
+                release_lease_after_busy(state, kind, repo_name, &cs, lease_expires).await;
                 return Ok(());
             }
             Err(e) => return Err(e),

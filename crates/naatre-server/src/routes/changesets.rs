@@ -203,15 +203,13 @@ async fn create_inner(
     // Repo + parents resolve before any content check (unknown_parent
     // outranks the content validations). Changesets are append-only, so the
     // metas fetched here stay valid through the write below.
-    let repo_id = repo_id_or_404(state, repo).await?;
     let parent_metas: Vec<(i64, Option<Vec<u8>>)> = {
         let ids = parents.clone();
+        let repo_name = repo.to_string();
         let graphs: Vec<Option<db::CsGraph>> = state
-            .read(move |conn| {
+            .read_repo(repo_name.clone(), move |cx| {
                 ids.iter()
-                    .map(|id| {
-                        db::changeset_graph(conn, repo_id, id).map_err(ApiError::log_internal)
-                    })
+                    .map(|id| db::changeset_graph(cx.db, cx.id, id).map_err(ApiError::log_internal))
                     .collect()
             })
             .await?;
@@ -271,6 +269,10 @@ async fn create_inner(
         });
     }
 
+    // The canonical frame carries the repo id (ids hash it), so it
+    // resolves before the frame is built; the write re-resolves inside the
+    // repo's slot.
+    let repo_id = repo_id_or_404(state, repo).await?;
     let timestamp_ns = body.timestamp_ns.unwrap_or_else(|| state.now_ns());
     let cs = Changeset {
         repo_id: repo_id as u64,
@@ -346,7 +348,6 @@ async fn create_inner(
 
     let root_tree_id = persist(
         state,
-        repo_id,
         repo,
         auth,
         &cs,
@@ -370,7 +371,6 @@ async fn create_inner(
 #[allow(clippy::too_many_arguments)]
 async fn persist(
     state: &AppState,
-    repo_id: i64,
     repo_name: &str,
     auth: &AuthedPrincipal,
     cs: &Changeset,
@@ -391,11 +391,13 @@ async fn persist(
     let clock = Arc::clone(&state.clock);
     let walk_deadline = state.derive_walk_deadline.as_nanos() as u64;
 
+    let repo_for_slot = repo.to_string();
     state
-        .write(move |store| {
-            let conn = store.conn();
+        .write_repo(repo_for_slot, move |cx| {
+            let conn = cx.db;
+            let repo_id = cx.id;
 
-            // The tombstone boundary (inside the write slot, so a
+            // The tombstone boundary (inside the repo's write slot, so a
             // concurrent mark cannot slip between probe and insert): a
             // changeset id that is tombstoned in this repo — active or
             // PURGED, the resurrection arm — is refused (same content +
@@ -429,8 +431,9 @@ async fn persist(
             // Blob presence: a CAS file AND an objects row, listing every
             // missing id in the details.
             let cas_has = cas.has(&blobs).map_err(ApiError::log_internal)?;
+            // The presence probe is catalog-side (the `objects` ledger).
             let mut missing: Vec<Id> =
-                db::objects_missing(conn, &blobs).map_err(ApiError::log_internal)?;
+                db::objects_missing(&cx.cat(), &blobs).map_err(ApiError::log_internal)?;
             for (id, present) in blobs.iter().zip(&cas_has) {
                 if !present && !missing.contains(id) {
                     missing.push(*id);
@@ -600,10 +603,12 @@ pub async fn get_changeset(
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<ChangesetResponse>, ApiError> {
     let id = parse_id(&id_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
+    let repo_name = repo.clone();
     let fetched = state
-        .read(move |conn| {
+        .read_repo(repo_name.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             // The redaction gate first: the tombstone wins over the row
             // lookup (410 even after a concurrent purge removed the row).
             if db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)? {
@@ -718,10 +723,12 @@ pub async fn get_root(
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<ChangesetRootResponse>, ApiError> {
     let id = parse_id(&id_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
+    let repo_name = repo.clone();
     let root = state
-        .read(move |conn| {
+        .read_repo(repo_name.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             if db::redaction_active(conn, repo_id, &id).map_err(ApiError::log_internal)? {
                 return Err(ApiError::new(
                     ApiCode::ObjectRedacted,

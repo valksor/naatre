@@ -71,6 +71,16 @@ enum Cmd {
         #[arg(long, default_value = "info")]
         log_level: String,
     },
+    /// Adopt the db-per-repo layout on an existing single-DB data dir
+    /// (M13a; offline — refuses a live server). Copies each repo's rows
+    /// into fresh per-repo SQLite files, builds the catalog, verifies (row
+    /// counts + fsck), and leaves the original single DB in place; prints
+    /// the cutover steps.
+    MigrateDbPerRepo {
+        /// Existing data directory (single-DB layout required).
+        #[arg(long)]
+        data: PathBuf,
+    },
     /// Token verbs: host-local mint (`--data --new-admin`) or HTTP client
     /// subcommands (list / create / revoke) against a running server.
     Token {
@@ -570,6 +580,7 @@ fn main() {
             sanitize,
             &git_path,
         ),
+        Cmd::MigrateDbPerRepo { data } => host::migrate_db_per_repo(&data),
         Cmd::Backup { data, dest } => host::backup(&data, &dest),
         Cmd::Login { server, token } => wc_locked(cwd, || verbs::login::run(cwd, &server, &token)),
         Cmd::Clone {

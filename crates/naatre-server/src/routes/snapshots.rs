@@ -39,7 +39,6 @@ use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
 use crate::db::{self, TreeEntryRow, TreeWrite};
 use crate::extract::AppJson;
-use crate::routes::repo_id_or_404;
 use crate::snapshots_gc::{SNAPSHOT_DEFAULT_TTL_SECS, SNAPSHOT_MIN_TTL_SECS};
 use crate::state::AppState;
 
@@ -210,7 +209,6 @@ pub async fn create(
         .with_details(serde_json::json!({ "limit": MAX_SNAPSHOT_BLOBS })));
     }
 
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let principal = auth.principal.clone();
     let ephemeral = Arc::clone(&state.ephemeral);
     let now_ns = state.now_ns() as i64;
@@ -222,9 +220,11 @@ pub async fn create(
         Existing { recorded_expires_ns: i64 },
     }
 
+    let repo_for_slot = repo.clone();
     let outcome = state
-        .write(move |store| {
-            let conn = store.conn();
+        .write_repo(repo_for_slot, move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             // Re-POST resolution first, reads only, no writes on any branch:
             // the RECORDED row is authoritative, so an identical re-POST
             // answers the recorded expiry (never a recomputed one), a
@@ -411,8 +411,7 @@ pub async fn get_metadata(
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<SnapshotResponse>, ApiError> {
     let snap_id = parse_id(&id_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
-    let row = load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
+    let row = load_owned_unexpired(&state, &repo, &snap_id, &auth.principal).await?;
     Ok(Json(SnapshotResponse {
         id: snap_id.to_hex(),
         tree_id: Id(row.tree_id.try_into().expect("tree id is 32 bytes")).to_hex(),
@@ -450,7 +449,6 @@ pub async fn get_blob(
 ) -> Result<Response, ApiError> {
     let snap_id = parse_id(&id_hex)?;
     let oid = parse_id(&oid_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     // The redaction gate BEFORE the TTL check: a tombstoned blob id is
     // unrestorable now, regardless of the snapshot's remaining TTL
     // ("redaction overrides the TTL root"). Content-addressing makes the
@@ -459,7 +457,9 @@ pub async fn get_blob(
     {
         let oid_gate = oid;
         let redacted = state
-            .read(move |conn| {
+            .read_repo(repo.clone(), move |cx| {
+                let repo_id = cx.id;
+                let conn = cx.db;
                 db::redaction_active(conn, repo_id, &oid_gate).map_err(ApiError::log_internal)
             })
             .await?;
@@ -470,7 +470,7 @@ pub async fn get_blob(
             ));
         }
     }
-    load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
+    load_owned_unexpired(&state, &repo, &snap_id, &auth.principal).await?;
 
     let ephemeral = Arc::clone(&state.ephemeral);
     let snap = snap_id.to_hex();
@@ -529,8 +529,7 @@ pub async fn get_snapshot_tree(
 ) -> Result<Json<crate::routes::trees::TreeResponse>, ApiError> {
     let snap_id = parse_id(&id_hex)?;
     let tree_id = parse_id(&tid_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
-    let row = load_owned_unexpired(&state, repo_id, &snap_id, &auth.principal).await?;
+    let row = load_owned_unexpired(&state, &repo, &snap_id, &auth.principal).await?;
 
     // Closure membership first (404 before any entries are served): only
     // the snapshot root itself and the trees reachable from it over dir
@@ -541,7 +540,9 @@ pub async fn get_snapshot_tree(
     // included).
     let root = Id(row.tree_id.try_into().expect("tree id is 32 bytes"));
     let entries = state
-        .read(move |conn| {
+        .read_repo(repo.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             if !db::tree_in_closure(conn, &root, &tree_id).map_err(ApiError::log_internal)? {
                 return Ok(None);
             }
@@ -602,7 +603,6 @@ pub async fn put_blob(
     require_role(&auth, Role::Writer)?;
     let snap_id = parse_id(&id_hex)?;
     let oid = parse_id(&oid_hex)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     if object_id(naatre_core::ids::Kind::Blob, &payload) != oid {
         return Err(ApiError::new(
             ApiCode::Malformed,
@@ -625,7 +625,9 @@ pub async fn put_blob(
     // the bytes would only invite the 410.
     {
         let redacted = state
-            .read(move |conn| {
+            .read_repo(repo.clone(), move |cx| {
+                let repo_id = cx.id;
+                let conn = cx.db;
                 db::redaction_active(conn, repo_id, &oid).map_err(ApiError::log_internal)
             })
             .await?;
@@ -943,14 +945,17 @@ fn closure_first_file(
 /// and be unexpired (410 `snapshot_expired` before anything else serves).
 async fn load_owned_unexpired(
     state: &AppState,
-    repo_id: i64,
+    repo: &str,
     snap_id: &Id,
     principal: &str,
 ) -> Result<db::SnapshotRow, ApiError> {
     let id = *snap_id;
     let owner = principal.to_string();
+    let repo = repo.to_string();
     let row = state
-        .read(move |conn| db::snapshot_get(conn, repo_id, &id).map_err(ApiError::log_internal))
+        .read_repo(repo, move |cx| {
+            db::snapshot_get(cx.db, cx.id, &id).map_err(ApiError::log_internal)
+        })
         .await?;
     let Some(row) = row.filter(|row| row.principal == owner) else {
         return Err(ApiError::new(

@@ -21,7 +21,6 @@ use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
 use crate::db;
 use crate::extract::AppJson;
-use crate::routes::repo_id_or_404;
 use crate::state::AppState;
 
 /// Request body of `POST /v1/repos/{r}/redactions`.
@@ -145,8 +144,6 @@ pub async fn create(
     let id = Id::from_hex(&body.id).ok_or_else(|| {
         ApiError::new(ApiCode::Malformed, "id must be 64 lowercase hex characters")
     })?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
-
     // The target must be a real object of this repo, or an already-
     // tombstoned id (the re-arm target): a changeset row of THIS repo, or
     // a blob the server holds in any form — an objects row, repo_blobs
@@ -158,9 +155,21 @@ pub async fn create(
     // upload; the GATE stays repo-scoped either way.
     let exists = {
         state
-            .read(move |conn| {
-                db::redaction_target_present(conn, repo_id, &id, kind)
-                    .map_err(ApiError::log_internal)
+            .read_repo(repo.clone(), move |cx| {
+                // The presence probe, split across the two connections:
+                // the repo-side shapes (tombstone, membership, file_changes,
+                // blob tree, changeset row) on the repo's connection; the
+                // plain `objects` row (a PUT upload this repo's tables never
+                // named) on the catalog — blob kind only.
+                let present = db::redaction_target_present_repo(cx.db, cx.id, &id, kind)
+                    .map_err(ApiError::log_internal)?;
+                if present {
+                    return Ok(true);
+                }
+                if kind == "blob" {
+                    return db::object_row_exists(&cx.cat(), &id).map_err(ApiError::log_internal);
+                }
+                Ok(false)
             })
             .await?
     };
@@ -174,30 +183,40 @@ pub async fn create(
     let now_ns = state.now_ns() as i64;
     let principal = auth.principal.clone();
     let reason = body.reason.clone();
+    let repo_name = repo.clone();
     let marked = state
-        .write(move |store| {
-            let conn = store.conn();
+        .write_repo(repo_name.clone(), move |cx| {
+            let repo_id = cx.id;
+            let conn = cx.db;
             // Immediate: the mark is a destructive write (it flips every
             // serving gate and poisons derived rows) — the same write-lock
-            // class as the GC's purge phases, taken up front.
+            // class as the GC's purge phases, taken up front (the repo's
+            // slot; the audit row below rides the catalog).
             let tx = conn
                 .transaction_immediate()
                 .map_err(ApiError::log_internal)?;
             let outcome = db::redaction_mark(&tx, repo_id, &id, kind, now_ns)
                 .map_err(ApiError::log_internal)?;
+            if matches!(outcome, db::RedactionMarkOutcome::Inserted(_)) {
+                // Mark-time invalidation of the tombstoned changeset's
+                // derived rows (a no-op for blobs): the read gates stop
+                // serving immediately, and re-derivations propagate the
+                // hole through the taint machinery.
+                db::redaction_invalidate_derived(&tx, repo_id, &id)
+                    .map_err(ApiError::log_internal)?;
+            }
+            tx.commit().map_err(ApiError::log_internal)?;
+            // The audit row is catalog-side and commits AFTER the
+            // tombstone's transaction (audit-after-work: a rolled-back mark
+            // never rows). It rides the 0→1 transition and the re-arm only
+            // (the token_revoke convention: an idempotent re-POST writes
+            // nothing). Split mode: a separate commit — a crash in that
+            // window loses the audit row for a standing tombstone, the
+            // documented split-mode atomicity boundary.
             match &outcome {
                 db::RedactionMarkOutcome::Inserted(_) => {
-                    // Mark-time invalidation of the tombstoned changeset's
-                    // derived rows (a no-op for blobs): the read gates stop
-                    // serving immediately, and re-derivations propagate the
-                    // hole through the taint machinery.
-                    db::redaction_invalidate_derived(&tx, repo_id, &id)
-                        .map_err(ApiError::log_internal)?;
-                    // The audit row rides the 0→1 transition only (the
-                    // token_revoke convention): an idempotent re-POST writes
-                    // nothing.
                     db::audit_append(
-                        &tx,
+                        &cx.cat(),
                         now_ns,
                         &principal,
                         "redact",
@@ -215,7 +234,7 @@ pub async fn create(
                     // A re-arm is a real admin action on a purged record —
                     // it rows its own audit entry, never a silent no-op.
                     db::audit_append(
-                        &tx,
+                        &cx.cat(),
                         now_ns,
                         &principal,
                         "redact",
@@ -233,7 +252,6 @@ pub async fn create(
                 db::RedactionMarkOutcome::Existing(_)
                 | db::RedactionMarkOutcome::KindMismatch { .. } => {}
             }
-            tx.commit().map_err(ApiError::log_internal)?;
             Ok(outcome)
         })
         .await?;
@@ -298,7 +316,6 @@ pub async fn list(
         limit: q.limit.clone(),
         cursor: None,
     })?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let after = match q.cursor.as_deref() {
         None => None,
         Some(raw) => {
@@ -311,9 +328,10 @@ pub async fn list(
             Some(id)
         }
     };
+    let repo_for_page = repo.clone();
     let rows = state
-        .read(move |conn| {
-            db::redactions_page(conn, repo_id, after.as_ref(), limit + 1)
+        .read_repo(repo_for_page, move |cx| {
+            db::redactions_page(cx.db, cx.id, after.as_ref(), limit + 1)
                 .map_err(ApiError::log_internal)
         })
         .await?;

@@ -2201,7 +2201,6 @@ async fn race_orphan_bytes_are_condemned_at_the_refusal_and_reclaimed() {
     f.redact("blob", &oid.to_hex(), "race orphan").await;
     let err = naatre_server::routes::objects::record_object(
         &f.t.state,
-        f.repo_id,
         REPO,
         oid,
         content.len() as i64,
@@ -2288,7 +2287,6 @@ async fn race_orphan_bytes_are_condemned_at_the_refusal_and_reclaimed() {
     assert_eq!(resp.body["rearmed"], true, "{}", resp.body);
     let err = naatre_server::routes::objects::record_object(
         &f.t.state,
-        f.repo_id,
         REPO,
         oid,
         content.len() as i64,
@@ -2879,7 +2877,6 @@ async fn batch_race_refusal_condemns_every_written_id() {
 
     let err = naatre_server::routes::objects::record_batch(
         &f.t.state,
-        f.repo_id,
         REPO,
         vec![
             (c1, clean1.len() as i64, 1),
@@ -2917,16 +2914,10 @@ async fn batch_race_refusal_condemns_every_written_id() {
 
     // The self-heal: a legitimate record of a clean id writes its row and
     // clears the condemnation mark.
-    let existed = naatre_server::routes::objects::record_object(
-        &f.t.state,
-        f.repo_id,
-        REPO,
-        c1,
-        clean1.len() as i64,
-        1,
-    )
-    .await
-    .unwrap();
+    let existed =
+        naatre_server::routes::objects::record_object(&f.t.state, REPO, c1, clean1.len() as i64, 1)
+            .await
+            .unwrap();
     assert!(!existed);
     assert_eq!(
         f.count_params(
@@ -2975,7 +2966,7 @@ async fn repo_stats_exclude_this_repo_tombstones() {
     let root = seed_base(&f).await;
     let before = {
         let conn = naatre_store::Db::Sqlite(rusqlite::Connection::open(&f.t.db_path).unwrap());
-        naatre_server::db::repo_stats(&conn, f.repo_id).unwrap()
+        stats_of(&conn, f.repo_id)
     };
 
     let secret = b"stats-secret!".to_vec();
@@ -2983,7 +2974,7 @@ async fn repo_stats_exclude_this_repo_tombstones() {
     let cs = f.commit(json!([root.clone()]), "s.txt", &secret).await;
     let with_secret = {
         let conn = naatre_store::Db::Sqlite(rusqlite::Connection::open(&f.t.db_path).unwrap());
-        naatre_server::db::repo_stats(&conn, f.repo_id).unwrap()
+        stats_of(&conn, f.repo_id)
     };
     assert_eq!(with_secret.0, before.0 + 1, "the commit counted");
     assert!(with_secret.1 > before.1, "the blob's row counted");
@@ -2991,7 +2982,7 @@ async fn repo_stats_exclude_this_repo_tombstones() {
     f.redact("blob", &secret_hex, "stats takedown").await;
     let after = {
         let conn = naatre_store::Db::Sqlite(rusqlite::Connection::open(&f.t.db_path).unwrap());
-        naatre_server::db::repo_stats(&conn, f.repo_id).unwrap()
+        stats_of(&conn, f.repo_id)
     };
     assert_eq!(
         after,
@@ -3004,4 +2995,20 @@ async fn repo_stats_exclude_this_repo_tombstones() {
     // reference to vanish); the leak the pin closes is exactly that
     // window: the stats are already the never-added baseline.
     let _ = cs;
+}
+
+fn stats_of(conn: &naatre_store::Db, repo_id: i64) -> (i64, i64, i64, i64) {
+    let changesets = naatre_server::db::repo_changeset_count(conn, repo_id).unwrap();
+    let excluded: std::collections::HashSet<naatre_core::ids::Id> =
+        naatre_server::db::redaction_ids_repo(conn)
+            .unwrap()
+            .into_iter()
+            .collect();
+    let members: Vec<naatre_core::ids::Id> = naatre_server::db::gc_repo_blobs(conn, repo_id)
+        .unwrap()
+        .into_iter()
+        .filter(|id| !excluded.contains(id))
+        .collect();
+    let (objects, bytes, cbytes) = naatre_server::db::repo_object_sums(conn, &members).unwrap();
+    (changesets, objects, bytes, cbytes)
 }

@@ -46,7 +46,6 @@ use crate::db;
 use crate::extract::AppJson;
 use crate::land::{self, LandCommand, LandDone};
 use crate::land_join::{InFlightLand, JoinSlot, LandOutcome};
-use crate::routes::repo_id_or_404;
 use crate::state::AppState;
 
 /// Request body of land.
@@ -190,8 +189,11 @@ pub async fn land(
     };
     let cas = Arc::clone(&state.cas);
     let derive = Arc::clone(&state.derive);
+    let repo_name = cmd.repo_name.clone();
     let result = state
-        .write(move |store| land::execute(store, cas.as_ref(), &derive, &cmd))
+        .write_repo(repo_name.clone(), move |cx| {
+            land::execute(cx, cas.as_ref(), &derive, &cmd)
+        })
         .await;
     // Share the outcome with joiners, then deregister (Drop). The write slot
     // is free again by the time this runs: a joiner sees the entry with its
@@ -277,11 +279,11 @@ async fn settled_replay(
     key: &str,
     head: Id,
 ) -> Result<Json<LandResponse>, ApiError> {
-    let repo_id = repo_id_or_404(state, repo).await?;
     let (principal, key) = (principal.to_string(), key.to_string());
+    let repo_for_read = repo.to_string();
     let row = state
-        .read(move |conn| {
-            db::land_get(conn, repo_id, &principal, &key).map_err(ApiError::log_internal)
+        .read_repo(repo_for_read, move |cx| {
+            db::land_get(cx.db, cx.id, &principal, &key).map_err(ApiError::log_internal)
         })
         .await?;
     let Some(row) = row.filter(|row| {
@@ -329,12 +331,12 @@ pub async fn land_status(
     Path((repo, key)): Path<(String, String)>,
 ) -> Result<Json<LandStatusResponse>, ApiError> {
     require_role(&auth, Role::Writer)?;
-    let repo_id = repo_id_or_404(&state, &repo).await?;
     let principal = auth.principal.clone();
     let key_for_lookup = key.clone();
+    let repo_for_read = repo.clone();
     let row = state
-        .read(move |conn| {
-            db::land_get(conn, repo_id, &principal, &key_for_lookup).map_err(ApiError::log_internal)
+        .read_repo(repo_for_read, move |cx| {
+            db::land_get(cx.db, cx.id, &principal, &key_for_lookup).map_err(ApiError::log_internal)
         })
         .await?;
     let Some(row) = row else {

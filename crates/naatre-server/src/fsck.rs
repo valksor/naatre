@@ -166,10 +166,12 @@ pub async fn fsck(state: &AppState) -> Result<FsckReport, ApiError> {
 /// backfill, so the report reflects the post-repair store.
 pub async fn fsck_repair(state: &AppState) -> Result<FsckReport, ApiError> {
     let now_i = state.now_ns() as i64;
-    // The work list: referenced blobs without their record row.
-    let candidates = state
-        .read(|conn| db::fsck_repair_candidates(conn).map_err(ApiError::log_internal))
-        .await?;
+    // The work list: referenced blobs without their record row — the
+    // referenced ids come from every repo's file (file_changes, blob
+    // tree_entries, repo_blobs membership), the record rows and the
+    // tombstone exclusions live on the catalog and every repo's file
+    // respectively; the anti-join runs in memory.
+    let candidates = fsck_repair_candidates(state).await?;
     let mut backfilled: Vec<Id> = Vec::new();
     if !candidates.is_empty() {
         let cas = std::sync::Arc::clone(&state.cas);
@@ -253,22 +255,129 @@ async fn scan(state: &AppState) -> Result<FsckReport, ApiError> {
     let now_i = state.now_ns() as i64;
     let cut = now_i.saturating_sub(state.gc_grace.as_nanos() as i64);
 
-    // The mark + the anti-joins + the ledger counts + the stale-candidate
-    // check + the redaction counts, in one read pass.
+    // The mark + the per-repo dangling checks + the cross-file
+    // missing-objects checks + the ledger counts + the stale-candidate
+    // check + the redaction counts, in one aggregated read pass. The
+    // cross-file checks keep the single-DB checker's exact names and
+    // row-multiplicity semantics: per repo file the reference rows are
+    // read with multiplicity and probed against the catalog's `objects`
+    // rows; the `tree_entries` leg is FILE-scoped (once per repo file in
+    // the split, once against the whole DB in single mode).
     let (mark_counts, danglings, candidates, stale_candidates, redactions) = state
-        .read(move |conn| {
-            let mark = gc::mark(conn, now_i).map_err(ApiError::log_internal)?;
-            let danglings = db::fsck_danglings(conn).map_err(ApiError::log_internal)?;
-            let candidates = db::gc_candidate_counts(conn, cut).map_err(ApiError::log_internal)?;
+        .read_all(move |cx| {
+            let mark = gc::mark(cx, now_i).map_err(ApiError::log_internal)?;
+            // The dangling checks: the repo-file checks per repo, plus the
+            // cross-file checks computed from the reference inventories
+            // against the catalog.
+            const CROSS_FILE: [&str; 3] = [
+                "file_change_blob_row_missing",
+                "tree_blob_row_missing",
+                "membership_row_object_missing",
+            ];
+            let mut counts: Vec<(&'static str, i64)> = Vec::new();
+            let mut push =
+                |name: &'static str, n: i64| match counts.iter_mut().find(|(n, _)| *n == name) {
+                    Some(entry) => entry.1 += n,
+                    None => counts.push((name, n)),
+                };
+            let mut file_refs: Vec<Id> = Vec::new();
+            let mut member_refs: Vec<Id> = Vec::new();
+            let mut tree_refs: Vec<Id> = Vec::new();
+            let split = cx.is_split();
+            for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                cx.with_repo(repo_id, |conn| {
+                    for (name, n) in
+                        db::fsck_danglings_repo(conn).map_err(ApiError::log_internal)?
+                    {
+                        push(name, n);
+                    }
+                    let (files, members) = db::fsck_blob_ref_rows_repo(conn, repo_id)
+                        .map_err(ApiError::log_internal)?;
+                    file_refs.extend(files);
+                    member_refs.extend(members);
+                    if split {
+                        tree_refs
+                            .extend(db::fsck_tree_blob_refs(conn).map_err(ApiError::log_internal)?);
+                    }
+                    Ok(())
+                })
+                .map_err(ApiError::log_internal)?;
+            }
+            if !split {
+                tree_refs = db::fsck_tree_blob_refs(cx.cat()).map_err(ApiError::log_internal)?;
+            }
+            // The catalog-side presence probe for every referenced id.
+            let mut union: Vec<Id> = Vec::new();
+            union.extend(&file_refs);
+            union.extend(&member_refs);
+            union.extend(&tree_refs);
+            union.sort_by_key(|id| id.0);
+            union.dedup();
+            let present: std::collections::HashSet<Id> = db::fsck_objects_present(cx.cat(), &union)
+                .map_err(ApiError::log_internal)?
+                .into_iter()
+                .collect();
+            let missing = |refs: &[Id]| -> i64 {
+                refs.iter().filter(|id| !present.contains(*id)).count() as i64
+            };
+            push("file_change_blob_row_missing", missing(&file_refs));
+            push("tree_blob_row_missing", missing(&tree_refs));
+            push("membership_row_object_missing", missing(&member_refs));
+            // The single-DB checker's statement order.
+            const ORDER: [&str; 14] = [
+                "changeset_parent_missing",
+                "file_change_blob_row_missing",
+                "tree_blob_row_missing",
+                "tree_child_row_missing",
+                "changeset_root_tree_missing",
+                "ref_target_missing",
+                "land_head_missing",
+                "land_base_missing",
+                "git_map_cs_missing",
+                "membership_row_object_missing",
+                "derive_state_cs_missing",
+                "derive_report_cs_missing",
+                "blame_state_cs_missing",
+                "path_history_cs_missing",
+            ];
+            let mut danglings: Vec<(&'static str, i64)> = Vec::new();
+            for name in ORDER {
+                if let Some((_, n)) = counts.iter().find(|(n, _)| *n == name) {
+                    danglings.push((name, *n));
+                }
+            }
+            let _ = CROSS_FILE;
+            let candidates =
+                db::gc_candidate_counts(cx.cat(), cut).map_err(ApiError::log_internal)?;
             let mut stale = 0usize;
             for scope in [db::GC_SCOPE_CS, db::GC_SCOPE_BLOB, db::GC_SCOPE_TREE] {
-                for id in db::gc_pending_ids(conn, scope).map_err(ApiError::log_internal)? {
+                for id in db::gc_pending_ids(cx.cat(), scope).map_err(ApiError::log_internal)? {
                     if mark.reachable(scope, &id) {
                         stale += 1;
                     }
                 }
             }
-            let redactions = db::fsck_redactions(conn).map_err(ApiError::log_internal)?;
+            // The redaction triple: per-repo counts + the changeset drift
+            // arm per repo, the blob drift arm against the catalog.
+            let mut redactions = (0i64, 0i64, 0i64);
+            for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                cx.with_repo(repo_id, |conn| {
+                    let slice =
+                        db::fsck_redactions_repo(conn, repo_id).map_err(ApiError::log_internal)?;
+                    redactions.0 += slice.active;
+                    redactions.1 += slice.purged;
+                    redactions.2 += slice.drift_cs;
+                    for (id, stamp) in slice.purged_blobs {
+                        if db::object_touched_before(cx.cat(), &id, stamp)
+                            .map_err(ApiError::log_internal)?
+                        {
+                            redactions.2 += 1;
+                        }
+                    }
+                    Ok(())
+                })
+                .map_err(ApiError::log_internal)?;
+            }
             Ok((
                 (mark.cs_len(), mark.blobs_len(), mark.trees_len()),
                 danglings,
@@ -279,27 +388,33 @@ async fn scan(state: &AppState) -> Result<FsckReport, ApiError> {
         })
         .await?;
 
-    // The inventories (one read pass).
+    // The inventories (one aggregated read pass; the catalog owns the
+    // objects rows, each repo its changesets and membership).
     let inventory = state
-        .read(|conn| {
-            let blobs_db = db::gc_all_object_ids(conn).map_err(ApiError::log_internal)?;
-            let trees = db::gc_all_tree_ids(conn).map_err(ApiError::log_internal)?;
+        .read_all(|cx| {
+            let blobs_db = db::gc_all_object_ids(cx.cat()).map_err(ApiError::log_internal)?;
+            let mut trees = Vec::new();
             let mut changesets = 0usize;
             let mut membership = Vec::new();
-            for repo_id in db::gc_repos(conn).map_err(ApiError::log_internal)? {
-                changesets += db::gc_all_changesets(conn, repo_id)
-                    .map_err(ApiError::log_internal)?
-                    .len();
-                let expected: HashSet<Id> = db::gc_file_change_blobs(conn, repo_id)
-                    .map_err(ApiError::log_internal)?
-                    .into_iter()
-                    .map(|(_, blob)| blob)
-                    .collect();
-                let actual: HashSet<Id> = db::gc_repo_blobs(conn, repo_id)
-                    .map_err(ApiError::log_internal)?
-                    .into_iter()
-                    .collect();
-                membership.push((expected, actual));
+            for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                cx.with_repo(repo_id, |conn| {
+                    trees.extend(db::gc_all_tree_ids(conn).map_err(ApiError::log_internal)?);
+                    changesets += db::gc_all_changesets(conn, repo_id)
+                        .map_err(ApiError::log_internal)?
+                        .len();
+                    let expected: HashSet<Id> = db::gc_file_change_blobs(conn, repo_id)
+                        .map_err(ApiError::log_internal)?
+                        .into_iter()
+                        .map(|(_, blob)| blob)
+                        .collect();
+                    let actual: HashSet<Id> = db::gc_repo_blobs(conn, repo_id)
+                        .map_err(ApiError::log_internal)?
+                        .into_iter()
+                        .collect();
+                    membership.push((expected, actual));
+                    Ok(())
+                })
+                .map_err(ApiError::log_internal)?;
             }
             Ok(Inventory {
                 blobs_db,
@@ -403,4 +518,59 @@ async fn scan(state: &AppState) -> Result<FsckReport, ApiError> {
         external_drift: (state.blob_backend == "s3").then_some(S3_DRIFT_NOTE),
         backfilled: Vec::new(),
     })
+}
+
+/// The fsck `--repair` arm's work list, split-aware: blobs REFERENCED by
+/// the store — `repo_blobs` membership, a `file_changes` row, or a blob
+/// `tree_entries` row, read with one DISTINCT set per repo file — whose
+/// `objects` record row is missing, EXCLUDING every id with a redactions
+/// row in ANY repo (active or purged): the objects table is global, and a
+/// tombstoned or purged id must NEVER gain an objects row back — that
+/// would resurrect purge drift or a condemned-bytes state. Otherwise
+/// exactly the dirt class the pre-M11 import left behind (it wrote CAS
+/// bytes + references but skipped the record step's row); every OTHER fsck
+/// finding is out of the repair's scope by construction, because this set
+/// is the whole work list.
+async fn fsck_repair_candidates(state: &AppState) -> Result<Vec<Id>, ApiError> {
+    state
+        .read_all(|cx| {
+            let mut referenced: Vec<Id> = Vec::new();
+            let mut tombstoned: HashSet<Id> = HashSet::new();
+            let split = cx.is_split();
+            for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                cx.with_repo(repo_id, |conn| {
+                    let (files, members) = db::fsck_blob_ref_rows_repo(conn, repo_id)
+                        .map_err(ApiError::log_internal)?;
+                    referenced.extend(files);
+                    referenced.extend(members);
+                    if split {
+                        referenced
+                            .extend(db::fsck_tree_blob_refs(conn).map_err(ApiError::log_internal)?);
+                    }
+                    tombstoned
+                        .extend(db::redaction_ids_repo(conn).map_err(ApiError::log_internal)?);
+                    Ok(())
+                })
+                .map_err(ApiError::log_internal)?;
+            }
+            if !split {
+                // Single mode: the tree inventory reads once against the
+                // whole DB (the per-repo loop's file_changes/membership
+                // reads already accumulated — EXTEND, never overwrite).
+                referenced
+                    .extend(db::fsck_tree_blob_refs(cx.cat()).map_err(ApiError::log_internal)?);
+            }
+            referenced.sort_by_key(|id| id.0);
+            referenced.dedup();
+            // The record rows (catalog side) and the tombstone exclusion.
+            let present: HashSet<Id> = db::fsck_objects_present(cx.cat(), &referenced)
+                .map_err(ApiError::log_internal)?
+                .into_iter()
+                .collect();
+            Ok(referenced
+                .into_iter()
+                .filter(|id| !present.contains(id) && !tombstoned.contains(id))
+                .collect())
+        })
+        .await
 }

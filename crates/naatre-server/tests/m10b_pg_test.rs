@@ -141,6 +141,7 @@ fn open_ctx() -> Option<Ctx> {
         .expect("root changeset");
         db::ref_cas(
             &conn,
+            &conn,
             db::RefMove {
                 repo_id,
                 repo_name: REPO,

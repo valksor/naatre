@@ -57,8 +57,9 @@ use naatre_core::changeset::{self, Changeset, FileChange, Op};
 use naatre_core::error::CoreError;
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::path;
+use naatre_store::BackendConfig;
+use naatre_store::DataDir;
 use naatre_store::error::StoreError;
-use naatre_store::{DataDir, Store};
 
 use crate::db;
 use crate::tree_derive::{self, MemEntry, MemNode};
@@ -221,6 +222,73 @@ pub fn run(
 /// [`run`] for the CONFIGURED backend: `naatre import` is offline but
 /// writes metadata, so it honors `backend.toml` exactly like `serve` —
 /// same open guard, same mismatch refusal, same migrations.
+/// The import's metadata connections: the catalog (`cat`) plus the
+/// target repo's file (`repo_conn`), one `Db` each. Single-DB mode: both
+/// roles are plain connections to `naatre.db` (the import's transaction
+/// shape is unchanged; the two connections' writes interleave through
+/// SQLite's busy timeout exactly as a server's do). Db-per-repo mode:
+/// `open_repo` materializes the repo's file (the shared migrations run on
+/// open) after the registry row exists.
+struct ImportDb {
+    cat_db: Db,
+    repo_db: Option<Db>,
+    data_dir: DataDir,
+    split: bool,
+}
+
+impl ImportDb {
+    fn open(data_dir: DataDir, cfg: &BackendConfig) -> Result<ImportDb, ImportError> {
+        let cat_db = match cfg.layout {
+            // Single: naatre.db may be the `naatre init`-shaped empty file —
+            // the open runs the migrations (the old Store::open_backend
+            // contract the import fixture relies on).
+            naatre_store::Layout::Single => naatre_store::store::open_repo_db(&data_dir.db_path()),
+            // Split: the catalog was migrated by the adoption (an absent
+            // catalog must not be silently created by an import).
+            naatre_store::Layout::DbPerRepo => naatre_store::store::open_repo_conn(
+                &data_dir.path().join(naatre_store::layout::CATALOG_FILE),
+            ),
+        }
+        .map_err(ImportError::DataDir)?;
+        Ok(ImportDb {
+            cat_db,
+            repo_db: None,
+            data_dir,
+            split: cfg.layout == naatre_store::Layout::DbPerRepo,
+        })
+    }
+
+    fn cat(&self) -> &Db {
+        &self.cat_db
+    }
+
+    fn repo_conn(&self) -> &Db {
+        self.repo_db.as_ref().expect("import opened the repo conn")
+    }
+
+    /// Opens (creating when absent) the target repo's file. Idempotent.
+    fn open_repo(&mut self, repo_id: i64) -> Result<(), ImportError> {
+        if self.repo_db.is_some() {
+            return Ok(());
+        }
+        let path = if self.split {
+            naatre_store::layout::repo_db_path(self.data_dir.path(), repo_id)
+        } else {
+            self.data_dir.db_path()
+        };
+        let conn = if self.split {
+            // The per-repo file runs the shared migrations on open
+            // (idempotent for an existing file; creating for a fresh one).
+            naatre_store::store::open_repo_db(&path)
+        } else {
+            naatre_store::store::open_repo_conn(&path)
+        }
+        .map_err(ImportError::DataDir)?;
+        self.repo_db = Some(conn);
+        Ok(())
+    }
+}
+
 pub fn run_backend(
     data: &Path,
     cfg: &naatre_store::BackendConfig,
@@ -258,16 +326,19 @@ pub fn run_backend(
     // The CONFIGURED CAS (fs, or the S3 bucket when blob = "s3") — the
     // import's blob writes must land where the server reads them.
     let cas = naatre_store::blob::history_cas(&data_dir, cfg)?;
-    let store = Store::open_backend(data_dir, cfg)?;
-    let conn = store.conn();
+    let mut idb = ImportDb::open(data_dir, cfg)?;
+    let cat = idb.cat();
 
-    // Target repo, created (and audited) when absent.
-    let existing = db::repo_id_by_name(conn, &repo_name)?;
+    // Target repo, created (and audited) when absent. The registry is
+    // catalog-side in both layouts; in db-per-repo mode the create also
+    // materializes the repo's own SQLite file (the shared migrations run
+    // on open).
+    let existing = db::repo_id_by_name(cat, &repo_name)?;
     let (repo_id, repo_created) = match existing {
         Some(id) => (id, false),
         None => {
             let now = now_ns();
-            let tx = conn.transaction()?;
+            let tx = cat.transaction()?;
             let id = db::repos_create(&tx, &repo_name, now)?;
             db::audit_append(
                 &tx,
@@ -280,9 +351,10 @@ pub fn run_backend(
             (id, true)
         }
     };
+    idb.open_repo(repo_id)?;
 
     // Import state so far: git oid → changeset id (and back).
-    let (git_map, reverse_map) = load_git_map(conn, repo_id)?;
+    let (git_map, reverse_map) = load_git_map(idb.repo_conn(), repo_id)?;
 
     // The to-import set: every ancestor of HEAD that is not yet mapped,
     // parents before children.
@@ -302,7 +374,7 @@ pub fn run_backend(
     };
 
     if batch.is_empty() {
-        finish(conn, &repo_name, &git_head_hex, &report)?;
+        finish(idb.cat(), &repo_name, &git_head_hex, &report)?;
         return Ok(report);
     }
 
@@ -310,7 +382,7 @@ pub fn run_backend(
     // commit must still be an ancestor of the source's new HEAD — otherwise
     // the source's history was rewritten and importing would graft onto a
     // sibling. Checked before anything is imported.
-    let main_row = db::ref_get(conn, repo_id, "main")?;
+    let main_row = db::ref_get(idb.repo_conn(), repo_id, "main")?;
     let main_git_oid: Option<ObjectId> = main_row
         .as_ref()
         .and_then(|row| row.target.as_deref())
@@ -330,7 +402,7 @@ pub fn run_backend(
                 "git_history_diverged: main's git commit {old_oid} is not an ancestor \
                  of the source's HEAD {git_head_hex}; the source history was rewritten"
             ));
-            finish(conn, &repo_name, &git_head_hex, &report)?;
+            finish(idb.cat(), &repo_name, &git_head_hex, &report)?;
             return Ok(report);
         }
     }
@@ -344,7 +416,7 @@ pub fn run_backend(
     for commit in &batch {
         match prepare_commit(
             &git,
-            &store,
+            &idb,
             repo_id,
             commit,
             &git_map,
@@ -381,7 +453,7 @@ pub fn run_backend(
             offending.len(),
             if offending.len() == 1 { "y" } else { "ies" },
         ));
-        finish(conn, &repo_name, &git_head_hex, &report)?;
+        finish(idb.cat(), &repo_name, &git_head_hex, &report)?;
         return Ok(report);
     }
 
@@ -407,7 +479,7 @@ pub fn run_backend(
     // file changes, blob membership, git_map row, derived trees, and audit.
     let mut git_map = git_map;
     for p in &importable {
-        import_commit(&git, cas.as_ref(), conn, repo_id, &repo_name, derive, p)?;
+        import_commit(&git, cas.as_ref(), &idb, repo_id, &repo_name, derive, p)?;
         git_map.insert(p.git_oid, p.cs_id);
         report.imported += 1;
         if p.sanitized {
@@ -429,7 +501,7 @@ pub fn run_backend(
     // Graft main, but only when at least one new commit arrived.
     if report.imported >= 1 {
         graft_main(
-            conn,
+            &idb,
             repo_id,
             &repo_name,
             main_row.as_ref(),
@@ -441,7 +513,7 @@ pub fn run_backend(
         )?;
     }
 
-    finish(conn, &repo_name, &git_head_hex, &report)?;
+    finish(idb.cat(), &repo_name, &git_head_hex, &report)?;
     Ok(report)
 }
 
@@ -947,7 +1019,7 @@ enum Prepared {
 /// a cascade artifact.
 fn prepare_commit(
     git: &gix::Repository,
-    store: &Store,
+    idb: &ImportDb,
     repo_id: i64,
     commit: &GitCommit,
     git_map: &HashMap<ObjectId, Id>,
@@ -1131,7 +1203,7 @@ fn prepare_commit(
             Some((_, parent_gen)) => *parent_gen,
             None => {
                 let cs = git_map.get(parent).expect("parent resolved above");
-                db::changeset_graph(store.conn(), repo_id, cs)
+                db::changeset_graph(idb.repo_conn(), repo_id, cs)
                     .map_err(ImportError::from)?
                     .map(|g| g.generation)
                     .ok_or_else(|| {
@@ -1380,12 +1452,12 @@ fn replace_with_replacement_char(s: &mut String, index: usize) {
 /// unsatisfiable on the import seeding path.
 fn put_recorded(
     cas: &dyn naatre_store::BlobStore,
-    conn: &Db,
+    cat: &Db,
     content: &[u8],
 ) -> Result<naatre_store::blob::PutInfo, ImportError> {
     let put = cas.put(content)?;
     db::object_row_upsert(
-        conn,
+        cat,
         &put.id,
         content.len() as i64,
         put.csize as i64,
@@ -1402,7 +1474,7 @@ fn put_recorded(
 fn import_commit(
     git: &gix::Repository,
     cas: &dyn naatre_store::BlobStore,
-    conn: &Db,
+    idb: &ImportDb,
     repo_id: i64,
     repo_name: &str,
     derive: &crate::derive::DeriveRegistry,
@@ -1412,6 +1484,7 @@ fn import_commit(
     // refuse the import (a write boundary; same content hashes to the same
     // id, so an import would resurrect redacted content the purge already
     // reclaimed).
+    let conn = idb.repo_conn();
     if db::redaction_active(conn, repo_id, &p.cs_id)? {
         return Err(ImportError::Redacted(format!(
             "changeset {} is redacted in {repo_name:?}; import refused",
@@ -1432,7 +1505,7 @@ fn import_commit(
                 )));
             }
             let content = read_blob(git, git_blob)?;
-            let put = put_recorded(cas, conn, &content)?.id;
+            let put = put_recorded(cas, idb.cat(), &content)?.id;
             if put != id {
                 return Err(ImportError::Internal(format!(
                     "blob id mismatch for path {:?}: scan computed {}, CAS put {}",
@@ -1446,7 +1519,7 @@ fn import_commit(
     // Full root tree, built directly from the git tree (never by replaying
     // deltas), reusing the MemNode persist/collect machinery. Its blob
     // puts pass the same tombstone boundary.
-    let node = build_tree_node(git, cas, conn, repo_id, repo_name, p.git_tree, "")?;
+    let node = build_tree_node(git, cas, idb, repo_id, repo_name, p.git_tree, "")?;
     let (root_tree_id, _, trees) = node.collect().map_err(map_derive)?;
 
     let canonical = changeset::encode(&p.cs)?;
@@ -1503,12 +1576,13 @@ fn import_commit(
 fn build_tree_node(
     git: &gix::Repository,
     cas: &dyn naatre_store::BlobStore,
-    conn: &Db,
+    idb: &ImportDb,
     repo_id: i64,
     repo_name: &str,
     tree_oid: ObjectId,
     prefix: &str,
 ) -> Result<MemNode, ImportError> {
+    let conn = idb.repo_conn();
     let mut node = MemNode::default();
     for (name, entry) in tree_entries(Some(&find_tree(git, tree_oid)?))? {
         let name = name.to_str_lossy().into_owned();
@@ -1518,7 +1592,7 @@ fn build_tree_node(
                 let sub = build_tree_node(
                     git,
                     cas,
-                    conn,
+                    idb,
                     repo_id,
                     repo_name,
                     entry.oid,
@@ -1535,7 +1609,7 @@ fn build_tree_node(
                         blob.to_hex()
                     )));
                 }
-                let put = put_recorded(cas, conn, &content)?.id;
+                let put = put_recorded(cas, idb.cat(), &content)?.id;
                 if put != blob {
                     return Err(ImportError::Internal(format!(
                         "blob id mismatch for tree path {path:?}: computed {}, CAS put {}",
@@ -1572,7 +1646,7 @@ fn build_tree_node(
 /// Moves `main` per the graft rules. Only runs after ≥1 new commit.
 #[allow(clippy::too_many_arguments)]
 fn graft_main(
-    conn: &Db,
+    idb: &ImportDb,
     repo_id: i64,
     repo_name: &str,
     main_row: Option<&db::RefRow>,
@@ -1582,10 +1656,11 @@ fn graft_main(
     head_oid: &ObjectId,
     report: &mut Report,
 ) -> Result<(), ImportError> {
+    let conn = idb.repo_conn();
     let Some(ref_row) = main_row else {
         // Absent → set to the head of the longest importable chain.
         let target = longest_chain_head(importable, head_oid);
-        ref_move(conn, repo_id, repo_name, None, &target)?;
+        ref_move(idb, repo_id, repo_name, None, &target)?;
         report.main = "set";
         return Ok(());
     };
@@ -1615,7 +1690,7 @@ fn graft_main(
     )?;
     match chain_descending_from(conn, repo_id, importable, previous_tip, head_oid)? {
         Some(target) => {
-            ref_move(conn, repo_id, repo_name, Some(version), &target)?;
+            ref_move(idb, repo_id, repo_name, Some(version), &target)?;
             report.main = "fast-forwarded";
         }
         None => {
@@ -1698,14 +1773,15 @@ fn descends_from(
 /// Under the import flock the CAS cannot lose: import checked it is the
 /// sole writer, so any non-success outcome is a broken invariant.
 fn ref_move(
-    conn: &Db,
+    idb: &ImportDb,
     repo_id: i64,
     repo_name: &str,
     expected_version: Option<i64>,
     target: &Id,
 ) -> Result<(), ImportError> {
     let outcome = db::ref_cas_via(
-        conn,
+        idb.repo_conn(),
+        idb.cat(),
         db::RefMove {
             repo_id,
             repo_name,

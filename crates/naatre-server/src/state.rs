@@ -3,24 +3,33 @@
 //! Hard rule: all SQLite access happens inside `spawn_blocking`, under the
 //! std [`Mutex`] guard. The guard is taken and released entirely inside the
 //! blocking closure — it is never held across an `.await` (the closures
-//! handed to [`ServerState::read`] and [`ServerState::write`] must be fully
-//! synchronous, which their `'static` + non-async signatures enforce).
+//! handed to the read/write entry points must be fully synchronous, which
+//! their `'static` + non-async signatures enforce).
 //!
 //! The write side is the single-writer slot: [`ServerState::write`] takes
 //! the mutex with `try_lock` and reports contention as 503 `writer_busy`
 //! with `retryable: true` instead of queueing. Concurrent lands on the
 //! same (repo, principal, key) never reach this slot — they join in
-//! flight above it (see [`crate::land_join`]).
+//! flight above it (see [`crate::land_join`]). Since M13a the slot is
+//! PER DATABASE in the `db-per-repo` layout: [`ServerState::write_repo`]
+//! takes the repo's own slot (two repos land concurrently — the plan's
+//! M13 check) while global writes keep the catalog's slot; the sweep
+//! batches that must stay atomic across databases take every slot at once
+//! ([`ServerState::write_all`], see [`crate::router`]). The single-DB
+//! default keeps one slot for everything (single-writer, the documented
+//! profile limit).
 //!
-//! The read side is decoupled from that slot: [`ServerState::read`] runs on
-//! a small pool of read-only connections ([`ReadPool`]). SQLite WAL lets
-//! readers run beside the single writer, so auth lookups and GET handlers
-//! never contend with lands for the write slot — writer-busy 503s mean
-//! another WRITE, nothing else.
+//! The read side is decoupled from the write slots:
+//! [`ServerState::read`] runs on a small pool of read-only connections
+//! ([`crate::router::ReadPools`]). SQLite WAL lets readers run beside any
+//! writer, so auth lookups and GET handlers never contend with lands for
+//! a write slot — writer-busy 503s mean another WRITE, nothing else.
+//! Repo-scoped reads route to the repo's pooled connections
+//! ([`ServerState::read_repo`]); the aggregation passes (GC mark, fsck)
+//! walk every repo through [`ServerState::read_all`].
 
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
@@ -28,12 +37,15 @@ use naatre_store::backend::{BackendConfig, BlobKind, MetaKind};
 use naatre_store::cas::Cas;
 use naatre_store::data_dir::DataDir;
 use naatre_store::error::StoreError;
+use naatre_store::layout::Layout;
 use naatre_store::store::Store;
 use naatre_store::{BlobStore, Db, EphemeralStore, S3Store};
 
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
+use crate::db;
 use crate::land_join::LandJoins;
+use crate::router::{AllCx, CATALOG_READ_POOL_SIZE, CatSource, ReadCx, ReadPools, RepoCx, Router};
 
 /// Injectable wall clock: nanoseconds since the Unix epoch. Production uses
 /// [`system_now_ns`]; tests inject a fixed-step clock so expiry behaviour is
@@ -85,83 +97,53 @@ pub(crate) fn tick_auth_failure(inner: &mut AuthFailInner, key: &str, now_ns: u6
     true
 }
 
-/// Pool of read-only metadata connections over the same store. WAL keeps
-/// SQLite readers lock-free beside the single writer, so GET handlers and
-/// auth lookups run without touching the write slot; on Postgres each pool
-/// connection is a session set read-only (`SET
-/// default_transaction_read_only = on`), mirroring the SQLite
-/// `SQLITE_OPEN_READ_ONLY` guard. Each connection sits behind its own std
-/// [`Mutex`]; [`ReadPool::checkout`] hands them out round-robin and the
-/// guard is locked/released entirely inside the `spawn_blocking` closure
-/// (never across an `.await`).
-struct ReadPool {
-    conns: Vec<Arc<Mutex<Db>>>,
-    next: AtomicUsize,
-}
-
-/// Pool size: four readers. A read is a bounded query; four concurrent
-/// readers per connection slot keep every GET path queue-free in practice.
-const READ_POOL_SIZE: usize = 4;
-
-impl ReadPool {
-    /// Opens `size` read-only connections to the migrated database. Callers
-    /// run this AFTER [`Store::open`]: the schema must exist and the WAL
-    /// must be recovered by the read-write connection before a read-only
-    /// connection can open.
-    fn open(db_path: &Path, size: usize) -> Result<ReadPool, StoreError> {
-        let conns = (0..size)
-            .map(|_| {
-                let conn = rusqlite::Connection::open_with_flags(
-                    db_path,
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-                )
-                .map_err(StoreError::Sqlite)?;
-                conn.busy_timeout(Duration::from_millis(naatre_store::store::BUSY_TIMEOUT_MS))
-                    .map_err(StoreError::Sqlite)?;
-                Ok(Arc::new(Mutex::new(Db::Sqlite(conn))))
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        Ok(ReadPool {
-            conns,
-            next: AtomicUsize::new(0),
-        })
-    }
-
-    /// Opens `size` read-only Postgres connections from the parsed DSN.
-    /// Callers run this AFTER [`Store::open_backend`] (migrations must be
-    /// current before reads start).
-    fn open_postgres(cfg: &BackendConfig, size: usize) -> Result<ReadPool, StoreError> {
-        let pg = cfg
-            .pg
-            .as_ref()
-            .expect("open_postgres requires a parsed Postgres config");
-        let conns = (0..size)
-            .map(|_| Ok(Arc::new(Mutex::new(Db::connect_postgres(pg, true)?))))
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        Ok(ReadPool {
-            conns,
-            next: AtomicUsize::new(0),
-        })
-    }
-
-    /// The next connection, round-robin.
-    fn checkout(&self) -> Arc<Mutex<Db>> {
-        let i = self.next.fetch_add(1, Ordering::Relaxed) % self.conns.len();
-        Arc::clone(&self.conns[i])
-    }
-}
-
 /// How long a same-key land join waits for the leader's outcome before
 /// answering retryable 503 (the retry lands on the settled-row replay).
 /// Independent of [`ServerState::drain_timeout`]: a request shed at the
 /// join deadline must not be coupled to shutdown drain budgeting.
 pub const JOIN_DEADLINE: Duration = Duration::from_secs(10);
 
+/// A Postgres read pool: `size` sessions set read-only (`SET
+/// default_transaction_read_only = on`), mirroring the SQLite
+/// `SQLITE_OPEN_READ_ONLY` guard — a bug that routes a write to a pooled
+/// read connection fails loudly on both backends. Postgres never splits
+/// (the layout parser refuses db-per-repo there), so the pool fronts the
+/// one database in both layouts.
+fn open_pg_read_pool(cfg: &BackendConfig, size: usize) -> Result<ReadPools, StoreError> {
+    let pg = cfg
+        .pg
+        .as_ref()
+        .expect("open_postgres requires a parsed Postgres config");
+    let conns = (0..size)
+        .map(|_| Ok(Arc::new(Mutex::new(Db::connect_postgres(pg, true)?))))
+        .collect::<Result<Vec<_>, StoreError>>()?;
+    Ok(ReadPools::from_pg(conns))
+}
+
 /// Shared server state: the store plus server configuration.
 pub struct ServerState {
     // `Arc` so the spawn_blocking closures own their reference (they must be
-    // 'static); the lock itself is a plain std Mutex.
+    // 'static); the lock itself is a plain std Mutex. Single mode: THE
+    // store. Split mode: the catalog `Store` (global statements route
+    // here; repo statements route through the router's per-repo
+    // connections).
     store: Arc<Mutex<Store>>,
+    /// The routing layer (M13a): the per-repo write connections, the aux
+    /// catalog connection, the sweep flag, and the coordinated-batch
+    /// entry point. Single mode: present but inert (every entry point
+    /// collapses onto the store).
+    router: Arc<Router>,
+    /// The read pools: the catalog's read-only connections (single mode:
+    /// the store's pool over `naatre.db`) plus one lazily-built pool per
+    /// repo file in split mode.
+    pools: Arc<ReadPools>,
+    /// The metadata layout this state was opened with.
+    pub layout: Layout,
+    /// The schema version to report on the banner: the store's version in
+    /// single mode, the per-repo schema version ([`naatre_store::MAX_SUPPORTED`])
+    /// in split mode (the catalog's own version is `1` — the banner
+    /// reports the schema the repo files run).
+    pub schema_version: i64,
     /// History blob store over the same data dir (`ServerState::open`
     /// creates the filesystem CAS; `open_backend` swaps in the configured
     /// backend behind the trait). Blocking CAS work goes through
@@ -183,9 +165,6 @@ pub struct ServerState {
     /// only, no store access; the guard mutex is never held across an
     /// `.await` (see [`crate::land_join`]).
     pub(crate) land_joins: LandJoins,
-    /// Read-only connection pool backing [`ServerState::read`]; WAL lets
-    /// these run beside the single writer without touching the write slot.
-    read_pool: ReadPool,
     /// Data dir path for the startup banner. Banner and log facts are paths
     /// and versions only — naatre has no credentials yet, and the standing
     /// rule is that none (DSNs, tokens, keys) may ever reach the banner,
@@ -324,12 +303,20 @@ impl ServerState {
         // connection recovers the WAL before any read-only connection
         // opens (a read-only connection cannot run recovery).
         let store = Arc::new(Mutex::new(Store::open(data)?));
-        let read_pool = ReadPool::open(&db_path, READ_POOL_SIZE)?;
+        let schema_version = {
+            let guard = store.lock().unwrap_or_else(PoisonError::into_inner);
+            naatre_store::store::schema_version(guard.conn())
+        };
+        let pools = Arc::new(ReadPools::open(&db_path)?);
+        let router = Arc::new(Router::new(Layout::Single, &data_dir_display));
         Ok(Self {
             meta_backend: MetaKind::Sqlite.as_str(),
             blob_backend: BlobKind::Fs.as_str(),
             store,
-            read_pool,
+            router,
+            pools,
+            layout: Layout::Single,
+            schema_version,
             cas,
             ephemeral,
             clock: Arc::new(system_now_ns),
@@ -388,18 +375,51 @@ impl ServerState {
                 (s3.clone(), s3)
             }
         };
-        // The write store opens first: migrations run there (and SQLite's
-        // WAL is recovered) before any read-only connection opens.
-        let store = Arc::new(Mutex::new(Store::open_backend(data, cfg)?));
-        let read_pool = match cfg.meta {
-            MetaKind::Sqlite => ReadPool::open(&db_path, READ_POOL_SIZE)?,
-            MetaKind::Postgres => ReadPool::open_postgres(cfg, READ_POOL_SIZE)?,
+        // The layout decides which file the "store" connection fronts:
+        // single mode opens `naatre.db` (every table); db-per-repo opens
+        // the CATALOG (the global tables + repo registry) and the
+        // per-repo connections come from the router on demand. The
+        // config/data-dir layout agreement was checked upstream.
+        let (store, schema_version, pools, router) = match cfg.layout {
+            Layout::Single => {
+                // The write store opens first: migrations run there (and
+                // SQLite's WAL is recovered) before any read-only
+                // connection opens.
+                let store = Arc::new(Mutex::new(Store::open_backend(data, cfg)?));
+                let schema_version = {
+                    let guard = store.lock().unwrap_or_else(PoisonError::into_inner);
+                    naatre_store::store::schema_version(guard.conn())
+                };
+                let pools = match cfg.meta {
+                    MetaKind::Sqlite => Arc::new(ReadPools::open(&db_path)?),
+                    MetaKind::Postgres => Arc::new(open_pg_read_pool(cfg, CATALOG_READ_POOL_SIZE)?),
+                };
+                let router = Arc::new(Router::new(Layout::Single, &data_dir_display));
+                (store, schema_version, pools, router)
+            }
+            Layout::DbPerRepo => {
+                // The catalog opens first (its migrations run; the WAL is
+                // recovered) before its read pool builds. The per-repo
+                // files were migrated when their rows were written
+                // (repo-create / the migration command); their read pools
+                // build lazily on first use.
+                let store = Arc::new(Mutex::new(Store::open_catalog(data)?));
+                let pools = Arc::new(ReadPools::open_split(
+                    &data_dir_display.join(naatre_store::layout::CATALOG_FILE),
+                    data_dir_display.clone(),
+                )?);
+                let router = Arc::new(Router::new(Layout::DbPerRepo, &data_dir_display));
+                (store, naatre_store::MAX_SUPPORTED, pools, router)
+            }
         };
         Ok(Self {
             meta_backend: cfg.meta.as_str(),
             blob_backend: cfg.blob.as_str(),
             store,
-            read_pool,
+            router,
+            pools,
+            layout: cfg.layout,
+            schema_version,
             cas,
             ephemeral,
             clock: Arc::new(system_now_ns),
@@ -476,21 +496,22 @@ impl ServerState {
         (inner.global_count, inner.rows_written)
     }
 
-    /// Runs a read-only closure against the store off the async runtime, on
-    /// a pooled read-only connection ([`ReadPool`]): reads never take the
-    /// single-writer slot.
+    /// Runs a read-only closure against the CATALOG off the async runtime,
+    /// on a pooled read-only connection: reads never take a write slot.
+    /// Single mode the catalog is the store; split mode this is
+    /// `catalog.db` — repo-scoped reads go through [`ServerState::read_repo`].
     ///
     /// The blocking wait is pool-wait only: the checkout lands on one of
-    /// `READ_POOL_SIZE` connections round-robin, and the std [`Mutex`] on
-    /// that connection is held for the length of one read. It is NOT
-    /// bounded by the store's `busy_timeout` — that governs SQLite-level
-    /// WRITE contention, which this pool never enters.
+    /// `CATALOG_READ_POOL_SIZE` connections round-robin, and the std
+    /// [`Mutex`] on that connection is held for the length of one read. It
+    /// is NOT bounded by the store's `busy_timeout` — that governs
+    /// SQLite-level WRITE contention, which this pool never enters.
     pub async fn read<T, F>(&self, f: F) -> Result<T, ApiError>
     where
         F: FnOnce(&Db) -> Result<T, ApiError> + Send + 'static,
         T: Send + 'static,
     {
-        let conn = self.read_pool.checkout();
+        let conn = self.pools.checkout_cat();
         tokio::task::spawn_blocking(move || {
             let guard = conn.lock().unwrap_or_else(PoisonError::into_inner);
             f(&guard)
@@ -500,6 +521,221 @@ impl ServerState {
             tracing::error!(error = %join, "store blocking task panicked");
             ApiError::internal()
         })?
+    }
+
+    /// Resolves a repo name on the catalog's read pool: `Some((id,))` or
+    /// `None` — the same lookup `repo_id_or_404` wraps, exposed for the
+    /// callers whose 404-vs-none contract differs from the routes'.
+    pub(crate) async fn resolve_repo(&self, name: &str) -> Result<Option<i64>, ApiError> {
+        let name = name.to_string();
+        self.read(move |conn| db::repo_id_by_name(conn, &name).map_err(ApiError::log_internal))
+            .await
+    }
+
+    /// Runs a repo-scoped read-only closure against THAT REPO's pooled
+    /// read-only connection. The repo resolves on the catalog first
+    /// (missing → 404 `repo_not_found`, the routes' contract); the
+    /// closure then sees the repo's id ([`RepoCx::id`]), the repo's
+    /// connection ([`RepoCx::db`]), and per-call catalog access
+    /// ([`RepoCx::cat`]) for the occasional global read inside a
+    /// repo-scoped handler. Single mode: one pool connection is both
+    /// `db` and `cat` — the pre-M13a shape.
+    pub async fn read_repo<T, F>(
+        &self,
+        repo: impl Into<String> + Send + 'static,
+        f: F,
+    ) -> Result<T, ApiError>
+    where
+        F: FnOnce(&RepoCx<'_>) -> Result<T, ApiError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let repo = repo.into();
+        let id = match self.resolve_repo(&repo).await? {
+            Some(id) => id,
+            None => {
+                return Err(ApiError::new(
+                    ApiCode::RepoNotFound,
+                    format!("no repo named {repo:?} on this server"),
+                ));
+            }
+        };
+        let pools = Arc::clone(&self.pools);
+        let router = Arc::clone(&self.router);
+        let split = router.is_split();
+        let repo_cat = if split {
+            Some(pools.checkout_cat())
+        } else {
+            None
+        };
+        let repo_conn = if split {
+            Some(pools.checkout_repo(id).map_err(ApiError::log_internal)?)
+        } else {
+            // Single mode: one pool connection plays both roles.
+            None
+        };
+        let single_conn = if split {
+            None
+        } else {
+            Some(pools.checkout_cat())
+        };
+        tokio::task::spawn_blocking(move || {
+            // The repo connection (split: the repo's read pool; single:
+            // one pool conn plays both the repo and catalog roles) and
+            // the catalog conn (split: a catalog-pool conn, locked per
+            // call via `RepoCx::cat`; single: the same conn). The Arcs
+            // live on this stack; the guards borrow them.
+            let repo_arc = if split {
+                repo_conn.expect("split mode carries the repo conn")
+            } else {
+                single_conn.expect("single mode carries the pool conn")
+            };
+            let repo_guard = repo_arc.lock().unwrap_or_else(PoisonError::into_inner);
+            let repo_cat_arc = repo_cat; // Option<Arc>; borrowed below
+            let cx = match repo_cat_arc.as_ref() {
+                Some(cat_arc) => RepoCx::new(id, &repo_guard, CatSource::Pooled(cat_arc)),
+                None => RepoCx::new(id, &repo_guard, CatSource::Same),
+            };
+            f(&cx)
+        })
+        .await
+        .map_err(|join| {
+            tracing::error!(error = %join, "store blocking task panicked");
+            ApiError::internal()
+        })?
+    }
+
+    /// [`ServerState::read_repo`] for callers whose contract is
+    /// `Ok(None)` on a missing repo (not the routes' 404).
+    pub async fn read_repo_opt<T, F>(
+        &self,
+        repo: impl Into<String> + Send + 'static,
+        f: F,
+    ) -> Result<Option<T>, ApiError>
+    where
+        F: FnOnce(&RepoCx<'_>) -> Result<T, ApiError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let repo = repo.into();
+        if self.resolve_repo(&repo).await?.is_none() {
+            return Ok(None);
+        }
+        self.read_repo(repo, f).await.map(Some)
+    }
+
+    /// Runs a repo-scoped MUTATING closure under THAT REPO's write slot
+    /// (per-repo single-writer; a second writer of the same repo answers
+    /// retryable 503 `writer_busy`, a DIFFERENT repo's writer proceeds —
+    /// the plan's M13 concurrency shape). The repo resolves on the
+    /// catalog read pool first (missing → 404). While a coordinated
+    /// sweep batch holds the slots ([`ServerState::write_all`]), repo
+    /// writes refuse up front with the same retryable `writer_busy` —
+    /// the single-DB contention shape. The closure's incidental catalog
+    /// writes (audit rows, `objects` upserts) go through
+    /// [`RepoCx::cat`], per statement. Single mode: the store slot, one
+    /// connection for both roles — behaviorally the old `state.write`.
+    pub async fn write_repo<T, F>(
+        &self,
+        repo: impl Into<String> + Send + 'static,
+        f: F,
+    ) -> Result<T, ApiError>
+    where
+        F: FnOnce(&RepoCx<'_>) -> Result<T, ApiError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let repo = repo.into();
+        let id = match self.resolve_repo(&repo).await? {
+            Some(id) => id,
+            None => {
+                return Err(ApiError::new(
+                    ApiCode::RepoNotFound,
+                    format!("no repo named {repo:?} on this server"),
+                ));
+            }
+        };
+        let store = Arc::clone(&self.store);
+        let router = Arc::clone(&self.router);
+        let split = router.is_split();
+        tokio::task::spawn_blocking(move || {
+            if split {
+                if router.sweep_in_flight() {
+                    return Err(ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true));
+                }
+                let aux = router.aux_conn().map_err(ApiError::log_internal)?;
+                let repo = router.repo_write_conn(id).map_err(ApiError::log_internal)?;
+                let guard = match repo.try_lock() {
+                    Ok(guard) => guard,
+                    Err(TryLockError::WouldBlock) => {
+                        return Err(
+                            ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true)
+                        );
+                    }
+                    Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                };
+                let cx = RepoCx::new(id, &guard, CatSource::Pooled(&aux));
+                let out = f(&cx);
+                drop(guard);
+                out
+            } else {
+                let guard = match store.try_lock() {
+                    Ok(guard) => guard,
+                    Err(TryLockError::WouldBlock) => {
+                        return Err(
+                            ApiError::new(ApiCode::WriterBusy, "writer busy").retryable(true)
+                        );
+                    }
+                    Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                };
+                let cx = RepoCx::new(id, guard.conn(), CatSource::Same);
+                f(&cx)
+            }
+        })
+        .await
+        .map_err(|join| {
+            tracing::error!(error = %join, "store blocking task panicked");
+            ApiError::internal()
+        })?
+    }
+
+    /// Runs the multi-repo READ pass ([`ReadCx`]): the catalog connection
+    /// plus per-repo checkouts, so the aggregation closures (GC mark,
+    /// fsck inventory, the purge probes) can walk every repo through the
+    /// registry and union the result in memory. Never touches a write
+    /// slot.
+    pub async fn read_all<T, F>(&self, f: F) -> Result<T, ApiError>
+    where
+        F: FnOnce(&ReadCx<'_>) -> Result<T, ApiError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let pools = Arc::clone(&self.pools);
+        tokio::task::spawn_blocking(move || {
+            let cx = ReadCx::new(&pools);
+            f(&cx)
+        })
+        .await
+        .map_err(|join| {
+            tracing::error!(error = %join, "store blocking task panicked");
+            ApiError::internal()
+        })?
+    }
+
+    /// Runs a coordinated WRITE batch ([`AllCx`]): the catalog slot plus
+    /// every repo slot, held together so the sweep-side re-verify + delete
+    /// stays atomic across databases. Single mode: the plain store slot.
+    /// Contention anywhere answers retryable 503 `writer_busy` (the GC's
+    /// batched loops end the pass; the next tick retries).
+    pub async fn write_all<T, F>(&self, f: F) -> Result<T, ApiError>
+    where
+        F: FnOnce(&mut AllCx<'_>) -> Result<T, ApiError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let store = Arc::clone(&self.store);
+        let router = Arc::clone(&self.router);
+        tokio::task::spawn_blocking(move || router.with_all(&store, f))
+            .await
+            .map_err(|join| {
+                tracing::error!(error = %join, "store blocking task panicked");
+                ApiError::internal()
+            })?
     }
 
     /// Runs a mutating closure against the store off the async runtime.

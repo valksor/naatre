@@ -12,7 +12,7 @@ use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
 use crate::db;
 use crate::extract::AppJson;
-use crate::routes::{ListQuery, parse_limit, repo_id_or_404};
+use crate::routes::{ListQuery, parse_limit};
 use crate::state::AppState;
 
 /// One repo in a listing page.
@@ -157,9 +157,16 @@ async fn create_inner(
 ) -> Result<(i64, String), ApiError> {
     require_role(auth, Role::Admin)?;
     validate_repo_name(&body.name)?;
+    let data_dir = state.data_dir_display.display().to_string();
     let name = body.name.clone();
     let now_ns = state.now_ns() as i64;
     let principal = auth.principal.clone();
+    // In db-per-repo mode the create also materializes the repo's own
+    // SQLite file, under the same catalog slot (the registry row and the
+    // file appear together — the catalog's serialization point; a crash
+    // between file and row leaves an empty file the row's first access
+    // reopens, never an unbacked row).
+    let split = state.layout == naatre_store::Layout::DbPerRepo;
     let id = state
         .write(move |store| {
             let conn = store.conn();
@@ -173,6 +180,15 @@ async fn create_inner(
                 ));
             }
             let id = db::repos_create(conn, &name, now_ns).map_err(ApiError::log_internal)?;
+            if split {
+                let path = naatre_store::layout::repo_db_path(std::path::Path::new(&data_dir), id);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        ApiError::log_internal(std::io::Error::other(format!("repo db dir: {e}")))
+                    })?;
+                }
+                naatre_store::store::open_repo_db(&path).map_err(ApiError::log_internal)?;
+            }
             db::audit_append(
                 conn,
                 now_ns,
@@ -224,9 +240,29 @@ pub async fn stats(
     Path(name): Path<String>,
 ) -> Result<Json<RepoStats>, ApiError> {
     require_role(&auth, Role::Admin)?;
-    let repo_id = repo_id_or_404(&state, &name).await?;
+    // The counters split across the two connections: the changeset count
+    // and the tombstone exclusion are repo-side; the `objects` sums are
+    // catalog-side (chunked IN-lists over this repo's membership ids).
+    let repo_for_stats = name.clone();
     let (changesets, objects, bytes, cbytes) = state
-        .read(move |conn| db::repo_stats(conn, repo_id).map_err(ApiError::log_internal))
+        .read_repo(repo_for_stats, move |cx| {
+            let repo_id = cx.id;
+            let changesets: i64 =
+                db::repo_changeset_count(cx.db, repo_id).map_err(ApiError::log_internal)?;
+            let excluded: std::collections::HashSet<naatre_core::ids::Id> =
+                db::redaction_ids_repo(cx.db)
+                    .map_err(ApiError::log_internal)?
+                    .into_iter()
+                    .collect();
+            let members: Vec<naatre_core::ids::Id> = db::gc_repo_blobs(cx.db, repo_id)
+                .map_err(ApiError::log_internal)?
+                .into_iter()
+                .filter(|id| !excluded.contains(id))
+                .collect();
+            let (objects, bytes, cbytes) =
+                db::repo_object_sums(&cx.cat(), &members).map_err(ApiError::log_internal)?;
+            Ok((changesets, objects, bytes, cbytes))
+        })
         .await?;
     Ok(Json(RepoStats {
         changesets: changesets as u64,

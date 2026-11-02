@@ -399,29 +399,24 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
     // The async closures are 'static: own the verb's strings.
     let (repo, reason) = (repo.to_string(), reason.to_string());
     match block_on_state(data, |state| async move {
-        let repo_id = state
-            .read({
-                let repo = repo.clone();
-                move |conn| {
-                    db::repo_id_by_name(conn, &repo)
-                        .map_err(ApiError::log_internal)?
-                        .ok_or_else(|| {
-                            ApiError::new(
-                                naatre_server::api_code::ApiCode::RepoNotFound,
-                                format!("no repo named {repo:?} on this server"),
-                            )
-                        })
-                }
-            })
-            .await?;
         // The target must be a real object of this repo, or an already-
         // tombstoned id (the re-arm target) — the route's contract, the
-        // import-aware presence arms included.
+        // import-aware presence arms included. The probe, split across the
+        // two connections: the repo-side shapes on the repo's connection,
+        // the plain `objects` row (blob kind only) on the catalog.
         let kind_for_probe = kind.clone();
+        let repo_for_probe = repo.clone();
         let exists = state
-            .read(move |conn| {
-                db::redaction_target_present(conn, repo_id, &id, &kind_for_probe)
-                    .map_err(ApiError::log_internal)
+            .read_repo(repo_for_probe, move |cx| {
+                let present = db::redaction_target_present_repo(cx.db, cx.id, &id, &kind_for_probe)
+                    .map_err(ApiError::log_internal)?;
+                if present {
+                    return Ok(true);
+                }
+                if kind_for_probe == "blob" {
+                    return db::object_row_exists(&cx.cat(), &id).map_err(ApiError::log_internal);
+                }
+                Ok(false)
             })
             .await?;
         if !exists {
@@ -431,56 +426,40 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
             ));
         }
         let now_ns = state.now_ns() as i64;
+        let repo_for_mark = repo.clone();
         let marked = state
-            .write(move |store| {
-                let conn = store.conn();
+            .write_repo(repo_for_mark, move |cx| {
+                let repo_id = cx.id;
+                let conn = cx.db;
                 // Immediate: the same destructive-write lock class as the
-                // route's mark.
+                // route's mark (the repo's slot; the audit row rides the
+                // catalog after the commit — the route's ordering).
                 let tx = conn
                     .transaction_immediate()
                     .map_err(ApiError::log_internal)?;
                 let outcome = db::redaction_mark(&tx, repo_id, &id, &kind, now_ns)
                     .map_err(ApiError::log_internal)?;
-                match &outcome {
-                    db::RedactionMarkOutcome::Inserted(_) => {
-                        db::redaction_invalidate_derived(&tx, repo_id, &id)
-                            .map_err(ApiError::log_internal)?;
-                        db::audit_append(
-                            &tx,
-                            now_ns,
-                            "admin",
-                            "redact",
-                            &serde_json::json!({
-                                "repo": repo,
-                                "id": id.to_hex(),
-                                "kind": kind,
-                                "reason": reason,
-                            })
-                            .to_string(),
-                        )
+                if matches!(outcome, db::RedactionMarkOutcome::Inserted(_)) {
+                    db::redaction_invalidate_derived(&tx, repo_id, &id)
                         .map_err(ApiError::log_internal)?;
-                    }
-                    db::RedactionMarkOutcome::Rearmed(_) => {
-                        db::audit_append(
-                            &tx,
-                            now_ns,
-                            "admin",
-                            "redact",
-                            &serde_json::json!({
-                                "repo": repo,
-                                "id": id.to_hex(),
-                                "kind": kind,
-                                "reason": reason,
-                                "rearmed": true,
-                            })
-                            .to_string(),
-                        )
-                        .map_err(ApiError::log_internal)?;
-                    }
-                    db::RedactionMarkOutcome::Existing(_)
-                    | db::RedactionMarkOutcome::KindMismatch { .. } => {}
                 }
+                let rearmed = matches!(outcome, db::RedactionMarkOutcome::Rearmed(_));
                 tx.commit().map_err(ApiError::log_internal)?;
+                // The audit row: catalog-side, after the tombstone's
+                // commit; it rides the 0→1 transition and the re-arm.
+                if matches!(outcome, db::RedactionMarkOutcome::Inserted(_)) || rearmed {
+                    let mut details = serde_json::json!({
+                        "repo": repo,
+                        "id": id.to_hex(),
+                        "kind": kind,
+                        "reason": reason,
+                    });
+                    if rearmed {
+                        details["rearmed"] = serde_json::json!(true);
+                    }
+                    db::audit_append(&cx.cat(), now_ns, "admin", "redact", &details.to_string())
+                        .map_err(ApiError::log_internal)?;
+                }
                 Ok(outcome)
             })
             .await?;
@@ -633,6 +612,52 @@ pub fn fsck(data: &Path, json: bool, repair: bool) -> i32 {
             fail(e);
             2
         }
+    }
+}
+
+/// `naatre migrate-db-per-repo --data <dir>`: the offline adoption (M13a).
+/// Prints the per-repo copy report (rows per table), the catalog totals,
+/// the fsck verdict, and the cutover steps. Exit 0 migrated, 1 error.
+pub fn migrate_db_per_repo(data: &Path) -> i32 {
+    let cfg = match load_backend_or_fail(data) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    match naatre_server::adopt::adopt_db_per_repo(data, &cfg) {
+        Ok(report) => {
+            println!(
+                "migrate-db-per-repo: catalog built at {}/catalog.db",
+                data.display()
+            );
+            for repo in &report.repos {
+                let total: usize = repo.rows.iter().map(|(_, n)| n).sum();
+                println!(
+                    "migrate-db-per-repo: repo {:?} (id {}) -> {} ({} rows, {} tables)",
+                    repo.name,
+                    repo.id,
+                    repo.db_file,
+                    total,
+                    repo.rows.len(),
+                );
+            }
+            for (table, n) in &report.catalog_rows {
+                println!("migrate-db-per-repo: catalog {table}: {n} row(s)");
+            }
+            println!(
+                "migrate-db-per-repo: row-count parity verified; fsck: {}",
+                if report.fsck_clean {
+                    "clean"
+                } else {
+                    "FINDINGS"
+                }
+            );
+            println!("migrate-db-per-repo: the original naatre.db is UNTOUCHED — cutover steps:");
+            for step in naatre_server::adopt::CUTOVER_STEPS {
+                println!("  {step}");
+            }
+            0
+        }
+        Err(e) => fail(e),
     }
 }
 
