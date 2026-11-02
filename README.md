@@ -324,6 +324,105 @@ dir erases only the blobs and config; the metadata erasure story is the
 Postgres deployment's (drop the database, and its backups). The S3 CAS
 (M9b) extends this to blob contents.
 
+## Repo access: private repos (M13b)
+
+Repos are **public** by default (every authenticated principal reads, the
+original behavior). `naatre repo access grant <repo> <principal> --read`
+(or `--write`, which implies read) makes the repo **private**: from that
+call on, non-readers meet the SAME `404 repo_not_found` on EVERY
+repo-scoped route — as if the repo did not exist — and the repo drops out
+of `GET /v1/repos` (admins still see everything). `revoke --write`
+downgrades to read-only; `revoke --read` removes the grant entirely
+(write cannot stand without read — the server refuses a write-only grant
+with 422 rather than silently upgrading it). Removing the repo's LAST
+grant returns it to public; that is a deliberate act of the operator, not
+a leak. Grants name existing principals (unknown principal → 422), are
+audited (`access_grant` / `access_revoke` in the audit log), and have an
+admin HTTP surface: `GET/PUT /v1/repos/{r}/access`,
+`DELETE /v1/repos/{r}/access/{principal}`.
+
+```sh
+naatre repo access grant demo alice --read
+naatre repo access grant demo alice --write     # implies read
+naatre repo access revoke demo alice --write    # downgrade to read-only
+naatre repo access revoke demo alice            # remove entirely (repo back to public if this was the last grant)
+naatre repo access list demo
+```
+
+**ACL-change staleness is bounded by the cache-ticket TTL** (see the next
+section): a ticket minted before a repo goes private cannot outlive its
+≤15-minute lifetime. Direct bearer-token access has NO such window — the
+gate runs on every request.
+
+## The cache tier (M13b)
+
+`naatre cache` runs a LAN-side read cache for **immutable by-id object
+reads only**. It serves exactly one data route — `GET /v1/objects/{id}` —
+and refuses everything else (refs, logs, writes are never proxied; point
+them at the origin). Deployment story:
+
+```sh
+# On the ORIGIN (the server's data dir is the trust boundary, 0700):
+naatre cache-key init --data /srv/naatre        # generates the signing pair once
+# Copy the PUBLIC verify list to the cache host (it carries no secrets):
+scp /srv/naatre/cache_keys.json cachehost:keys/
+
+# On the CACHE host:
+naatre cache --origin http://origin:7400 --key ./keys/cache_keys.json \
+    --listen 127.0.0.1:7500 --data /srv/naatre-cache
+# Clients point their object fetches at the tier:
+export NAATRE_CACHE_URL=http://cachehost:7500
+```
+
+How it stays honest:
+
+- **Tickets, verified before any byte.** The origin signs an Ed25519
+  ticket bound to (principal, repo, one root tree, expiry) whenever a
+  client needs one (`POST /v1/repos/{r}/tickets`; the CLI mints
+  automatically when `NAATRE_CACHE_URL` is set). The tier verifies the
+  signature, the key id, the shape, and the expiry — all BEFORE touching
+  its store or the origin. The lifetime is capped at **15 minutes at
+  mint AND at verify** (a signed-but-over-cap ticket is refused), so a
+  repo made private cannot stay readable through the tier for more than
+  one ticket lifetime.
+- **Fail-closed startup.** No verify keys, no serve: the tier exits with
+  an error before binding. Rotating the origin key
+  (`naatre cache-key rotate --data …`, audited) retires the old key but
+  keeps it in the verify list — its unexpired tickets still verify until
+  their ≤15-min expiry, then stop; restart the tier to load the rotated
+  list.
+- **Membership is the M1 `repo_blobs` rule, enforced at the tier.** The
+  tier holds, per (repo, root tree), the origin's membership walk: every
+  blob under the tree that the repo references and does not tombstone. An
+  id outside the set answers the same `404 object_not_found` a
+  cross-repo id gets at the origin — a blob warmed under one ticket is
+  refused under another's narrower scope, never served.
+- **Negative caching is forbidden.** A miss or a refusal is never stored;
+  every miss's authority is the origin's own gated answer, fetched per
+  request.
+- **The tombstone epoch is revalidated at serve** (the M10 mechanism):
+  on every serve from the store the tier probes the origin's epoch
+  endpoint; a changed epoch (any tombstone event) drops the snapshot,
+  refetches membership, and delegates the fetch to the origin — so a
+  blob redacted after warming answers `410 object_redacted` through the
+  tier and its local copy is deleted. The origin also excludes
+  tombstoned ids from every membership walk, so a tombstoned id never
+  even mints into scope.
+- **Corrupt local store → origin fallback.** Every cache hit is
+  hash-verified (`cas.get` verifies the BLAKE3 address); a corrupted
+  shard is refetched from the origin, re-verified, and rewritten — a
+  cache never serves bytes that do not hash.
+- **The tier is a bandwidth cache, not an availability tier.** The
+  per-serve epoch probe is what makes the tombstone guarantee
+  unconditional, so an origin outage answers `503 origin_unreachable`
+  (retryable) rather than an un-revalidated hit. The CLI falls back to
+  the origin's batch fetch when the tier misbehaves (bounded: it warns
+  and goes direct for the rest of the run).
+
+Cache erasure: a redacted id's bytes are deleted from the tier on its
+next serve (the 410 path); destroying the tier's data dir erases its
+whole store (pure content-addressed blobs, no metadata — always safe).
+
 ## Garbage collection and fsck
 
 `serve` runs a reachability GC pass hourly (off-switch/interval:
@@ -779,6 +878,8 @@ a generic message + `request_id` only.
 | `blame_too_large` | 503 | blame exceeded a structural read cap; not retryable |
 | `request_timeout` | 503 | request shed at the 30 s budget; retry |
 | `server_busy` | 503 | at the concurrent-request cap; retry |
+| `origin_unreachable` | 503 | the cache tier could not reach its origin (a miss fetch or an epoch revalidation); retry — the tier never serves un-revalidated bytes (M13b) |
+| `cache_disabled` | 503 | ticket minting is not configured on this origin (no signing key: run `naatre cache-key init`); not retryable (M13b) |
 | `internal` | 500 | internal error; specifics stay in server logs |
 
 Retryable 503s carry `Retry-After: 1`; back off and retry. The bundled CLI
@@ -892,10 +993,16 @@ erasure, and naatre does not have one).
 
 **Client-side copies sit outside every server-side purge**: the mount
 hydrate cache (`~/.cache/naatre/mounts/…` — persistent, no TTL, only
-LRU-capped) and every clone's working copy hold plaintext blob content
-that is user/operator-owned. Server-side erasure — redaction purge, GC,
-data-dir destruction — never reaches those; erasing them is the client
-machine's own story.
+LRU-capped), every clone's working copy, and — since M13b — the `naatre
+cache` tier's own store hold plaintext blob content that is
+user/operator-owned. Server-side erasure — redaction purge, GC, data-dir
+destruction — never reaches those; erasing them is the owning machine's
+own story. The cache tier honors the redaction gate at every serve (the
+tombstone epoch revalidation), so redacted content stops SERVING through
+the tier immediately (the stale local copy is deleted on the refused
+serve), but its bytes persist on the cache host until that next serve or
+until the operator destroys the tier's data dir (pure content-addressed
+blobs, no metadata — destroying it is always safe).
 
 **External metadata changes the erasure surface**: with
 `meta = "postgres"` the rows above (and the append-only `audit_log`) live

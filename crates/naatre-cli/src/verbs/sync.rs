@@ -28,7 +28,9 @@ use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::client::HttpError;
-use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree_allowing_missing_prefixes};
+use crate::wc::fetch::{
+    CacheRoute, fetch_blobs_verified, materialize, walk_tree_allowing_missing_prefixes,
+};
 use crate::wc::{State, Wc, remove_and_prune, under_sparse};
 
 /// The build's conflicted-node capability (M12b): this client understands
@@ -365,7 +367,11 @@ pub(crate) fn apply_tree_diff(
     }
     unavailable.sort();
     unavailable.dedup();
-    let blobs = fetch_blobs_verified(client, repo, &to_fetch)?;
+    // M13b: NAATRE_CACHE_URL routes the by-id fetches through the tier
+    // (per-run route; sync and the land working-copy update share this
+    // ONE materialization path, so both get the tier).
+    let mut cache = CacheRoute::from_env();
+    let blobs = fetch_blobs_verified(client, repo, &target_root, &to_fetch, &mut cache)?;
 
     // Every incoming blob is fetched and hash-verified, so --force can now
     // discard exactly the colliders the gate named — a failed fetch above

@@ -9,6 +9,7 @@ use utoipa::ToSchema;
 use naatre_core::ids::Id;
 use naatre_store::Db;
 
+use super::repo_read_gate;
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::AuthedPrincipal;
@@ -75,9 +76,10 @@ pub struct TreeResponse {
 )]
 pub async fn get_tree(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<TreeResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let id = Id::from_hex(&id_hex).ok_or_else(|| {
         ApiError::new(ApiCode::Malformed, "id must be 64 lowercase hex characters")
     })?;

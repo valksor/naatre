@@ -57,6 +57,24 @@ under a valid signature FAILS the checksum check. To rotate the production
 key, generate a new pair, replace the published `.pub`, and announce the
 change on the release channel.
 
+## The cache-tier ticket signing key (M13b)
+
+The origin's cache-ticket signing material lives in the data dir:
+`cache_signing.pkcs8` (the Ed25519 secret, 0600) beside
+`cache_keys.json` (the PUBLIC verify list — current + retired keys, each
+with its id). The data dir is the trust boundary (the same boundary as
+the token store): anything that can read the data dir can mint tickets.
+The verify list carries no secrets and is the file operators copy to
+`naatre cache` tiers; a tier holds NO secret material and NO origin
+token — its whole authority is verifying ticket signatures. Rotation
+(`naatre cache-key rotate`, host-local and audited) retires the old key
+but keeps its public half verifying until the ≤15-minute ticket TTL
+drains outstanding tickets; restart tiers after copying the rotated
+list. Ticket-presenting requests travel as `Authorization: NaatreTicket`
+headers — bearer tokens do NOT flow to the tier — so a TLS-fronted
+deployment protects ticket traffic the same way it protects token
+traffic (README "TLS and reverse proxies").
+
 ## Scope notes
 
 - The **data dir is the trust boundary** (deployed 0700): anything that

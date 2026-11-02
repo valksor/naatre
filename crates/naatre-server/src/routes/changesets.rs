@@ -25,6 +25,7 @@ use naatre_core::error::CoreError;
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::path::PathError;
 
+use super::{repo_read_gate, repo_write_gate};
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
@@ -152,6 +153,7 @@ pub async fn create(
     Path(repo): Path<String>,
     body: AppJson<CreateChangesetRequest>,
 ) -> Result<Response, ApiError> {
+    repo_write_gate(&state, &auth, &repo).await?;
     let created = create_inner(&state, &auth, &repo, body.0).await?;
     Ok((
         StatusCode::CREATED,
@@ -599,9 +601,10 @@ fn map_derive(e: crate::tree_derive::DeriveError) -> ApiError {
 )]
 pub async fn get_changeset(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<ChangesetResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let id = parse_id(&id_hex)?;
     let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
     let repo_name = repo.clone();
@@ -719,9 +722,10 @@ pub async fn get_changeset(
 )]
 pub async fn get_root(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<ChangesetRootResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let id = parse_id(&id_hex)?;
     let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
     let repo_name = repo.clone();

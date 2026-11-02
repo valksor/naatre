@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::{Net, VerbError};
 use crate::client::{Client, DEFAULT_URL, uri_segment};
-use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree};
+use crate::wc::fetch::{CacheRoute, fetch_blobs_verified, materialize, walk_tree};
 use crate::wc::index::Index;
 use crate::wc::{Config, StageDir, State};
 
@@ -138,7 +138,9 @@ pub fn value(
     let files = walk.files;
     let unavailable = walk.redacted;
     let blob_ids: Vec<Id> = files.iter().map(|f| f.blob).collect();
-    let blobs = fetch_blobs_verified(&client, &repo, &blob_ids)?;
+    // M13b: NAATRE_CACHE_URL routes the by-id fetches through the tier.
+    let mut cache = CacheRoute::from_env();
+    let blobs = fetch_blobs_verified(&client, &repo, &root_tree, &blob_ids, &mut cache)?;
 
     // Materialize into staging; atomic rename onto the destination.
     let stage = StageDir::beside(dest)

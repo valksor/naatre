@@ -33,6 +33,16 @@ base64 = "0.22"
 # same crate/version the workspace already resolves (the test harnesses
 # pin it) — no new external code enters the lockfile.
 sha2 = "0.10"
+# Origin-signed cache tickets (M13b): Ed25519 sign/verify via
+# `ring::signature`. ring is ALREADY in the dependency graph (rustls and
+# quinn-proto ride object_store's aws feature in naatre-store), so this
+# direct dependency adds zero new crates to Cargo.lock — the M13b
+# dependency decision over ed25519-dalek (which would add five).
+ring = "0.17"
+# The cache tier's origin client (M13b): the same blocking client and
+# version pin the CLI's verbs use — no new external crate (ureq is
+# naatre-cli's pinned HTTP client already).
+ureq = { version = "3", default-features = false, features = ["json"] }
 
 [dev-dependencies]
 tempfile = "3"

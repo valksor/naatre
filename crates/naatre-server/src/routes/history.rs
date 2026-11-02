@@ -16,6 +16,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use naatre_core::ids::Id;
 
+use super::repo_read_gate;
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::AuthedPrincipal;
@@ -93,10 +94,12 @@ pub struct LogResponse {
 )]
 pub async fn log(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
+
     Query(q): Query<LogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     if let Some(path) = &q.path {
         // The path-history surface: the log-page shape plus the derived-
         // read contract fields, carried in a dedicated response type so
@@ -443,10 +446,11 @@ pub struct DiffResponse {
 )]
 pub async fn diff(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     Query(q): Query<DiffQuery>,
 ) -> Result<Json<DiffResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let a = parse_id(&q.a)?;
     let b = parse_id(&q.b)?;
     let entries = state
@@ -609,10 +613,11 @@ pub struct MergeBaseResponse {
 )]
 pub async fn merge_base(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     Query(q): Query<DiffQuery>,
 ) -> Result<Json<MergeBaseResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let a = parse_id(&q.a)?;
     let b = parse_id(&q.b)?;
     let base = state
@@ -1080,10 +1085,11 @@ const REDACTED_AUTHOR: &str = "(redacted)";
 )]
 pub async fn blame(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     Query(q): Query<BlameQuery>,
 ) -> Result<Response, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let at = parse_id(&q.at)?;
     let path = q.path.clone();
     let repo_in_walk = repo.clone();
@@ -1509,10 +1515,11 @@ pub struct FileResponse {
 )]
 pub async fn file(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     Query(q): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let at = parse_id(&q.at)?;
     let path = q.path.clone();
     let found = state

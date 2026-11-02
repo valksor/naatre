@@ -53,6 +53,8 @@ const TABLE: &[(ApiCode, &str, u16)] = &[
     (ApiCode::RequestTimeout, "request_timeout", 503),
     (ApiCode::ServerBusy, "server_busy", 503),
     (ApiCode::BlobSwept, "blob_swept", 503),
+    (ApiCode::OriginUnreachable, "origin_unreachable", 503),
+    (ApiCode::CacheDisabled, "cache_disabled", 503),
     (ApiCode::Internal, "internal", 500),
 ];
 
@@ -98,6 +100,8 @@ fn all_variants() -> Vec<ApiCode> {
         RequestTimeout,
         ServerBusy,
         BlobSwept,
+        OriginUnreachable,
+        CacheDisabled,
         Internal,
     ];
     for code in &all {
@@ -137,6 +141,8 @@ fn all_variants() -> Vec<ApiCode> {
             | RequestTimeout
             | ServerBusy
             | BlobSwept
+            | OriginUnreachable
+            | CacheDisabled
             | Internal => true,
         };
     }

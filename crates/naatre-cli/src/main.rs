@@ -424,6 +424,60 @@ enum Cmd {
         #[command(flatten)]
         net: NetOpts,
     },
+    /// Run the LAN cache read tier (M13b): ticket-verified by-id object
+    /// reads only (refs/logs/writes are never proxied). Fail-closed: no
+    /// verify keys, no serve. Ctrl-C/SIGTERM drains gracefully.
+    Cache {
+        /// The origin's base URL, e.g. http://origin-host:7400.
+        #[arg(long)]
+        origin: String,
+        /// The origin's PUBLIC verify-key list (the origin data dir's
+        /// cache_keys.json, copied here): a path, or env:NAME to read it
+        /// from an environment variable.
+        #[arg(long)]
+        key: String,
+        /// Listen address; non-loopback warns that tickets cross the
+        /// network in cleartext unless fronted by TLS.
+        #[arg(long, default_value = "127.0.0.1:7500")]
+        listen: String,
+        /// The tier's OWN data directory for its content store (created
+        /// on first run; never a naatre data dir).
+        #[arg(long)]
+        data: PathBuf,
+        /// Ops log level (access logs are debug-level: off by default).
+        #[arg(long, default_value = "info")]
+        log_level: String,
+    },
+    /// The origin's cache-ticket signing keys (host-local, M13b): init
+    /// once, rotate to retire (retired keys verify unexpired tickets
+    /// until their ≤15-min expiry). Both audited.
+    CacheKey {
+        #[command(subcommand)]
+        cmd: CacheKeyCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CacheKeyCmd {
+    /// Generate the signing pair (refuses an existing key store).
+    Init {
+        /// Existing data directory (uninitialized → run naatre init first).
+        #[arg(long)]
+        data: PathBuf,
+    },
+    /// Rotate: a new current key; the old key retires (public half kept,
+    /// unexpired tickets still verify until expiry).
+    Rotate {
+        /// Existing data directory.
+        #[arg(long)]
+        data: PathBuf,
+    },
+    /// Print the verify key ids (current/retired) and the list's path.
+    Show {
+        /// Existing data directory.
+        #[arg(long)]
+        data: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -463,6 +517,50 @@ enum RepoCmd {
     Stats {
         /// Repo name.
         name: String,
+    },
+    /// The repo read/write ACL surface (M13b, admin): a repo's FIRST
+    /// grant makes it private (uniform 404 for non-readers everywhere,
+    /// dropped from the listing); revoking the LAST grant returns it to
+    /// public.
+    Access {
+        #[command(subcommand)]
+        cmd: AccessCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AccessCmd {
+    /// Grant a principal read or write on the repo (write implies read).
+    Grant {
+        /// Repo name.
+        repo: String,
+        /// Principal name (must exist).
+        principal: String,
+        /// Grant read.
+        #[arg(long)]
+        read: bool,
+        /// Grant write (implies read).
+        #[arg(long)]
+        write: bool,
+    },
+    /// Revoke: `--write` downgrades to read-only; `--read` (or no flag)
+    /// removes the grant entirely.
+    Revoke {
+        /// Repo name.
+        repo: String,
+        /// Principal whose grant goes.
+        principal: String,
+        /// Remove the whole grant (write goes with it).
+        #[arg(long)]
+        read: bool,
+        /// Downgrade to read-only.
+        #[arg(long)]
+        write: bool,
+    },
+    /// List the repo's grants (empty = the repo is public).
+    List {
+        /// Repo name.
+        repo: String,
     },
 }
 
@@ -566,6 +664,35 @@ fn main() {
         Cmd::Repo { cmd } => match cmd {
             RepoCmd::Create { name } => client::repo_create(&name),
             RepoCmd::Stats { name } => client::repo_stats(&name),
+            RepoCmd::Access { cmd } => match cmd {
+                AccessCmd::Grant {
+                    repo,
+                    principal,
+                    read,
+                    write,
+                } => {
+                    if !read && !write {
+                        usage("repo access grant takes --read and/or --write")
+                    } else {
+                        client::repo_access_grant(&repo, &principal, read || write, write)
+                    }
+                }
+                AccessCmd::Revoke {
+                    repo,
+                    principal,
+                    read,
+                    write,
+                } => {
+                    if !read && !write {
+                        usage(
+                            "repo access revoke takes --read and/or --write (none removes the grant entirely)",
+                        )
+                    } else {
+                        client::repo_access_revoke(&repo, &principal, read, write)
+                    }
+                }
+                AccessCmd::List { repo } => client::repo_access_list(&repo),
+            },
         },
         Cmd::Import {
             data,
@@ -685,6 +812,18 @@ fn main() {
             }),
         },
         Cmd::Mcp { token, read_only } => verbs::mcp::run(cwd, read_only, token),
+        Cmd::Cache {
+            origin,
+            key,
+            listen,
+            data,
+            log_level,
+        } => host::cache_run(&origin, &key, &listen, &data, &log_level),
+        Cmd::CacheKey { cmd } => match cmd {
+            CacheKeyCmd::Init { data } => host::cache_key_init(&data),
+            CacheKeyCmd::Rotate { data } => host::cache_key_rotate(&data),
+            CacheKeyCmd::Show { data } => host::cache_key_show(&data),
+        },
         Cmd::Mount {
             repo,
             at,

@@ -7,6 +7,7 @@ use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::repo_read_gate;
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
@@ -63,14 +64,19 @@ pub struct RepoStats {
     pub cbytes: u64,
 }
 
-/// List repos, cursor-paginated. Any authenticated principal may list (the
-/// plan documents repo-level read ACLs arriving in M13).
+/// List repos, cursor-paginated. Any authenticated principal may list;
+/// since M13b the page is FILTERED: private repos (at least one
+/// `repo_access` row) appear only to admins and granted readers — the
+/// same invisibility the repo-scoped routes enforce. The cursor tracks
+/// the last RAW row scanned (a filtered-out repo never blocks the
+/// walk); a page may therefore come back shorter than `limit` while
+/// `has_more` is true when private repos were skipped.
 #[utoipa::path(
     get,
     path = "/v1/repos",
     params(ListQuery),
     responses(
-        (status = 200, description = "A page of repos", body = RepoListResponse),
+        (status = 200, description = "A page of repos visible to this principal", body = RepoListResponse),
         (status = 400, description = "Malformed cursor or limit"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 422, description = "limit out of the 1..=200 range")
@@ -78,7 +84,7 @@ pub struct RepoStats {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<RepoListResponse>, ApiError> {
     let limit = parse_limit(&q)?;
@@ -96,13 +102,46 @@ pub async fn list(
             id
         }
     };
-    let rows = state
-        .read(move |conn| db::repos_list(conn, after, limit + 1).map_err(ApiError::log_internal))
+    let admin = auth.role == crate::auth::Role::Admin;
+    let principal = auth.principal.clone();
+    let (rows, raw_page_full, last_scanned) = state
+        .read(move |conn| {
+            let raw = db::repos_list(conn, after, limit + 1).map_err(ApiError::log_internal)?;
+            let raw_page_full = raw.len() as i64 > limit;
+            let last_scanned = raw.last().map_or(0, |r| r.id);
+            if admin {
+                return Ok::<_, ApiError>((raw, raw_page_full, last_scanned));
+            }
+            // The visibility filter, per row: public repos (no access
+            // rows) stay; private repos need this principal's read grant
+            // (one indexed probe each; the page is bounded by limit+1).
+            let mut visible = Vec::with_capacity(raw.len());
+            for row in raw {
+                let keep = if db::access_is_private(conn, row.id).map_err(ApiError::log_internal)? {
+                    db::access_row(conn, row.id, &principal)
+                        .map_err(ApiError::log_internal)?
+                        .is_some_and(|a| a.read)
+                } else {
+                    true
+                };
+                if keep {
+                    visible.push(row);
+                }
+            }
+            Ok((visible, raw_page_full, last_scanned))
+        })
         .await?;
-    let has_more = rows.len() as i64 > limit;
+    // has_more tracks the RAW walk (a page of filtered-out private repos
+    // must not end the listing). The cursor advances past what was
+    // scanned: normally the last RETURNED id (the legacy contract —
+    // invisible rows behind it are merely re-scanned and re-filtered),
+    // but on an EMPTY visible page with more raw rows ahead it is the
+    // last RAW id scanned (after:0 would restart the walk forever).
+    let has_more = raw_page_full;
     let mut rows = rows;
     rows.truncate(limit as usize);
-    let next_cursor = has_more.then(|| format!("after:{}", rows.last().map_or(0, |r| r.id)));
+    let cursor_id = rows.last().map_or(last_scanned, |r| r.id);
+    let next_cursor = has_more.then(|| format!("after:{cursor_id}"));
     Ok(Json(RepoListResponse {
         repos: rows
             .into_iter()
@@ -254,6 +293,9 @@ pub async fn stats(
     Extension(auth): Extension<AuthedPrincipal>,
     Path(name): Path<String>,
 ) -> Result<Json<RepoStats>, ApiError> {
+    // The M13b read gate first (a private repo's non-reader gets the
+    // uniform 404); the admin matrix follows unchanged.
+    repo_read_gate(&state, &auth, &name).await?;
     require_role(&auth, Role::Admin)?;
     // The counters split across the two connections: the changeset count
     // and the tombstone exclusion are repo-side; the `objects` sums are

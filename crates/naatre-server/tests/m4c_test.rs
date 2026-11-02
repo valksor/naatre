@@ -284,10 +284,25 @@ async fn bare_land(bare: &Router, head: &str, key: &str) -> Resp {
 /// `try_lock` 503s instead of queueing. `hold_write_txn` cannot play this
 /// role: it holds the STORE mutex, which would 503 the leader outright.
 /// Dropping the connection rolls the lock back.
+/// Holds the SQLite write lock on the fixture (BEGIN IMMEDIATE on a
+/// separate connection). The hold SELF-RELEASES after 300 ms on a
+/// dedicated thread: the detached land closure's BEGIN parks in its
+/// 5 s busy wait and must find the lock GONE well inside that window
+/// regardless of test-thread scheduling — a hold that stands longer
+/// than the busy timeout would error the detached BEGIN (a legitimate
+/// product behavior: 503 writer_busy) and the "settles anyway" premise
+/// would flake under load. 300 ms blocks the first BEGIN attempt
+/// deterministically and clears far inside the window; the callers'
+/// explicit ROLLBACKs become no-ops (rolling back no transaction).
 fn hold_sqlite_write(f: &Fixture) -> rusqlite::Connection {
     let conn = conn_at(&f.t.db_path);
     conn.execute_batch("BEGIN IMMEDIATE")
         .expect("hold: BEGIN IMMEDIATE");
+    let releaser = conn_at(&f.t.db_path);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = releaser.execute_batch("ROLLBACK");
+    });
     conn
 }
 
@@ -448,7 +463,7 @@ async fn cancelled_leader_fails_its_joiner_promptly() {
 
     // Release the SQLite lock so the cancelled leader's detached blocking
     // closure finishes before the temp dir drops.
-    hold.execute_batch("ROLLBACK").unwrap();
+    let _ = hold.execute_batch("ROLLBACK");
     wait_key_done(&f, "k-drop").await;
 }
 
@@ -481,7 +496,7 @@ async fn join_deadline_expiry_is_a_prompt_retryable_503() {
     );
 
     // The leader was never touched: release the lock, it lands normally.
-    hold.execute_batch("ROLLBACK").unwrap();
+    let _ = hold.execute_batch("ROLLBACK");
     let done = tokio::time::timeout(Duration::from_secs(10), leader)
         .await
         .expect("leader completes")
@@ -513,7 +528,7 @@ async fn cancelled_leader_that_lands_anyway_heals_via_status_and_retry() {
 
     // The land settles anyway once the lock is gone: the client's error was
     // a lie the status surface can heal.
-    hold.execute_batch("ROLLBACK").unwrap();
+    let _ = hold.execute_batch("ROLLBACK");
     wait_key_done(&f, "k-heal").await;
     let status = m4b_common::get_on(
         &f.t.app,

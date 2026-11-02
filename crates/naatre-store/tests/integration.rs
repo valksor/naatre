@@ -58,12 +58,12 @@ fn fresh_db_migrates_to_current() {
              AND name IN ('meta','repos','changesets','changeset_parents','file_changes',\
              'repo_blobs','refs','trees','tree_entries','objects','principals','tokens',\
              'lands','snapshots','audit_log','git_map','repo_trees',\
-             'derive_kinds','derive_state','derive_reports')",
+             'derive_kinds','derive_state','derive_reports','repo_access')",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(tables, 20);
+    assert_eq!(tables, 21);
     let indexes: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
@@ -148,6 +148,9 @@ fn migration3_backfills_tree_membership_from_existing_data() {
          ALTER TABLE objects DROP COLUMN touched_ns;
          -- Migration 012 (M12a, format v2) is an empty version-bump
          -- marker: no objects to drop, nothing to rewind.
+         -- Migration 013 (M13b) creates repo_access: drop it so the
+         -- rewound store is the exact shipped form the era had.
+         DROP TABLE IF EXISTS repo_access;
          INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
          INSERT INTO repos(id, name, created_ns) VALUES (1, 'one', 1), (7, 'seven', 1);
          -- One tree shared by both repos (content-addressed id), containing
@@ -273,8 +276,13 @@ fn migration12_forward_from_v11_is_a_pure_version_bump() {
         let dir = tempfile::tempdir().unwrap();
         let conn = fresh_conn(&dir);
         migrate(&conn).unwrap();
-        conn.execute_batch("UPDATE meta SET value = '11' WHERE key = 'schema_version';")
-            .unwrap();
+        conn.execute_batch(
+            "-- 013's table is above the rewound stamp: shed it (012 itself \
+             still creates nothing — the bump-only premise is unchanged).
+             DROP TABLE repo_access;
+             UPDATE meta SET value = '11' WHERE key = 'schema_version';",
+        )
+        .unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row(
@@ -299,7 +307,10 @@ fn migration12_forward_from_v11_is_a_pure_version_bump() {
         assert_eq!(store.schema_version(), MAX_SUPPORTED);
         store
             .conn()
-            .execute_batch("UPDATE meta SET value = '11' WHERE key = 'schema_version';")
+            .execute_batch(
+                "DROP TABLE repo_access; \
+                 UPDATE meta SET value = '11' WHERE key = 'schema_version';",
+            )
             .unwrap();
     }
     let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)
@@ -332,6 +343,7 @@ fn migration11_forward_from_shipped_v10_recreates_the_probe_index() {
         migrate(&conn).unwrap();
         conn.execute_batch(
             "DROP INDEX redactions_object_id;
+             DROP TABLE repo_access;
              UPDATE meta SET value = '10' WHERE key = 'schema_version';",
         )
         .unwrap();
@@ -375,6 +387,7 @@ fn migration11_forward_from_shipped_v10_recreates_the_probe_index() {
             .conn()
             .execute_batch(
                 "DROP INDEX redactions_object_id;
+                 DROP TABLE repo_access;
                  UPDATE meta SET value = '10' WHERE key = 'schema_version';",
             )
             .unwrap();
@@ -417,8 +430,11 @@ fn migration11_tolerates_the_interim_binary_index() {
         let dir = tempfile::tempdir().unwrap();
         let conn = fresh_conn(&dir);
         migrate(&conn).unwrap();
-        conn.execute_batch("UPDATE meta SET value = '10' WHERE key = 'schema_version';")
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE repo_access; \
+             UPDATE meta SET value = '10' WHERE key = 'schema_version';",
+        )
+        .unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row(
@@ -453,7 +469,10 @@ fn migration11_tolerates_the_interim_binary_index() {
             .expect("pg store opens");
         store
             .conn()
-            .execute_batch("UPDATE meta SET value = '10' WHERE key = 'schema_version';")
+            .execute_batch(
+                "DROP TABLE repo_access; \
+                 UPDATE meta SET value = '10' WHERE key = 'schema_version';",
+            )
             .unwrap();
     }
     let store = Store::open_backend(DataDir::create(dir.path()).unwrap(), &cfg)

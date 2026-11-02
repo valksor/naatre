@@ -28,7 +28,7 @@
 //! fsck): a catalog without it is a crashed run's partial target, refused
 //! by every guard with the incomplete-migration remedy.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
@@ -146,6 +146,35 @@ pub mod anyhow_source {
 }
 
 use anyhow_source::AnyhowSource;
+
+/// The hot-WAL guard on the source-open path: a killed server leaves
+/// `naatre.db-wal`/`-shm` behind, and the READ-ONLY ATTACH cannot run
+/// WAL recovery (recovery writes), so the failure surfaces as a raw
+/// SQLite message at the ATTACH or the first `src.` query — AFTER
+/// catalog.db exists (the partial target the cleanup then removes).
+/// When the error carries the WAL siblings, name the REMEDY instead of
+/// leaving the operator a bare driver message.
+pub fn hot_wal_or_failed(
+    db_path: &Path,
+    step: &'static str,
+    e: impl std::fmt::Display,
+) -> AdoptError {
+    let raw = e.to_string();
+    let wal = PathBuf::from(format!("{}-wal", db_path.display()));
+    let shm = PathBuf::from(format!("{}-shm", db_path.display()));
+    if wal.exists() || shm.exists() {
+        return AdoptError::Failed {
+            step: "source open (hot WAL)",
+            source: AnyhowSource(format!(
+                "{raw}; the source has an unrecovered WAL — start and stop the \
+                 single-DB server once (or otherwise recover it), then re-run \
+                 `naatre migrate-db-per-repo`"
+            )),
+            cleanup: "partial targets removed".to_string(),
+        };
+    }
+    failed(step, raw)
+}
 
 fn failed(step: &'static str, e: impl std::fmt::Display) -> AdoptError {
     AdoptError::Failed {
@@ -298,17 +327,21 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
                 uri_escape(&db_path.display().to_string())
             )),
         ))
-        .map_err(|e| failed("open source", e))?;
+        .map_err(|e| hot_wal_or_failed(&db_path, "open source", e))?;
 
         // The repo registry first (ids must exist before the per-repo files).
         let repos: Vec<(i64, String, i64)> = {
+            // The FIRST src query — where a hot WAL's read-only recovery
+            // refusal surfaces (the ATTACH itself may succeed). Every arm
+            // goes through the WAL-sibling guard so the operator gets the
+            // remedy, never a bare driver message.
             let mut stmt = conn
                 .prepare("SELECT id, name, created_ns FROM src.repos ORDER BY id ASC")
-                .map_err(|e| failed("registry read", e))?;
+                .map_err(|e| hot_wal_or_failed(&db_path, "registry read", e))?;
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-                .map_err(|e| failed("registry read", e))?
+                .map_err(|e| hot_wal_or_failed(&db_path, "registry read", e))?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| failed("registry read", e))?
+                .map_err(|e| hot_wal_or_failed(&db_path, "registry read", e))?
         };
         let mut report = AdoptReport {
             repos: Vec::new(),

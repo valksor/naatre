@@ -2838,6 +2838,9 @@ async fn backfill_after_in_place_upgrade_of_pre_derive_db() {
              ALTER TABLE objects DROP COLUMN touched_ns;
              -- Migration 012 (M12a, format v2) is an empty version-bump
              -- marker: no objects to drop, nothing to rewind.
+             -- Migration 013 (M13b) creates repo_access: drop it so the
+             -- rewound store is the exact shipped form the era had.
+             DROP TABLE IF EXISTS repo_access;
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
         )
         .unwrap();
@@ -3025,6 +3028,9 @@ async fn upgrade_ab_ctx(dir: &Path) -> (Ctx, String, String, String) {
              ALTER TABLE objects DROP COLUMN touched_ns;
              -- Migration 012 (M12a, format v2) is an empty version-bump
              -- marker: no objects to drop, nothing to rewind.
+             -- Migration 013 (M13b) creates repo_access: drop it so the
+             -- rewound store is the exact shipped form the era had.
+             DROP TABLE IF EXISTS repo_access;
              UPDATE meta SET value = '3' WHERE key = 'schema_version';",
         )
         .unwrap();

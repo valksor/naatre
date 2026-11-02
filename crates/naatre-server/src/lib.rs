@@ -23,6 +23,7 @@ pub mod api_error;
 pub mod auth;
 pub mod authz;
 pub mod backup;
+pub mod cache_tier;
 pub mod db;
 pub mod derive;
 pub mod derived;
@@ -40,6 +41,7 @@ pub mod routes;
 pub mod serve;
 pub mod snapshots_gc;
 pub mod state;
+pub mod ticket;
 pub mod tree_derive;
 
 /// Wire protocol version reported by `GET /version` and the startup banner.
@@ -71,6 +73,20 @@ pub fn router(state: AppState) -> axum::Router {
             get(routes::repos::list).post(routes::repos::create),
         )
         .route("/v1/repos/{r}/stats", get(routes::repos::stats))
+        .route(
+            "/v1/repos/{r}/access",
+            get(routes::access::list).put(routes::access::set),
+        )
+        .route(
+            "/v1/repos/{r}/access/{principal}",
+            delete(routes::access::revoke),
+        )
+        .route("/v1/repos/{r}/tickets", post(routes::tickets::mint))
+        .route(
+            "/v1/repos/{r}/cache/membership",
+            get(routes::tickets::membership),
+        )
+        .route("/v1/repos/{r}/cache/epoch", get(routes::tickets::epoch))
         .route("/v1/repos/{r}/changesets", post(routes::changesets::create))
         .route(
             "/v1/repos/{r}/changesets/{id}",

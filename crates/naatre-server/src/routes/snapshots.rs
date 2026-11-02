@@ -34,9 +34,10 @@ use naatre_core::ids::{Id, object_id};
 use naatre_core::tree::{self, Tree};
 use naatre_store::BLOB_LIMIT;
 
+use super::{repo_read_gate, repo_write_gate};
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
-use crate::auth::{AuthedPrincipal, Role, require_role};
+use crate::auth::AuthedPrincipal;
 use crate::db::{self, TreeEntryRow, TreeWrite};
 use crate::extract::AppJson;
 use crate::snapshots_gc::{SNAPSHOT_DEFAULT_TTL_SECS, SNAPSHOT_MIN_TTL_SECS};
@@ -143,7 +144,10 @@ pub async fn create(
     Path(repo): Path<String>,
     body: AppJson<CreateSnapshotRequest>,
 ) -> Result<Response, ApiError> {
-    require_role(&auth, Role::Writer)?;
+    // The M13b repo write gate: public repos keep the writer matrix (the
+    // same 403), private repos admit granted writers (uniform 404 for
+    // the rest).
+    repo_write_gate(&state, &auth, &repo).await?;
     let snap_id = parse_id(&body.0.snap_id)?;
     let tree_id = parse_id(&body.0.tree_id)?;
     let ttl_secs = body.0.ttl_secs.unwrap_or(SNAPSHOT_DEFAULT_TTL_SECS);
@@ -410,6 +414,7 @@ pub async fn get_metadata(
     Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<SnapshotResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let snap_id = parse_id(&id_hex)?;
     let row = load_owned_unexpired(&state, &repo, &snap_id, &auth.principal).await?;
     Ok(Json(SnapshotResponse {
@@ -447,6 +452,7 @@ pub async fn get_blob(
     Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, id_hex, oid_hex)): Path<(String, String, String)>,
 ) -> Result<Response, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let snap_id = parse_id(&id_hex)?;
     let oid = parse_id(&oid_hex)?;
     // The redaction gate BEFORE the TTL check: a tombstoned blob id is
@@ -527,6 +533,7 @@ pub async fn get_snapshot_tree(
     Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, id_hex, tid_hex)): Path<(String, String, String)>,
 ) -> Result<Json<crate::routes::trees::TreeResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let snap_id = parse_id(&id_hex)?;
     let tree_id = parse_id(&tid_hex)?;
     let row = load_owned_unexpired(&state, &repo, &snap_id, &auth.principal).await?;
@@ -600,7 +607,9 @@ pub async fn put_blob(
     Path((repo, id_hex, oid_hex)): Path<(String, String, String)>,
     payload: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    require_role(&auth, Role::Writer)?;
+    // The M13b repo write gate (public repos keep the writer matrix;
+    // private repos admit granted writers).
+    repo_write_gate(&state, &auth, &repo).await?;
     let snap_id = parse_id(&id_hex)?;
     let oid = parse_id(&oid_hex)?;
     if object_id(naatre_core::ids::Kind::Blob, &payload) != oid {

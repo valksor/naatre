@@ -52,6 +52,15 @@ pub enum Role {
     Admin,
     Writer,
     Reader,
+    /// A verified M13b cache ticket — NEVER a principals.role value (parse
+    /// rejects it; the role arrives only from [`super::ticket`]
+    /// verification in the auth middleware). It ranks below Reader so
+    /// every `require_role` gate refuses it: a ticket authorizes exactly
+    /// three surfaces — the origin's ticket-scoped cache-support routes
+    /// and the by-id object read — and nothing else (refs/log never
+    /// serve to a ticket, defense in depth on top of the tier's own
+    /// by-id-only surface).
+    Ticket,
 }
 
 impl Role {
@@ -71,20 +80,22 @@ impl Role {
             Role::Admin => "admin",
             Role::Writer => "writer",
             Role::Reader => "reader",
+            Role::Ticket => "ticket",
         }
     }
 
     /// True when `self` has at least `min`'s authority
-    /// (admin > writer > reader).
+    /// (admin > writer > reader > ticket).
     pub fn at_least(self, min: Role) -> bool {
         self.rank() >= min.rank()
     }
 
     fn rank(self) -> u8 {
         match self {
-            Role::Admin => 2,
-            Role::Writer => 1,
-            Role::Reader => 0,
+            Role::Admin => 3,
+            Role::Writer => 2,
+            Role::Reader => 1,
+            Role::Ticket => 0,
         }
     }
 }
@@ -100,6 +111,20 @@ pub struct AuthedPrincipal {
     pub scope_path: Option<String>,
 }
 
+/// The verified cache-ticket claims (M13b), inserted alongside
+/// [`AuthedPrincipal`] (role [`Role::Ticket`]) when the request
+/// authenticated via the `NaatreTicket` scheme. The ticket-accepting
+/// routes extract this and enforce the repo/tree binding; every other
+/// route sees only the below-Reader role and refuses with 403.
+#[derive(Clone, Debug)]
+pub struct CacheTicket {
+    pub repo: String,
+    pub root_tree: naatre_core::ids::Id,
+    /// Expiry, ns since the epoch (the middleware's verify already
+    /// refused expired tickets; routes use this only for diagnostics).
+    pub exp_ns: u64,
+}
+
 /// Gate for handlers: requires `auth.role` to be at least `min`.
 pub(crate) fn require_role(auth: &AuthedPrincipal, min: Role) -> Result<(), ApiError> {
     if auth.role.at_least(min) {
@@ -113,23 +138,29 @@ pub(crate) fn require_role(auth: &AuthedPrincipal, min: Role) -> Result<(), ApiE
 }
 
 /// The stable audit/bucket key for a failed auth attempt: a short BLAKE3
-/// prefix of the presented bearer token when one parses out of the header,
-/// `"anon"` otherwise. Deliberately not the peer address and not raw token
-/// material (audit rows are retained indefinitely).
+/// prefix of the presented credential — bearer token or cache ticket —
+/// when one parses out of the header, `"anon"` otherwise. Deliberately not
+/// the peer address and not raw credential material (audit rows are
+/// retained indefinitely).
 fn failure_key(auth_header: Option<&str>) -> String {
-    let presented = auth_header
-        .and_then(|v| {
-            let (scheme, token) = v.split_once(' ')?;
-            scheme
-                .eq_ignore_ascii_case("bearer")
-                .then_some(token.trim())
-        })
-        .filter(|t| !t.is_empty());
+    let presented = auth_header.and_then(|v| {
+        let (scheme, credential) = v.split_once(' ')?;
+        let ok = scheme.eq_ignore_ascii_case("bearer")
+            || scheme.eq_ignore_ascii_case(super::ticket::TICKET_SCHEME);
+        ok.then(|| credential.trim()).filter(|t| !t.is_empty())
+    });
     match presented {
-        Some(token) => {
-            let hash = hash_token(token);
+        Some(credential) => {
+            let hash = hash_token(credential);
             let hex: String = hash.iter().take(8).map(|b| format!("{b:02x}")).collect();
-            format!("tk:{hex}")
+            let ticket = auth_header
+                .and_then(|v| v.split_once(' '))
+                .is_some_and(|(s, _)| s.eq_ignore_ascii_case(super::ticket::TICKET_SCHEME));
+            if ticket {
+                format!("ct:{hex}")
+            } else {
+                format!("tk:{hex}")
+            }
         }
         None => "anon".to_string(),
     }
@@ -169,6 +200,15 @@ pub async fn authenticate(State(state): State<AppState>, mut req: Request, next:
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
+
+    let is_ticket = header_value
+        .and_then(|v| v.split_once(' '))
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case(super::ticket::TICKET_SCHEME));
+    if is_ticket {
+        // Owned: the borrow rides the request body, which moves here.
+        let owned = header_value.map(str::to_string);
+        return authenticate_ticket(&state, owned.as_deref(), req, next).await;
+    }
 
     let token = header_value
         .and_then(|v| {
@@ -246,6 +286,85 @@ pub async fn authenticate(State(state): State<AppState>, mut req: Request, next:
         principal: row.principal,
         role,
         scope_path: row.scope_path,
+    });
+    next.run(req).await
+}
+
+/// The M13b `NaatreTicket` arm of [`authenticate`]: verifies the origin-
+/// signed cache ticket (signature by key-id against the data dir's verify
+/// list, the lifetime cap, expiry — all BEFORE any byte of the request is
+/// served) and inserts [`AuthedPrincipal`] at [`Role::Ticket`] plus the
+/// [`CacheTicket`] claims. Failures answer the credential codes
+/// (`token_invalid` / `token_expired`) with the same rate-limited
+/// auth-failure auditing as bearer failures. The origin's verify list is
+/// read per request: rotation takes effect without a restart, and an
+/// origin whose key files were removed refuses tickets fail-closed.
+async fn authenticate_ticket(
+    state: &AppState,
+    auth_header: Option<&str>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let Some(ticket_str) = auth_header
+        .and_then(|v| v.split_once(' '))
+        .map(|(_, t)| t.trim())
+    else {
+        let key = failure_key(auth_header);
+        return fail_auth(
+            state,
+            &key,
+            ApiCode::TokenInvalid,
+            "malformed ticket header",
+        )
+        .await
+        .into_response();
+    };
+    let keys = match crate::ticket::load_verify_keys(&state.data_dir_display) {
+        Ok(keys) => keys,
+        Err(_) => {
+            let key = failure_key(auth_header);
+            return fail_auth(
+                state,
+                &key,
+                ApiCode::TokenInvalid,
+                "cache tickets are not configured on this origin",
+            )
+            .await
+            .into_response();
+        }
+    };
+    let claims = match crate::ticket::verify_ticket(ticket_str, &keys, state.now_ns()) {
+        Ok(claims) => claims,
+        Err(crate::ticket::TicketError::Expired) => {
+            let key = failure_key(auth_header);
+            return fail_auth(
+                state,
+                &key,
+                ApiCode::TokenExpired,
+                "cache ticket is expired",
+            )
+            .await
+            .into_response();
+        }
+        Err(crate::ticket::TicketError::Invalid) => {
+            let key = failure_key(auth_header);
+            return fail_auth(state, &key, ApiCode::TokenInvalid, "invalid cache ticket")
+                .await
+                .into_response();
+        }
+    };
+    let root_tree = naatre_core::ids::Id::from_hex(&claims.root_tree)
+        .expect("verify_ticket checks the tree id parses");
+    let mut req = req;
+    req.extensions_mut().insert(AuthedPrincipal {
+        principal: claims.principal.clone(),
+        role: Role::Ticket,
+        scope_path: None,
+    });
+    req.extensions_mut().insert(CacheTicket {
+        repo: claims.repo,
+        root_tree,
+        exp_ns: claims.exp,
     });
     next.run(req).await
 }

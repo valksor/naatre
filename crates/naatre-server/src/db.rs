@@ -4130,3 +4130,228 @@ pub fn audit_page_action(
         |row| Ok((row.get(0)?, row.get(1)?)),
     )
 }
+
+// ---- repo read ACLs + cache support (M13b) --------------------------------
+//
+// `repo_access` is global-principal state per repo: it lives in the
+// CATALOG (single mode: the one store; split mode: catalog.db — the same
+// home as principals/tokens; the shared per-repo files carry the table
+// but never its rows). Visibility contract: a repo with at least one
+// repo_access row is PRIVATE (only granted readers/writers and admins
+// see it — every repo-scoped route answers the uniform repo-not-found
+// 404 for a non-reader, and the listing drops it); a repo with no rows
+// is PUBLIC (the pre-M13 behavior). The statement layer enforces
+// read >= write (write implies read) at write time, so a grant can never
+// produce a writer who cannot read.
+
+/// One row of `repo_access`.
+#[derive(Debug, Clone)]
+pub struct AccessRow {
+    pub principal: String,
+    /// 0/1 (write implies read — the invariant holds in every row).
+    pub read: bool,
+    pub write: bool,
+}
+
+/// True when ANY repo_access row exists for the repo: the private/public
+/// bit. One indexed probe on the PK's repo_id prefix.
+pub fn access_is_private(conn: &Db, repo_id: i64) -> Result<bool, DbError> {
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM repo_access WHERE repo_id = ?1 LIMIT 1"),
+        &pv![repo_id],
+        |r| r.get(0),
+    )?;
+    Ok(hit.is_some())
+}
+
+/// The principal's row on the repo, if granted.
+pub fn access_row(conn: &Db, repo_id: i64, principal: &str) -> Result<Option<AccessRow>, DbError> {
+    conn.query_opt_map(
+        &Sql::plain("SELECT read, write FROM repo_access WHERE repo_id = ?1 AND principal = ?2"),
+        &pv![repo_id, principal],
+        |r| {
+            Ok(AccessRow {
+                principal: String::new(),
+                read: r.get::<i64>(0)? != 0,
+                write: r.get::<i64>(1)? != 0,
+            })
+        },
+    )
+}
+
+/// Upserts a grant with the read >= write invariant: write implies read,
+/// so a `write = 1` row always stores `read = 1`. Callers validate the
+/// request shape (a `read = false, write = true` body is refused 422 at
+/// the route, not silently corrected here).
+pub fn access_set(
+    conn: &Db,
+    repo_id: i64,
+    principal: &str,
+    read: bool,
+    write: bool,
+) -> Result<(), DbError> {
+    let read = i64::from(read || write);
+    let write = i64::from(write);
+    conn.execute(
+        &Sql::plain(
+            "INSERT INTO repo_access(repo_id, principal, read, write) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(repo_id, principal) DO UPDATE SET read = ?3, write = ?4",
+        ),
+        &pv![repo_id, principal, read, write],
+    )?;
+    Ok(())
+}
+
+/// Deletes a grant. Revoking read removes write with it (write without
+/// read is not a state the invariant admits) — deleting the row is the
+/// whole revoke; a write-only downgrade goes through [`access_set`] with
+/// `read = true, write = false`.
+pub fn access_clear(conn: &Db, repo_id: i64, principal: &str) -> Result<bool, DbError> {
+    Ok(conn.execute(
+        &Sql::plain("DELETE FROM repo_access WHERE repo_id = ?1 AND principal = ?2"),
+        &pv![repo_id, principal],
+    )? > 0)
+}
+
+/// The repo's grants, principal order ascending (the admin listing).
+pub fn access_list(conn: &Db, repo_id: i64) -> Result<Vec<AccessRow>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "SELECT principal, read, write FROM repo_access WHERE repo_id = ?1 ORDER BY principal ASC",
+        ),
+        &pv![repo_id],
+        |r| {
+            Ok(AccessRow {
+                principal: r.get(0)?,
+                read: r.get::<i64>(1)? != 0,
+                write: r.get::<i64>(2)? != 0,
+            })
+        },
+    )
+}
+
+/// True when the principal holds a repo_trees junction row: the mint's
+/// root-tree validation (a ticket binds to a tree THIS repo wrote —
+/// history trees carry junction rows; snapshot trees do not and can never
+/// be ticketed).
+pub fn repo_tree_member(conn: &Db, repo_id: i64, tree_id: &Id) -> Result<bool, DbError> {
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM repo_trees WHERE repo_id = ?1 AND tree_id = ?2"),
+        &pv![repo_id, tree_id.0.as_slice()],
+        |r| r.get(0),
+    )?;
+    Ok(hit.is_some())
+}
+
+/// The repo's TOMBSTONE EPOCH (M13's "tombstone epoch honored"): the
+/// count of `redactions` rows for the repo. Rows are only ever INSERTED
+/// (a mark, a re-arm's mutation keeps the row; the purge stamps
+/// `purged_ns` and the row stays as the tombstone record), so the count
+/// is monotone and changes on every serving-relevant tombstone event —
+/// it is a schema-free counter the cache tier re-probes per store-hit
+/// serve ("tombstone epoch revalidated at serve", the M10 clause). Same
+/// epoch ⟺ the same gating set. Atomic with the mark (same repo DB,
+/// same transaction visibility in both layouts). One indexed COUNT on
+/// the (repo_id, object_id) PK prefix.
+pub fn tombstone_epoch(conn: &Db, repo_id: i64) -> Result<i64, DbError> {
+    conn.query_row_map(
+        &Sql::plain("SELECT COUNT(*) FROM redactions WHERE repo_id = ?1"),
+        &pv![repo_id],
+        |r| r.get(0),
+    )
+}
+
+/// The ticket-scoped membership walk (the M1 `repo_blobs` rule at the
+/// cache tier): every blob id reachable from `root_tree`'s entry closure
+/// that THIS repo references (`repo_blobs`) and is not tombstoned in it —
+/// active or purged tombstones both exclude (the row's existence is the
+/// gate, exactly [`crate::db::redaction_active`]'s semantics). The
+/// closure recursion mirrors migration 3's reach CTE: the root tree plus
+/// every dir entry (kind = 1) below it; blob ids are the file entries
+/// (kind = 0) on the reached trees. Runs on the REPO connection (all
+/// four tables are repo-scoped in both layouts).
+pub fn cache_membership(conn: &Db, repo_id: i64, root_tree: &Id) -> Result<Vec<Id>, DbError> {
+    conn.query_all_map(
+        &Sql::plain(
+            "WITH RECURSIVE reach(tree_id) AS (                  SELECT ?2 UNION                  SELECT te.object_id FROM reach r                  JOIN tree_entries te ON te.tree_id = r.tree_id AND te.kind = 1              )              SELECT DISTINCT te.object_id              FROM reach              JOIN tree_entries te ON te.tree_id = reach.tree_id AND te.kind = 0              WHERE te.object_id IS NOT NULL                AND EXISTS (SELECT 1 FROM repo_blobs rb                            WHERE rb.repo_id = ?1 AND rb.object_id = te.object_id)                AND NOT EXISTS (SELECT 1 FROM redactions x                                WHERE x.repo_id = ?1 AND x.object_id = te.object_id)",
+        ),
+        &pv![repo_id, root_tree.0.as_slice()],
+        id_of_col0,
+    )
+}
+
+/// Grants (or updates) one principal's flags on one repo: the principal-
+/// exists probe, the upsert (with the read >= write invariant), and the
+/// `access_grant` audit row in ONE catalog transaction. Returns `None`
+/// when the principal does not exist (the route answers 422 — grants
+/// name global principals, never invent them).
+#[allow(clippy::too_many_arguments)]
+pub fn access_grant(
+    conn: &Db,
+    repo_id: i64,
+    repo_name: &str,
+    principal: &str,
+    read: bool,
+    write: bool,
+    now_ns: i64,
+    actor: &str,
+) -> Result<Option<(bool, bool)>, DbError> {
+    let tx = conn.transaction()?;
+    let exists: Option<i64> = tx.query_opt_map(
+        &Sql::plain("SELECT 1 FROM principals WHERE name = ?1"),
+        &pv![principal],
+        |r| r.get(0),
+    )?;
+    if exists.is_none() {
+        return Ok(None);
+    }
+    let stored_read = read || write;
+    access_set(&tx, repo_id, principal, stored_read, write)?;
+    audit_append(
+        &tx,
+        now_ns,
+        actor,
+        "access_grant",
+        &serde_json::json!({
+            "repo": repo_name,
+            "principal": principal,
+            "read": stored_read,
+            "write": write,
+        })
+        .to_string(),
+    )?;
+    tx.commit()?;
+    Ok(Some((stored_read, write)))
+}
+
+/// Removes one principal's grant: the delete and the `access_revoke`
+/// audit row in ONE catalog transaction. Returns whether a row stood
+/// (a re-revoke of an absent grant is a silent no-op with no audit row —
+/// nothing happened). Revoking read removes write with it (the row goes;
+/// write without read is not a state the invariant admits).
+pub fn access_revoke(
+    conn: &Db,
+    repo_id: i64,
+    repo_name: &str,
+    principal: &str,
+    now_ns: i64,
+    actor: &str,
+) -> Result<bool, DbError> {
+    let tx = conn.transaction()?;
+    let removed = access_clear(&tx, repo_id, principal)?;
+    if removed {
+        audit_append(
+            &tx,
+            now_ns,
+            actor,
+            "access_revoke",
+            &serde_json::json!({
+                "repo": repo_name,
+                "principal": principal,
+            })
+            .to_string(),
+        )?;
+    }
+    tx.commit()?;
+    Ok(removed)
+}

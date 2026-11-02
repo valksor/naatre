@@ -10,6 +10,7 @@ use utoipa::ToSchema;
 
 use naatre_core::ids::Id;
 
+use super::{repo_read_gate, repo_write_gate};
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
@@ -60,9 +61,10 @@ pub struct ExpectedRef {
 )]
 pub async fn get_ref(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, name)): Path<(String, String)>,
 ) -> Result<Json<RefResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let name_for_lookup = name.clone();
     let repo_name = repo.clone();
     let row = state
@@ -125,6 +127,10 @@ pub async fn cas_ref(
     Path((repo, name)): Path<(String, String)>,
     body: AppJson<CreateRefRequest>,
 ) -> Result<Json<RefResponse>, ApiError> {
+    // The M13b repo visibility gate runs FIRST (a private repo's
+    // non-writer gets the uniform 404); the route's own admin-role
+    // matrix follows unchanged.
+    repo_write_gate(&state, &auth, &repo).await?;
     require_role(&auth, Role::Admin)?;
     if name == "main" {
         return Err(ApiError::new(

@@ -10,12 +10,13 @@ use crate::error::StoreError;
 
 /// Highest schema version this binary understands.
 ///
-/// 12 is M12a's format-v2 marker: migration 012 carries NO schema objects
-/// (the `lands.state` column is a free-form string, so `'conflicted'`
-/// needs none) — the version bump itself is the old-binary lockout the
-/// plan names: a pre-M12 binary (max 11) refuses any store this binary
-/// creates or upgrades AT OPEN, before any row is read.
-pub const MAX_SUPPORTED: i64 = 12;
+/// 13 is M13b's repo read ACLs: the `repo_access` table (per-repo grants
+/// of read/write to global principals — global-principal state per repo,
+/// so it lives in the catalog's schema in the db-per-repo layout;
+/// migration 2 of `catalog.rs` is that twin). A repo with at least one
+/// `repo_access` row is PRIVATE: non-readers meet the uniform 404 on
+/// every repo-scoped route.
+pub const MAX_SUPPORTED: i64 = 13;
 
 /// `(version, sql)` for every migration, in order. Version 1 is the full
 /// initial schema. Once shipped, a migration's SQL is immutable — fixes go
@@ -241,6 +242,24 @@ CREATE INDEX IF NOT EXISTS redactions_object_id ON redactions(object_id);
     // defense-in-depth. Nothing here is created, so rewind fixtures need
     // no new DROPs.
     (12, ""),
+    // M13b: the repo read ACLs. One row grants (or records the absence of)
+    // read/write on one repo to one global principal — global-principal
+    // state per repo, so in the db-per-repo layout it lives in the
+    // CATALOG (the `catalog.rs` migration list's twin; this shared list
+    // also runs in every per-repo file, where the table stays empty — the
+    // catalog owns the rows, the same rule as principals/tokens). A repo
+    // with at least one row here is PRIVATE: non-readers meet the uniform
+    // 404 on every repo-scoped route and the listing drops it. `read` and
+    // `write` are 0/1 flags with the invariant read >= write (write
+    // implies read — a writer must see what it writes); the statement
+    // layer enforces it at write time. No row for a repo = that repo is
+    // PUBLIC (the pre-M13 behavior: any authenticated principal reads).
+    (
+        13,
+        r#"
+CREATE TABLE repo_access(repo_id INTEGER NOT NULL, principal TEXT NOT NULL, read INTEGER NOT NULL, write INTEGER NOT NULL, PRIMARY KEY(repo_id, principal));
+"#,
+    ),
 ];
 
 /// The Postgres migration set: one file per SQLite migration, 1–12, in
@@ -261,6 +280,8 @@ const PG_MIGRATIONS: &[&str] = &[
     include_str!("../migrations/postgres/011_redactions_index.sql"),
     // M12a: the empty version-bump marker (see the SQLite twin above).
     include_str!("../migrations/postgres/012_format_v2.sql"),
+    // M13b: the repo read ACLs (the SQLite 013 twin — see it there).
+    include_str!("../migrations/postgres/013_repo_access.sql"),
 ];
 
 const _: () = assert!(

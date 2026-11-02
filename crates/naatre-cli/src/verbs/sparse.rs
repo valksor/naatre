@@ -24,7 +24,7 @@ use naatre_core::path;
 use serde_json::{Value, json};
 
 use super::{Net, VerbError};
-use crate::wc::fetch::{fetch_blobs_verified, materialize, walk_tree};
+use crate::wc::fetch::{CacheRoute, fetch_blobs_verified, materialize, walk_tree};
 use crate::wc::{State, Wc, remove_and_prune, under_prefix};
 
 pub enum Action {
@@ -214,7 +214,9 @@ fn add(
     // failed fetch must cost the user nothing (nothing materialized,
     // nothing removed).
     let ids: Vec<naatre_core::ids::Id> = files.iter().map(|f| f.blob).collect();
-    let blobs = fetch_blobs_verified(&client, &state.server_repo, &ids)?;
+    // M13b: NAATRE_CACHE_URL routes the by-id fetches through the tier.
+    let mut cache = CacheRoute::from_env();
+    let blobs = fetch_blobs_verified(&client, &state.server_repo, &head, &ids, &mut cache)?;
 
     // Fetch verified: only now discard exactly the colliders the refusal
     // named — untracked files are deleted, symlinks are unlinked (never

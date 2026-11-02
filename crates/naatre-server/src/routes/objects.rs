@@ -26,9 +26,10 @@ use utoipa::ToSchema;
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_store::{BLOB_LIMIT, BlobStore, StoreError};
 
+use super::{repo_id_or_404, repo_read_gate, repo_write_gate};
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
-use crate::auth::{AuthedPrincipal, Role, require_role};
+use crate::auth::{AuthedPrincipal, CacheTicket};
 use crate::db;
 use crate::extract::AppJson;
 use crate::state::AppState;
@@ -141,10 +142,11 @@ pub struct StoredObjectId {
 )]
 pub async fn present(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     body: AppJson<PresentRequest>,
 ) -> Result<Json<PresentResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let ids = parse_id_batch(&body.0.ids)?;
     let tombstoned: std::collections::HashSet<Id> = {
         let ids = ids.clone();
@@ -215,7 +217,11 @@ pub async fn put_raw(
     Path((repo, id_hex)): Path<(String, String)>,
     payload: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    require_role(&auth, Role::Writer)?;
+    // The M13b repo write gate replaces the bare role check: public
+    // repos keep the writer-and-above matrix (the gate answers the same
+    // 403), private repos admit granted writers (uniform 404 for the
+    // rest — the write surface is as invisible as the read surface).
+    repo_write_gate(&state, &auth, &repo).await?;
     let id = parse_single_id(&id_hex)?;
     verify_addressed(&id, &payload)?;
     if payload.len() > BLOB_LIMIT {
@@ -361,7 +367,9 @@ pub async fn create_batch(
     Path(repo): Path<String>,
     body: AppJson<BatchPutRequest>,
 ) -> Result<Json<BatchPutResponse>, ApiError> {
-    require_role(&auth, Role::Writer)?;
+    // The write gate (see put_raw): public repos keep the writer matrix,
+    // private repos admit granted writers.
+    repo_write_gate(&state, &auth, &repo).await?;
     let entries = body.0.objects;
     if entries.len() > BATCH_CAP {
         return Err(ApiError::new(
@@ -527,10 +535,11 @@ pub async fn record_batch(
 )]
 pub async fn get_batch(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
     Path(repo): Path<String>,
     body: AppJson<BatchGetRequest>,
 ) -> Result<Json<BatchGetResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     let ids = parse_id_batch(&body.0.ids)?;
 
     // The redaction gate first (the tombstone wins over membership), then
@@ -628,10 +637,33 @@ pub async fn get_batch(
 )]
 pub async fn get_raw(
     state: State<AppState>,
-    Extension(_auth): Extension<AuthedPrincipal>,
+    Extension(auth): Extension<AuthedPrincipal>,
+    cache_ticket: Option<Extension<CacheTicket>>,
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let id = parse_single_id(&id_hex)?;
+
+    // M13b: the fetch credential decides the repo gate. A BEARER caller
+    // takes the repo READ gate (uniform 404 for a private repo's
+    // non-reader). The CACHE TIER's ticket arm takes the binding check
+    // only: the ticket names its repo (a mismatch is the uniform 404),
+    // the repo must exist, and the ACL check stays at the MINT (the
+    // TTL bound is the plan's staleness story — a ticket minted before
+    // a repo goes private cannot outlive it, and the tier's per-serve
+    // epoch probe plus fresh walks keep the tombstone gate live). The
+    // redaction/membership gates below run for BOTH arms unchanged.
+    match &cache_ticket {
+        Some(t) if t.repo == repo => {
+            repo_id_or_404(&state, &repo).await?;
+        }
+        Some(_) => {
+            return Err(ApiError::new(
+                ApiCode::RepoNotFound,
+                format!("no repo named {repo:?} on this server"),
+            ));
+        }
+        None => repo_read_gate(&state, &auth, &repo).await?,
+    }
 
     // The redaction gate first (the tombstone wins over membership), then
     // the cross-repo isolation gate.

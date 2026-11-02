@@ -38,6 +38,7 @@ pub fn crash_point(_name: &str) {}
 
 use naatre_core::ids::Id;
 
+use super::repo_read_gate;
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
@@ -146,6 +147,9 @@ pub async fn create(
     body: AppJson<CreateRedactionRequest>,
 ) -> Result<axum::response::Response, ApiError> {
     let AppJson(body) = body;
+    // The M13b repo read gate first: a private repo's non-reader gets
+    // the uniform 404; the admin-role matrix follows unchanged.
+    repo_read_gate(&state, &auth, &repo).await?;
     require_role(&auth, Role::Admin)?;
     let kind = match body.kind.as_str() {
         "blob" => "blob",
@@ -345,6 +349,7 @@ pub async fn list(
     Path(repo): Path<String>,
     Query(q): Query<RedactionListQuery>,
 ) -> Result<Json<RedactionListResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     require_role(&auth, Role::Admin)?;
     let limit = super::parse_limit(&crate::routes::ListQuery {
         limit: q.limit.clone(),

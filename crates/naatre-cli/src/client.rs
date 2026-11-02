@@ -241,6 +241,23 @@ impl Client {
         })
     }
 
+    /// PUT a JSON body; succeeds on any 2xx with the parsed JSON. Routed
+    /// through the idempotent-verb retry contract: every PUT this client
+    /// makes is a keyed upsert (`repo access`), so a replay cannot
+    /// double-apply — the same uniform rule as the idempotent POSTs.
+    pub fn put_json_idempotent(&self, path: &str, body: &Value) -> Result<(u16, Value), HttpError> {
+        self.check_version();
+        let url = format!("{}{}", self.base, path);
+        let body = body.clone();
+        self.retrying_codes(&POST_SAFE_RETRY_CODES, move || {
+            let res = self
+                .with_bearer(self.agent.put(&url))
+                .send_json(&body)
+                .map_err(|e| HttpError::transport(e, &url))?;
+            self.finish_json(res)
+        })
+    }
+
     /// DELETE a path; succeeds on any 2xx with the parsed JSON. Routed
     /// through the idempotent-verb retry contract: every DELETE this
     /// client makes is keyed and idempotent (`token revoke`,
@@ -374,7 +391,7 @@ fn envelope_from(value: &Value, status: u16, retry_after: Option<u64>) -> HttpEr
     }
 }
 
-fn bytes_as_envelope(bytes: &[u8], status: u16, retry_after: Option<u64>) -> HttpError {
+pub(crate) fn bytes_as_envelope(bytes: &[u8], status: u16, retry_after: Option<u64>) -> HttpError {
     match serde_json::from_slice::<Value>(bytes) {
         Ok(v) if v["error"]["code"].is_string() => envelope_from(&v, status, retry_after),
         _ => envelope_from(&Value::Null, status, retry_after),
@@ -555,6 +572,88 @@ pub fn principal_delete(name: &str) -> i32 {
                 value["principal"].as_str().unwrap_or(name),
                 value["tokens_deleted"]
             );
+            0
+        }
+        Err(e) => report(&e),
+    }
+}
+
+/// `naatre repo access grant <repo> <principal> --read|--write` (admin,
+/// M13b). `--write` implies read server-side (the invariant is enforced
+/// at the route: a write-only grant is a 422). Idempotent PUT.
+pub fn repo_access_grant(repo: &str, principal: &str, read: bool, write: bool) -> i32 {
+    let client = Client::from_env();
+    let body = json!({ "principal": principal, "read": read, "write": write });
+    match client.put_json_idempotent(&format!("/v1/repos/{}/access", uri_segment(repo)), &body) {
+        Ok((_, value)) => {
+            println!(
+                "granted {} on {}: read={} write={}",
+                value["principal"], value["repo"], value["read"], value["write"]
+            );
+            0
+        }
+        Err(e) => report(&e),
+    }
+}
+
+/// `naatre repo access revoke <repo> <principal> [--read|--write]`
+/// (admin). `--write` downgrades to read-only (a PUT with write = false);
+/// `--read` or no flag removes the grant entirely (DELETE — write cannot
+/// stand without read). Removing the repo's LAST grant returns it to
+/// public (the documented flip). Idempotent either way.
+pub fn repo_access_revoke(repo: &str, principal: &str, read: bool, write: bool) -> i32 {
+    let client = Client::from_env();
+    // A bare `--write` downgrades to read-only (a PUT with write = false);
+    // `--read` (with or without --write) or NO flag removes the grant
+    // entirely (write cannot stand without read).
+    if write && !read {
+        // The write-only revoke: downgrade the row to read-only.
+        let body = json!({ "principal": principal, "read": true, "write": false });
+        match client.put_json_idempotent(&format!("/v1/repos/{}/access", uri_segment(repo)), &body)
+        {
+            Ok((_, value)) => {
+                println!(
+                    "revoked write for {} on {}: read={} write={}",
+                    value["principal"], value["repo"], value["read"], value["write"]
+                );
+                0
+            }
+            Err(e) => report(&e),
+        }
+    } else {
+        match client.delete_json_idempotent(&format!(
+            "/v1/repos/{}/access/{}",
+            uri_segment(repo),
+            uri_segment(principal)
+        )) {
+            Ok(_) => {
+                println!("revoked all access for {principal} on {repo}");
+                0
+            }
+            Err(e) => report(&e),
+        }
+    }
+}
+
+/// `naatre repo access list <repo>` (admin).
+pub fn repo_access_list(repo: &str) -> i32 {
+    let client = Client::from_env();
+    match client.get_json(&format!("/v1/repos/{}/access", uri_segment(repo)), &[]) {
+        Ok(value) => {
+            let rows = value["access"].as_array().map_or(&[][..], Vec::as_slice);
+            if rows.is_empty() {
+                println!("(no grants — {repo} is public)");
+            } else {
+                println!("{:<20} {:<6} {:<6}", "principal", "read", "write");
+                for row in rows {
+                    println!(
+                        "{:<20} {:<6} {:<6}",
+                        row["principal"].as_str().unwrap_or("?"),
+                        row["read"].as_bool().unwrap_or(false),
+                        row["write"].as_bool().unwrap_or(false),
+                    );
+                }
+            }
             0
         }
         Err(e) => report(&e),

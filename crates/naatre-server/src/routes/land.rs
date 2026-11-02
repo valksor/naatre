@@ -39,6 +39,7 @@ use utoipa::ToSchema;
 
 use naatre_core::ids::Id;
 
+use super::repo_read_gate;
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::auth::{AuthedPrincipal, Role, require_role};
@@ -139,7 +140,6 @@ pub async fn land(
     Path(repo): Path<String>,
     body: AppJson<LandRequest>,
 ) -> Result<Json<LandResponse>, ApiError> {
-    require_role(&auth, Role::Writer)?;
     let body = body.0;
 
     let head = parse_id(&body.head)?;
@@ -190,8 +190,25 @@ pub async fn land(
     let cas = Arc::clone(&state.cas);
     let derive = Arc::clone(&state.derive);
     let repo_name = cmd.repo_name.clone();
+    // The M13b repo write gate runs INSIDE the write closure, on purpose:
+    // `begin` stays the leader's first await-free step and the write spawn
+    // stays its first poll boundary (the M4c contracts — a joiner's first
+    // poll finds the in-flight land, and an aborted leader's detached
+    // write still settles) — while an invisible repo's leader runs the
+    // gate in the closure and publishes its uniform 404 to its joiners.
+    // Public repos keep the writer matrix (the same 403).
+    let gate_principal = auth.principal.clone();
+    let gate_role = auth.role;
+    let gate_repo = repo.clone();
     let result = state
         .write_repo(repo_name.clone(), move |cx| {
+            crate::routes::repo_write_gate_sync(
+                &cx.cat(),
+                cx.id,
+                &gate_principal,
+                gate_role,
+                &gate_repo,
+            )?;
             land::execute(cx, cas.as_ref(), &derive, &cmd)
         })
         .await;
@@ -330,6 +347,7 @@ pub async fn land_status(
     Extension(auth): Extension<AuthedPrincipal>,
     Path((repo, key)): Path<(String, String)>,
 ) -> Result<Json<LandStatusResponse>, ApiError> {
+    repo_read_gate(&state, &auth, &repo).await?;
     require_role(&auth, Role::Writer)?;
     let principal = auth.principal.clone();
     let key_for_lookup = key.clone();

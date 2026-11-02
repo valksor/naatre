@@ -35,7 +35,11 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::StoreError;
 
 /// Highest catalog schema version this binary understands.
-pub const CATALOG_MAX_SUPPORTED: i64 = 1;
+///
+/// 2 is M13b's repo read ACLs: the `repo_access` table (the shared
+/// migration 13's twin — global-principal state per repo lives in the
+/// catalog; see that migration's comment for the visibility contract).
+pub const CATALOG_MAX_SUPPORTED: i64 = 2;
 
 /// The `meta` key the offline adoption writes as its LAST catalog write
 /// (after fsck passes). A `catalog.db` without it is a crashed adoption's
@@ -61,6 +65,19 @@ CREATE TABLE tokens(id INTEGER PRIMARY KEY, principal TEXT NOT NULL, blake3 BLOB
 CREATE TABLE audit_log(id INTEGER PRIMARY KEY, ts_ns INTEGER NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL, details_json TEXT NOT NULL);
 CREATE TABLE derive_kinds(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE gc_pending(scope TEXT NOT NULL CHECK(scope IN ('cs','blob','tree')), id BLOB NOT NULL, first_ns INTEGER NOT NULL, condemned_at INTEGER, PRIMARY KEY(scope, id));
+"#,
+    ),
+    // M13b: the repo read ACLs (the shared migration 13's twin — this is
+    // its home in the db-per-repo layout). One row grants read/write on
+    // one repo to one global principal; a repo with at least one row is
+    // PRIVATE (uniform 404 for non-readers on every repo-scoped route,
+    // dropped from the listing), a repo with none is PUBLIC. The invariant
+    // read >= write (write implies read) is enforced by the statement
+    // layer at write time.
+    (
+        2,
+        r#"
+CREATE TABLE repo_access(repo_id INTEGER NOT NULL, principal TEXT NOT NULL, read INTEGER NOT NULL, write INTEGER NOT NULL, PRIMARY KEY(repo_id, principal));
 "#,
     ),
 ];

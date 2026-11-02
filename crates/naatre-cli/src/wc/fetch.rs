@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -15,7 +16,7 @@ use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::path;
 use serde_json::json;
 
-use crate::client::{Client, HttpError};
+use crate::client::{Client, HttpError, bytes_as_envelope};
 use crate::wc::index::Row;
 
 /// A fetch/verify failure: either HTTP or a local data-integrity error.
@@ -236,13 +237,46 @@ fn under(prefixes: &[String], path: &str) -> bool {
 /// Fetches blobs by id in batch, decoding and hash-verifying EVERY payload
 /// client-side (`object_id(Blob)` must equal the requested id). Any missing
 /// id or mismatch aborts with a [`FetchError::Local`].
+///
+/// M13b: with a [`CacheRoute`] active (`NAATRE_CACHE_URL` set) every id is
+/// fetched BY-ID through the tier first (ticket-authenticated, tier-side
+/// membership + tombstone gates apply); the origin's batch endpoint is the
+/// FALLBACK — a cache transport failure (or 5xx) disables the tier for the
+/// rest of the call and the remaining ids go direct (bounded: one cache
+/// attempt per id, one disable per run). The origin's own negative answers
+/// (404/410 passed through by the tier) are authoritative errors, exactly
+/// as when fetching direct.
 pub fn fetch_blobs_verified(
     client: &Client,
     repo: &str,
+    root_tree: &Id,
     ids: &[Id],
+    cache: &mut Option<CacheRoute>,
 ) -> Result<HashMap<Id, Vec<u8>>, FetchError> {
     let mut out = HashMap::new();
-    for chunk in ids.chunks(256) {
+    let mut pending: Vec<Id> = Vec::new();
+    let mut cache_enabled = cache.is_some();
+    for id in ids {
+        if cache_enabled {
+            let route = cache.as_mut().expect("cache_enabled implies a route");
+            match route.fetch_one(client, repo, root_tree, id) {
+                Ok(Some(bytes)) => {
+                    out.insert(*id, bytes);
+                    continue;
+                }
+                Ok(None) => {
+                    // The tier is unreachable or unhealthy: fall back to
+                    // the origin for everything left (bounded — one
+                    // disable per run).
+                    cache_enabled = false;
+                    eprintln!("warning: cache tier unavailable; fetching from the origin instead");
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        pending.push(*id);
+    }
+    for chunk in pending.chunks(256) {
         let body = json!({ "ids": chunk.iter().map(Id::to_hex).collect::<Vec<_>>() });
         // A POST-shaped read (batch object fetch) — the retry contract
         // applies.
@@ -281,6 +315,160 @@ pub fn fetch_blobs_verified(
         }
     }
     Ok(out)
+}
+
+/// The client's route to the `naatre cache` tier (M13b): `NAATRE_CACHE_URL`
+/// set means by-id object fetches go through the tier with a ticket minted
+/// from the origin (`POST /v1/repos/{r}/tickets`, the plan's mint-on-
+/// demand client story). Only by-id fetches route here — refs, diffs,
+/// trees, and writes stay direct-to-origin (the plan: refs/log never
+/// proxied). One route per verb run; the ticket lives in memory only
+/// (the token never touches disk either) and re-mints when it nears
+/// expiry or binds a different tree.
+pub struct CacheRoute {
+    /// The tier's base URL, no trailing slash.
+    base: String,
+    /// A minimal agent for the tier (the same no-TLS posture as the
+    /// origin client: LAN/LAN-localhost).
+    agent: ureq::Agent,
+    /// The live ticket, if minted (None until the first by-id fetch).
+    ticket: Option<TicketState>,
+}
+
+struct TicketState {
+    ticket: String,
+    expires_ns: u64,
+    repo: String,
+    root_tree: Id,
+}
+
+impl CacheRoute {
+    /// The `NAATRE_CACHE_URL` route, or `None` when unset/empty.
+    pub fn from_env() -> Option<CacheRoute> {
+        let base = std::env::var("NAATRE_CACHE_URL").ok()?;
+        let base = base.trim().trim_end_matches('/').to_string();
+        if base.is_empty() {
+            return None;
+        }
+        Some(CacheRoute {
+            base,
+            agent: ureq::Agent::new_with_config(
+                ureq::config::Config::builder()
+                    .http_status_as_error(false)
+                    .timeout_connect(Some(Duration::from_secs(5)))
+                    .timeout_global(Some(Duration::from_secs(120)))
+                    .build(),
+            ),
+            ticket: None,
+        })
+    }
+
+    /// One by-id fetch through the tier. `Ok(Some(bytes))` served;
+    /// `Ok(None)` = the tier failed transport-side (caller falls back to
+    /// the origin); `Err` = an AUTHORITATIVE answer (the tier's 404/410 —
+    /// itself the origin's gated answer — or a client-side hash
+    /// mismatch), which must surface, never fall back. One re-mint is
+    /// attempted when the tier answers 401 (an expired ticket mid-run).
+    fn fetch_one(
+        &mut self,
+        client: &Client,
+        repo: &str,
+        root_tree: &Id,
+        id: &Id,
+    ) -> Result<Option<Vec<u8>>, FetchError> {
+        for attempt in 0..2 {
+            // A mint failure is an origin-side problem: the cache path
+            // is unusable — fall back to the origin batch (Ok(None)).
+            let ticket = match self.ticket_for(client, repo, root_tree) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("warning: cache ticket unavailable ({e}); using the origin");
+                    return Ok(None);
+                }
+            };
+            let url = format!("{}/v1/objects/{}", self.base, id.to_hex());
+            let res = self
+                .agent
+                .get(&url)
+                .header("Authorization", format!("NaatreTicket {ticket}"))
+                .call();
+            match res {
+                Ok(res) => {
+                    let status = res.status().as_u16();
+                    let mut body = res.into_body();
+                    if (200..300).contains(&status) {
+                        let bytes = body.read_to_vec().map_err(|e| {
+                            FetchError::Local(format!("cache tier body read failed: {e}"))
+                        })?;
+                        // The pinned integrity gate — the tier's bytes
+                        // are untrusted exactly like the origin's.
+                        verify(id, &bytes)?;
+                        return Ok(Some(bytes));
+                    }
+                    let bytes = body.read_to_vec().unwrap_or_default();
+                    let err = bytes_as_envelope(&bytes, status, None);
+                    if status == 401 && attempt == 0 {
+                        // Expired (or rotated) mid-run: re-mint once.
+                        self.ticket = None;
+                        continue;
+                    }
+                    // 404 (not in ticket scope / origin-missing) and 410
+                    // (origin-redacted) are authoritative negatives.
+                    return Err(FetchError::Http(err));
+                }
+                Err(e) => {
+                    // Transport: bounded fallback (the caller disables
+                    // the tier for this run).
+                    let _ = e;
+                    return Ok(None);
+                }
+            }
+        }
+        unreachable!("both loop arms return")
+    }
+
+    /// A live ticket for (repo, tree): reuses the cached one while it has
+    /// ≥30 s of headroom and matches the binding, else mints a fresh one
+    /// from the origin. The 30 s margin keeps a ticket from dying between
+    /// mint and use on a slow fetch.
+    fn ticket_for(
+        &mut self,
+        client: &Client,
+        repo: &str,
+        root_tree: &Id,
+    ) -> Result<String, String> {
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        if let Some(t) = &self.ticket
+            && t.repo == repo
+            && t.root_tree == *root_tree
+            && now_ns + 30_000_000_000 < t.expires_ns
+        {
+            return Ok(t.ticket.clone());
+        }
+        let (_status, v) = client
+            .post_json(
+                &format!("/v1/repos/{}/tickets", crate::client::uri_segment(repo)),
+                &json!({ "root_tree": root_tree.to_hex() }),
+            )
+            .map_err(|e| e.to_string())?;
+        let ticket = v["ticket"]
+            .as_str()
+            .ok_or_else(|| "the origin's mint response has no ticket".to_string())?
+            .to_string();
+        let expires_ns = v["expires_ns"]
+            .as_u64()
+            .ok_or_else(|| "the origin's mint response has no expiry".to_string())?;
+        self.ticket = Some(TicketState {
+            ticket,
+            expires_ns,
+            repo: repo.to_string(),
+            root_tree: *root_tree,
+        });
+        Ok(self.ticket.as_ref().expect("just stored").ticket.clone())
+    }
 }
 
 /// The pinned client-side integrity gate: payload must hash to its id.

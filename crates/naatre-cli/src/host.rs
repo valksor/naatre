@@ -818,3 +818,216 @@ pub fn restore_backup(
         Err(e) => fail(e),
     }
 }
+
+// ---- M13b: the cache tier and its origin key store -------------------------
+
+/// `naatre cache-key init --data <dir>`: generate the origin's Ed25519
+/// ticket-signing pair (host-local, flocked, audited `cache_key_init` —
+/// actor `admin`, the key ID in the details, never key material).
+/// Refuses when the key store already exists (rotation, not re-init).
+/// The verify list (`cache_keys.json`) carries PUBLIC keys only and is
+/// the file the cache operator copies to the tier.
+pub fn cache_key_init(data: &Path) -> i32 {
+    key_store_write(data, "init", || {
+        if data.join(naatre_server::ticket::SIGNING_FILE).exists()
+            || data.join(naatre_server::ticket::VERIFY_FILE).exists()
+        {
+            return Err(format!(
+                "the cache key store already exists at {} (rotate, don't re-init)",
+                data.join(naatre_server::ticket::SIGNING_FILE).display()
+            ));
+        }
+        let (der, public_hex) = naatre_server::ticket::generate_keypair()?;
+        let id = naatre_server::ticket::key_id_from_hex_checked(&public_hex)?;
+        let keys = naatre_server::ticket::VerifyKeys::parse(&format!(
+            r#"{{"keys":[{{"id":"{id}","public":"{public_hex}","current":true}}]}}"#
+        ))?;
+        naatre_server::ticket::write_signing_file(data, &der)?;
+        naatre_server::ticket::write_verify_file(data, &keys)?;
+        Ok((id, None))
+    })
+}
+
+/// `naatre cache-key rotate --data <dir>`: a fresh current pair; the old
+/// key moves to the RETIRED list with its public half — its unexpired
+/// tickets still verify until their ≤15-min expiry (the staleness bound),
+/// then stop. Audited `cache_key_rotate` with both key ids.
+pub fn cache_key_rotate(data: &Path) -> i32 {
+    key_store_write(data, "rotate", || {
+        let old = naatre_server::ticket::load_verify_keys(data)?;
+        let (der, public_hex) = naatre_server::ticket::generate_keypair()?;
+        let new_id = naatre_server::ticket::key_id_from_hex_checked(&public_hex)?;
+        // Rebuild the list: the new key current, every previous key
+        // retired (id + public preserved; a key id never changes).
+        let mut keys_json = String::from("{\"keys\":[");
+        keys_json.push_str(&format!(
+            r#"{{"id":"{new_id}","public":"{public_hex}","current":true}}"#
+        ));
+        for k in old.keys() {
+            let hex: String = k.public.iter().map(|b| format!("{b:02x}")).collect();
+            let id = k.id.as_str();
+            keys_json.push_str(&format!(
+                r#",{{"id":"{id}","public":"{hex}","current":false}}"#
+            ));
+        }
+        keys_json.push_str("]}");
+        let keys = naatre_server::ticket::VerifyKeys::parse(&keys_json)?;
+        naatre_server::ticket::write_signing_file(data, &der)?;
+        naatre_server::ticket::write_verify_file(data, &keys)?;
+        let retired: Vec<String> = old.keys().iter().map(|k| k.id.clone()).collect();
+        Ok((new_id, Some(retired)))
+    })
+}
+
+/// The shared body of the two key verbs: flock, write the files, audit.
+fn key_store_write(
+    data: &Path,
+    action: &str,
+    write: impl FnOnce() -> Result<(String, Option<Vec<String>>), String>,
+) -> i32 {
+    let cfg = match load_backend_or_fail(data) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    let data_dir = match open_or_fail_backend(data, &cfg) {
+        Ok(d) => d,
+        Err(code) => return code,
+    };
+    let _lock = match lock_or_fail(&data_dir) {
+        Ok(l) => l,
+        Err(code) => return code,
+    };
+    let (new_id, retired) = match write() {
+        Ok(pair) => pair,
+        Err(e) => return fail(e),
+    };
+    // The audit row (actor admin; ids only — never key material).
+    let store = match Store::open_backend(data_dir, &cfg) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    let conn = store.conn();
+    let mut details = serde_json::json!({ "key_id": new_id });
+    if let Some(retired) = &retired {
+        details["retired"] = serde_json::json!(retired);
+    }
+    let write_row = || -> Result<(), StoreError> {
+        let tx = conn.transaction()?;
+        let action = if action == "init" {
+            "cache_key_init"
+        } else {
+            "cache_key_rotate"
+        };
+        db::audit_append(&tx, now_ns(), "admin", action, &details.to_string())?;
+        tx.commit()?;
+        Ok(())
+    };
+    if let Err(e) = write_row() {
+        return fail(e);
+    }
+    match &retired {
+        Some(retired) => {
+            println!(
+                "rotated cache signing key: new {new_id}, retired {}",
+                retired.join(", ")
+            );
+            println!(
+                "the verify list {} now carries both keys — copy it to every cache \
+                 tier and restart it (the retired key's unexpired tickets verify until \
+                 their ≤15-min expiry)",
+                data.join(naatre_server::ticket::VERIFY_FILE).display()
+            );
+        }
+        None => {
+            println!("cache signing key initialized: key id {new_id}");
+            println!(
+                "verify list (public keys only): {} — copy it to the cache tier \
+                 (`naatre cache --key …`); the secret stays at {}",
+                data.join(naatre_server::ticket::VERIFY_FILE).display(),
+                data.join(naatre_server::ticket::SIGNING_FILE).display()
+            );
+        }
+    }
+    0
+}
+
+/// `naatre cache-key show --data <dir>`: the verify ids and which is
+/// current (the operator's rotation checklist). Never prints secrets.
+pub fn cache_key_show(data: &Path) -> i32 {
+    let keys = match naatre_server::ticket::load_verify_keys(data) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    for k in keys.keys() {
+        println!("{} {}", if k.current { "current" } else { "retired" }, k.id);
+    }
+    println!(
+        "verify list: {}",
+        data.join(naatre_server::ticket::VERIFY_FILE).display()
+    );
+    0
+}
+
+/// `naatre cache --origin <url> --key <path|env:NAME> [--listen ADDR]
+/// --data <dir>`: the LAN read tier (M13b). Fail-closed: the verify keys
+/// load BEFORE the listener binds — zero keys (or a malformed entry) is
+/// exit 1 with the reason, never a serving cache.
+#[tokio::main]
+pub async fn cache_run(
+    origin: &str,
+    key_source: &str,
+    listen: &str,
+    data: &Path,
+    log_level: &str,
+) -> i32 {
+    // `--key <path>` or `--key env:NAME` (the brief's path-or-env shape;
+    // the env form keeps the file out of argv-adjacent paths).
+    // `--key <path>` or `--key env:NAME` (the brief's path-or-env shape;
+    // the env form carries no file-permission semantics to check). The
+    // PATH arm loads through the same 0600-at-load guard the origin's
+    // own loader uses — a widened key file is refused, never loaded.
+    let keys = match key_source.strip_prefix("env:") {
+        Some(name) => {
+            let json = std::env::var(name).unwrap_or_else(|_| {
+                eprintln!("error: env var {name:?} (from --key env:{name}) is not set");
+                std::process::exit(1);
+            });
+            naatre_server::ticket::VerifyKeys::parse(&json)
+                .map_err(|e| format!("--key env:{name}: {e}"))
+        }
+        None => naatre_server::ticket::load_verify_key_file(std::path::Path::new(key_source))
+            .map_err(|e| format!("--key {key_source:?}: {e}")),
+    };
+    let keys = match keys {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    let addr: std::net::SocketAddr = match listen.parse() {
+        Ok(a) => a,
+        Err(_) => return fail(format!("invalid listen address {listen:?}")),
+    };
+    if !addr.ip().is_loopback() {
+        eprintln!(
+            "warning: {addr} is non-loopback: cache tickets cross the network in cleartext unless fronted by TLS"
+        );
+    }
+    let state = match naatre_server::cache_tier::CacheState::new(keys, origin, data) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    naatre_server::middleware::logging_setup(log_level);
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => return fail(e),
+    };
+    match naatre_server::cache_tier::run(
+        listener,
+        state,
+        naatre_server::serve::unix_shutdown_signal(),
+    )
+    .await
+    {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
+}

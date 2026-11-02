@@ -97,6 +97,15 @@ pub enum ApiCode {
     /// past its grace window). The row was never written; a retry re-PUTs
     /// the bytes and lands the row fresh.
     BlobSwept,
+    /// 503 — the cache tier could not reach its origin for a step it
+    /// refuses to guess about (a miss fetch, an epoch revalidation). The
+    /// tier never serves un-revalidated bytes, so an origin outage is a
+    /// 503 with `retryable: true`, never a stale answer.
+    OriginUnreachable,
+    /// 503 — ticket minting is not configured on this origin (no signing
+    /// key in the data dir: run `naatre cache-key init`). Not retryable —
+    /// the operator must configure the key, retrying cannot help.
+    CacheDisabled,
     /// 500 — internal error; details never reach the client.
     Internal,
 }
@@ -106,7 +115,7 @@ impl ApiCode {
     /// cross-checks this list against its compile-time-exhaustive variant
     /// list (a `match` with no wildcard arm) and the wire-string table, so
     /// the published enum cannot silently drift from the registry.
-    pub const ALL: [ApiCode; 35] = [
+    pub const ALL: [ApiCode; 37] = [
         ApiCode::TokenInvalid,
         ApiCode::TokenExpired,
         ApiCode::TokenRevoked,
@@ -141,6 +150,8 @@ impl ApiCode {
         ApiCode::RequestTimeout,
         ApiCode::ServerBusy,
         ApiCode::BlobSwept,
+        ApiCode::OriginUnreachable,
+        ApiCode::CacheDisabled,
         ApiCode::Internal,
     ];
 
@@ -181,6 +192,8 @@ impl ApiCode {
             Self::RequestTimeout => "request_timeout",
             Self::ServerBusy => "server_busy",
             Self::BlobSwept => "blob_swept",
+            Self::OriginUnreachable => "origin_unreachable",
+            Self::CacheDisabled => "cache_disabled",
             Self::Internal => "internal",
         }
     }
@@ -219,7 +232,9 @@ impl ApiCode {
             | Self::BlameTooLarge
             | Self::RequestTimeout
             | Self::ServerBusy
-            | Self::BlobSwept => StatusCode::SERVICE_UNAVAILABLE,
+            | Self::BlobSwept
+            | Self::OriginUnreachable
+            | Self::CacheDisabled => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

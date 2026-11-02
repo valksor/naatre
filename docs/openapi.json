@@ -1,6 +1,65 @@
 {
   "components": {
     "schemas": {
+      "AccessEntry": {
+        "description": "One grant as served by the list and the PUT response.",
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "write": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "principal",
+          "read",
+          "write"
+        ],
+        "type": "object"
+      },
+      "AccessListResponse": {
+        "description": "List body.",
+        "properties": {
+          "access": {
+            "items": {
+              "$ref": "#/components/schemas/AccessEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "access"
+        ],
+        "type": "object"
+      },
+      "AccessSetResponse": {
+        "description": "Response of PUT and DELETE.",
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "write": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "repo",
+          "principal",
+          "read",
+          "write"
+        ],
+        "type": "object"
+      },
       "AuditEntry": {
         "description": "One audit row.",
         "properties": {
@@ -676,6 +735,8 @@
           "request_timeout",
           "server_busy",
           "blob_swept",
+          "origin_unreachable",
+          "cache_disabled",
           "internal"
         ],
         "type": "string"
@@ -956,6 +1017,28 @@
         ],
         "type": "object"
       },
+      "MembershipResponse": {
+        "description": "Membership response: the walk's blob ids and the repo's tombstone\nepoch at walk time.",
+        "properties": {
+          "blobs": {
+            "description": "Blob ids, 64 lowercase hex each: the ticket's in-scope set.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "epoch": {
+            "description": "The tombstone epoch (redactions row count) at walk time — the\ntier stores it with the set and re-probes it per store-hit serve.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "blobs"
+        ],
+        "type": "object"
+      },
       "MergeBaseResponse": {
         "description": "Response of `/merge-base`.",
         "properties": {
@@ -967,6 +1050,28 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "MintTicketRequest": {
+        "description": "Request body of `POST /v1/repos/{r}/tickets`.",
+        "properties": {
+          "root_tree": {
+            "description": "The root tree to bind the ticket to, 64 lowercase hex — the walk\nscope the tier will enforce. Must be a tree THIS repo wrote\n(`repo_trees` junction; snapshot trees are never ticketable).",
+            "type": "string"
+          },
+          "ttl_secs": {
+            "description": "Requested lifetime in seconds (default\n[`crate::ticket::TICKET_DEFAULT_LIFETIME_SECS`]; anything above\nthe 15-min cap is refused 422 — the cap is enforced at mint AND\nat verify).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "root_tree"
+        ],
         "type": "object"
       },
       "PathLogResponse": {
@@ -1302,6 +1407,29 @@
         ],
         "type": "object"
       },
+      "SetAccessRequest": {
+        "description": "Request body of `PUT /v1/repos/{r}/access`.",
+        "properties": {
+          "principal": {
+            "description": "The (existing) principal to grant.",
+            "type": "string"
+          },
+          "read": {
+            "description": "Grant read (see the module doc: a repo's first grant makes it\nprivate; write implies read).",
+            "type": "boolean"
+          },
+          "write": {
+            "description": "Grant write (implies read).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "principal",
+          "read",
+          "write"
+        ],
+        "type": "object"
+      },
       "SnapshotBlobStored": {
         "description": "The id echo of a successful snapshot-blob PUT.",
         "properties": {
@@ -1385,6 +1513,51 @@
         },
         "required": [
           "id"
+        ],
+        "type": "object"
+      },
+      "TicketCreated": {
+        "description": "Response of the mint (201).",
+        "properties": {
+          "expires_ns": {
+            "description": "Expiry, ns since the epoch.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key_id": {
+            "description": "The signing key's id (the tier's verify list must carry it).",
+            "type": "string"
+          },
+          "lifetime_secs": {
+            "description": "The granted lifetime in seconds (echo of the effective value).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "root_tree": {
+            "description": "The bound root tree (echo).",
+            "type": "string"
+          },
+          "ticket": {
+            "description": "The ticket string: `<b64url payload>.<b64url signature>.<key-id>`.\nPresented as `Authorization: NaatreTicket <ticket>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "key_id",
+          "expires_ns",
+          "principal",
+          "repo",
+          "root_tree",
+          "lifetime_secs"
         ],
         "type": "object"
       },
@@ -1475,6 +1648,19 @@
           "id",
           "principal",
           "role"
+        ],
+        "type": "object"
+      },
+      "TombstoneEpoch": {
+        "description": "The epoch wire shape.",
+        "properties": {
+          "epoch": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch"
         ],
         "type": "object"
       },
@@ -1771,7 +1957,7 @@
                 }
               }
             },
-            "description": "A page of repos"
+            "description": "A page of repos visible to this principal"
           },
           "400": {
             "description": "Malformed cursor or limit"
@@ -1783,7 +1969,7 @@
             "description": "limit out of the 1..=200 range"
           }
         },
-        "summary": "List repos, cursor-paginated. Any authenticated principal may list (the\nplan documents repo-level read ACLs arriving in M13).",
+        "summary": "List repos, cursor-paginated. Any authenticated principal may list;\nsince M13b the page is FILTERED: private repos (at least one\n`repo_access` row) appear only to admins and granted readers — the\nsame invisibility the repo-scoped routes enforce. The cursor tracks\nthe last RAW row scanned (a filtered-out repo never blocks the\nwalk); a page may therefore come back shorter than `limit` while\n`has_more` is true when private repos were skipped.",
         "tags": [
           "routes::repos"
         ]
@@ -1827,6 +2013,149 @@
         "summary": "Creates a repo (admin, audited). 201 + `Location: /v1/repos/{name}`.",
         "tags": [
           "routes::repos"
+        ]
+      }
+    },
+    "/v1/repos/{r}/access": {
+      "get": {
+        "operationId": "list",
+        "parameters": [
+          {
+            "description": "Repo name",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessListResponse"
+                }
+              }
+            },
+            "description": "The repo's grants (empty = the repo is public)"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "Authenticated without the admin role"
+          },
+          "404": {
+            "description": "No such repo"
+          }
+        },
+        "summary": "Lists the repo's grants (admin). Empty = the repo is public.",
+        "tags": [
+          "routes::access"
+        ]
+      },
+      "put": {
+        "operationId": "set",
+        "parameters": [
+          {
+            "description": "Repo name",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSetResponse"
+                }
+              }
+            },
+            "description": "Grant recorded (the stored flags; write implies read)"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "Authenticated without the admin role"
+          },
+          "404": {
+            "description": "No such repo"
+          },
+          "422": {
+            "description": "Unknown principal, empty principal name, or write-without-read"
+          }
+        },
+        "summary": "Grants (or updates) one principal's read/write flags on the repo\n(admin, audited `access_grant`). The principal must exist (422\notherwise — grants name global principals); `write = true` implies\nread (a `read = false, write = true` body is refused 422, never\nsilently upgraded). A repo's FIRST grant makes it private: from this\ncall on, non-readers meet the uniform 404 everywhere and the listing\ndrops the repo.",
+        "tags": [
+          "routes::access"
+        ]
+      }
+    },
+    "/v1/repos/{r}/access/{principal}": {
+      "delete": {
+        "operationId": "revoke",
+        "parameters": [
+          {
+            "description": "Repo name",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Principal whose grant is removed",
+            "in": "path",
+            "name": "principal",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSetResponse"
+                }
+              }
+            },
+            "description": "Grant removed (or none stood)"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "Authenticated without the admin role"
+          },
+          "404": {
+            "description": "No such repo"
+          }
+        },
+        "summary": "Removes one principal's grant (admin, audited `access_revoke` — an\nabsent grant is a silent 200, nothing happened so nothing is rowed).\nRemoving the repo's LAST grant returns it to PUBLIC (the documented\nflip; README \"Repo access\"). Revoking read removes write with it\n(write without read cannot stand).",
+        "tags": [
+          "routes::access"
         ]
       }
     },
@@ -1893,6 +2222,97 @@
         "summary": "Blames one file at one changeset (any authenticated principal) by\nwalking the first-parent chain over the derived blame diff-state:\nper node one `derive_state` lookup and one `blame_state` point query;\nat each node that touched the path, the line diff between its blob and\nthe parent's blob attributes the introduced lines. First touched node\nwith no parent blob = the add; the walk stops there.",
         "tags": [
           "routes::history"
+        ]
+      }
+    },
+    "/v1/repos/{r}/cache/epoch": {
+      "get": {
+        "operationId": "epoch",
+        "parameters": [
+          {
+            "description": "Repo name (must match the ticket)",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TombstoneEpoch"
+                }
+              }
+            },
+            "description": "The repo's tombstone epoch"
+          },
+          "401": {
+            "description": "Missing, invalid, or expired ticket"
+          },
+          "403": {
+            "description": "Bearer-token callers: this surface is ticket-only"
+          },
+          "404": {
+            "description": "The repo does not match the ticket"
+          }
+        },
+        "summary": "The repo's tombstone epoch (TICKET-ONLY). The tier's store-hit serve\nre-probes this BEFORE serving cached bytes: a changed epoch means a\ntombstone event since the membership walk — the tier drops its\nsnapshot, refetches membership, and the next content fetch goes\nthrough the origin's 410 gate. This is the \"tombstone epoch\nrevalidated at serve\" mechanism (M10's clause carried to the tier).",
+        "tags": [
+          "routes::tickets"
+        ]
+      }
+    },
+    "/v1/repos/{r}/cache/membership": {
+      "get": {
+        "operationId": "membership",
+        "parameters": [
+          {
+            "description": "Repo name (must match the ticket)",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ticket's root tree (must MATCH the ticket's binding — the walk\nis only ever served for the ticket's own scope).",
+            "in": "path",
+            "name": "tree",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
+              }
+            },
+            "description": "The ticket-scoped membership set + the tombstone epoch"
+          },
+          "401": {
+            "description": "Missing, invalid, or expired ticket"
+          },
+          "403": {
+            "description": "Bearer-token callers: this surface is ticket-only"
+          },
+          "404": {
+            "description": "The repo does not match the ticket, or the tree does not match the ticket's root tree"
+          }
+        },
+        "summary": "The ticket's root-tree membership walk (TICKET-ONLY: a bearer token\nanswers 403 — this is the tier's data plane, and the tier holds\ntickets, not tokens). The walk excludes tombstoned ids — the tombstone\ngate at mint/scope time: a tombstoned blob never enters any\nmembership set, so it can never be warmed or served from scope.",
+        "tags": [
+          "routes::tickets"
         ]
       }
     },
@@ -3369,6 +3789,66 @@
         "summary": "Repo-scoped counters (admin): changeset count and this repo's object\nmembership totals (the fuller disk-usage view grows later).",
         "tags": [
           "routes::repos"
+        ]
+      }
+    },
+    "/v1/repos/{r}/tickets": {
+      "post": {
+        "operationId": "mint",
+        "parameters": [
+          {
+            "description": "Repo name",
+            "in": "path",
+            "name": "r",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketCreated"
+                }
+              }
+            },
+            "description": "Ticket minted"
+          },
+          "400": {
+            "description": "The root tree is not 64 lowercase hex"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked, or expired token"
+          },
+          "403": {
+            "description": "A cache ticket is not a minting credential (bearer required)"
+          },
+          "404": {
+            "description": "No such repo — INCLUDING a private repo this principal cannot read (uniform 404, no ticket); or the root tree is not a tree of this repo"
+          },
+          "422": {
+            "description": "ttl_secs above the 15-minute cap"
+          },
+          "503": {
+            "description": "Ticket minting is not configured on this origin (`cache_disabled`: run `naatre cache-key init`)"
+          }
+        },
+        "summary": "Mints a cache ticket (any principal with read on the repo — the READ\ngate runs first, so a private repo's non-reader gets the uniform 404\nand no ticket; that is the invisibility-through-the-cache contract).",
+        "tags": [
+          "routes::tickets"
         ]
       }
     },

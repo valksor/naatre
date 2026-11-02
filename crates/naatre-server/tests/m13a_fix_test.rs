@@ -853,9 +853,19 @@ async fn split_cs_phantom_page_does_not_stall_collection() {
     // One REAL unreachable changeset (collectible garbage) in repo A.
     let _head = seed_orphan_cs(&app, &token).await;
 
-    // 10,000 phantoms: ledger rows for ids no repo's changesets hold,
-    // stamped OLDER than the real candidate (they take the page head).
-    let phantoms: Vec<Id> = (0..10_000u32)
+    // EXACTLY a FULL candidate page of phantoms: ledger rows for ids no
+    // repo's changesets hold, stamped OLDER than the real candidate (they
+    // take the `first_ns ASC` page head, and the real candidate lands
+    // BEHIND the page — row limit + 1 — never inside pass 1's window).
+    // The count is bound to the loop's own page size: this pin is about
+    // the FULL-PAGE boundary (raw_len == GC_BATCH_ROWS) precisely, so a
+    // constant change cannot silently un-full the page and void the pin.
+    assert_eq!(
+        naatre_server::gc::GC_BATCH_ROWS,
+        10_000,
+        "the pinned page size is the loop's page size"
+    );
+    let phantoms: Vec<Id> = (0..naatre_server::gc::GC_BATCH_ROWS as u32)
         .map(|i| {
             let mut b = [0u8; 32];
             b[0..4].copy_from_slice(&i.to_be_bytes());
@@ -881,7 +891,19 @@ async fn split_cs_phantom_page_does_not_stall_collection() {
     // ledger row now (too fresh to collect this pass).
     advance(&f, BASE_NS + GRACE + DAY_NS);
     let rep1 = naatre_server::gc::gc_pass(&state).await.unwrap();
-    assert_eq!(rep1.cs_collected, 0, "the real cs is too fresh: {rep1:?}");
+    // THE FULL-PAGE CONTRACT, spelled per the m13a-fix lesson — the reap
+    // converges ACROSS passes, and this pin asserts BOTH passes' halves:
+    // pass 1's iteration faces a page that is exactly GC_BATCH_ROWS rows
+    // and every one a phantom (the reap deletes the whole page; the
+    // collectible batch is EMPTY), so the loop's zero-collect guard
+    // breaks the pass with nothing collected.
+    assert_eq!(
+        rep1.cs_collected, 0,
+        "pass 1 collects NOTHING: the page is all phantoms, the batch is \
+         empty, and the loop's zero-collect guard breaks the pass — the \
+         real candidate behind the page (row limit + 1, beyond the page's \
+         LIMIT) is never seen by pass 1: {rep1:?}"
+    );
     let single = single_conn(&f.data_path);
     let ledgered: i64 = single
         .query_row(
@@ -890,14 +912,23 @@ async fn split_cs_phantom_page_does_not_stall_collection() {
             |r| r.get(0),
         )
         .unwrap();
+    // Pass 1, half two: the ledger now holds EXACTLY the real candidate —
+    // the full phantom page was reaped and the loop BROKE (a zero-collect
+    // batch cannot advance the paging cursor, so the residue defers to
+    // the next pass by design). One pass, one full-page reap, no
+    // collection — never a single-pass convergence claim.
     assert_eq!(ledgered, 1, "only the real candidate remains: {ledgered}");
 
-    // Pass 2: the real candidate is past grace — collected.
+    // Pass 2: pages FORWARD past the reaped page (the head moved — the
+    // phantoms are gone) and collects NORMALLY: the real candidate is
+    // now the page's only row (raw_len < GC_BATCH_ROWS is the loop's
+    // page-exhaustion break), collected in its own iteration.
     advance(&f, BASE_NS + 2 * (GRACE + DAY_NS));
     let rep2 = naatre_server::gc::gc_pass(&state).await.unwrap();
     assert_eq!(
         rep2.cs_collected, 1,
-        "the candidate behind the phantom page collects: {rep2:?}"
+        "the candidate behind the reaped page collects on the NEXT pass: \
+         {rep2:?}"
     );
     let ledgered: i64 = single
         .query_row(
@@ -909,68 +940,197 @@ async fn split_cs_phantom_page_does_not_stall_collection() {
     assert_eq!(ledgered, 0, "the ledger drains: {ledgered}");
 }
 
-/// Crash between the per-repo deletes and the ledger delete: the stranded
-/// ledger row is a phantom the probes never re-enter — the NEXT pass must
-/// clear it (the existence-only reap). Pre-fix the row strands forever.
+/// The adoption's hot-WAL refusal (m13a-fix advisor round 2): a source
+/// naatre.db left by a KILLED server — real WAL frames, a stale
+/// wal-index (the SIGKILL released the file locks, so SQLite must run
+/// recovery), and the read-only ATTACH cannot run recovery (recovery
+/// writes) — fails at the first src query with a raw SQLite message
+/// AFTER catalog.db exists. The adoption must DETECT that shape (the
+/// open/query error with the WAL siblings present) and name the REMEDY;
+/// the partial-target cleanup still removes catalog.db, and the
+/// original single DB is untouched.
+///
+/// Fixture: a CHILD PROCESS (this same test binary, an #[ignore] test —
+/// the standard parent/child pattern) writes through a real store
+/// connection with autocheckpoint off and then holds the handles; the
+/// parent SIGKILLs it. A separate process is REQUIRED — an in-process
+/// handle either cleans the WAL on close (last connection) or keeps the
+/// process-wide wal-index alive for the adopter (joinable, reads fine):
+/// only a killed process loses the locks and forces recovery.
 #[tokio::test]
-async fn crash_between_cs_repo_delete_and_ledger_delete_converges() {
+async fn adoption_names_the_hot_wal_remedy() {
     let base = tempfile::tempdir().unwrap();
     let dir = base.path().join("data");
     std::fs::create_dir_all(&dir).unwrap();
     let data = DataDir::create(&dir).unwrap();
     std::fs::write(data.db_path(), b"").unwrap();
-    {
-        let f_seed = fixture_at(&dir).await;
-        let app = f_seed.app.clone();
-        let token = f_seed.token.clone();
-        seed_orphan_cs(&app, &token).await;
-        // The fixture state must drop before the child opens the files.
+
+    // The child: opens the store, seeds, holds. Identified by an env the
+    // harness never sets.
+    let exe = std::env::current_exe().expect("current_exe");
+    let mut child = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "adoption_hot_wal_child_writer",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("NAATRE_HOTWAL_DATA", &dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the child writer");
+
+    // Wait for the CHILD'S OWN completion marker: the first WAL frames
+    // appear inside the FIRST migration transaction, so wal-nonempty
+    // would allow a kill mid-migration — a HALF-MIGRATED source, whose
+    // refusal is a schema mismatch, not the hot-WAL shape this pin
+    // exercises. The marker says migrations + seeds are DONE and the
+    // committed frames all sit in the WAL (autocheckpoint off).
+    let wal = PathBuf::from(format!("{}-wal", data.db_path().display()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let marker = dir.join("hotwal-ready");
+    loop {
+        if marker.exists() && wal.exists() && wal.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never completed its seeding"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    drop(data);
 
-    let child = spawn_child(&dir, "gc-cs-crash", "gc_after_cs_repo_rows", None);
-    let collected = wait_bounded(child);
+    // SIGKILL: the locks die with the process; the WAL frames and the
+    // (now stale) wal-index stand — the killed-server shape. The
+    // WAL/-shm files go UNWRITABLE to the adopter (the operator ran the
+    // server as one identity, the migration as another — or the mount is
+    // read-only): SQLite's wal-index recovery writes the -shm, and a
+    // read-only ATTACH that cannot write it answers the raw
+    // SQLITE_READONLY_RECOVERY/CANTINIT message the guard names. (With
+    // the files writable, the read-only attach recovers silently and the
+    // adoption succeeds — the refusal needs this shape.)
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(wal.exists(), "the WAL survived the kill");
+    // (NO file mangling: the files stand exactly as the SIGKILL left
+    // them. Whether SQLite's read-only attach can silently recover the
+    // wal-index is a platform/file-permission question — the pin asserts
+    // the adoption's CONTRACT for both outcomes below.)
+
+    // The adoption's CONTRACT on this shape, both outcomes pinned:
+    //
+    // (a) SQLite's read-only attach silently recovered the wal-index
+    //     (the files were writable to this process) → the adoption
+    //     completes and fscks clean — the killed server's committed
+    //     data traveled;
+    // (b) the open/query REFUSED (the shape the supervisor observed:
+    //     wal recovery the read-only attach cannot run — e.g. the
+    //     wal/-shm unwritable to the migration's identity) → the error
+    //     NAMES the remedy, the partial catalog.db is cleaned, and the
+    //     source stands. Never a raw driver message, never a partial
+    //     target left behind.
+    let cfg = naatre_store::BackendConfig::default();
+    match naatre_server::adopt::adopt_db_per_repo(&dir, &cfg) {
+        Ok(report) => {
+            assert!(report.fsck_clean, "recovered-quietly: {report:?}");
+            assert_eq!(report.repos.len(), 1, "the child's repo traveled");
+        }
+        Err(err) => {
+            let text = err.to_string();
+            assert!(
+                text.contains("unrecovered WAL"),
+                "the refusal names the hot-WAL shape: {text}"
+            );
+            assert!(
+                text.contains("start and stop the single-DB server once"),
+                "the refusal names the remedy: {text}"
+            );
+            assert!(
+                !dir.join("catalog.db").exists(),
+                "the partial target was removed"
+            );
+            assert!(dir.join("naatre.db").exists(), "the source stands");
+            assert!(
+                wal.exists(),
+                "the adoption's error path never touches the source's WAL"
+            );
+        }
+    }
+}
+
+/// The GUARD's own deterministic pin (the detection is the deliverable):
+/// an open/query error with the WAL siblings present becomes the
+/// named-remedy refusal; the same error WITHOUT siblings stays the
+/// plain step failure. File-state independent — this is the code path
+/// every hot-WAL refusal flows through.
+#[test]
+fn hot_wal_guard_names_the_remedy_when_siblings_stand() {
+    let base = tempfile::tempdir().unwrap();
+    let db_path = base.path().join("naatre.db");
+    std::fs::write(&db_path, b"").unwrap();
+    let wal = PathBuf::from(format!("{}-wal", db_path.display()));
+    std::fs::write(&wal, b"frames").unwrap();
+
+    let err =
+        naatre_server::adopt::hot_wal_or_failed(&db_path, "registry read", "raw sqlite: boom");
+    let text = err.to_string();
     assert!(
-        collected.status.success(),
-        "the child must reach and honor the crash point: {}",
-        collected.stderr
+        text.contains("raw sqlite: boom"),
+        "the raw cause is kept: {text}"
     );
+    assert!(text.contains("unrecovered WAL"), "{text}");
+    assert!(
+        text.contains("start and stop the single-DB server once"),
+        "{text}"
+    );
+    assert!(text.contains("partial targets removed"), "{text}");
 
-    // Parent: reopen and converge. The stranded ledger row (the changeset
-    // rows are already gone) must clear on the next pass.
-    // The stranded row's first_ns is the child's pass stamp (BASE + 2
-    // grace steps); the parent runs far enough past it for the reap.
-    let a = attach(&dir, None, BASE_NS + 3 * (GRACE + DAY_NS));
-    let conn = rusqlite::Connection::open(&a.db_path).unwrap();
-    let stranded: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM gc_pending WHERE scope = 'cs'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(stranded, 1, "the crash stranded exactly the ledger row");
-    let cs_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM changesets", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(cs_rows, 0, "the repo rows are already gone");
+    std::fs::remove_file(&wal).unwrap();
+    let plain =
+        naatre_server::adopt::hot_wal_or_failed(&db_path, "registry read", "raw sqlite: boom");
+    let text = plain.to_string();
+    assert!(
+        !text.contains("unrecovered WAL") && text.contains("raw sqlite: boom"),
+        "no siblings → the plain step failure: {text}"
+    );
+}
 
-    let report = naatre_server::gc::gc_pass(&a.state).await.unwrap();
-    assert_eq!(
-        report.cs_collected, 0,
-        "nothing left to collect: {report:?}"
-    );
-    let ledgered: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM gc_pending WHERE scope = 'cs'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        ledgered, 0,
-        "the next pass clears the stranded ledger row (the phantom reap): {report:?}"
-    );
+/// The killed-server child (NEVER run by the suite — spawned and
+/// SIGKILLed by [`adoption_names_the_hot_wal_remedy`]): opens the store,
+/// seeds with autocheckpoint off (frames stay in the WAL), and holds
+/// the handles until killed.
+#[test]
+#[ignore = "spawned and SIGKILLed by adoption_names_the_hot_wal_remedy"]
+fn adoption_hot_wal_child_writer() {
+    let Some(dir) = std::env::var("NAATRE_HOTWAL_DATA").ok() else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let data = DataDir::open_any(&dir);
+    let conn = rusqlite::Connection::open(data.db_path()).expect("child opens the db");
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA wal_autocheckpoint = 0;",
+    )
+    .expect("child pragmas");
+    naatre_store::migrate::migrate(&conn).expect("child migrates");
+    conn.execute(
+        "INSERT INTO repos(id, name, created_ns) VALUES (1, 'hotwal', 1)",
+        [],
+    )
+    .expect("child seeds repos");
+    conn.execute(
+        "INSERT INTO audit_log(ts_ns, principal, action, details_json) \
+         VALUES (1, 'admin', 'init', '{}')",
+        [],
+    )
+    .expect("child seeds audit");
+    // The parent's readiness marker: migrations + seeds are committed
+    // (into the WAL — autocheckpoint off); the handles stay open.
+    std::fs::write(dir.join("hotwal-ready"), b"ok").expect("child marker");
+    // Hold the handles (and the locks) until the parent's SIGKILL.
+    std::thread::sleep(std::time::Duration::from_secs(120));
 }
 
 /// The fixture pinned to an EXPLICIT dir (the crash pins' parent-side
