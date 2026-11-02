@@ -294,16 +294,39 @@ async fn bare_land(bare: &Router, head: &str, key: &str) -> Resp {
 /// would flake under load. 300 ms blocks the first BEGIN attempt
 /// deterministically and clears far inside the window; the callers'
 /// explicit ROLLBACKs become no-ops (rolling back no transaction).
-fn hold_sqlite_write(f: &Fixture) -> rusqlite::Connection {
+fn hold_sqlite_write(f: &Fixture) -> HoldGuard {
     let conn = conn_at(&f.t.db_path);
     conn.execute_batch("BEGIN IMMEDIATE")
         .expect("hold: BEGIN IMMEDIATE");
-    let releaser = conn_at(&f.t.db_path);
+    // The guard owns the HOLDING connection through a shared mutex; the
+    // releaser thread rolls back ON THAT CONNECTION — a genuine
+    // self-release (a second connection's ROLLBACK would be a
+    // per-connection no-op: the M13b-fix senior-qa C3 finding).
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
+    let releaser = std::sync::Arc::clone(&shared);
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
-        let _ = releaser.execute_batch("ROLLBACK");
+        if let Ok(c) = releaser.lock() {
+            let _ = c.execute_batch("ROLLBACK");
+        }
     });
-    conn
+    HoldGuard { shared }
+}
+
+/// The write-lock hold: shared so the releaser thread (and the caller)
+/// can roll the holding connection's transaction back.
+struct HoldGuard {
+    shared: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+}
+
+impl HoldGuard {
+    /// The caller's explicit early release (a no-op once the 300 ms
+    /// releaser has run — rolling back no transaction is fine).
+    fn rollback(&self) {
+        if let Ok(c) = self.shared.lock() {
+            let _ = c.execute_batch("ROLLBACK");
+        }
+    }
 }
 
 /// Bounded cooperative handoff: lets a just-spawned land task take its
@@ -463,7 +486,7 @@ async fn cancelled_leader_fails_its_joiner_promptly() {
 
     // Release the SQLite lock so the cancelled leader's detached blocking
     // closure finishes before the temp dir drops.
-    let _ = hold.execute_batch("ROLLBACK");
+    hold.rollback();
     wait_key_done(&f, "k-drop").await;
 }
 
@@ -496,7 +519,7 @@ async fn join_deadline_expiry_is_a_prompt_retryable_503() {
     );
 
     // The leader was never touched: release the lock, it lands normally.
-    let _ = hold.execute_batch("ROLLBACK");
+    hold.rollback();
     let done = tokio::time::timeout(Duration::from_secs(10), leader)
         .await
         .expect("leader completes")
@@ -528,7 +551,7 @@ async fn cancelled_leader_that_lands_anyway_heals_via_status_and_retry() {
 
     // The land settles anyway once the lock is gone: the client's error was
     // a lie the status surface can heal.
-    let _ = hold.execute_batch("ROLLBACK");
+    hold.rollback();
     wait_key_done(&f, "k-heal").await;
     let status = m4b_common::get_on(
         &f.t.app,
@@ -609,4 +632,34 @@ async fn missing_tree_row_is_corruption_not_silent_empty() {
         "the failed land leaves the key unsettled"
     );
     assert_eq!(f.main_target().as_deref(), Some(c0.as_str()));
+}
+
+/// The M13b-fix senior-qa C3 pin: the hold SELF-RELEASES within the
+/// documented 300 ms window WITHOUT any caller rollback — a write_repo
+/// (a gate-observing write) proceeds while the hold's guard still lives,
+/// which the pre-fix second-connection ROLLBACK (a per-connection no-op)
+/// could never deliver.
+#[tokio::test]
+async fn the_hold_self_releases_without_a_caller_rollback() {
+    let f = fixture();
+    let hold = hold_sqlite_write(&f);
+    let state = std::sync::Arc::clone(&f.t.state);
+    let started = Instant::now();
+    let done =
+        tokio::spawn(async move { state.write_repo(m4b_common::REPO, move |_cx| Ok(())).await });
+    // Well inside the 5 s busy window the detached land closure works
+    // under: the release must land at ~300 ms, and the write proceeds.
+    let outcome = tokio::time::timeout(Duration::from_secs(2), done).await;
+    match outcome {
+        Ok(Ok(Ok(()))) => {}
+        other => panic!("the hold did not self-release in the documented window: {other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the gate observed the release at {:?}",
+        started.elapsed()
+    );
+    // The caller's release is a no-op after the self-release (and the
+    // guard's thread may not have run yet — either way this is legal).
+    hold.rollback();
 }

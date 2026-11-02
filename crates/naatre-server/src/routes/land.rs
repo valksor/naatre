@@ -39,10 +39,10 @@ use utoipa::ToSchema;
 
 use naatre_core::ids::Id;
 
-use super::repo_read_gate;
+use super::{repo_read_gate, repo_write_gate};
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
-use crate::auth::{AuthedPrincipal, Role, require_role};
+use crate::auth::AuthedPrincipal;
 use crate::db;
 use crate::extract::AppJson;
 use crate::land::{self, LandCommand, LandDone};
@@ -348,7 +348,15 @@ pub async fn land_status(
     Path((repo, key)): Path<(String, String)>,
 ) -> Result<Json<LandStatusResponse>, ApiError> {
     repo_read_gate(&state, &auth, &repo).await?;
-    require_role(&auth, Role::Writer)?;
+    // The M13b-fix write-grant decision: land status is WRITER-class
+    // content (it names lands), so the WRITE gate's admission runs here
+    // repo-aware — a PUBLIC repo keeps writer-and-above (the same 403
+    // the pre-M13 matrix answered), a PRIVATE repo admits granted
+    // writers (a reader-role principal WITH a write grant polls its own
+    // land; the pre-fix inner require_role(Writer) 403'd exactly that
+    // caller). The read itself is owner-keyed (land_get by principal +
+    // key).
+    repo_write_gate(&state, &auth, &repo).await?;
     let principal = auth.principal.clone();
     let key_for_lookup = key.clone();
     let repo_for_read = repo.clone();

@@ -168,6 +168,17 @@ pub(crate) fn repo_write_gate_sync(
     role: Role,
     repo_name: &str,
 ) -> Result<(), ApiError> {
+    // The ticket floor (mirrors repo_read_gate): a cache ticket is a
+    // READ-shaped credential for the tier's surfaces — never a write
+    // credential, on public or private repos alike. (B1: the private
+    // branch below only checks the grant's write flag, so without this
+    // floor a ticket under a granted writer would pass.)
+    if role == Role::Ticket {
+        return Err(ApiError::new(
+            ApiCode::Forbidden,
+            "cache tickets are not credentials on this route",
+        ));
+    }
     if role == Role::Admin {
         return Ok(());
     }
@@ -201,6 +212,16 @@ pub(crate) async fn repo_write_gate(
     auth: &AuthedPrincipal,
     repo: &str,
 ) -> Result<(), ApiError> {
+    // The ticket floor (mirrors repo_read_gate above): a cache ticket is
+    // never a write credential — the private branch below only checks
+    // the grant's write flag, so without this floor a ticket under a
+    // granted writer would write on a private repo.
+    if auth.role == Role::Ticket {
+        return Err(ApiError::new(
+            ApiCode::Forbidden,
+            "cache tickets are not credentials on this route",
+        ));
+    }
     let repo_id = repo_id_or_404(state, repo).await?;
     if auth.role == Role::Admin {
         return Ok(());

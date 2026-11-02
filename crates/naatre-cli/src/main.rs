@@ -472,6 +472,16 @@ enum CacheKeyCmd {
         #[arg(long)]
         data: PathBuf,
     },
+    /// Containment (M13b-fix): remove a RETIRED key id from the verify
+    /// list (the current key refuses — rotate first). Tickets under the
+    /// dropped key fail at their next verify. Audited.
+    Drop {
+        /// The retired key id (see `cache-key show`).
+        id: String,
+        /// Existing data directory.
+        #[arg(long)]
+        data: PathBuf,
+    },
     /// Print the verify key ids (current/retired) and the list's path.
     Show {
         /// Existing data directory.
@@ -683,13 +693,11 @@ fn main() {
                     read,
                     write,
                 } => {
-                    if !read && !write {
-                        usage(
-                            "repo access revoke takes --read and/or --write (none removes the grant entirely)",
-                        )
-                    } else {
-                        client::repo_access_revoke(&repo, &principal, read, write)
-                    }
+                    // The documented mapping: `--write` downgrades to
+                    // read-only; `--read` or NO FLAG removes the grant
+                    // entirely (write cannot stand without read — the
+                    // full-removal DELETE path).
+                    client::repo_access_revoke(&repo, &principal, read, write)
                 }
                 AccessCmd::List { repo } => client::repo_access_list(&repo),
             },
@@ -822,6 +830,7 @@ fn main() {
         Cmd::CacheKey { cmd } => match cmd {
             CacheKeyCmd::Init { data } => host::cache_key_init(&data),
             CacheKeyCmd::Rotate { data } => host::cache_key_rotate(&data),
+            CacheKeyCmd::Drop { id, data } => host::cache_key_drop(&data, &id),
             CacheKeyCmd::Show { data } => host::cache_key_show(&data),
         },
         Cmd::Mount {

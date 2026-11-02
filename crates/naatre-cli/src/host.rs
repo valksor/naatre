@@ -828,24 +828,155 @@ pub fn restore_backup(
 /// The verify list (`cache_keys.json`) carries PUBLIC keys only and is
 /// the file the cache operator copies to the tier.
 pub fn cache_key_init(data: &Path) -> i32 {
+    // The M13b-fix audit-repair path: init REFUSES over a healthy store
+    // (rotate, don't re-init) but HEALS the crashed-audit state — the
+    // key files stand (a prior init/audit crash) with no `cache_key_init`
+    // audit row. That state is detected BEFORE the store write and
+    // finishes the accountability record instead of refusing: re-running
+    // init after a failed audit is the documented heal (see
+    // key_store_write's log-and-answer).
+    if data.join(naatre_server::ticket::SIGNING_FILE).exists()
+        && data.join(naatre_server::ticket::VERIFY_FILE).exists()
+    {
+        return cache_key_repair_audit(data);
+    }
     key_store_write(data, "init", || {
-        if data.join(naatre_server::ticket::SIGNING_FILE).exists()
-            || data.join(naatre_server::ticket::VERIFY_FILE).exists()
-        {
-            return Err(format!(
-                "the cache key store already exists at {} (rotate, don't re-init)",
-                data.join(naatre_server::ticket::SIGNING_FILE).display()
-            ));
-        }
         let (der, public_hex) = naatre_server::ticket::generate_keypair()?;
         let id = naatre_server::ticket::key_id_from_hex_checked(&public_hex)?;
         let keys = naatre_server::ticket::VerifyKeys::parse(&format!(
             r#"{{"keys":[{{"id":"{id}","public":"{public_hex}","current":true}}]}}"#
         ))?;
-        naatre_server::ticket::write_signing_file(data, &der)?;
+        // The VERIFY LIST goes first (M13b-fix security A5): a crash
+        // between the two writes leaves the origin signing under a key
+        // the list already KNOWS (the old key retires into the list /
+        // the new pair's public is listed before its secret exists) —
+        // never under an unlisted one.
         naatre_server::ticket::write_verify_file(data, &keys)?;
+        naatre_server::ticket::write_signing_file(data, &der)?;
         Ok((id, None))
     })
+}
+
+/// The crashed-audit repair: the key store stands, the `cache_key_init`
+/// audit row does not (a crash between the key-file writes and the audit
+/// — or the log-and-answer's failed-insert state). Rows the CURRENT
+/// key's init record from the verify list and answers success. A store
+/// that already rows the init is refused (the healthy-store posture —
+/// rotate, don't re-init).
+fn cache_key_repair_audit(data: &Path) -> i32 {
+    let cfg = match load_backend_or_fail(data) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    let data_dir = match open_or_fail_backend(data, &cfg) {
+        Ok(d) => d,
+        Err(code) => return code,
+    };
+    let _lock = match lock_or_fail(&data_dir) {
+        Ok(l) => l,
+        Err(code) => return code,
+    };
+    // The verify-list-first write order (security A5) leaves one crash
+    // window: the list stands but the SECRET write never happened. The
+    // repair regenerates the pair in that state — the listed current
+    // public has no secret (a dead key, never used for minting), so a
+    // fresh pair + a fresh list is the only healing — and rows the NEW
+    // id's init record.
+    let keys = match naatre_server::ticket::load_verify_keys(data) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    let secret_missing = !data.join(naatre_server::ticket::SIGNING_FILE).exists();
+    let (_keys, key_id) = if secret_missing {
+        let (der, public_hex) = match naatre_server::ticket::generate_keypair() {
+            Ok(pair) => pair,
+            Err(e) => return fail(e),
+        };
+        let new_id = match naatre_server::ticket::key_id_from_hex_checked(&public_hex) {
+            Ok(id) => id,
+            Err(e) => return fail(e),
+        };
+        let fresh = match naatre_server::ticket::VerifyKeys::parse(&format!(
+            r#"{{"keys":[{{"id":"{new_id}","public":"{public_hex}","current":true}}]}}"#
+        )) {
+            Ok(k) => k,
+            Err(e) => return fail(e),
+        };
+        if let Err(e) = naatre_server::ticket::write_verify_file(data, &fresh) {
+            return fail(e);
+        }
+        if let Err(e) = naatre_server::ticket::write_signing_file(data, &der) {
+            return fail(e);
+        }
+        (fresh, new_id)
+    } else {
+        let Some(current) = keys.keys().iter().find(|k| k.current) else {
+            return fail("the verify list carries no CURRENT key — rotate instead");
+        };
+        let id = current.id.clone();
+        (keys, id)
+    };
+    let store = match Store::open_backend(data_dir, &cfg) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    let conn = store.conn();
+    let write_row = || -> Result<(), StoreError> {
+        let tx = conn.transaction()?;
+        // The repair fires only when NO init row stands (idempotent the
+        // honest way: the healthy store is refused above by file-shape,
+        // and a store whose audit row EXISTS but files were re-created
+        // by hand is rotated, never silently re-inited).
+        let stood = naatre_server::db::audit_page_action(conn, "cache_key_init", i64::MAX, 1)
+            .map_err(StoreError::from)?;
+        if !stood.is_empty() {
+            tx.commit()?;
+            return Ok(());
+        }
+        naatre_server::db::audit_append(
+            &tx,
+            now_ns(),
+            "admin",
+            "cache_key_init",
+            &serde_json::json!({ "key_id": key_id, "repaired": true }).to_string(),
+        )?;
+        tx.commit()?;
+        Ok(())
+    };
+    // The log-and-answer (both verbs — the repair is init's failure
+    // path): the KEY FILES STOOD (they pre-date this attempt); a failed
+    // audit row is logged loudly with the copy duty, never answered as
+    // bare failure — the exit stays nonzero.
+    if let Err(e) = write_row() {
+        eprintln!(
+            "warning: the cache key store STOOD (the key files are written \
+             and in force) but its audit row could not be written: {e}"
+        );
+        eprintln!(
+            "warning: the verify list {} must still be copied to every cache tier",
+            data.join(naatre_server::ticket::VERIFY_FILE).display()
+        );
+        eprintln!(
+            "warning: the audit trail is STILL missing a cache_key_init row — \
+             fix the store (or the table) and re-run `naatre cache-key init \
+             --data {}`",
+            data.display()
+        );
+        return 1;
+    }
+    if secret_missing {
+        println!(
+            "cache-key store repaired: the crashed init's LIST stood without its \
+             SECRET — a fresh pair was generated (current key id {key_id}); the \
+             verify list must be copied to every cache tier"
+        );
+    } else {
+        println!(
+            "cache-key audit trail repaired: the standing key store (current key id \
+             {key_id}) is now rowed — the key files were left untouched"
+        );
+    }
+    0
 }
 
 /// `naatre cache-key rotate --data <dir>`: a fresh current pair; the old
@@ -872,8 +1003,13 @@ pub fn cache_key_rotate(data: &Path) -> i32 {
         }
         keys_json.push_str("]}");
         let keys = naatre_server::ticket::VerifyKeys::parse(&keys_json)?;
-        naatre_server::ticket::write_signing_file(data, &der)?;
+        // The VERIFY LIST goes first (M13b-fix security A5): a crash
+        // between the two writes leaves the origin signing under a key
+        // the list already KNOWS (the old key retires into the list /
+        // the new pair's public is listed before its secret exists) —
+        // never under an unlisted one.
         naatre_server::ticket::write_verify_file(data, &keys)?;
+        naatre_server::ticket::write_signing_file(data, &der)?;
         let retired: Vec<String> = old.keys().iter().map(|k| k.id.clone()).collect();
         Ok((new_id, Some(retired)))
     })
@@ -901,6 +1037,20 @@ fn key_store_write(
         Ok(pair) => pair,
         Err(e) => return fail(e),
     };
+    // The crash point sits between the KEY FILES (plain fs writes, already
+    // durable) and the audit row: a crash here leaves the keys STOOD with
+    // no audit row — the exact state init's repair path and rotate's
+    // log-and-answer below exist for. Debug builds only, the M4
+    // NAATRE_CRASH_POINT pattern.
+    #[cfg(debug_assertions)]
+    {
+        use std::sync::OnceLock;
+        static POINT: OnceLock<Option<String>> = OnceLock::new();
+        let want = POINT.get_or_init(|| std::env::var("NAATRE_CRASH_POINT").ok());
+        if want.as_deref() == Some("cache_key_audit") {
+            panic!("crash point cache_key_audit triggered");
+        }
+    }
     // The audit row (actor admin; ids only — never key material).
     let store = match Store::open_backend(data_dir, &cfg) {
         Ok(s) => s,
@@ -922,8 +1072,34 @@ fn key_store_write(
         tx.commit()?;
         Ok(())
     };
+    // The M13b-fix log-and-answer (the land precedent): the KEY FILES
+    // already stood when the audit was attempted — a failed audit row is
+    // NEVER answered as bare failure. The message states the stood work,
+    // the copy duty, and the heal path; the exit stays nonzero (the
+    // accountability row is missing and the operator must know).
     if let Err(e) = write_row() {
-        return fail(e);
+        eprintln!(
+            "warning: the cache key {action} STOOD (the key files are written \
+             and in force) but its audit row could not be written: {e}"
+        );
+        eprintln!(
+            "warning: the verify list {} must still be copied to every cache tier",
+            data.join(naatre_server::ticket::VERIFY_FILE).display()
+        );
+        if action == "cache_key_rotate" {
+            eprintln!(
+                "warning: a re-run of `naatre cache-key rotate --data {}` heals the \
+                 audit trail (it rotates again and rows the newest key)",
+                data.display()
+            );
+        } else {
+            eprintln!(
+                "warning: a re-run of `naatre cache-key init --data {}` repairs the \
+                 audit trail (it detects the stood key store and rows it)",
+                data.display()
+            );
+        }
+        return 1;
     }
     match &retired {
         Some(retired) => {
@@ -948,6 +1124,112 @@ fn key_store_write(
             );
         }
     }
+    0
+}
+
+/// `naatre cache-key drop <id> --data <dir>`: remove a RETIRED key from
+/// the verify list (the compromised-key containment step — M13b-fix).
+/// The CURRENT key refuses (drop it by ROTATING first — a rotation rows
+/// the replacement and retires the old key legitimately); a dropped id's
+/// still-unexpired tickets fail at their NEXT verify (at the origin and
+/// at every tier carrying the updated list), which is the drain window
+/// the warning names. Audited `cache_key_drop` (actor admin, the id only
+/// — never key material).
+pub fn cache_key_drop(data: &Path, id: &str) -> i32 {
+    let cfg = match load_backend_or_fail(data) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    let data_dir = match open_or_fail_backend(data, &cfg) {
+        Ok(d) => d,
+        Err(code) => return code,
+    };
+    let _lock = match lock_or_fail(&data_dir) {
+        Ok(l) => l,
+        Err(code) => return code,
+    };
+    let keys = match naatre_server::ticket::load_verify_keys(data) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    let Some(dropped) = keys.keys().iter().find(|k| k.id == id) else {
+        return fail(format!(
+            "no verify key with id {id:?} (see `naatre cache-key show`)"
+        ));
+    };
+    if dropped.current {
+        return fail(format!(
+            "{id} is the CURRENT signing key — dropping it strands every ticket \
+             the origin mints; ROTATE first (a rotation retires this key and rows \
+             its replacement), then drop the retired id"
+        ));
+    }
+    let remaining: Vec<String> = keys
+        .keys()
+        .iter()
+        .filter(|k| k.id != id)
+        .map(|k| {
+            let public = k
+                .public
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            format!(
+                r#"{{"id":"{}","public":"{public}","current":{}}}"#,
+                k.id,
+                if k.current { "true" } else { "false" }
+            )
+        })
+        .collect();
+    let updated = match naatre_server::ticket::VerifyKeys::parse(&format!(
+        r#"{{"keys":[{}]}}"#,
+        remaining.join(",")
+    )) {
+        Ok(k) => k,
+        Err(e) => return fail(e),
+    };
+    if let Err(e) = naatre_server::ticket::write_verify_file(data, &updated) {
+        return fail(e);
+    }
+    // The audit row (actor admin; the id only — never key material).
+    let store = match Store::open_backend(data_dir, &cfg) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    let conn = store.conn();
+    let write_row = || -> Result<(), StoreError> {
+        let tx = conn.transaction()?;
+        naatre_server::db::audit_append(
+            &tx,
+            now_ns(),
+            "admin",
+            "cache_key_drop",
+            &serde_json::json!({ "key_id": id }).to_string(),
+        )?;
+        tx.commit()?;
+        Ok(())
+    };
+    // The M13b-fix log-and-answer: the LIST change stood (the write
+    // happened); a failed audit row is logged loudly with the copy duty,
+    // never answered as bare success — the exit stays nonzero.
+    if let Err(e) = write_row() {
+        eprintln!(
+            "warning: the cache key {id} DROP STOOD (the verify list is rewritten) \
+             but its audit row could not be written: {e}"
+        );
+        eprintln!(
+            "warning: the verify list {} must still be copied to every cache tier",
+            data.join(naatre_server::ticket::VERIFY_FILE).display()
+        );
+        return 1;
+    }
+    println!("dropped retired key {id} from the verify list");
+    println!(
+        "copy the verify list {} to every cache tier and restart them — \
+         tickets under the dropped key fail at their next verify (the drain \
+         window: still-valid tickets die at most at their ≤15-min expiry)",
+        data.join(naatre_server::ticket::VERIFY_FILE).display()
+    );
     0
 }
 
@@ -980,8 +1262,6 @@ pub async fn cache_run(
     data: &Path,
     log_level: &str,
 ) -> i32 {
-    // `--key <path>` or `--key env:NAME` (the brief's path-or-env shape;
-    // the env form keeps the file out of argv-adjacent paths).
     // `--key <path>` or `--key env:NAME` (the brief's path-or-env shape;
     // the env form carries no file-permission semantics to check). The
     // PATH arm loads through the same 0600-at-load guard the origin's

@@ -64,6 +64,29 @@ The origin's cache-ticket signing material lives in the data dir:
 `cache_keys.json` (the PUBLIC verify list — current + retired keys, each
 with its id). The data dir is the trust boundary (the same boundary as
 the token store): anything that can read the data dir can mint tickets.
+**Compromised-key containment (M13b-fix)**: a believed-compromised
+signing key is contained by (1) `naatre cache-key rotate --data <dir>` —
+a rotation retires the suspect key and rows its replacement; the suspect
+key's still-unexpired tickets verify until their ≤15-minute TTL — bounded
+staleness; (2) `naatre cache-key drop <retired-id> --data <dir>` — removes
+the RETIRED key from the verify list entirely (the CURRENT key refuses —
+rotate first), so tickets under the suspect key fail at their NEXT verify
+instead of living out the TTL; copy the updated list to every tier and
+restart them. Both verbs are audited (`cache_key_rotate`,
+`cache_key_drop`). If the list itself leaked, rotate once more (mints
+move to the fresh key) and re-copy.
+
+**TLS posture, stated plainly (M13b-fix)**: ticket-bearing requests
+(`Authorization: NaatreTicket` headers) and tier↔origin object fetches
+have **NO TLS option in naatre today** — the tier's origin client and the
+CLI's cache client are plain HTTP by design (the same posture as the
+CLI's origin traffic). The intended deployment is a TRUSTED LAN; front
+BOTH hops with TLS-terminating proxies if the network is not trusted (the
+proxies' own certificates and access control cover the hop; a followup
+may add native TLS to these clients, tracked as a post-plan item). A
+ticket in transit is a bearer-grade credential for by-id reads within its
+TTL — treat the LAN accordingly.
+
 The verify list carries no secrets and is the file operators copy to
 `naatre cache` tiers; a tier holds NO secret material and NO origin
 token — its whole authority is verifying ticket signatures. Rotation

@@ -4153,6 +4153,28 @@ pub struct AccessRow {
     pub write: bool,
 }
 
+/// The VISIBILITY probe, folded (M13b-fix security A8): one round trip
+/// answers "is the repo private" AND "can this principal read it" — the
+/// listing filter's per-row pair in a single statement (the private-bit
+/// probe and the grant probe share the same PK prefix).
+/// `(private, readable)`.
+pub fn access_visibility(
+    conn: &Db,
+    repo_id: i64,
+    principal: &str,
+) -> Result<(bool, bool), DbError> {
+    conn.query_row_map(
+        &Sql::plain(
+            "SELECT \
+                 EXISTS(SELECT 1 FROM repo_access WHERE repo_id = ?1), \
+                 EXISTS(SELECT 1 FROM repo_access WHERE repo_id = ?1 \
+                       AND principal = ?2 AND read = 1)",
+        ),
+        &pv![repo_id, principal],
+        |r| Ok((r.get::<i64>(0)? != 0, r.get::<i64>(1)? != 0)),
+    )
+}
+
 /// True when ANY repo_access row exists for the repo: the private/public
 /// bit. One indexed probe on the PK's repo_id prefix.
 pub fn access_is_private(conn: &Db, repo_id: i64) -> Result<bool, DbError> {
@@ -4164,14 +4186,18 @@ pub fn access_is_private(conn: &Db, repo_id: i64) -> Result<bool, DbError> {
     Ok(hit.is_some())
 }
 
-/// The principal's row on the repo, if granted.
+/// The principal's row on the repo, if granted. The row CARRIES the
+/// principal (the query's own parameter — an empty-string principal
+/// would lie about whose grant this is).
 pub fn access_row(conn: &Db, repo_id: i64, principal: &str) -> Result<Option<AccessRow>, DbError> {
+    let principal_row = principal.to_string();
     conn.query_opt_map(
         &Sql::plain("SELECT read, write FROM repo_access WHERE repo_id = ?1 AND principal = ?2"),
         &pv![repo_id, principal],
-        |r| {
+        move |r| {
+            let principal = principal_row.clone();
             Ok(AccessRow {
-                principal: String::new(),
+                principal,
                 read: r.get::<i64>(0)? != 0,
                 write: r.get::<i64>(1)? != 0,
             })

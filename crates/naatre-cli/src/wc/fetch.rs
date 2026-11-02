@@ -412,14 +412,49 @@ impl CacheRoute {
                         self.ticket = None;
                         continue;
                     }
+                    if status == 401 {
+                        // A PERSISTENT credential refusal after the
+                        // re-mint — the tier's key list is stale (a
+                        // rotation not yet copied) or its clock is far
+                        // off. The tier cannot serve this run: fall back
+                        // to the origin batch (the same bounded fallback
+                        // as a tier failure) — the origin is the
+                        // authoritative answer, never a hard failure.
+                        eprintln!(
+                            "warning: the cache tier refuses the ticket \
+                             ({}); fetching from the origin instead",
+                            code_of_envelope(&err)
+                        );
+                        return Ok(None);
+                    }
+                    if status >= 500 {
+                        // The DOCUMENTED tier-5xx fallback: a tier that
+                        // answers 5xx (origin_unreachable etc.) cannot
+                        // serve authoritatively — the tier is disabled
+                        // for this run and the remaining ids go direct
+                        // (the origin batch below). 404/410 stay
+                        // authoritative refusals (handled above/below);
+                        // the transport detail rides the warning.
+                        eprintln!(
+                            "warning: the cache tier answered {status} \
+                             ({}); fetching from the origin instead",
+                            code_of_envelope(&err)
+                        );
+                        return Ok(None);
+                    }
                     // 404 (not in ticket scope / origin-missing) and 410
                     // (origin-redacted) are authoritative negatives.
                     return Err(FetchError::Http(err));
                 }
                 Err(e) => {
                     // Transport: bounded fallback (the caller disables
-                    // the tier for this run).
-                    let _ = e;
+                    // the tier for this run); the error detail rides
+                    // the warning (qa A5 — "connection refused" and
+                    // "timed out" are different operator problems).
+                    eprintln!(
+                        "warning: the cache tier is unreachable ({e}); \
+                         fetching from the origin instead"
+                    );
                     return Ok(None);
                 }
             }
@@ -468,6 +503,14 @@ impl CacheRoute {
             root_tree: *root_tree,
         });
         Ok(self.ticket.as_ref().expect("just stored").ticket.clone())
+    }
+}
+
+/// The envelope's stable code (the fallback warnings name it).
+fn code_of_envelope(e: &HttpError) -> String {
+    match e {
+        HttpError::Envelope { code, .. } => code.clone(),
+        HttpError::Transport(_) => "transport".into(),
     }
 }
 

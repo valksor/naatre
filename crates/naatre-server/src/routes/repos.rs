@@ -112,19 +112,14 @@ pub async fn list(
             if admin {
                 return Ok::<_, ApiError>((raw, raw_page_full, last_scanned));
             }
-            // The visibility filter, per row: public repos (no access
-            // rows) stay; private repos need this principal's read grant
-            // (one indexed probe each; the page is bounded by limit+1).
+            // The visibility filter, per row: ONE folded probe answers
+            // private AND readable (M13b-fix security A8; the page is
+            // bounded by limit+1).
             let mut visible = Vec::with_capacity(raw.len());
             for row in raw {
-                let keep = if db::access_is_private(conn, row.id).map_err(ApiError::log_internal)? {
-                    db::access_row(conn, row.id, &principal)
-                        .map_err(ApiError::log_internal)?
-                        .is_some_and(|a| a.read)
-                } else {
-                    true
-                };
-                if keep {
+                let (private, readable) = db::access_visibility(conn, row.id, &principal)
+                    .map_err(ApiError::log_internal)?;
+                if !private || readable {
                     visible.push(row);
                 }
             }

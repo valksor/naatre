@@ -655,6 +655,23 @@ pub async fn get_raw(
     match &cache_ticket {
         Some(t) if t.repo == repo => {
             repo_id_or_404(&state, &repo).await?;
+            // Defense-in-depth (M13b-fix security A1): the ticket's
+            // root tree must STILL be a tree this repo wrote — the
+            // mint-time junction check re-run at the fetch (a repo can
+            // only lose history via redaction/GC, and a tree the repo
+            // no longer holds has no business serving through a ticket).
+            let tree = t.root_tree;
+            let known = state
+                .read_repo(repo.clone(), move |cx| {
+                    db::repo_tree_member(cx.db, cx.id, &tree).map_err(ApiError::log_internal)
+                })
+                .await?;
+            if !known {
+                return Err(ApiError::new(
+                    ApiCode::ObjectNotFound,
+                    "the ticket's root tree is not a tree of this repo",
+                ));
+            }
         }
         Some(_) => {
             return Err(ApiError::new(

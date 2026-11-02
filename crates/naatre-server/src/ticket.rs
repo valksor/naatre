@@ -148,6 +148,24 @@ pub fn verify_ticket(
     if claims.exp.saturating_sub(claims.iat) > TICKET_MAX_LIFETIME_SECS * 1_000_000_000 {
         return Err(TicketError::Invalid);
     }
+    // The future-iat refusal: a signed ticket minted "years from now"
+    // would otherwise verify for YEARS (its exp is then far ahead of
+    // now), defeating the verify-side cap's stated purpose — the defense
+    // against a misconfigured or compromised origin. A small skew
+    // tolerance accommodates clock drift between mint and verify hosts;
+    // anything beyond it is refused as invalid.
+    const IAT_SKEW_SECS: u64 = 30;
+    if claims.iat > now_ns.saturating_add(IAT_SKEW_SECS * 1_000_000_000) {
+        return Err(TicketError::Invalid);
+    }
+    // The cap's second arm at verify: even a WELL-STAMPED ticket (iat in
+    // the past, exp - iat within the cap by the mint's own clock) cannot
+    // buy more than the cap of validity from THIS verifier's now — an
+    // origin with a skewed-forward mint clock cannot mint
+    // longer-lived-than-cap tickets.
+    if claims.exp > now_ns.saturating_add(TICKET_MAX_LIFETIME_SECS * 1_000_000_000) {
+        return Err(TicketError::Invalid);
+    }
     if now_ns >= claims.exp {
         return Err(TicketError::Expired);
     }
@@ -199,6 +217,12 @@ impl VerifyKeys {
             if k.id != key_id_from_hex_checked(&k.public)? {
                 return Err(format!(
                     "key id {} does not match its public key's BLAKE3 prefix",
+                    k.id
+                ));
+            }
+            if keys.iter().any(|existing: &VerifyKey| existing.id == k.id) {
+                return Err(format!(
+                    "duplicate key id {} in the verify list (a key id names ONE key)",
                     k.id
                 ));
             }
@@ -278,7 +302,7 @@ pub const VERIFY_FILE: &str = "cache_keys.json";
 /// same posture the data dir's 0700 boundary promises. Applies to the
 /// secret AND to the verify list (public material, but a widened file
 /// means the operator's copy story leaked permissions somewhere; fail
-/// loud at load, not at audit time).
+/// loud at load, not at audit time). The remedy NAMES the chmod.
 fn check_private_file(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -291,9 +315,10 @@ fn check_private_file(path: &Path) -> Result<(), String> {
         if mode & 0o077 != 0 {
             return Err(format!(
                 "{} is group/world-readable (mode {:04o}); key files must be 0600 — \
-                 tighten the permissions and retry",
+                 tighten the permissions first (chmod 600 {}) and retry",
                 path.display(),
-                mode
+                mode,
+                path.display()
             ));
         }
     }
@@ -360,13 +385,21 @@ pub fn write_signing_file(data: &Path, der: &[u8]) -> Result<(), String> {
     {
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        // mode(0600) applies only at CREATE — a rotation REWRITING a
+        // pre-widened file must not inherit the wide mode, so the
+        // permissions are SET explicitly after the write too (M13b-fix
+        // security A4).
         std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
             .open(&path)
-            .and_then(|mut f| f.write_all(der))
+            .and_then(|mut f| {
+                f.write_all(der)?;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            })
             .map_err(|e| format!("writing {path:?}: {e}"))
     }
     #[cfg(not(unix))]
@@ -381,13 +414,19 @@ pub fn write_verify_file(data: &Path, keys: &VerifyKeys) -> Result<(), String> {
     {
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        // set_permissions after the write (see write_signing_file): a
+        // rewrite of a pre-widened file lands 0600, never inherits.
         std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
             .open(&path)
-            .and_then(|mut f| f.write_all(keys.to_json().as_bytes()))
+            .and_then(|mut f| {
+                f.write_all(keys.to_json().as_bytes())?;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            })
             .map_err(|e| format!("writing {path:?}: {e}"))
     }
     #[cfg(not(unix))]
@@ -462,6 +501,54 @@ mod tests {
             verify_ticket(&ticket, &k.verify, NOW + 601 * 1_000_000_000),
             Err(TicketError::Expired)
         );
+    }
+
+    #[test]
+    fn future_iat_refuses_at_verify_even_when_signed() {
+        let k = keys();
+        // A validly-signed ticket whose iat sits in the FUTURE: without
+        // the skew check it would verify for years (exp far ahead of
+        // now) — the verify-side cap's stated purpose is exactly this
+        // defense. 31 s beyond now: past the 30 s skew tolerance.
+        let mut future = claims(600);
+        future.iat = NOW + 31 * 1_000_000_000;
+        future.exp = NOW + 31 * 1_000_000_000 + 600 * 1_000_000_000;
+        let ticket = mint_ticket(&future, &k.pair);
+        assert_eq!(
+            verify_ticket(&ticket, &k.verify, NOW),
+            Err(TicketError::Invalid),
+            "a future-iat ticket refuses"
+        );
+        // Exactly at the skew boundary (30 s): allowed.
+        let mut boundary = claims(600);
+        boundary.iat = NOW + 30 * 1_000_000_000;
+        boundary.exp = NOW + 30 * 1_000_000_000 + 600 * 1_000_000_000;
+        let ticket = mint_ticket(&boundary, &k.pair);
+        verify_ticket(&ticket, &k.verify, NOW).expect("skew-boundary iat verifies");
+    }
+
+    #[test]
+    fn verify_side_cap_bounds_validity_from_the_verifiers_now() {
+        let k = keys();
+        // Minted 800 s ago with a 900 s lifetime (well-formed by the
+        // mint's clock), but claiming 900 MORE seconds from the
+        // verifier's now: the second cap arm refuses — a skewed-forward
+        // origin cannot mint longer-lived-than-cap tickets.
+        let mut skewed = claims(900);
+        skewed.iat = NOW - 800 * 1_000_000_000;
+        skewed.exp = NOW + 900 * 1_000_000_000;
+        let ticket = mint_ticket(&skewed, &k.pair);
+        assert_eq!(
+            verify_ticket(&ticket, &k.verify, NOW),
+            Err(TicketError::Invalid),
+            "validity beyond the cap from the verifier's now refuses"
+        );
+        // The same shape inside the cap: exp within now + 900 verifies.
+        let mut in_cap = claims(900);
+        in_cap.iat = NOW - 800 * 1_000_000_000;
+        in_cap.exp = NOW + 100 * 1_000_000_000;
+        let ticket = mint_ticket(&in_cap, &k.pair);
+        verify_ticket(&ticket, &k.verify, NOW).expect("in-cap ticket verifies");
     }
 
     #[test]
@@ -612,6 +699,59 @@ mod tests {
         .unwrap();
         let err = load_verify_key_file(&dir.join(VERIFY_FILE)).unwrap_err();
         assert!(err.contains("group/world-readable"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn duplicate_key_ids_refuse_at_parse() {
+        let k = keys();
+        // The same id twice — the M13b-fix parse guard refuses (a key id
+        // names ONE key; a duplicated entry would make rotation bookkeeping
+        // ambiguous).
+        let json = format!(
+            r#"{{"keys":[{{"id":"{}","public":"{}","current":true}},{{"id":"{}","public":"{}","current":false}}]}}"#,
+            k.key_id, k.public_hex, k.key_id, k.public_hex
+        );
+        let err = VerifyKeys::parse(&json).unwrap_err();
+        assert!(err.contains("duplicate key id"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rewrites_land_0600_even_over_widened_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (der, public_hex) = generate_keypair().unwrap();
+        let id = key_id_from_hex_checked(&public_hex).unwrap();
+        let verify = VerifyKeys::parse(&format!(
+            r#"{{"keys":[{{"id":"{id}","public":"{public_hex}","current":true}}]}}"#
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // Pre-widen BOTH files (an operator's leaked-copy shape): the
+        // rewrite must land 0600, never inherit (security A4's rotate
+        // half).
+        std::fs::write(dir.path().join(SIGNING_FILE), b"").unwrap();
+        std::fs::write(dir.path().join(VERIFY_FILE), b"").unwrap();
+        std::fs::set_permissions(
+            dir.path().join(SIGNING_FILE),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            dir.path().join(VERIFY_FILE),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        write_signing_file(dir.path(), &der).unwrap();
+        write_verify_file(dir.path(), &verify).unwrap();
+        for name in [SIGNING_FILE, VERIFY_FILE] {
+            let mode = std::fs::metadata(dir.path().join(name))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "{name} lands 0600 after a rewrite");
+        }
     }
 
     #[test]

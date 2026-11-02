@@ -31,7 +31,12 @@
 //!   the tier as content (the mint-time membership walk excludes active
 //!   tombstones; the per-serve epoch probe catches later marks; the
 //!   origin's 410 gates every fetch; a 410 also DELETES any local copy
-//!   — the erasure duty at the tier).
+//!   — the erasure duty at the tier). HONEST RACE WINDOW: the probe and
+//!   the serve are two steps — a tombstone landing at the origin BETWEEN
+//!   the epoch probe and the bytes leaving is caught on the NEXT serve
+//!   of that id (the epoch will differ then), not this one: a
+//!   one-request window of the same class as the origin's own read
+//!   concurrency, never an un-revalidated answer.
 //! * **Corrupt local store → origin fallback**: the local CAS verifies
 //!   every read's hash ([`naatre_store::Cas::get`]); a mismatch is
 //!   refetched from the origin, re-verified, and rewritten. A cache
@@ -93,6 +98,34 @@ struct MembershipSnapshot {
     /// The repo's tombstone epoch at walk time.
     epoch: i64,
     blobs: HashSet<Id>,
+    /// The walk's fetch time (the bound's clock — see
+    /// [`MEMBERSHIP_TTL`] and [`MEMBERSHIP_MAX_ENTRIES`]).
+    fetched_ns: u64,
+}
+
+/// The membership map's bounds (M13b-fix qa A1 / compliance A2 /
+/// senior-dev A1): an entry older than [`MEMBERSHIP_TTL`] is stale
+/// regardless of epoch (the tier refetches it on next use), and the map
+/// is capped at [`MEMBERSHIP_MAX_ENTRIES`] entries — inserting past the
+/// cap evicts the OLDEST-fetched entries first (a multi-repo tier
+/// cannot grow its map without bound). Bounded memory; correctness is
+/// untouched (an evicted snapshot simply refetches).
+const MEMBERSHIP_TTL_NS: u64 = 3600 * 1_000_000_000;
+const MEMBERSHIP_MAX_ENTRIES: usize = 256;
+
+/// Evicts stale + oldest entries to keep the map at or under `cap`.
+fn bound_membership(map: &mut HashMap<(String, Id), MembershipSnapshot>, now_ns: u64, cap: usize) {
+    map.retain(|_, snap| now_ns.saturating_sub(snap.fetched_ns) < MEMBERSHIP_TTL_NS);
+    if map.len() <= cap {
+        return;
+    }
+    let mut order: Vec<((String, Id), u64)> =
+        map.iter().map(|(k, s)| (k.clone(), s.fetched_ns)).collect();
+    order.sort_by_key(|(_, fetched)| *fetched);
+    let excess = map.len() - cap;
+    for (key, _) in order.into_iter().take(excess) {
+        map.remove(&key);
+    }
 }
 
 impl CacheState {
@@ -266,11 +299,12 @@ async fn scope_check(
         .lock_membership()
         .contains_key(&(repo.to_string(), *root_tree));
     if !had_snapshot {
-        let snap = fetch_membership(state, repo, root_tree, ticket).await?;
+        let mut snap = fetch_membership(state, repo, root_tree, ticket).await?;
+        snap.fetched_ns = state.now_ns();
         let in_scope = snap.blobs.contains(id);
-        state
-            .lock_membership()
-            .insert((repo.to_string(), *root_tree), snap);
+        let mut map = state.lock_membership();
+        bound_membership(&mut map, state.now_ns(), MEMBERSHIP_MAX_ENTRIES);
+        map.insert((repo.to_string(), *root_tree), snap);
         return Ok(if in_scope {
             ScopeOutcome::InScope
         } else {
@@ -301,11 +335,12 @@ async fn scope_check(
         });
     }
     // The epoch moved: a tombstone event since the walk. Fresh walk.
-    let snap = fetch_membership(state, repo, root_tree, ticket).await?;
+    let mut snap = fetch_membership(state, repo, root_tree, ticket).await?;
+    snap.fetched_ns = state.now_ns();
     let in_scope = snap.blobs.contains(id);
-    state
-        .lock_membership()
-        .insert((repo.to_string(), *root_tree), snap);
+    let mut map = state.lock_membership();
+    bound_membership(&mut map, state.now_ns(), MEMBERSHIP_MAX_ENTRIES);
+    map.insert((repo.to_string(), *root_tree), snap);
     Ok(if in_scope {
         ScopeOutcome::InScope
     } else {
@@ -329,6 +364,7 @@ async fn fetch_membership(
     Ok(MembershipSnapshot {
         epoch,
         blobs: blobs.into_iter().collect(),
+        fetched_ns: 0, // stamped by the caller (its own clock read)
     })
 }
 
@@ -483,6 +519,20 @@ impl OriginError {
                 message,
                 ..
             } => ApiError::new(ApiCode::ObjectRedacted, message),
+            // The origin's credential refusals pass through as the
+            // credential codes (a 401 from the origin is a ticket
+            // problem — expired or invalid — never an internal error).
+            OriginError::Envelope {
+                status: 401,
+                code,
+                message,
+            } => {
+                if code == "token_expired" {
+                    ApiError::new(ApiCode::TokenExpired, message)
+                } else {
+                    ApiError::new(ApiCode::TokenInvalid, message)
+                }
+            }
             OriginError::Envelope {
                 status: 503,
                 message,

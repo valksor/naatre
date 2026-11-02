@@ -28,7 +28,7 @@ use naatre_core::path::PathError;
 use super::{repo_read_gate, repo_write_gate};
 use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
-use crate::auth::{AuthedPrincipal, Role, require_role};
+use crate::auth::AuthedPrincipal;
 use crate::db;
 use crate::extract::AppJson;
 use crate::routes::repo_id_or_404;
@@ -172,7 +172,13 @@ async fn create_inner(
     repo: &str,
     body: CreateChangesetRequest,
 ) -> Result<ChangesetCreated, ApiError> {
-    require_role(auth, Role::Writer)?;
+    // The M13b-fix write-grant decision: a grant's write flag CONFERS
+    // write, and the route-level repo_write_gate is the admission —
+    // public repos keep the writer-and-above matrix there (the same
+    // 403 the old inner check answered), private repos admit granted
+    // writers (a reader-role principal WITH a write grant authors —
+    // the pre-fix inner require_role 403'd exactly that caller). No
+    // inner role check remains.
 
     // Path scope: every change must sit inside the token's scope. Checked
     // before any validation work — authorization does not leak validation

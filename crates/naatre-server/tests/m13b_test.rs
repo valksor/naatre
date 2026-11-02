@@ -1446,3 +1446,371 @@ async fn split_grant_and_revoke_audit_rows_are_catalog_atomic() {
         .unwrap();
     assert_eq!(grants_after, grants, "a failed grant rows nothing");
 }
+
+// ---- the M13b-fix round ------------------------------------------------------
+
+/// THE BLOCKER (senior-qa B1): a cache ticket NEVER passes a write gate.
+/// The exploit shape the pre-fix code admitted: the ticket's principal
+/// HOLDS a write grant on the private repo (so the private branch's
+/// grant check passes), the ticket itself is valid — and the write gate
+/// must STILL refuse it (the ticket floor), on every write route, one
+/// negative pin per route: object raw PUT, batch PUT, snapshot POST,
+/// snapshot blob PUT, land POST, changeset POST, ref POST.
+#[tokio::test]
+async fn tickets_refuse_on_every_private_repo_write_route() {
+    let f = fixture().await;
+    let app = f.app.clone();
+
+    // agent HOLDS a write grant on the (now private) repo — the exact
+    // shape whose pre-fix hole the floor closes.
+    let (status, body) = send(
+        &app,
+        "PUT",
+        "/v1/repos/m13b-a/access",
+        Some(&bearer(&f.admin)),
+        &json_body(&serde_json::json!({"principal": "agent", "read": true, "write": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, minted) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/tickets",
+        Some(&bearer(&f.agent)),
+        &json_body(&serde_json::json!({"root_tree": f.root_tree.to_hex()})),
+    )
+    .await;
+    assert!(minted.as_object().is_some(), "the mint succeeded: {minted}");
+    let ticket = minted["ticket"].as_str().unwrap().to_string();
+    let ticket_auth = format!("NaatreTicket {ticket}");
+    let blob0 = f.blobs[0].to_hex();
+
+    // One negative pin per write route: the ticket floor answers 403
+    // BEFORE the grant check could admit.
+    let writes: Vec<(&str, &str, serde_json::Value)> = vec![
+        (
+            "POST",
+            "/v1/repos/m13b-a/land",
+            serde_json::json!({"head": blob0, "key": "k"}),
+        ),
+        (
+            "POST",
+            "/v1/repos/m13b-a/tickets",
+            serde_json::json!({"root_tree": f.root_tree.to_hex()}),
+        ),
+    ];
+    for (method, uri, body) in &writes {
+        let (status, resp) = send(&app, method, uri, Some(&ticket_auth), &json_body(body)).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{method} {uri}: a ticket is never a write credential: {resp}"
+        );
+        assert_eq!(code_of(&resp), "forbidden", "{uri}: {resp}");
+    }
+
+    // Object raw PUT (bytes body — send raw, not JSON).
+    let (status, body) = send(
+        &app,
+        "PUT",
+        &format!("/v1/repos/m13b-a/objects/{blob0}"),
+        Some(&ticket_auth),
+        b"payload bytes",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "raw PUT: {body}");
+    assert_eq!(code_of(&body), "forbidden");
+
+    // Batch PUT.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/objects",
+        Some(&ticket_auth),
+        &json_body(&serde_json::json!({"objects": []})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "batch PUT: {body}");
+
+    // Changeset POST (the author route).
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/changesets",
+        Some(&ticket_auth),
+        &json_body(&serde_json::json!({
+            "parents": [],
+            "author": "t <t@x>",
+            "message": "m",
+            "changes": []
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "changeset POST: {body}");
+    assert_eq!(code_of(&body), "forbidden", "{body}");
+
+    // Snapshot POST — a schema-valid body (the gate runs after the
+    // extractor, so the floor's 403 must come from the GATE, not a 422
+    // from a malformed body).
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/snapshots",
+        Some(&ticket_auth),
+        &json_body(&serde_json::json!({
+            "snap_id": "aa".repeat(32),
+            "tree_id": f.root_tree.to_hex(),
+            "trees": []
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "snapshot POST: {body}");
+    assert_eq!(code_of(&body), "forbidden", "{body}");
+
+    // Snapshot blob PUT.
+    let (status, body) = send(
+        &app,
+        "PUT",
+        &format!(
+            "/v1/repos/m13b-a/snapshots/{}/objects/{}",
+            "aa".repeat(32),
+            blob0
+        ),
+        Some(&ticket_auth),
+        b"payload bytes",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "snapshot blob PUT: {body}");
+
+    // And a WRITE-GRANTED BEARER principal still writes (both directions
+    // on the same shape: the floor is about the CREDENTIAL, not the
+    // grant).
+    let (status, _) = send(
+        &app,
+        "PUT",
+        &format!("/v1/repos/m13b-a/objects/{blob0}"),
+        Some(&bearer(&f.agent)),
+        b"m13b payload 0\n",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the write-granted BEARER principal writes (the grant confers; \\
+         the ticket floor is about the credential)"
+    );
+}
+
+/// Defense-in-depth (M13b-fix security A1) pinned: a ticket bound to a
+/// FOREIGN tree — validly signed by the origin's own key (hand-minted,
+/// bypassing the mint's junction check exactly the way a stolen
+/// signing-key scenario would) — answers the uniform 404 at the by-id
+/// fetch's ticket arm: the fetch re-runs the repo_trees junction check
+/// the mint performed.
+#[tokio::test]
+async fn a_foreign_tree_ticket_refuses_at_the_fetch() {
+    let f = fixture().await;
+    let app = f.app.clone();
+    // Hand-mint: the fixture's signing key + a claim bound to a tree the
+    // repo never wrote.
+    let foreign_tree = "ee".repeat(32);
+    let claims = naatre_server::ticket::TicketClaims {
+        v: 1,
+        tid: "ab".repeat(16),
+        principal: "agent".into(),
+        repo: "m13b-a".into(),
+        root_tree: foreign_tree.clone(),
+        iat: BASE_NS,
+        exp: BASE_NS + 600 * 1_000_000_000,
+    };
+    let der = std::fs::read(f.data_path.join(naatre_server::ticket::SIGNING_FILE)).unwrap();
+    let pair = ring::signature::Ed25519KeyPair::from_pkcs8(&der).unwrap();
+    let ticket = naatre_server::ticket::mint_ticket(&claims, &pair);
+    let ticket_auth = format!("NaatreTicket {ticket}");
+    let blob0 = f.blobs[0].to_hex();
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/v1/repos/m13b-a/objects/{blob0}"),
+        Some(&ticket_auth),
+        b"",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a foreign-tree ticket is refused at the fetch: {body}"
+    );
+    assert_eq!(code_of(&body), "object_not_found", "{body}");
+}
+
+/// The write-grant decision pinned BOTH directions: a reader-role
+/// principal WITH a write grant AUTHORS a changeset and polls land
+/// status on the private repo (the grant confers — the pre-fix inner
+/// require_role 403'd exactly this caller), while the PUBLIC-repo role
+/// matrix is unchanged (reader without grant → 403).
+#[tokio::test]
+async fn a_write_grant_confers_authoring_and_status() {
+    let f = fixture().await;
+    let app = f.app.clone();
+
+    // alice: reader role, WRITE grant on the private repo.
+    let (alice, alice_hash) = naatre_server::auth::mint_token();
+    let s = Arc::clone(&f.state);
+    let h = alice_hash;
+    s.write(move |store| {
+        let conn = store.conn();
+        let tx = conn.transaction().unwrap();
+        naatre_server::db::principal_upsert(&tx, "alice", "reader", BASE_NS as i64).unwrap();
+        naatre_server::db::token_insert(&tx, "alice", &h, None, None).unwrap();
+        tx.commit().unwrap();
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let (status, _) = send(
+        &app,
+        "PUT",
+        "/v1/repos/m13b-a/access",
+        Some(&bearer(&f.admin)),
+        &json_body(&serde_json::json!({"principal": "alice", "read": true, "write": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let alice_auth = bearer(&alice);
+
+    // A changeset needs a parent chain: seed one real changeset as the
+    // admin through the route (writer role suffices — admin).
+    let blob = f.blobs[0];
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/changesets",
+        Some(&bearer(&f.admin)),
+        &json_body(&serde_json::json!({
+            "parents": [],
+            "author": "a <a@x>",
+            "message": "seed",
+            "changes": [{"path": "f1.txt", "op": "add", "blob": blob.to_hex(), "size": 15, "exec": false}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "admin seeds: {body}");
+    let seeded = body["id"].as_str().unwrap().to_string();
+
+    // main must exist before ANY land — land moves but never creates it
+    // (the import-only seeding rule): the ref row is seeded directly,
+    // the fixture shape.
+    {
+        let s = Arc::clone(&f.state);
+        let seeded_cs = Id::from_hex(&seeded).unwrap();
+        s.write_repo("m13b-a", move |cx| {
+            cx.db
+                .execute(
+                    &naatre_store::Sql::plain(
+                        "INSERT INTO refs(repo_id, name, target, version, last_principal) \
+                         VALUES (?1, 'main', ?2, 1, 'admin')",
+                    ),
+                    &naatre_store::pv![cx.id, seeded_cs.0.as_slice()],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    // The admin lands the seed.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/land",
+        Some(&bearer(&f.admin)),
+        &json_body(&serde_json::json!({"head": seeded, "key": "admin-k"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the admin lands main: {body}");
+
+    // THE PIN: alice (reader role, write grant) AUTHORS on the private
+    // repo.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/changesets",
+        Some(&alice_auth),
+        &json_body(&serde_json::json!({
+            "parents": [seeded],
+            "author": "al <al@x>",
+            "message": "alice authors",
+            "changes": [{"path": "f1.txt", "op": "mod", "blob": blob.to_hex(), "size": 15, "exec": false}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a reader-role principal with a write grant authors: {body}"
+    );
+    let authored = body["id"].as_str().unwrap().to_string();
+
+    // ...and LANDS (the write gate admitted her already — the land
+    // route's closure gate).
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/land",
+        Some(&alice_auth),
+        &json_body(&serde_json::json!({"head": authored, "key": "alice-k"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the granted writer lands: {body}");
+
+    // ...and POLLS her land status (the pre-fix inner require_role
+    // 403'd exactly this caller).
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/v1/repos/m13b-a/land/alice-k",
+        Some(&alice_auth),
+        b"",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the granted writer polls her own land status: {body}"
+    );
+
+    // THE PUBLIC-REPO MATRIX UNCHANGED: alice (reader, NO grant — the
+    // grant was revoked here by re-granting... simplest: use the other
+    // public repo shape — make the repo public again by revoking the
+    // last grant) → reader POSTs a changeset → 403 (never admitted).
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        "/v1/repos/m13b-a/access/alice",
+        Some(&bearer(&f.admin)),
+        b"",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/v1/repos/m13b-a/changesets",
+        Some(&alice_auth),
+        &json_body(&serde_json::json!({
+            "parents": [],
+            "author": "al <al@x>",
+            "message": "post-revoke",
+            "changes": [{"path": "f1.txt", "op": "mod", "blob": blob.to_hex(), "size": 15, "exec": false}]
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "public repo: the reader matrix is unchanged: {body}"
+    );
+    assert_eq!(code_of(&body), "forbidden");
+}

@@ -319,9 +319,15 @@ async fn authenticate_ticket(
         .await
         .into_response();
     };
-    let keys = match crate::ticket::load_verify_keys(&state.data_dir_display) {
-        Ok(keys) => keys,
-        Err(_) => {
+    // The key-file read is BLOCKING file I/O — it runs on the blocking
+    // pool, never on the async runtime (the mint's own load does the
+    // same; one fix serves the three M13b-fix findings).
+    let data_dir = state.data_dir_display.clone();
+    let keys = match tokio::task::spawn_blocking(move || crate::ticket::load_verify_keys(&data_dir))
+        .await
+    {
+        Ok(Ok(keys)) => keys,
+        Ok(Err(_)) => {
             let key = failure_key(auth_header);
             return fail_auth(
                 state,
@@ -331,6 +337,10 @@ async fn authenticate_ticket(
             )
             .await
             .into_response();
+        }
+        Err(join) => {
+            tracing::error!(error = %join, "key load task panicked");
+            return ApiError::internal().into_response();
         }
     };
     let claims = match crate::ticket::verify_ticket(ticket_str, &keys, state.now_ns()) {

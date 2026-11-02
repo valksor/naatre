@@ -399,7 +399,7 @@ fn m13_cache_authz_e2e() {
     // ---- pin: the client story -----------------------------------------
     step!("client story: clone with NAATRE_CACHE_URL routes through the tier");
     let clone_dir = root.join("client1");
-    let writer_cached = Naatre {
+    let mut writer_cached = Naatre {
         bin: bin.clone(),
         url: origin_url.clone(),
         token: writer.clone(),
@@ -918,25 +918,132 @@ fn m13_cache_authz_e2e() {
     );
 
     // An OLD ticket that then EXPIRES refuses (retired + expired).
-    let dying = mint_with_expired(&bin, root, &origin_url, &writer, "demo", &tree_v2);
-    sleep(Duration::from_millis(1500));
-    let (status, body) = http(
+    // (The next four pins need the demo repo still PUBLIC and agent
+    // still minting, so they run BEFORE the private-repo pin below.)
+
+    // ---- M13b-fix item 6: cache-key drop (containment) -----------------
+    step!("M13b-fix: cache-key drop (retired only; current refuses; tier drains)");
+    let show = origin_naatre.run_ok(
+        root,
+        &["cache-key", "show", "--data", origin_data.to_str().unwrap()],
+    );
+    let retired_id = show
+        .lines()
+        .find_map(|l| l.strip_prefix("retired ").map(str::to_string))
+        .expect("the rotation left a retired key");
+    let current_id = show
+        .lines()
+        .find_map(|l| l.strip_prefix("current ").map(str::to_string))
+        .expect("a current key stands");
+    // The CURRENT key refuses to drop (flocked: serve stops for the
+    // attempt — the refusal is the verb's own, not the flock's).
+    origin.stop();
+    let out = origin_naatre.run(
+        root,
+        &[
+            "cache-key",
+            "drop",
+            &current_id,
+            "--data",
+            origin_data.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "the current key refuses to drop: {}",
+        string_of(&out.stderr)
+    );
+    assert!(
+        string_of(&out.stderr).contains("ROTATE first"),
+        "the refusal names the rotation remedy: {}",
+        string_of(&out.stderr)
+    );
+    // The retired key drops (audited — asserted with the init/rotate rows
+    // in the fix-audit pin below). Flocked like every host verb: serve
+    // stops for it.
+    origin.stop();
+    origin_naatre.run_ok(
+        root,
+        &[
+            "cache-key",
+            "drop",
+            &retired_id,
+            "--data",
+            origin_data.to_str().unwrap(),
+        ],
+    );
+    origin = Serve::start_listener(
+        &bin,
+        &[
+            "serve",
+            "--data",
+            origin_data.to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{origin_port}"),
+        ],
+        &root.join("origin.log"),
+        origin_port,
+        "/healthz",
+    );
+    let _origin_guard_drop = &mut origin;
+    // The tier still runs the pre-drop list (restart-to-refresh is the
+    // documented story) — the retired key's LIVE ticket still verifies
+    // there; the ORIGIN (fresh list) already refuses it: the drain
+    // window's outer edge.
+    let (status, _) = http(
         origin_port,
         "GET",
         "/v1/repos/demo/cache/epoch",
-        Some(&format!("NaatreTicket {dying}")),
+        Some(&old_auth),
         b"",
     )
     .unwrap();
-    assert_eq!(status, 401, "retired+expired refuses: {status}");
-    assert_eq!(code_of(&json_of(&body)), "token_expired");
-    let _ = dying;
+    assert_eq!(
+        status, 401,
+        "the dropped key's ticket refuses at the origin"
+    );
+    // After the tier restarts on the updated list: the same refusal.
+    cache.stop();
+    cache = Serve::start_listener(
+        &bin,
+        &[
+            "cache",
+            "--origin",
+            &origin_url,
+            "--key",
+            origin_data.join("cache_keys.json").to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{cache_port}"),
+            "--data",
+            cache_data.to_str().unwrap(),
+        ],
+        &root.join("cache.log"),
+        cache_port,
+        "/healthz",
+    );
+    let (status, _) = http(
+        cache_port,
+        "GET",
+        &format!("/v1/objects/{live_id}"),
+        Some(&old_auth),
+        b"",
+    )
+    .unwrap();
+    assert_eq!(
+        status, 401,
+        "the dropped key's ticket refuses at the restarted tier"
+    );
 
     // ---- pin: private-repo invisibility THROUGH the cache ------------------
     step!("pin: private-repo invisibility through the cache");
     // Make demo private (alice only). agent's fresh mint → uniform 404;
     // the pre-existing VALID ticket still serves until its TTL (the
-    // documented bound) — then a NEW mint is impossible.
+    // documented bound) — then a NEW mint is impossible. The staleness
+    // ticket is minted NOW (pre-flip, the current standing key — t2's
+    // tombstone-era key was legitimately dropped by the containment pin
+    // above; containment outranks staleness).
+    let t_stale = mint("demo", &tree_v2, None);
+    let t_stale_auth = format!("NaatreTicket {}", t_stale["ticket"].as_str().unwrap());
     // (Grants name existing principals: alice's token create upserts her.)
     origin_naatre.run_ok(root, &["token", "create", "alice", "--role", "reader"]);
     let (status, body) = http(
@@ -994,13 +1101,498 @@ fn m13_cache_authz_e2e() {
         cache_port,
         "GET",
         &format!("/v1/objects/{live_id}"),
-        Some(&t2_auth),
+        Some(&t_stale_auth),
         b"",
     )
     .unwrap();
     assert_eq!(
         status, 200,
         "an unexpired ticket minted BEFORE the repo went private serves within its TTL (the documented staleness bound)"
+    );
+
+    // The item-2b/503 pins that follow need agent READING demo again
+    // (the flip made the repo invisible to him): grant agent now —
+    // himself a pin (a granted writer's fresh mint succeeds on the
+    // private repo).
+    let (status, body) = http(
+        origin_port,
+        "PUT",
+        "/v1/repos/demo/access",
+        Some(&format!("Bearer {admin}")),
+        serde_json::to_vec(&serde_json::json!({"principal": "agent", "read": true, "write": true}))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", string_of(&body));
+    let (status, agent_mint_body) = http(
+        origin_port,
+        "POST",
+        "/v1/repos/demo/tickets",
+        Some(&format!("Bearer {writer}")),
+        serde_json::to_vec(&serde_json::json!({ "root_tree": tree_v2 }))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    assert_eq!(
+        status,
+        201,
+        "the granted agent mints on the private repo: {}",
+        string_of(&agent_mint_body)
+    );
+
+    // ---- M13b-fix item 5: audit-failure log-and-answer + init repair ---
+    step!("M13b-fix: init audit crash → repair; audit-table failure → stood-and-copy message");
+    // A crashed init (the crash point sits between the key files and the
+    // audit): the keys STAND with no audit row.
+    let crash_dir = root.join("crash-keys");
+    std::fs::create_dir_all(&crash_dir).unwrap();
+    let out = Command::new(&bin)
+        .args(["init", "--data", crash_dir.to_str().unwrap()])
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("crash-dir init");
+    assert!(out.status.success());
+    let out = Command::new(&bin)
+        .args(["cache-key", "init", "--data", crash_dir.to_str().unwrap()])
+        .env("NAATRE_CRASH_POINT", "cache_key_audit")
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("crashed cache-key init");
+    assert!(!out.status.success(), "the crash point fires (debug build)");
+    assert!(
+        crash_dir.join("cache_keys.json").exists()
+            && crash_dir.join("cache_signing.pkcs8").exists(),
+        "the key files STOOD through the crash"
+    );
+    // Re-run init: the repair path detects files-without-audit-row and
+    // finishes the record.
+    let out = Command::new(&bin)
+        .args(["cache-key", "init", "--data", crash_dir.to_str().unwrap()])
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("repair init");
+    assert!(
+        out.status.success(),
+        "init repairs the crashed-audit state: {}{}",
+        string_of(&out.stdout),
+        string_of(&out.stderr)
+    );
+    assert!(
+        string_of(&out.stdout).contains("repaired"),
+        "the repair names itself: {}",
+        string_of(&out.stdout)
+    );
+
+    // The LOG-AND-ANSWER message (both verbs): with the audit_log table
+    // gone, the audit insert fails at runtime and the verbs answer the
+    // stood-and-copy message with a nonzero exit.
+    let cat = std::fs::OpenOptions::new()
+        .read(true)
+        .open(crash_dir.join("naatre.db"))
+        .map(drop);
+    let _ = cat;
+    // (rusqlite via the dev-dep: drop the audit table out from under the
+    // verb.)
+    {
+        use rusqlite::Connection;
+        let conn = Connection::open(crash_dir.join("naatre.db")).unwrap();
+        conn.execute_batch("DROP TABLE audit_log;").unwrap();
+    }
+    // INIT (a fresh crash → keys stood again, then the audit fails on
+    // the missing table): wait — init refuses over the standing store.
+    // The repair path IS the init failure path here: repair's audit
+    // append fails on the dropped table → the stood-and-copy message.
+    let out = Command::new(&bin)
+        .args(["cache-key", "init", "--data", crash_dir.to_str().unwrap()])
+        .env("NAATRE_CRASH_POINT", "cache_key_audit")
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("second crashed init");
+    assert!(!out.status.success());
+    let out = Command::new(&bin)
+        .args(["cache-key", "init", "--data", crash_dir.to_str().unwrap()])
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("repair attempt against the dropped table");
+    assert!(!out.status.success(), "the audit failed → nonzero exit");
+    let stderr = string_of(&out.stderr);
+    assert!(
+        stderr.contains("STOOD") && stderr.contains("must still be copied"),
+        "the init failure message states the stood work and the copy duty: {stderr}"
+    );
+    // Restore the table: the repair then completes.
+    {
+        use rusqlite::Connection;
+        let conn = Connection::open(crash_dir.join("naatre.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE audit_log(id INTEGER PRIMARY KEY, ts_ns INTEGER NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL, details_json TEXT NOT NULL);",
+        )
+        .unwrap();
+    }
+    let out = Command::new(&bin)
+        .args(["cache-key", "init", "--data", crash_dir.to_str().unwrap()])
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("final repair");
+    assert!(
+        out.status.success(),
+        "the repair completes: {}",
+        string_of(&out.stderr)
+    );
+    // The ROTATE message: same shape (rotate on the origin data dir with
+    // the audit table dropped — rotate stands, the message fires).
+    origin.stop();
+    {
+        use rusqlite::Connection;
+        let conn = Connection::open(origin_data.join("naatre.db")).unwrap();
+        conn.execute_batch("DROP TABLE audit_log;").unwrap();
+    }
+    let out = Command::new(&bin)
+        .args([
+            "cache-key",
+            "rotate",
+            "--data",
+            origin_data.to_str().unwrap(),
+        ])
+        .env_remove("NAATRE_URL")
+        .env_remove("NAATRE_TOKEN")
+        .output()
+        .expect("rotate against the dropped table");
+    assert!(!out.status.success(), "the audit failed → nonzero exit");
+    let stderr = string_of(&out.stderr);
+    assert!(
+        stderr.contains("STOOD") && stderr.contains("must still be copied"),
+        "the rotate failure message states the stood work and the copy duty: {stderr}"
+    );
+    {
+        use rusqlite::Connection;
+        let conn = Connection::open(origin_data.join("naatre.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE audit_log(id INTEGER PRIMARY KEY, ts_ns INTEGER NOT NULL, principal TEXT NOT NULL, action TEXT NOT NULL, details_json TEXT NOT NULL);",
+        )
+        .unwrap();
+    }
+    // The heal: a re-run of rotate rows the newest key's rotation.
+    origin = Serve::start_listener(
+        &bin,
+        &[
+            "serve",
+            "--data",
+            origin_data.to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{origin_port}"),
+        ],
+        &root.join("origin.log"),
+        origin_port,
+        "/healthz",
+    );
+    let _origin_guard3 = &mut origin;
+    origin.stop();
+    origin_naatre.run_ok(
+        root,
+        &[
+            "cache-key",
+            "rotate",
+            "--data",
+            origin_data.to_str().unwrap(),
+        ],
+    );
+    origin = Serve::start_listener(
+        &bin,
+        &[
+            "serve",
+            "--data",
+            origin_data.to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{origin_port}"),
+        ],
+        &root.join("origin.log"),
+        origin_port,
+        "/healthz",
+    );
+    let _origin_guard4 = &mut origin;
+
+    // ---- M13b-fix item 2b: the CLIENT's persistent-401 fallback --------
+    step!("M13b-fix: the client falls back when the tier refuses fresh tickets");
+    // The tier still runs the STALE list (the dropped/new keys story):
+    // a fresh mint carries the NEW key id — the tier 401s it, the
+    // client re-mints once, still 401 → falls back to the origin and
+    // the sync completes.
+    // The tier's STALE COPY loses the newest key (the missed-rotation
+    // story): a tier-side file, NOT the origin's own list — the origin
+    // keeps every key it minted under.
+    let show = origin_naatre.run_ok(
+        root,
+        &["cache-key", "show", "--data", origin_data.to_str().unwrap()],
+    );
+    let newest = show
+        .lines()
+        .find_map(|l| l.strip_prefix("current ").map(str::to_string))
+        .expect("the current key id");
+    let stale_list = root.join("tier-stale-keys.json");
+    {
+        let mut content: Value = serde_json::from_str(
+            &std::fs::read_to_string(origin_data.join("cache_keys.json")).unwrap(),
+        )
+        .expect("the key file parses");
+        if let Some(keys) = content["keys"].as_array_mut() {
+            keys.retain(|k| k["id"].as_str() != Some(newest.as_str()));
+        }
+        let json = serde_json::to_string_pretty(&content).unwrap();
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&stale_list)
+            .unwrap();
+        f.write_all(json.as_bytes()).unwrap();
+    }
+    cache.stop();
+    cache = Serve::start_listener(
+        &bin,
+        &[
+            "cache",
+            "--origin",
+            &origin_url,
+            "--key",
+            stale_list.to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{cache_port}"),
+            "--data",
+            cache_data.to_str().unwrap(),
+        ],
+        &root.join("cache.log"),
+        cache_port,
+        "/healthz",
+    );
+    // A live-TIER sync whose ticket the tier refuses: the client lands
+    // on the origin and completes.
+    writer_cached.extra_env = vec![(
+        "NAATRE_CACHE_URL".into(),
+        format!("http://127.0.0.1:{cache_port}"),
+    )];
+    std::fs::write(land_dir.join("e.txt"), "fallback\n").unwrap();
+    writer_naatre.run_ok(&land_dir, &["commit", "-m", "add e"]);
+    writer_naatre.run_ok(&land_dir, &["land"]);
+    let sync_out = writer_cached.run(&clone_dir, &["sync"]);
+    assert!(
+        sync_out.status.success(),
+        "a ticket-refusing tier never fails the sync: {}{}",
+        string_of(&sync_out.stdout),
+        string_of(&sync_out.stderr)
+    );
+    assert!(
+        string_of(&sync_out.stderr).contains("refuses the ticket"),
+        "the fallback names the refusal: {}",
+        string_of(&sync_out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(clone_dir.join("e.txt")).unwrap(),
+        "fallback\n"
+    );
+
+    // ---- M13b-fix item 8: the tier-5xx fallback -------------------------
+    step!("M13b-fix: a tier answering 503 falls back to the origin");
+    // A tier whose ORIGIN is a dead port answers 503 origin_unreachable
+    // on every fetch — the client disables the tier for the run and
+    // completes via the origin.
+    let dead_origin_port = free_port();
+    cache.stop();
+    let mut miswired_cache = Serve::start_listener(
+        &bin,
+        &[
+            "cache",
+            "--origin",
+            &format!("http://127.0.0.1:{dead_origin_port}"),
+            "--key",
+            origin_data.join("cache_keys.json").to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{cache_port}"),
+            "--data",
+            root.join("cache-miswired").to_str().unwrap(),
+        ],
+        &root.join("cache-miswired.log"),
+        cache_port,
+        "/healthz",
+    );
+    let _miswired = &mut miswired_cache;
+    std::fs::write(land_dir.join("f.txt"), "fivexx\n").unwrap();
+    writer_naatre.run_ok(&land_dir, &["commit", "-m", "add f"]);
+    writer_naatre.run_ok(&land_dir, &["land"]);
+    let sync_out = writer_cached.run(&clone_dir, &["sync"]);
+    assert!(
+        sync_out.status.success(),
+        "a 503-answering tier never fails the sync: {}{}",
+        string_of(&sync_out.stdout),
+        string_of(&sync_out.stderr)
+    );
+    assert!(
+        string_of(&sync_out.stderr).contains("503"),
+        "the fallback names the tier's status: {}",
+        string_of(&sync_out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(clone_dir.join("f.txt")).unwrap(),
+        "fivexx\n"
+    );
+    // Restore the well-wired tier for the remaining pins.
+    miswired_cache.stop();
+    cache.stop();
+    cache = Serve::start_listener(
+        &bin,
+        &[
+            "cache",
+            "--origin",
+            &origin_url,
+            "--key",
+            origin_data.join("cache_keys.json").to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{cache_port}"),
+            "--data",
+            cache_data.to_str().unwrap(),
+        ],
+        &root.join("cache.log"),
+        cache_port,
+        "/healthz",
+    );
+
+    // An OLD ticket that then EXPIRES refuses (retired + expired).
+    let dying = mint_with_expired(&bin, root, &origin_url, &writer, "demo", &tree_v2);
+    sleep(Duration::from_millis(1500));
+    let (status, body) = http(
+        origin_port,
+        "GET",
+        "/v1/repos/demo/cache/epoch",
+        Some(&format!("NaatreTicket {dying}")),
+        b"",
+    )
+    .unwrap();
+    assert_eq!(status, 401, "retired+expired refuses: {status}");
+    assert_eq!(code_of(&json_of(&body)), "token_expired");
+    let _ = dying;
+
+    // ---- M13b-fix item 4: no-flag revoke removes the grant entirely -----
+    step!("M13b-fix: repo access revoke with NO flag removes the grant");
+    // Grant alice, then revoke with NO flags (the documented full-removal
+    // DELETE path — main.rs routes the no-flag case there).
+    let (status, body) = http(
+        origin_port,
+        "PUT",
+        "/v1/repos/demo/access",
+        Some(&format!("Bearer {admin}")),
+        serde_json::to_vec(
+            &serde_json::json!({"principal": "alice", "read": true, "write": false}),
+        )
+        .unwrap()
+        .as_slice(),
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", string_of(&body));
+    // The no-flag revoke is an HTTP CLIENT verb: the server stays up.
+    let out = origin_naatre.run(root, &["repo", "access", "revoke", "demo", "alice"]);
+    assert!(
+        out.status.success(),
+        "the no-flag revoke runs: {}{}",
+        string_of(&out.stdout),
+        string_of(&out.stderr)
+    );
+    let (_, list_raw) = http(
+        origin_port,
+        "GET",
+        "/v1/repos/demo/access",
+        Some(&format!("Bearer {admin}")),
+        b"",
+    )
+    .unwrap();
+    let list = json_of(&list_raw);
+    let rows: Vec<&str> = list["access"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["principal"].as_str().unwrap())
+        .collect();
+    assert!(
+        !rows.contains(&"alice"),
+        "the no-flag revoke removed the row entirely: {rows:?}"
+    );
+    // (agent's grant stands — the later pins mint as agent.)
+
+    // The M13b-fix drop verb is AUDITED. The EARLIER drop's row was
+    // lost with the audit table the item-5 pin dropped (its restore
+    // recreated an empty table) — run a fresh containment drop NOW so
+    // the row exists in the live table: rotate (a fresh retired id),
+    // then drop it.
+    origin.stop();
+    origin_naatre.run_ok(
+        root,
+        &[
+            "cache-key",
+            "rotate",
+            "--data",
+            origin_data.to_str().unwrap(),
+        ],
+    );
+    let show = origin_naatre.run_ok(
+        root,
+        &["cache-key", "show", "--data", origin_data.to_str().unwrap()],
+    );
+    let fresh_retired = show
+        .lines()
+        .find_map(|l| l.strip_prefix("retired ").map(str::to_string))
+        .expect("the rotation left a fresh retired key");
+    origin_naatre.run_ok(
+        root,
+        &[
+            "cache-key",
+            "drop",
+            &fresh_retired,
+            "--data",
+            origin_data.to_str().unwrap(),
+        ],
+    );
+    origin = Serve::start_listener(
+        &bin,
+        &[
+            "serve",
+            "--data",
+            origin_data.to_str().unwrap(),
+            "--listen",
+            &format!("127.0.0.1:{origin_port}"),
+        ],
+        &root.join("origin.log"),
+        origin_port,
+        "/healthz",
+    );
+    let _origin_guard_drop2 = &mut origin;
+    let (_, audit2_raw) = http(
+        origin_port,
+        "GET",
+        "/v1/audit?limit=200",
+        Some(&format!("Bearer {admin}")),
+        b"",
+    )
+    .unwrap();
+    let audit2 = json_of(&audit2_raw);
+    let actions2: Vec<&str> = audit2["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["action"].as_str().unwrap())
+        .collect();
+    assert!(
+        actions2.contains(&"cache_key_drop"),
+        "the drop verb is audited: {actions2:?}"
     );
 
     // ---- pin: fail-closed startup without keys ------------------------------
@@ -1066,20 +1658,6 @@ fn m13_cache_authz_e2e() {
 
     // ---- pin: client falls back to the origin on cache failure -------------
     step!("pin: the client falls back to the origin when the tier is down");
-    // agent needs a read grant now that demo is private (the invisibility
-    // pin above made the repo invisible to him — correct, but the
-    // fallback pin needs a reader).
-    let (status, body) = http(
-        origin_port,
-        "PUT",
-        "/v1/repos/demo/access",
-        Some(&format!("Bearer {admin}")),
-        serde_json::to_vec(&serde_json::json!({"principal": "agent", "read": true, "write": true}))
-            .unwrap()
-            .as_slice(),
-    )
-    .unwrap();
-    assert_eq!(status, 200, "{}", string_of(&body));
     let writer_dead_cache = Naatre {
         bin: bin.clone(),
         url: origin_url.clone(),
