@@ -162,15 +162,20 @@ async fn create_inner(
     let now_ns = state.now_ns() as i64;
     let principal = auth.principal.clone();
     // In db-per-repo mode the create also materializes the repo's own
-    // SQLite file, under the same catalog slot (the registry row and the
-    // file appear together — the catalog's serialization point; a crash
-    // between file and row leaves an empty file the row's first access
-    // reopens, never an unbacked row).
+    // SQLite file, INSIDE the registry transaction and before it commits
+    // (the registry row and the file appear together — the catalog's
+    // serialization point; a crash before the commit leaves an orphan
+    // file no row names, never an unbacked row). The catalog's `db_file`
+    // column is NOT NULL and names the auto-assigned id, so the split
+    // insert is [`db::repos_create_split`] (placeholder + real name in
+    // one transaction) — a plain two-column insert 500s on the split
+    // schema.
     let split = state.layout == naatre_store::Layout::DbPerRepo;
     let id = state
         .write(move |store| {
             let conn = store.conn();
-            if db::repo_id_by_name(conn, &name)
+            let tx = conn.transaction().map_err(ApiError::log_internal)?;
+            if db::repo_id_by_name(&tx, &name)
                 .map_err(ApiError::log_internal)?
                 .is_some()
             {
@@ -179,7 +184,14 @@ async fn create_inner(
                     format!("repo {name:?} already exists"),
                 ));
             }
-            let id = db::repos_create(conn, &name, now_ns).map_err(ApiError::log_internal)?;
+            let (id, _db_file) = if split {
+                db::repos_create_split(&tx, &name, now_ns).map_err(ApiError::log_internal)?
+            } else {
+                (
+                    db::repos_create(&tx, &name, now_ns).map_err(ApiError::log_internal)?,
+                    String::new(),
+                )
+            };
             if split {
                 let path = naatre_store::layout::repo_db_path(std::path::Path::new(&data_dir), id);
                 if let Some(parent) = path.parent() {
@@ -187,16 +199,19 @@ async fn create_inner(
                         ApiError::log_internal(std::io::Error::other(format!("repo db dir: {e}")))
                     })?;
                 }
+                // The file (migrations run idempotently on open) exists
+                // BEFORE the registry row commits.
                 naatre_store::store::open_repo_db(&path).map_err(ApiError::log_internal)?;
             }
             db::audit_append(
-                conn,
+                &tx,
                 now_ns,
                 &principal,
                 "repo_create",
                 &serde_json::json!({ "repo": name }).to_string(),
             )
             .map_err(ApiError::log_internal)?;
+            tx.commit().map_err(ApiError::log_internal)?;
             Ok(id)
         })
         .await?;
@@ -250,7 +265,7 @@ pub async fn stats(
             let changesets: i64 =
                 db::repo_changeset_count(cx.db, repo_id).map_err(ApiError::log_internal)?;
             let excluded: std::collections::HashSet<naatre_core::ids::Id> =
-                db::redaction_ids_repo(cx.db)
+                db::redaction_ids_repo(cx.db, Some(cx.id))
                     .map_err(ApiError::log_internal)?
                     .into_iter()
                     .collect();

@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use naatre_core::ids::Id;
-use naatre_store::{Db, DbError, P, Row, Sql, pv};
+use naatre_store::{Db, DbError, IntoP, P, Row, Sql, pv};
 
 /// One row of `repos`.
 pub struct RepoRow {
@@ -90,11 +90,36 @@ pub fn is_retryable_contention(err: &DbError) -> bool {
 // ---- repos ---------------------------------------------------------------
 
 /// Inserts a repo; the caller maps UNIQUE violations to `repo_exists`.
+/// The single-DB `repos` table has no `db_file` column, so the insert
+/// stays two-column; the split catalog uses [`repos_create_split`].
 pub fn repos_create(conn: &Db, name: &str, created_ns: i64) -> Result<i64, DbError> {
     conn.insert_id(
         &Sql::plain("INSERT INTO repos(name, created_ns) VALUES (?1, ?2)"),
         &pv![name, created_ns],
     )
+}
+
+/// The split catalog's repo insert: `db_file` is NOT NULL and NAMES the
+/// auto-assigned id, so the row lands with a `''` placeholder and its
+/// real `repos/<id>.db` in the same transaction — the placeholder never
+/// commits (the caller runs the file materialization inside the same
+/// transaction, before the commit; a crash leaves an orphan file no row
+/// names, never an unbacked row). Returns `(id, db_file)`.
+pub fn repos_create_split(
+    conn: &Db,
+    name: &str,
+    created_ns: i64,
+) -> Result<(i64, String), DbError> {
+    let id = conn.insert_id(
+        &Sql::plain("INSERT INTO repos(name, created_ns, db_file) VALUES (?1, ?2, '')"),
+        &pv![name, created_ns],
+    )?;
+    let db_file = format!("repos/{id}.db");
+    conn.execute(
+        &Sql::plain("UPDATE repos SET db_file = ?1 WHERE id = ?2"),
+        &pv![&db_file, id],
+    )?;
+    Ok((id, db_file))
 }
 
 /// Lists repos with `id > after_id`, ascending, up to `limit` rows.
@@ -280,14 +305,18 @@ fn ref_cas_inner(
         }
     };
 
-    tx.commit()?;
+    // Audit-after-work, in the connection shape the caller gave us: when
+    // `cat` IS the work connection (single mode), the audit row joins the
+    // refs transaction — a crash between the move and the audit rolls both
+    // back (nothing is lost). When they differ (split mode), the audit
+    // commits after the refs transaction — a crash in that window loses
+    // the audit row for a moved ref, the documented split-mode atomicity
+    // boundary. The crash point sits immediately before the append in
+    // both shapes (pins assert the single-DB pair is indivisible).
     if matches!(outcome, RefCas::Created | RefCas::Updated { .. }) {
         // Same convention as changeset_create: the `via` key is present
         // only when the producer named itself — a bare API move leaves no
-        // `via: null` behind. The audit row is catalog-side and commits
-        // after the refs transaction (single-DB: the same connection, one
-        // statement later — a crash in that window loses the audit row for
-        // a moved ref, the documented split-mode atomicity boundary).
+        // `via: null` behind.
         let mut details = serde_json::json!({
             "repo": repo_name,
             "ref": name,
@@ -296,10 +325,52 @@ fn ref_cas_inner(
         if let Some(via) = via {
             details["via"] = serde_json::json!(via);
         }
-        audit_append(cat, now_ns, principal, "ref_move", &details.to_string())?;
+        let same_conn = std::ptr::eq(conn, cat);
+        if same_conn {
+            // Inside the transaction: the crash point models the atomic
+            // window — the crash rolls the move and the audit back
+            // together.
+            crash_point("ref_cas_before_audit");
+            audit_append(&tx, now_ns, principal, "ref_move", &details.to_string())?;
+            tx.commit()?;
+        } else {
+            // The documented after-commit window: the move stands, the
+            // crash point models the audit-loss window.
+            tx.commit()?;
+            crash_point("ref_cas_before_audit");
+            audit_append(cat, now_ns, principal, "ref_move", &details.to_string())?;
+        }
+    } else {
+        tx.commit()?;
     }
     Ok(outcome)
 }
+
+/// The statement layer's crash points (debug builds only, the M4
+/// `NAATRE_CRASH_POINT` pattern, its own OnceLock — same contract as
+/// [`crate::gc::crash_point`]):
+///
+/// * `ref_cas_before_audit` — immediately before `ref_cas_inner`'s audit
+///   append. In single mode the append is inside the refs transaction, so
+///   the crash rolls the move and the row back together (the atomicity
+///   pin); in split mode it lands in the documented after-commit window.
+pub const DB_CRASH_POINTS: [&str; 1] = ["ref_cas_before_audit"];
+
+/// Panics when `NAATRE_CRASH_POINT` (read once per process) names this
+/// call site; debug builds only, release no-op.
+#[cfg(debug_assertions)]
+pub fn crash_point(name: &str) {
+    use std::sync::OnceLock;
+    static POINT: OnceLock<Option<String>> = OnceLock::new();
+    let want = POINT.get_or_init(|| std::env::var("NAATRE_CRASH_POINT").ok());
+    if want.as_deref() == Some(name) {
+        panic!("crash point {name} triggered");
+    }
+}
+
+/// Release no-op (see the debug build above).
+#[cfg(not(debug_assertions))]
+pub fn crash_point(_name: &str) {}
 
 // ---- objects -------------------------------------------------------------
 
@@ -2676,15 +2747,17 @@ pub fn gc_cs_collectible_probe(
     Ok(out)
 }
 
-/// The reference probes for one repo over a changeset batch: the ids that
-/// still carry a reference HERE (ref target, lands head/base, git_map row,
-/// changeset child). The batch-collect loop subtracts the union across
-/// repos before deleting. A changeset id can only be referenced within its
-/// own repo (parents/refs/git_map/lands rows carry repo_id), so the union
-/// reproduces the single-DB anti-join exactly.
-pub fn gc_cs_referenced_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Vec<Id>, DbError> {
+/// The EXISTENCE probe for one repo over a candidate batch: which ids are
+/// a changeset row of THIS repo — no reference, tombstone, or generation
+/// arms ([`gc_cs_collectible_probe`] is the collectible half). The caller
+/// unions it across repos and reap-deletes the candidates no repo contains:
+/// ledger rows whose changeset rows are gone from every file (the
+/// crash-between-repo-delete-and-ledger-delete shape) would otherwise
+/// strand at the `first_ns ASC` page head forever — the collectible probe
+/// requires the row, so a phantom never re-enters a batch.
+pub fn gc_cs_present_among(conn: &Db, repo_id: i64, candidates: &[Id]) -> Result<Vec<Id>, DbError> {
     let mut out = Vec::new();
-    for chunk in ids.chunks(GC_IN_CHUNK) {
+    for chunk in candidates.chunks(GC_IN_CHUNK) {
         let list = (2..)
             .map(|i| format!("?{i}"))
             .take(chunk.len())
@@ -2694,11 +2767,7 @@ pub fn gc_cs_referenced_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Vec
         params.extend(id_params(chunk));
         let rows: Vec<Vec<u8>> = conn.query_all_map(
             &Sql::plain_owned(format!(
-                "SELECT target FROM refs WHERE repo_id = ?1 AND target IN ({list}) \
-                 UNION SELECT head FROM lands WHERE repo_id = ?1 AND head IN ({list}) \
-                 UNION SELECT base FROM lands WHERE repo_id = ?1 AND base IN ({list}) \
-                 UNION SELECT cs_id FROM git_map WHERE repo_id = ?1 AND cs_id IN ({list}) \
-                 UNION SELECT parent FROM changeset_parents WHERE repo_id = ?1 AND parent IN ({list})"
+                "SELECT id FROM changesets WHERE repo_id = ?1 AND id IN ({list})"
             )),
             &params,
             |r| r.get(0),
@@ -2711,10 +2780,13 @@ pub fn gc_cs_referenced_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Vec
     Ok(out)
 }
 
-/// The actively-tombstoned ids (kind-filtered) among a batch in one repo.
+/// The actively-tombstoned ids (kind-filtered) among a batch in one repo
+/// (`Some(id)`), or across the whole store (`None` — the single-DB batch's
+/// one-query shape: every repo routes to the same connection, so the
+/// per-repo loop would run one identical whole-DB query per repo).
 pub fn gc_tombstoned_among(
     conn: &Db,
-    repo_id: i64,
+    repo_id: Option<i64>,
     kind: &str,
     ids: &[Id],
 ) -> Result<Vec<Id>, DbError> {
@@ -2725,12 +2797,15 @@ pub fn gc_tombstoned_among(
             .take(chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let mut params = vec![P::I(repo_id), P::S(kind.to_string())];
+        let mut params: Vec<P> = Vec::new();
+        params.push(repo_id.into_p());
+        params.push(P::S(kind.to_string()));
         params.extend(id_params(chunk));
         let rows: Vec<Vec<u8>> = conn.query_all_map(
             &Sql::plain_owned(format!(
                 "SELECT object_id FROM redactions \
-                 WHERE repo_id = ?1 AND kind = ?2 AND purged_ns IS NULL AND object_id IN ({list})"
+                 WHERE repo_id = COALESCE(?1, repo_id) AND kind = ?2 AND purged_ns IS NULL \
+                   AND object_id IN ({list})"
             )),
             &params,
             |r| r.get(0),
@@ -2884,90 +2959,12 @@ pub fn gc_tree_protected_among(
     Ok(out)
 }
 
-/// Phase A's selector: the blob candidates past the grace cut that are
-/// STILL unreferenced at read time AND not yet condemned (`condemned_at IS
-/// NULL` — a stamped row belongs to phase B; a touch cleared the stamp, so
-/// a re-PUT's blob re-enters here honestly): no `file_changes` row and no
-/// blob `tree_entries` row — both probes indexed (migration 8's
-/// `idx_file_changes_blob`, migration 3's `idx_tree_entries_object`) — and
-/// no upload touch inside the grace window (`objects.touched_ns`: a
-/// content-addressed re-PUT of an old orphan is a CAS no-op, and the row
-/// touch is what re-enters it into grace, so a re-referenced blob can
-/// never collect under a concurrent pass). Actively-tombstoned blobs are
-/// EXCLUDED (any repo's tombstone): the redaction purge phase owns them —
-/// only it stamps `redactions.purged_ns` and rows the purge audit. Any live
-/// reference spares the blob for this transaction; a tree row of a tree
-/// that is itself dying spares it too and the blob follows one phase later
-/// (never dangling, always converging).
-pub fn gc_collectible_blobs(conn: &Db, cut_ns: i64, limit: usize) -> Result<Vec<Id>, DbError> {
-    conn.query_all_map(
-        &Sql::plain(
-            "SELECT p.id FROM gc_pending p \
-             WHERE p.scope = 'blob' AND p.first_ns <= ?1 \
-               AND p.condemned_at IS NULL \
-               AND NOT EXISTS (SELECT 1 FROM objects o \
-                               WHERE o.object_id = p.id AND o.touched_ns > ?1) \
-               AND NOT EXISTS (SELECT 1 FROM file_changes f WHERE f.blob_id = p.id) \
-               AND NOT EXISTS (SELECT 1 FROM tree_entries te \
-                               WHERE te.kind = 0 AND te.object_id = p.id) \
-               AND NOT EXISTS (SELECT 1 FROM redactions r \
-                               WHERE r.object_id = p.id AND r.kind = 'blob' \
-                                 AND r.purged_ns IS NULL) \
-             ORDER BY p.first_ns ASC, p.id ASC LIMIT ?2",
-        ),
-        &pv![cut_ns, limit as i64],
-        |r| {
-            let b: Vec<u8> = r.get(0)?;
-            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
-                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
-            })?))
-        },
-    )
-}
-
-/// The tree candidates past the grace cut that the CURRENT protective
-/// closure still does not reach: the recursive `live` set is computed from
-/// every surviving changeset root plus every unexpired snapshot, inside the
-/// collecting transaction — a land or snapshot POST that commits a
-/// reference mid-pass is already committed here (the single-writer slot
-/// serializes the two) and spares its shared subtrees.
-pub fn gc_collectible_trees(
-    conn: &Db,
-    now_ns: i64,
-    cut_ns: i64,
-    limit: usize,
-) -> Result<Vec<Id>, DbError> {
-    conn.query_all_map(
-        &Sql::plain(
-            "WITH RECURSIVE live(tree_id) AS ( \
-                 SELECT root_tree_id FROM changesets WHERE root_tree_id IS NOT NULL \
-                 UNION \
-                 SELECT tree_id FROM snapshots WHERE expires_ns > ?1 \
-                 UNION \
-                 SELECT te.object_id FROM live l \
-                 JOIN tree_entries te ON te.tree_id = l.tree_id AND te.kind = 1 \
-             ) \
-             SELECT p.id FROM gc_pending p \
-             WHERE p.scope = 'tree' AND p.first_ns <= ?2 \
-               AND NOT EXISTS (SELECT 1 FROM live l WHERE l.tree_id = p.id) \
-             ORDER BY p.first_ns ASC, p.id ASC LIMIT ?3",
-        ),
-        &pv![now_ns, cut_ns, limit as i64],
-        |r| {
-            let b: Vec<u8> = r.get(0)?;
-            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
-                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
-            })?))
-        },
-    )
-}
-
 /// The two-phase delete's PHASE A: stamps `condemned_at` on the past-grace,
-/// unreferenced blob candidates selected by [`gc_collectible_blobs`] — the
-/// bytes are NOT touched this pass. A later pass's phase B
-/// ([`gc_condemned_blobs`]) deletes them only while the mark is still set;
-/// any PUT's row touch ([`object_row_upsert`]) clears it first. Returns
-/// the rows condemned.
+/// unreferenced blob candidates the pass selected ([`gc_blob_candidates`]
+/// plus the caller's per-repo re-verification probes) — the bytes are NOT
+/// touched this pass. A later pass's phase B ([`gc_condemned_blob_candidates`])
+/// selects them again only while the mark is still set; any PUT's row touch
+/// ([`object_row_upsert`]) clears it first. Returns the rows condemned.
 pub fn gc_condemn_blobs(conn: &Db, ids: &[Id], condemned_at: i64) -> Result<usize, DbError> {
     let mut n = 0;
     for chunk in ids.chunks(GC_IN_CHUNK) {
@@ -2987,43 +2984,6 @@ pub fn gc_condemn_blobs(conn: &Db, ids: &[Id], condemned_at: i64) -> Result<usiz
         )?;
     }
     Ok(n)
-}
-
-/// The two-phase delete's PHASE B selector: blob candidates condemned by an
-/// EARLIER pass (`condemned_at < now_ns`, so this pass's own phase-A
-/// stamps never qualify), still unreferenced at read time, and still
-/// condemned — the mark is the proof no upload touched the row since the
-/// stamp. Actively-tombstoned blobs are EXCLUDED (the redaction purge phase
-/// owns them, as in [`gc_collectible_blobs`]). Runs inside the deleting
-/// transaction (the slot serializes it against the record step, whose touch
-/// clears the mark in the same slot).
-pub fn gc_condemned_blobs(
-    conn: &Db,
-    now_ns: i64,
-    cut_ns: i64,
-    limit: usize,
-) -> Result<Vec<Id>, DbError> {
-    conn.query_all_map(
-        &Sql::plain(
-            "SELECT p.id FROM gc_pending p \
-             WHERE p.scope = 'blob' AND p.first_ns <= ?1 \
-               AND p.condemned_at IS NOT NULL AND p.condemned_at < ?2 \
-               AND NOT EXISTS (SELECT 1 FROM file_changes f WHERE f.blob_id = p.id) \
-               AND NOT EXISTS (SELECT 1 FROM tree_entries te \
-                               WHERE te.kind = 0 AND te.object_id = p.id) \
-               AND NOT EXISTS (SELECT 1 FROM redactions r \
-                               WHERE r.object_id = p.id AND r.kind = 'blob' \
-                                 AND r.purged_ns IS NULL) \
-             ORDER BY p.first_ns ASC, p.id ASC LIMIT ?3",
-        ),
-        &pv![cut_ns, now_ns, limit as i64],
-        |r| {
-            let b: Vec<u8> = r.get(0)?;
-            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
-                DbError::from(std::io::Error::other("gc_pending.id is not 32 bytes"))
-            })?))
-        },
-    )
 }
 
 // -- collection (the deleting half of a batch) --------------------------------
@@ -3252,9 +3212,13 @@ pub fn fsck_blob_ref_rows_repo(conn: &Db, repo_id: i64) -> Result<(Vec<Id>, Vec<
     Ok((file_changes, membership))
 }
 
-/// Every blob `tree_entries` row of the connection's FILE, with
-/// multiplicity (the tree-blob leg of the cross-file checks; see
-/// [`fsck_blob_ref_rows_repo`] for the scoping note).
+/// Every blob `tree_entries` row of the connection's FILE (the tree-blob
+/// leg of the cross-file checks; see [`fsck_blob_ref_rows_repo`] for the
+/// scoping note). The rows come back WITH multiplicity (an id carried by
+/// several entries repeats), and after a wholesale-copy adoption every
+/// repo file holds every tree row — the CALLER dedups the union before
+/// counting, so the missing-rows count is per-DISTINCT-id and never
+/// inflates with the per-file copies.
 pub fn fsck_tree_blob_refs(conn: &Db) -> Result<Vec<Id>, DbError> {
     let rows: Vec<Vec<u8>> = conn.query_all_map(
         &Sql::plain("SELECT object_id FROM tree_entries WHERE kind = 0"),
@@ -3559,8 +3523,7 @@ fn redaction_row_from(row: &Row) -> Result<RedactionRow, DbError> {
 /// re-PUT, a re-import, or a recreated changeset answer 410 on every
 /// serving path from the first request, not only after the next admin
 /// action. The PURGE work list keeps its own `purged_ns IS NULL`
-/// selection ([`redactions_active_all`], [`redact_purgeable_cs`],
-/// [`redact_purgeable_blobs`]).
+/// selection ([`redact_purgeable_cs_repo`], [`redact_blob_tombstones_repo`]).
 pub fn redaction_active(conn: &Db, repo_id: i64, object_id: &Id) -> Result<bool, DbError> {
     let hit: Option<i64> = conn.query_opt_map(
         &Sql::plain(
@@ -3606,7 +3569,7 @@ pub fn redactions_active_among(conn: &Db, repo_id: i64, ids: &[Id]) -> Result<Ve
 /// The listing's dir-entry tree ids that have ANY tombstoned blob
 /// descendant in `repo_id` — the dir-aggregate mask's probe, ONE
 /// set-based recursive statement per chunk of dir ids (the
-/// [`gc_collectible_trees`] CTE's shape, with each closure node carrying
+/// [`gc_tree_protected_among`] CTE's shape, with each closure node carrying
 /// the frontier dir it descended from, so dirty roots come back
 /// attributed). Dirs are chunked like every walk; the recursion is
 /// `UNION`-deduplicated and content-addressed trees cannot cycle.
@@ -3682,30 +3645,6 @@ pub fn redactions_active_changesets(conn: &Db, repo_id: i64) -> Result<Vec<Id>, 
     )
 }
 
-/// Every ACTIVE tombstone across all repos: `(repo_id, object_id, kind)` —
-/// the GC redaction phase's work list.
-pub fn redactions_active_all(conn: &Db) -> Result<Vec<(i64, Id, String)>, DbError> {
-    conn.query_all_map(
-        &Sql::plain(
-            "SELECT repo_id, object_id, kind FROM redactions \
-         WHERE purged_ns IS NULL ORDER BY repo_id ASC, marked_ns ASC, object_id ASC",
-        ),
-        &pv![],
-        |r| {
-            let b: Vec<u8> = r.get(1)?;
-            Ok((
-                r.get::<i64>(0)?,
-                Id(<[u8; 32]>::try_from(b).map_err(|_| {
-                    DbError::from(std::io::Error::other(
-                        "redactions.object_id is not 32 bytes",
-                    ))
-                })?),
-                r.get(2)?,
-            ))
-        },
-    )
-}
-
 /// One page of the repo's tombstones, ascending by object id (the PK order —
 /// the same `after:`-cursor shape as the repos list), purged rows included.
 pub fn redactions_page(
@@ -3777,6 +3716,13 @@ pub fn redaction_invalidate_derived(conn: &Db, repo_id: i64, cs: &Id) -> Result<
 /// tombstone (a changeset id can only be referenced within its own repo),
 /// so the per-repo form reproduces the single-DB query exactly. Runs
 /// inside the purging transaction's coordinated-batch window.
+// The redaction purge's DELETE halves are [`gc_collect_cs_repo`],
+// [`gc_collect_blobs_repo`], and [`gc_collect_blobs_catalog`] — the same
+// rows, the same split (repo files first, catalog bookkeeping last), so
+// the tombstone purge and the reachability sweep share one deletion path.
+// The completion stamps ([`redaction_stamp_purged`]) run per repo on the
+// tombstone's own file; the fsck consistency slice is
+// [`fsck_redactions_repo`].
 pub fn redact_purgeable_cs_repo(conn: &Db, repo_id: i64, limit: usize) -> Result<Vec<Id>, DbError> {
     conn.query_all_map(
         &Sql::plain(
@@ -3834,10 +3780,17 @@ pub fn redact_blob_tombstones_repo(
 /// Every tombstone id in one repo, any kind, purged or active — the
 /// fsck repair's exclusion set (a tombstoned or purged id must never gain
 /// an `objects` row back).
-pub fn redaction_ids_repo(conn: &Db) -> Result<Vec<Id>, DbError> {
+/// The DISTINCT tombstoned ids of ONE repo (`Some(id)`), or of the whole
+/// store (`None` — the single-DB fsck repair's one-query shape; a per-repo
+/// file has only its own rows). The repo filter is what keeps the stats
+/// route's exclusion per-repo in the single-DB layout: another repo's
+/// tombstone must not trim THIS repo's servable bytes.
+pub fn redaction_ids_repo(conn: &Db, repo_id: Option<i64>) -> Result<Vec<Id>, DbError> {
     conn.query_all_map(
-        &Sql::plain("SELECT DISTINCT object_id FROM redactions"),
-        &[],
+        &Sql::plain(
+            "SELECT DISTINCT object_id FROM redactions WHERE repo_id = COALESCE(?1, repo_id)",
+        ),
+        &pv![repo_id],
         |r| {
             let b: Vec<u8> = r.get(0)?;
             Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
@@ -3902,46 +3855,6 @@ pub fn object_row_exists(conn: &Db, id: &Id) -> Result<bool, DbError> {
     Ok(hit.is_some())
 }
 
-/// The actively-tombstoned blobs with NO reference left anywhere and no
-/// upload touch inside the grace window — GROUP BY object_id, one row per
-/// id (a blob tombstoned in several repos carries one row PER REPO, each
-/// with its own `marked_ns`; a DISTINCT on the `(object_id, marked_ns)`
-/// pair would NOT collapse them and the batch would attempt and count the
-/// reclaim twice): no `file_changes`
-/// row, no blob
-/// `tree_entries` row, and no `objects.touched_ns` past `cut_ns` (the same
-/// upload grace [`gc_collectible_blobs`] honors — a client between the blob
-/// PUT and its referencing changeset create is never overtaken; the record
-/// step's row touch re-enters grace). A blob referenced by an UNPURGED
-/// tombstoned changeset stays — its file_changes row is a live reference
-/// until the changeset's own purge drops it (never dangling; the blob
-/// follows in the same pass, right after). Runs inside the purging
-/// transaction.
-pub fn redact_purgeable_blobs(conn: &Db, cut_ns: i64, limit: usize) -> Result<Vec<Id>, DbError> {
-    conn.query_all_map(
-        &Sql::plain(
-            "SELECT r.object_id, MIN(r.marked_ns) FROM redactions r \
-             WHERE r.kind = 'blob' AND r.purged_ns IS NULL \
-               AND NOT EXISTS (SELECT 1 FROM objects o \
-                               WHERE o.object_id = r.object_id AND o.touched_ns > ?1) \
-               AND NOT EXISTS (SELECT 1 FROM file_changes f WHERE f.blob_id = r.object_id) \
-               AND NOT EXISTS (SELECT 1 FROM tree_entries te \
-                               WHERE te.kind = 0 AND te.object_id = r.object_id) \
-             GROUP BY r.object_id \
-             ORDER BY MIN(r.marked_ns) ASC, r.object_id ASC LIMIT ?2",
-        ),
-        &pv![cut_ns, limit as i64],
-        |r| {
-            let b: Vec<u8> = r.get(0)?;
-            Ok(Id(<[u8; 32]>::try_from(b).map_err(|_| {
-                DbError::from(std::io::Error::other(
-                    "redactions.object_id is not 32 bytes",
-                ))
-            })?))
-        },
-    )
-}
-
 /// The distinct blob ids a purged changeset batch's `file_changes` carried —
 /// read BEFORE the rows go (the tombstoned changeset's exclusively-
 /// referenced blobs follow the blob rule in the same transaction).
@@ -3970,13 +3883,6 @@ pub fn file_change_blobs_of_cs(conn: &Db, cs_ids: &[Id]) -> Result<Vec<Id>, DbEr
     Ok(out)
 }
 
-// The redaction purge's DELETE halves are [`gc_collect_cs_repo`],
-// [`gc_collect_blobs_repo`], and [`gc_collect_blobs_catalog`] — the same
-// rows, the same split (repo files first, catalog bookkeeping last), so
-// the tombstone purge and the reachability sweep share one deletion path.
-// The completion stamps ([`redaction_stamp_purged`]) run per repo on the
-// tombstone's own file; the fsck consistency slice is
-// [`fsck_redactions_repo`].
 /// One repo's redaction consistency slice ([`fsck_redactions_repo`]): the
 /// tombstone counts, the changeset drift arm, and the purged blob
 /// tombstones with their stamps (the caller probes the catalog for the
@@ -3986,6 +3892,17 @@ pub struct RedactionSlice {
     pub purged: i64,
     pub drift_cs: i64,
     pub purged_blobs: Vec<(Id, i64)>,
+}
+
+/// Whether ANY active tombstone stands in this repo (the redaction purge
+/// phase's quiet-server probe: an idle pass never takes the slots).
+pub fn redactions_active_exist_repo(conn: &Db) -> Result<bool, DbError> {
+    let hit: Option<i64> = conn.query_opt_map(
+        &Sql::plain("SELECT 1 FROM redactions WHERE purged_ns IS NULL LIMIT 1"),
+        &[],
+        |r| r.get(0),
+    )?;
+    Ok(hit.is_some())
 }
 
 /// One repo's redaction consistency slice (M10b): `(active, purged,
@@ -3998,17 +3915,6 @@ pub struct RedactionSlice {
 /// ([`object_touched_before`]: a row predating the stamp is drift; a row
 /// touched at or after it is a legitimate re-upload by a repo that never
 /// tombstoned the content).
-/// Whether ANY active tombstone stands in this repo (the redaction purge
-/// phase's quiet-server probe: an idle pass never takes the slots).
-pub fn redactions_active_exist_repo(conn: &Db) -> Result<bool, DbError> {
-    let hit: Option<i64> = conn.query_opt_map(
-        &Sql::plain("SELECT 1 FROM redactions WHERE purged_ns IS NULL LIMIT 1"),
-        &[],
-        |r| r.get(0),
-    )?;
-    Ok(hit.is_some())
-}
-
 pub fn fsck_redactions_repo(conn: &Db, repo_id: i64) -> Result<RedactionSlice, DbError> {
     let active: i64 = conn.query_row_map(
         &Sql::plain("SELECT COUNT(*) FROM redactions WHERE repo_id = ?1 AND purged_ns IS NULL"),

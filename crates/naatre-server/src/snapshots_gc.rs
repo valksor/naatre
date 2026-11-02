@@ -93,14 +93,24 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
         state
             .read_all(move |cx| {
                 let mut out = Vec::new();
-                for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
-                    cx.with_repo(repo_id, |conn| {
-                        out.extend(
-                            db::snapshots_expired(conn, now_i).map_err(ApiError::log_internal)?,
-                        );
-                        Ok(())
-                    })
-                    .map_err(ApiError::log_internal)?;
+                // Single mode: ONE whole-DB read (every repo routes to the
+                // same connection — the registry loop would be R identical
+                // queries); the split walks every repo's file.
+                if cx.is_split() {
+                    for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                        cx.with_repo(repo_id, |conn| {
+                            out.extend(
+                                db::snapshots_expired(conn, now_i)
+                                    .map_err(ApiError::log_internal)?,
+                            );
+                            Ok(())
+                        })
+                        .map_err(ApiError::log_internal)?;
+                    }
+                } else {
+                    out.extend(
+                        db::snapshots_expired(cx.cat(), now_i).map_err(ApiError::log_internal)?,
+                    );
                 }
                 Ok(out)
             })
@@ -130,18 +140,29 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
         let exists = state
             .read_all(move |cx| {
                 let mut any = vec![false; ids.len()];
-                for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
-                    cx.with_repo(repo_id, |conn| {
-                        for (i, hit) in db::snapshots_exist(conn, &ids)
-                            .map_err(ApiError::log_internal)?
-                            .into_iter()
-                            .enumerate()
-                        {
-                            any[i] = any[i] || hit;
-                        }
-                        Ok(())
-                    })
-                    .map_err(ApiError::log_internal)?;
+                // Single mode: one whole-DB probe; the split walks the files.
+                if cx.is_split() {
+                    for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                        cx.with_repo(repo_id, |conn| {
+                            for (i, hit) in db::snapshots_exist(conn, &ids)
+                                .map_err(ApiError::log_internal)?
+                                .into_iter()
+                                .enumerate()
+                            {
+                                any[i] = any[i] || hit;
+                            }
+                            Ok(())
+                        })
+                        .map_err(ApiError::log_internal)?;
+                    }
+                } else {
+                    for (i, hit) in db::snapshots_exist(cx.cat(), &ids)
+                        .map_err(ApiError::log_internal)?
+                        .into_iter()
+                        .enumerate()
+                    {
+                        any[i] = any[i] || hit;
+                    }
                 }
                 Ok(any)
             })
@@ -200,14 +221,19 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
         state
             .read_all(move |cx| {
                 let mut any = false;
-                for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
-                    cx.with_repo(repo_id, |conn| {
-                        if db::any_junctionless_trees(conn).map_err(ApiError::log_internal)? {
-                            any = true;
-                        }
-                        Ok(())
-                    })
-                    .map_err(ApiError::log_internal)?;
+                // Single mode: one whole-DB probe.
+                if cx.is_split() {
+                    for repo_id in db::gc_repos(cx.cat()).map_err(ApiError::log_internal)? {
+                        cx.with_repo(repo_id, |conn| {
+                            if db::any_junctionless_trees(conn).map_err(ApiError::log_internal)? {
+                                any = true;
+                            }
+                            Ok(())
+                        })
+                        .map_err(ApiError::log_internal)?;
+                    }
+                } else if db::any_junctionless_trees(cx.cat()).map_err(ApiError::log_internal)? {
+                    any = true;
                 }
                 Ok(any)
             })
@@ -232,8 +258,12 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
                 // audit row rides it).
                 let mut total_rows = 0usize;
                 let mut total_trees = 0usize;
-                for repo_id in cx.repo_ids().collect::<Vec<_>>() {
-                    let conn = cx.repo(repo_id)?;
+                // Single mode: ONE transaction over THE connection (every
+                // repo routes there — the registry loop would purge R
+                // times over the same rows and R-fold the tree walk);
+                // the split runs each repo's file in its own transaction.
+                if cx.is_single() {
+                    let conn = cx.cat();
                     let tx = conn.transaction().map_err(ApiError::log_internal)?;
                     let rows_purged =
                         db::snapshots_purge(&tx, &purgable).map_err(ApiError::log_internal)?;
@@ -244,6 +274,20 @@ pub async fn gc_snapshots(state: &AppState) -> Result<GcReport, ApiError> {
                     tx.commit().map_err(ApiError::log_internal)?;
                     total_rows += rows_purged;
                     total_trees += trees_purged;
+                } else {
+                    for repo_id in cx.repo_ids().collect::<Vec<_>>() {
+                        let conn = cx.repo(repo_id)?;
+                        let tx = conn.transaction().map_err(ApiError::log_internal)?;
+                        let rows_purged =
+                            db::snapshots_purge(&tx, &purgable).map_err(ApiError::log_internal)?;
+                        let garbage =
+                            db::unprotected_trees(&tx, now_i).map_err(ApiError::log_internal)?;
+                        let trees_purged =
+                            db::delete_tree_rows(&tx, &garbage).map_err(ApiError::log_internal)?;
+                        tx.commit().map_err(ApiError::log_internal)?;
+                        total_rows += rows_purged;
+                        total_trees += trees_purged;
+                    }
                 }
                 // One audit row per collecting pass, committed with the
                 // catalog-side delete bookkeeping (the loop's last

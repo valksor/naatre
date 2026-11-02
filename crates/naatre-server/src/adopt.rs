@@ -15,9 +15,18 @@
 //!
 //! The copy is SQL-level (`ATTACH` + `INSERT … SELECT`), so the byte-level
 //! row shapes travel verbatim — no Rust-side row decoding, no type
-//! coercion. On ANY failure the partial targets (catalog.db, repos/) are
-//! removed and the original single DB stands: the migration is all-or-
-//! nothing at the layout level.
+//! coercion. The source attaches READ-ONLY (a `file:…?mode=ro` URI —
+//! SQLite makes attached databases follow main's read-only-ness, so the
+//! catalog is main and the source is never opened read-write, never
+//! mutated, not even its journal mode; a crashed server's hot WAL must be
+//! recovered by a normal open before a read-only source can read it — the
+//! adoption refuses with the open error rather than touching the file).
+//! On ANY failure the partial targets (catalog.db, repos/) are removed —
+//! removal failures are NAMED in the error — and the original single DB
+//! stands: the migration is all-or-nothing at the layout level. Success
+//! ends with the `adopted` meta row as the catalog's LAST write (after
+//! fsck): a catalog without it is a crashed run's partial target, refused
+//! by every guard with the incomplete-migration remedy.
 
 use std::path::Path;
 
@@ -90,10 +99,7 @@ pub struct AdoptReport {
 pub enum AdoptError {
     #[error("data dir is live (another naatre process holds the lockfile)")]
     Live,
-    #[error(
-        "migration refused: {0} (run it against a single-DB data dir: `naatre.db` present, \
-         no catalog.db)"
-    )]
+    #[error("migration refused: {0}")]
     NotSingleDb(String),
     #[error(
         "db-per-repo is a SQLite layout: the config selects meta = postgres \
@@ -101,13 +107,19 @@ pub enum AdoptError {
     )]
     PostgresUnsupported,
     #[error(
-        "adoption failed at {step}: {source} (partial targets removed; \
+        "adoption failed at {step}: {source} ({cleanup}; \
              the original single DB is untouched)"
     )]
     Failed {
         step: &'static str,
         #[source]
         source: anyhow_source::AnyhowSource,
+        /// What the partial-target cleanup actually did: "partial targets
+        /// removed" on success, or the named removal failures (the old
+        /// text claimed removal unconditionally — a cleanup that could not
+        /// remove catalog.db left a marker-less partial target and the
+        /// error lied about it).
+        cleanup: String,
     },
 }
 
@@ -139,7 +151,71 @@ fn failed(step: &'static str, e: impl std::fmt::Display) -> AdoptError {
     AdoptError::Failed {
         step,
         source: AnyhowSource::from_err(e),
+        cleanup: "partial targets removed".to_string(),
     }
+}
+
+/// [`failed`] carrying the cleanup's own failures (the error names what
+/// could not be removed — the operator needs to know a partial target
+/// remains).
+fn failed_with_cleanup(
+    step: &'static str,
+    e: impl std::fmt::Display,
+    cleanup_failures: Vec<String>,
+) -> AdoptError {
+    AdoptError::Failed {
+        step,
+        source: AnyhowSource::from_err(e),
+        cleanup: if cleanup_failures.is_empty() {
+            "partial targets removed".to_string()
+        } else {
+            format!(
+                "PARTIAL TARGETS REMAIN: {} — remove them by hand before re-running",
+                cleanup_failures.join("; ")
+            )
+        },
+    }
+}
+
+/// The adoption's crash point (debug builds only, the M4
+/// `NAATRE_CRASH_POINT` pattern, its own OnceLock — same contract as
+/// [`crate::gc::crash_point`]):
+///
+/// * `adopt_mid_copy` — mid-copy, after the catalog schema and the first
+///   repo's rows have landed: the fault-injected partial-migration shape
+///   the refusal pins need (a marker-less `catalog.db` the guards refuse).
+#[cfg(debug_assertions)]
+pub fn crash_point(name: &str) {
+    use std::sync::OnceLock;
+    static POINT: OnceLock<Option<String>> = OnceLock::new();
+    let want = POINT.get_or_init(|| std::env::var("NAATRE_CRASH_POINT").ok());
+    if want.as_deref() == Some(name) {
+        panic!("crash point {name} triggered");
+    }
+}
+
+/// Release no-op (see the debug build above).
+#[cfg(not(debug_assertions))]
+pub fn crash_point(_name: &str) {}
+
+/// A SQL string literal with `''` escaping (the ATTACH targets' paths are
+/// operator-supplied and may contain quotes; the old `{:?}`-formatted
+/// ATTACH broke on them and was never a real SQL literal).
+fn sql_literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Percent-escapes the URI-special bytes of a filesystem path for a
+/// `file:` URI (the read-only source ATTACH).
+fn uri_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
+        match b {
+            b'?' | b'#' | b'%' => out.push_str(&format!("%{b:02X}")),
+            _ => out.push(b as char),
+        }
+    }
+    out
 }
 
 /// Runs the offline adoption. `data` is the data dir; `cfg` its parsed
@@ -158,10 +234,36 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
             data.display()
         )));
     }
+    // A stale target refuses with the shape it is in: a COMPLETE catalog
+    // (the adopted marker) is a finished migration — re-running means
+    // deleting it first; a MARKER-LESS catalog is a crashed adoption's
+    // partial target — never served, never mistaken for complete, and a
+    // re-run against it refuses with the incomplete-migration remedy.
     if catalog_path.exists() {
-        return Err(AdoptError::NotSingleDb(
-            "catalog.db already exists (migrated already?)".to_string(),
-        ));
+        let complete = naatre_store::store::store_has_adopted_marker(data);
+        return Err(AdoptError::NotSingleDb(if complete {
+            "catalog.db already exists and the adoption COMPLETED (the adopted \
+             marker is present) — the split is servable; delete catalog.db and \
+             repos/ only if you mean to abandon db-per-repo (post-cutover writes \
+             are lost) and start over"
+                .to_string()
+        } else {
+            "incomplete migration — catalog.db carries no adopted marker: the \
+             previous adoption died mid-copy. Delete catalog.db and repos/ and \
+             re-run `naatre migrate-db-per-repo`"
+                .to_string()
+        }));
+    }
+    // A pre-existing repos/ refuses up front: stale per-repo files from an
+    // earlier run would be silently overwritten by id-keyed copies (the
+    // operator must clear them consciously).
+    if repos_dir.exists() {
+        return Err(AdoptError::NotSingleDb(format!(
+            "refusing to adopt: {} already exists (a previous run's or another \
+             store's per-repo files) — remove it first; the adoption writes \
+             every repo file itself",
+            repos_dir.display()
+        )));
     }
     // The flock: a running server (or an in-flight import) refuses the
     // migration — the plan's offline clause.
@@ -172,33 +274,36 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
         Err(e) => return Err(failed("flock", e)),
     };
 
-    // The copy runs on ONE raw connection holding the source (main), the
-    // catalog, and (per repo) the repo file — ATTACH + INSERT…SELECT, no
+    // The copy runs on ONE raw connection holding the CATALOG (main,
+    // read-write) with the source attached READ-ONLY — the original single
+    // DB is never opened read-write, never mutated, not even its journal
+    // mode. (SQLite makes ATTACHed databases follow main's read-only-ness,
+    // so the source cannot BE the read-only main.) The ATTACH is a file:
+    // URI with mode=ro; a crashed server's hot WAL must be recovered
+    // before a read-only open can read it — the adoption refuses with the
+    // open error rather than touching the source. Per repo the repo file
+    // attaches read-write for its copy. ATTACH + INSERT…SELECT, no
     // Rust-side row handling.
     let work = || -> Result<AdoptReport, AdoptError> {
-        let conn = Connection::open(&db_path).map_err(|e| failed("open source", e))?;
-        conn.execute_batch("PRAGMA journal_mode = WAL;")
-            .map_err(|e| failed("source pragmas", e))?;
-        // The catalog: created here, its OWN migration list runs (the
-        // global tables + the registry; the per-repo files run the shared
-        // list).
-        {
-            let catalog =
-                Connection::open(&catalog_path).map_err(|e| failed("catalog create", e))?;
-            naatre_store::catalog::migrate_catalog(&catalog)
-                .map_err(|e| failed("catalog create", e))?;
-            drop(catalog);
-        }
+        // The catalog: created here (main), its OWN migration list runs
+        // (the global tables + the registry; the per-repo files run the
+        // shared list). The adopted marker is NOT here — it is the
+        // adoption's LAST write, after fsck passes.
+        let conn = Connection::open(&catalog_path).map_err(|e| failed("catalog create", e))?;
+        naatre_store::catalog::migrate_catalog(&conn).map_err(|e| failed("catalog create", e))?;
         conn.execute_batch(&format!(
-            "ATTACH DATABASE {catalog:?} AS catalog;",
-            catalog = catalog_path.display().to_string()
+            "ATTACH DATABASE {} AS src;",
+            sql_literal(&format!(
+                "file:{}?mode=ro",
+                uri_escape(&db_path.display().to_string())
+            )),
         ))
-        .map_err(|e| failed("attach catalog", e))?;
+        .map_err(|e| failed("open source", e))?;
 
         // The repo registry first (ids must exist before the per-repo files).
         let repos: Vec<(i64, String, i64)> = {
             let mut stmt = conn
-                .prepare("SELECT id, name, created_ns FROM repos ORDER BY id ASC")
+                .prepare("SELECT id, name, created_ns FROM src.repos ORDER BY id ASC")
                 .map_err(|e| failed("registry read", e))?;
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
                 .map_err(|e| failed("registry read", e))?
@@ -221,13 +326,13 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
                 let _repo_db = open_repo_db(&repo_path).map_err(|e| failed("repo db create", e));
             }
             conn.execute_batch(&format!(
-                "ATTACH DATABASE {path:?} AS repo_db;",
-                path = repo_path.display().to_string()
+                "ATTACH DATABASE {} AS repo_db;",
+                sql_literal(&repo_path.display().to_string())
             ))
             .map_err(|e| failed("attach repo", e))?;
             // The registry row: the catalog's shape adds the db path.
             conn.execute(
-                "INSERT INTO catalog.repos(id, name, created_ns, db_file) \
+                "INSERT INTO repos(id, name, created_ns, db_file) \
                  VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![id, name, created_ns, db_file],
             )
@@ -241,7 +346,7 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
             for table in REPO_TABLES {
                 let n = conn
                     .execute(
-                        &format!("INSERT INTO repo_db.{table} SELECT * FROM main.{table} WHERE repo_id = ?1"),
+                        &format!("INSERT INTO repo_db.{table} SELECT * FROM src.{table} WHERE repo_id = ?1"),
                         rusqlite::params![id],
                     )
                     .map_err(|e| failed("repo copy", e))?;
@@ -250,7 +355,7 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
             for table in REPO_TABLES_NO_REPO_ID {
                 let n = conn
                     .execute(
-                        &format!("INSERT INTO repo_db.{table} SELECT * FROM main.{table}"),
+                        &format!("INSERT INTO repo_db.{table} SELECT * FROM src.{table}"),
                         [],
                     )
                     .map_err(|e| failed("repo copy", e))?;
@@ -270,7 +375,7 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
                 };
                 let source: i64 = conn
                     .query_row(
-                        &format!("SELECT COUNT(*) FROM main.{table}{where_clause}"),
+                        &format!("SELECT COUNT(*) FROM src.{table}{where_clause}"),
                         [],
                         |r| r.get(0),
                     )
@@ -297,11 +402,16 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
                 .map_err(|e| failed("detach repo", e))?;
         }
 
+        // The fault-injection point: every repo file has landed, the
+        // global copies have not (the crash pin's partial-migration shape
+        // — a marker-less catalog the guards refuse).
+        crash_point("adopt_mid_copy");
+
         // The global tables: verbatim into the catalog.
         for table in CATALOG_TABLES {
             let n = conn
                 .execute(
-                    &format!("INSERT INTO catalog.{table} SELECT * FROM main.{table}"),
+                    &format!("INSERT INTO {table} SELECT * FROM src.{table}"),
                     [],
                 )
                 .map_err(|e| failed("catalog copy", e))?;
@@ -313,7 +423,7 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
         {
             let markers: Vec<(String, String)> = {
                 let mut stmt = conn
-                    .prepare("SELECT key, value FROM main.meta WHERE key != 'schema_version'")
+                    .prepare("SELECT key, value FROM src.meta WHERE key != 'schema_version'")
                     .map_err(|e| failed("meta read", e))?;
                 stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                     .map_err(|e| failed("meta read", e))?
@@ -323,7 +433,7 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
             let mut n = 0usize;
             for (key, value) in markers {
                 conn.execute(
-                    "INSERT INTO catalog.meta(key, value) VALUES (?1, ?2)",
+                    "INSERT INTO meta(key, value) VALUES (?1, ?2)",
                     rusqlite::params![key, value],
                 )
                 .map_err(|e| failed("meta copy", e))?;
@@ -337,14 +447,12 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
                 continue;
             }
             let source: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM main.{table}"), [], |r| {
+                .query_row(&format!("SELECT COUNT(*) FROM src.{table}"), [], |r| {
                     r.get(0)
                 })
                 .map_err(|e| failed("parity read", e))?;
             let copied: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM catalog.{table}"), [], |r| {
-                    r.get(0)
-                })
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
                 .map_err(|e| failed("parity read", e))?;
             if source != copied {
                 return Err(failed(
@@ -360,32 +468,47 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
         Ok(r) => r,
         Err(e) => {
             // All-or-nothing: remove the partial targets, the original
-            // stands.
-            cleanup(&catalog_path, &repos_dir);
-            return Err(e);
+            // stands. A cleanup that cannot remove a target says so (the
+            // marker-less partial target is refused by every guard, but
+            // the error must not claim removal that never happened).
+            let failures = cleanup(&catalog_path, &repos_dir);
+            return Err(failed_with_cleanup(
+                match &e {
+                    AdoptError::Failed { step, .. } => step,
+                    _ => "adoption",
+                },
+                match &e {
+                    AdoptError::Failed { source, .. } => source.to_string(),
+                    other => other.to_string(),
+                },
+                failures,
+            ));
         }
     };
 
     // The fsck pass against the NEW layout: the split must serve the same
     // store the single DB did (clean or with exactly the same advisory
-    // states a single-DB fsck reports — the check demands clean()).
+    // states a single-DB fsck reports — the check demands clean()). The
+    // open bypasses the adopted-marker guard ([ServerState::open_backend_adopt]):
+    // the marker is this function's LAST write, after fsck — a crash
+    // anywhere above leaves a marker-less catalog every guard refuses.
     let mut verify_cfg = cfg.clone();
     verify_cfg.layout = Layout::DbPerRepo;
     let state = naatre_server_state(data, &verify_cfg);
     let state = match state {
         Ok(s) => std::sync::Arc::new(s),
         Err(e) => {
-            cleanup(&catalog_path, &repos_dir);
-            return Err(failed("open split store", e));
+            let failures = cleanup(&catalog_path, &repos_dir);
+            return Err(failed_with_cleanup("open split store", e, failures));
         }
     };
-    // fsck is the async read pass; the offline adopt runs it on a
-    // current-thread runtime (the S3 facade and every spawn_blocking hop
-    // run on it — the host verbs' block_on shape).
     // fsck is the async read pass; the offline adopt runs it OFF the
     // caller's runtime (adopt may be called from an async test or CLI
     // context — a helper thread owns its own runtime, the
-    // Db::connect_postgres pattern).
+    // Db::connect_postgres pattern). A PANIC inside the pass used to
+    // resume unwind past the cleanup — a marker-less catalog left behind
+    // that the old re-run refusal invited serving ("migrated already?");
+    // the panic is caught, the partial targets removed, THEN resumed.
     let state_for_fsck = std::sync::Arc::clone(&state);
     let fsck = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -398,50 +521,112 @@ pub fn adopt_db_per_repo(data: &Path, cfg: &BackendConfig) -> Result<AdoptReport
         }
     })
     .join()
-    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    .unwrap_or_else(|panic| {
+        let failures = cleanup(&catalog_path, &repos_dir);
+        let _ = failures; // a panic resume names the panic; the targets are gone
+        std::panic::resume_unwind(panic);
+    });
     let fsck = match fsck {
         Ok(r) => r,
         Err(e) => {
-            cleanup(&catalog_path, &repos_dir);
-            return Err(e);
+            let failures = cleanup(&catalog_path, &repos_dir);
+            return Err(failed_with_cleanup(
+                match &e {
+                    AdoptError::Failed { step, .. } => step,
+                    _ => "fsck",
+                },
+                match &e {
+                    AdoptError::Failed { source, .. } => source.to_string(),
+                    other => other.to_string(),
+                },
+                failures,
+            ));
         }
     };
     let fsck_clean = fsck.clean();
     if !fsck_clean {
-        cleanup(&catalog_path, &repos_dir);
-        return Err(failed(
+        let failures = cleanup(&catalog_path, &repos_dir);
+        return Err(failed_with_cleanup(
             "fsck",
             format!(
                 "the migrated layout does not fsck clean: {} dangling bytes-missing {}",
                 fsck.danglings.len(),
                 fsck.bytes_missing
             ),
+            failures,
         ));
     }
     report.fsck_clean = true;
+
+    // The adopted marker: the adoption's LAST catalog write, after fsck
+    // passes. From here the catalog is complete — every guard (the layout
+    // check, Store::open_catalog, a re-run) accepts it; above this point a
+    // crash leaves a marker-less catalog the same guards refuse with the
+    // incomplete-migration remedy.
+    {
+        let catalog = Connection::open(&catalog_path).map_err(|e| {
+            let failures = cleanup(&catalog_path, &repos_dir);
+            failed_with_cleanup("adopted marker", e, failures)
+        })?;
+        catalog
+            .execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    naatre_store::catalog::ADOPTED_MARKER,
+                    format!("db-per-repo {}", chrono_now_secs()),
+                ],
+            )
+            .map_err(|e| {
+                let failures = cleanup(&catalog_path, &repos_dir);
+                failed_with_cleanup("adopted marker", e, failures)
+            })?;
+    }
     Ok(report)
 }
 
-fn cleanup(catalog_path: &Path, repos_dir: &Path) {
-    let _ = std::fs::remove_file(catalog_path);
-    // WAL/SHM siblings, then the directory.
-    let _ = std::fs::remove_file(catalog_path.with_extension("db-wal"));
-    let _ = std::fs::remove_file(catalog_path.with_extension("db-shm"));
-    if repos_dir.exists() {
-        let _ = std::fs::remove_dir_all(repos_dir);
-    }
+/// Seconds since the epoch for the marker's value (a plain i64 timestamp —
+/// the marker's PRESENCE is the check; the value names when the adoption
+/// completed).
+fn chrono_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
-/// Opens a split-layout ServerState for the verification fsck (the same
-/// open path `serve` uses, programmatic — the config is NOT written to
-/// disk; the cutover steps are the operator's).
+fn cleanup(catalog_path: &Path, repos_dir: &Path) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut rm = |p: &Path| {
+        if let Err(e) = std::fs::remove_file(p)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            failures.push(format!("{}: {e}", p.display()));
+        }
+    };
+    rm(catalog_path);
+    // WAL/SHM siblings, then the directory.
+    rm(&catalog_path.with_extension("db-wal"));
+    rm(&catalog_path.with_extension("db-shm"));
+    if repos_dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(repos_dir)
+    {
+        failures.push(format!("{}: {e}", repos_dir.display()));
+    }
+    failures
+}
+
+/// Opens a split-layout ServerState for the verification fsck — the
+/// unchecked-catalog open ([ServerState::open_backend_adopt]): the
+/// adopted marker is this module's LAST write, so the just-built catalog
+/// does not carry it yet (the guard's marker check is for everything
+/// EXCEPT this pass; the config is NOT written to disk — the cutover
+/// steps are the operator's).
 fn naatre_server_state(
     data: &Path,
     cfg: &BackendConfig,
 ) -> Result<crate::state::ServerState, naatre_store::StoreError> {
     let data_dir = naatre_store::DataDir::open_any(data);
-    naatre_store::backend::check_data_dir_backend(data_dir.path(), cfg)?;
-    crate::state::ServerState::open_backend(data_dir, cfg)
+    crate::state::ServerState::open_backend_adopt(data_dir, cfg)
 }
 
 /// The cutover steps the tool prints (the operator runs them; the tool

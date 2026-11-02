@@ -432,8 +432,12 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
                 let repo_id = cx.id;
                 let conn = cx.db;
                 // Immediate: the same destructive-write lock class as the
-                // route's mark (the repo's slot; the audit row rides the
-                // catalog after the commit — the route's ordering).
+                // route's mark (the repo's slot). The audit row follows the
+                // route's connection shape: single-DB mode (the catalog IS
+                // the work connection) appends INSIDE the mark's
+                // transaction — a crash rolls the tombstone and the row
+                // back together; the split appends after the commit (the
+                // documented window).
                 let tx = conn
                     .transaction_immediate()
                     .map_err(ApiError::log_internal)?;
@@ -444,9 +448,7 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
                         .map_err(ApiError::log_internal)?;
                 }
                 let rearmed = matches!(outcome, db::RedactionMarkOutcome::Rearmed(_));
-                tx.commit().map_err(ApiError::log_internal)?;
-                // The audit row: catalog-side, after the tombstone's
-                // commit; it rides the 0→1 transition and the re-arm.
+                // The audit row rides the 0→1 transition and the re-arm.
                 if matches!(outcome, db::RedactionMarkOutcome::Inserted(_)) || rearmed {
                     let mut details = serde_json::json!({
                         "repo": repo,
@@ -457,8 +459,18 @@ pub fn redact(data: &Path, repo: &str, kind: &str, id_hex: &str, reason: &str) -
                     if rearmed {
                         details["rearmed"] = serde_json::json!(true);
                     }
-                    db::audit_append(&cx.cat(), now_ns, "admin", "redact", &details.to_string())
-                        .map_err(ApiError::log_internal)?;
+                    let details = details.to_string();
+                    if cx.cat_is_db() {
+                        db::audit_append(&tx, now_ns, "admin", "redact", &details)
+                            .map_err(ApiError::log_internal)?;
+                        tx.commit().map_err(ApiError::log_internal)?;
+                    } else {
+                        tx.commit().map_err(ApiError::log_internal)?;
+                        db::audit_append(&cx.cat(), now_ns, "admin", "redact", &details)
+                            .map_err(ApiError::log_internal)?;
+                    }
+                } else {
+                    tx.commit().map_err(ApiError::log_internal)?;
                 }
                 Ok(outcome)
             })

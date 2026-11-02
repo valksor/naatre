@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use naatre_store::layout::{Layout, repo_db_path};
-use naatre_store::store::{open_repo_conn, open_repo_db};
+use naatre_store::store::{open_repo_conn, open_repo_db_existing};
 use naatre_store::{Db, Store, StoreError};
 
 use crate::api_code::ApiCode;
@@ -148,21 +148,28 @@ impl ReadPools {
     }
 
     /// One of the repo's read connections, building the repo's pool on
-    /// first use (read-only connections to the repo's file; the write
-    /// connection created the WAL at repo-create/migration time, so the
-    /// read-only opens succeed). Load balances across the pool with the
-    /// shared round-robin counter.
+    /// first use (read-only connections to the repo's file; boot opens the
+    /// file read-write once first, so the WAL is recovered before any
+    /// read-only open — a read-only connection cannot run recovery). A
+    /// failed open propagates: the repo file is missing or unrecoverable,
+    /// and the caller answers a proper error, never a panic, and never a
+    /// silently-empty pool. A failed build leaves the pool un-cached (the
+    /// next checkout retries the open). Load balances across the pool with
+    /// the shared round-robin counter.
     pub(crate) fn checkout_repo(&self, repo_id: i64) -> Result<Arc<Mutex<Db>>, StoreError> {
         let mut repos = self.repos.lock().unwrap_or_else(PoisonError::into_inner);
-        repos.entry(repo_id).or_insert_with(|| -> _ {
-            let data = self
-                .data
-                .as_ref()
-                .expect("a repo connection checkout never runs on a single-DB store");
-            Self::open_ro(&repo_db_path(data, repo_id), REPO_READ_POOL_SIZE)
-                .expect("the repo file was migrated when its rows were written")
-        });
-        let pool = &repos[&repo_id];
+        let pool = match repos.get(&repo_id) {
+            Some(pool) => pool,
+            None => {
+                let data = self
+                    .data
+                    .as_ref()
+                    .expect("a repo connection checkout never runs on a single-DB store");
+                let pool = Self::open_ro(&repo_db_path(data, repo_id), REPO_READ_POOL_SIZE)?;
+                repos.insert(repo_id, pool);
+                repos.get(&repo_id).expect("just inserted")
+            }
+        };
         let i = self.next.fetch_add(1, Ordering::Relaxed) % pool.len();
         Ok(Arc::clone(&pool[i]))
     }
@@ -185,10 +192,17 @@ pub(crate) enum CatSource<'a> {
     /// Single mode: the catalog IS the repo connection.
     Same,
     /// Split mode: one pooled catalog connection, locked per call (the
-    /// read path pools read-only catalog connections; the write path
-    /// locks the one aux read-write connection per STATEMENT, so a
-    /// repo-slot holder never pins it across a transaction).
+    /// write path locks the one aux read-write connection per STATEMENT,
+    /// so a repo-slot holder never pins it across a transaction).
     Pooled(&'a Arc<Mutex<Db>>),
+    /// Split READ path: the catalog connection locked ONCE for the whole
+    /// closure, BEFORE the repo connection — cat→repo, the same order
+    /// [`ReadCx`] takes (cat held, then per-repo checkouts). One lock
+    /// order everywhere is what keeps the two read passes deadlock-free:
+    /// a `read_repo` holding a repo connection and waiting on a catalog
+    /// one against a `read_all` holding that catalog connection and
+    /// waiting on the repo one would deadlock the std mutexes.
+    Held(&'a MutexGuard<'a, Db>),
 }
 
 /// The scope a repo-scoped closure works against: the repo's id (the
@@ -211,10 +225,17 @@ impl<'a> RepoCx<'a> {
         RepoCx { id, db, source }
     }
 
-    /// The catalog connection. Per-STATEMENT hold in split mode; the same
-    /// connection as [`RepoCx::db`] in single mode. Global-statement
-    /// calls (`audit_append`, `object_row_upsert`, `derive_kind_seed`,
-    /// the `repos`-table reads) route here. The std [`Mutex`] lock never
+    /// True when the catalog IS the repo connection (single mode): the
+    /// audit-inside-the-transaction callers branch on this.
+    pub fn cat_is_db(&self) -> bool {
+        matches!(self.source, CatSource::Same)
+    }
+
+    /// The catalog connection. Per-STATEMENT hold in split writes; the
+    /// already-held guard on the split read path; the same connection as
+    /// [`RepoCx::db`] in single mode. Global-statement calls
+    /// (`audit_append`, `object_row_upsert`, `derive_kind_seed`, the
+    /// `repos`-table reads) route here. The std [`Mutex`] lock never
     /// fails (poisoning is recovered past — the store stays usable), so
     /// this is infallible; pass `&cx.cat()` to statement calls (deref
     /// coercion hands the statement layer its `&Db`).
@@ -225,6 +246,10 @@ impl<'a> RepoCx<'a> {
                 let guard = arc.lock().unwrap_or_else(PoisonError::into_inner);
                 CatGuard::Held(guard)
             }
+            // Already locked (the read path's closure-start hold); hand
+            // back the connection without re-locking (a re-lock would
+            // self-deadlock the std mutex).
+            CatSource::Held(guard) => CatGuard::Borrowed(guard),
         }
     }
 }
@@ -343,6 +368,14 @@ impl AllCx<'_> {
             Box::new(self.repos.iter().map(|(id, _)| *id))
         }
     }
+
+    /// True when the batch is the single-DB shape: every repo routes to
+    /// THE one connection, so the UNFILTERED per-repo probes (reference
+    /// anti-joins, protection closures) run ONCE here, not once per
+    /// registry id (which would be R identical whole-DB queries).
+    pub fn is_single(&self) -> bool {
+        self.repos.is_empty()
+    }
 }
 
 /// The per-database connection machinery behind the
@@ -381,7 +414,10 @@ impl Router {
 
     /// The repo's write connection, opened on first use (the file runs
     /// the shared migrations on open — idempotent for an existing file).
-    /// The caller then `try_lock`s the returned mutex (the repo slot).
+    /// The open REFUSES a missing file: a registry row whose repo file
+    /// vanished is a named inconsistency, never masked by silently
+    /// creating an empty repo. The caller then `try_lock`s the returned
+    /// mutex (the repo slot).
     pub(crate) fn repo_write_conn(&self, repo_id: i64) -> Result<Arc<Mutex<Db>>, StoreError> {
         let mut map = self
             .repo_write
@@ -390,7 +426,7 @@ impl Router {
         if let Some(conn) = map.get(&repo_id) {
             return Ok(Arc::clone(conn));
         }
-        let conn = Arc::new(Mutex::new(open_repo_db(&repo_db_path(
+        let conn = Arc::new(Mutex::new(open_repo_db_existing(&repo_db_path(
             &self.data, repo_id,
         ))?));
         map.insert(repo_id, Arc::clone(&conn));

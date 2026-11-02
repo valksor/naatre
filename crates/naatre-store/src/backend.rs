@@ -944,6 +944,13 @@ pub enum BackendError {
         configured: &'static str,
         remedy: &'static str,
     },
+
+    #[error(
+        "incomplete migration — {path:?} carries no adopted marker: the adoption \
+         died mid-copy. Delete catalog.db and repos/ and re-run \
+         `naatre migrate-db-per-repo`; the server never serves a partial store"
+    )]
+    IncompleteMigration { path: PathBuf },
 }
 
 /// The mismatch guard (plan M9): refuses a data dir whose existing
@@ -990,8 +997,19 @@ pub fn check_data_dir_backend(data: &Path, cfg: &BackendConfig) -> Result<(), St
                 }
                 // db-per-repo on disk: catalog.db present; naatre.db may
                 // sit beside it (pre-cutover, the migrate tool leaves it)
-                // or be gone (post-cutover) — both open.
-                (Layout::DbPerRepo, Layout::DbPerRepo) => {}
+                // or be gone (post-cutover) — both open. But the catalog
+                // must carry the adoption's marker: a marker-less catalog
+                // is a crashed adoption's partial target, refused with the
+                // incomplete-migration remedy (never served, and a re-run
+                // never mistakes it for a completed migration).
+                (Layout::DbPerRepo, Layout::DbPerRepo) => {
+                    let catalog = data.join(crate::layout::CATALOG_FILE);
+                    if catalog.exists() && !crate::store::store_has_adopted_marker(data) {
+                        return Err(StoreError::Backend(BackendError::IncompleteMigration {
+                            path: catalog,
+                        }));
+                    }
+                }
                 (Layout::Single, Layout::Single) => {
                     if !db.exists() {
                         return Err(StoreError::DataDirUninitialized(data.to_path_buf()));

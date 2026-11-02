@@ -81,8 +81,10 @@ pub(crate) fn layout_mismatch(on_disk: Layout, configured: Layout) -> StoreError
     let remedy = match (on_disk, configured) {
         (Layout::DbPerRepo, Layout::Single) => {
             "this data dir was migrated to db-per-repo: set `[layout] mode = \
-             \"db-per-repo\"` in backend.toml (or delete catalog.db to abandon \
-             the migration and keep serving from naatre.db)"
+             \"db-per-repo\"` in backend.toml. Deleting catalog.db AND repos/ \
+             abandons the migration and serves the old naatre.db again — any \
+             writes the split served after the cutover are LOST (they live in \
+             the deleted catalog and repo files only)"
         }
         (Layout::Single, Layout::DbPerRepo) => {
             "no catalog.db: run `naatre migrate-db-per-repo` first (the config \

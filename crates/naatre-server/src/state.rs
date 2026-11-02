@@ -140,9 +140,10 @@ pub struct ServerState {
     /// The metadata layout this state was opened with.
     pub layout: Layout,
     /// The schema version to report on the banner: the store's version in
-    /// single mode, the per-repo schema version ([`naatre_store::MAX_SUPPORTED`])
-    /// in split mode (the catalog's own version is `1` — the banner
-    /// reports the schema the repo files run).
+    /// single mode, the FIRST repo file's ACTUAL version in split mode
+    /// (read at boot's recovery walk — the catalog's own version is `1`;
+    /// the banner reports the schema the repo files run; zero repos: the
+    /// shared list's ceiling).
     pub schema_version: i64,
     /// History blob store over the same data dir (`ServerState::open`
     /// creates the filesystem CAS; `open_backend` swaps in the configured
@@ -353,6 +354,27 @@ impl ServerState {
     /// [`naatre_store::backend::check_data_dir_backend`] — the
     /// config/data-dir agreement is refused upstream, not here.
     pub fn open_backend(data: DataDir, cfg: &BackendConfig) -> Result<Self, StoreError> {
+        Self::open_backend_inner(data, cfg, true)
+    }
+
+    /// [`ServerState::open_backend`] for the OFFLINE ADOPTION's
+    /// verification pass: the catalog it opens is the one the adoption
+    /// just built, BEFORE the `adopted` marker exists (the marker is the
+    /// adoption's LAST write, after fsck). Every other entry point — boot,
+    /// the host verbs, the tests' split opens — goes through
+    /// [`ServerState::open_backend`], which requires the marker.
+    pub(crate) fn open_backend_adopt(
+        data: DataDir,
+        cfg: &BackendConfig,
+    ) -> Result<Self, StoreError> {
+        Self::open_backend_inner(data, cfg, false)
+    }
+
+    fn open_backend_inner(
+        data: DataDir,
+        cfg: &BackendConfig,
+        require_adopted: bool,
+    ) -> Result<Self, StoreError> {
         let data_dir_display = data.path().to_path_buf();
         let db_path = data.db_path();
         // Blob + ephemeral backends are selected together (the brief's
@@ -399,17 +421,42 @@ impl ServerState {
             }
             Layout::DbPerRepo => {
                 // The catalog opens first (its migrations run; the WAL is
-                // recovered) before its read pool builds. The per-repo
-                // files were migrated when their rows were written
-                // (repo-create / the migration command); their read pools
-                // build lazily on first use.
-                let store = Arc::new(Mutex::new(Store::open_catalog(data)?));
+                // recovered) before its read pool builds. Then EVERY repo
+                // file opens READ-WRITE once: a read-only pool connection
+                // cannot run WAL recovery, so a repo file left hot by a
+                // crashed writer (SQLITE_READONLY_RECOVERY on the pool's
+                // open) must be recovered by this walk or every read of
+                // that repo fails. The walk also fails boot loudly when a
+                // registry row's file is missing — the inconsistency is
+                // named, never served, and never masked by an empty repo.
+                // Each file runs the shared migrations idempotently; the
+                // conns drop after the walk. The banner's schema version
+                // reads the first repo file's ACTUAL version (zero repos:
+                // the shared list's ceiling).
+                let store = Arc::new(Mutex::new(if require_adopted {
+                    Store::open_catalog(data)?
+                } else {
+                    Store::open_catalog_raw(data)?
+                }));
+                let repo_ids = {
+                    let guard = store.lock().unwrap_or_else(PoisonError::into_inner);
+                    crate::db::gc_repos(guard.conn()).map_err(StoreError::from)?
+                };
+                let mut schema = naatre_store::MAX_SUPPORTED;
+                for id in &repo_ids {
+                    let conn = naatre_store::store::open_repo_db_existing(
+                        &naatre_store::layout::repo_db_path(&data_dir_display, *id),
+                    )?;
+                    if *id == repo_ids[0] {
+                        schema = naatre_store::store::schema_version(&conn);
+                    }
+                }
                 let pools = Arc::new(ReadPools::open_split(
                     &data_dir_display.join(naatre_store::layout::CATALOG_FILE),
                     data_dir_display.clone(),
                 )?);
                 let router = Arc::new(Router::new(Layout::DbPerRepo, &data_dir_display));
-                (store, naatre_store::MAX_SUPPORTED, pools, router)
+                (store, schema, pools, router)
             }
         };
         Ok(Self {
@@ -579,20 +626,25 @@ impl ServerState {
             Some(pools.checkout_cat())
         };
         tokio::task::spawn_blocking(move || {
-            // The repo connection (split: the repo's read pool; single:
-            // one pool conn plays both the repo and catalog roles) and
-            // the catalog conn (split: a catalog-pool conn, locked per
-            // call via `RepoCx::cat`; single: the same conn). The Arcs
-            // live on this stack; the guards borrow them.
+            // LOCK ORDER: the catalog connection locks FIRST, then the
+            // repo connection — cat→repo, the same order ReadCx takes
+            // (cat held for the pass, then per-repo checkouts). The
+            // pre-M13a order here (repo first, catalog per call) was the
+            // opposite of read_all's and the two read passes could
+            // deadlock the std mutexes. The guard lives on this stack;
+            // `RepoCx::cat` hands it out without re-locking.
+            let repo_cat_arc = repo_cat; // Option<Arc>; locked below
+            let cat_guard = repo_cat_arc
+                .as_ref()
+                .map(|arc| arc.lock().unwrap_or_else(PoisonError::into_inner));
             let repo_arc = if split {
                 repo_conn.expect("split mode carries the repo conn")
             } else {
                 single_conn.expect("single mode carries the pool conn")
             };
             let repo_guard = repo_arc.lock().unwrap_or_else(PoisonError::into_inner);
-            let repo_cat_arc = repo_cat; // Option<Arc>; borrowed below
-            let cx = match repo_cat_arc.as_ref() {
-                Some(cat_arc) => RepoCx::new(id, &repo_guard, CatSource::Pooled(cat_arc)),
+            let cx = match cat_guard.as_ref() {
+                Some(guard) => RepoCx::new(id, &repo_guard, CatSource::Held(guard)),
                 None => RepoCx::new(id, &repo_guard, CatSource::Same),
             };
             f(&cx)

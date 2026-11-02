@@ -37,6 +37,15 @@ use crate::error::StoreError;
 /// Highest catalog schema version this binary understands.
 pub const CATALOG_MAX_SUPPORTED: i64 = 1;
 
+/// The `meta` key the offline adoption writes as its LAST catalog write
+/// (after fsck passes). A `catalog.db` without it is a crashed adoption's
+/// partial target: [`crate::store::Store::open_catalog`] and
+/// [`crate::backend::check_data_dir_backend`] refuse to open or re-run
+/// against it — the operator deletes `catalog.db` and `repos/` and starts
+/// the migration over. The server never serves a partial store, and a
+/// re-run never mistakes one for a completed migration.
+pub const ADOPTED_MARKER: &str = "adopted";
+
 /// `(version, sql)` for the catalog schema, in order. Once shipped, a
 /// migration's SQL is immutable — fixes go in a new, higher version.
 const CATALOG_MIGRATIONS: &[(i64, &str)] = &[

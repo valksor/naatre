@@ -67,11 +67,12 @@ use crate::router::RepoCx;
 use crate::tree_derive::{DeriveError, MemNode};
 
 /// The closed crash-point enum (checked against `NAATRE_CRASH_POINT`).
-pub const CRASH_POINTS: [&str; 6] = [
+pub const CRASH_POINTS: [&str; 7] = [
     "after_pending_row",
     "after_blob_write",
     "after_rebase",
     "after_cas_main",
+    "before_commit",
     "after_commit",
     "after_conflict_rollback",
 ];
@@ -213,17 +214,30 @@ fn id_of(bytes: &[u8]) -> Option<Id> {
     <[u8; 32]>::try_from(bytes).ok().map(Id)
 }
 
+/// The split-mode land's audit payload, appended AFTER the repo
+/// transaction commits (the documented order — the reverse would let a
+/// crash fabricate a `land` audit row for a land that never stood).
+struct PendingAudit {
+    now_ns: i64,
+    principal: String,
+    details_json: String,
+}
+
 /// Runs one land inside its single write transaction (the REPO's
 /// transaction; the route resolved the repo and holds the repo's write
 /// slot). The incidental CATALOG writes — the merged blobs' `objects`
-/// rows and the `land` audit row — run through `cx.cat()` at their old
-/// sequence points: the object rows BEFORE the repo rows that reference
-/// them (the orphan direction — a crash leaves orphan rows the GC
-/// collects, never rows naming absent bytes), the audit row inside the
-/// settlement (in single-DB mode still one atomic transaction with the
-/// repo rows; in db-per-repo mode a separate commit AFTER the repo
-/// transaction commits — a crash in that window loses the audit row for a
-/// landed key, the documented split-mode atomicity boundary).
+/// rows and the `land` audit row — follow the connection shape: on the
+/// split, the object rows go through `cx.cat()` BEFORE the repo rows that
+/// reference them (the orphan direction — a crash leaves orphan rows the
+/// GC collects, never rows naming absent bytes), and the audit row
+/// commits AFTER the repo transaction ([`PendingAudit`]) — a crash in
+/// that window loses the audit row for a landed key, the documented
+/// split-mode atomicity boundary. In single-DB mode the catalog IS the
+/// work connection, so the audit joins the land's one transaction
+/// (nothing is lost, and a rolled-back land leaves NO audit row); a
+/// post-commit audit-insert FAILURE on the split is logged and answered
+/// success — the land stood, and answering failure would invite a retry
+/// against a settled key.
 pub(crate) fn execute(
     cx: &RepoCx<'_>,
     cas: &dyn BlobStore,
@@ -232,8 +246,29 @@ pub(crate) fn execute(
 ) -> Result<LandDone, ApiError> {
     let guard = TxnGuard::begin(cx.db)?;
     match land_in_txn(cx, cas, derive, cmd) {
-        Ok(done) => {
+        Ok((done, pending_audit)) => {
+            crash_point("before_commit");
             guard.commit()?;
+            // Split mode only (`Some`): the land HAS STOOD — a post-commit
+            // audit-insert failure must not answer failure (the client
+            // would retry a landed key). The audit loss is the documented
+            // split-mode window; log it for ops and answer success.
+            // Single mode never reaches this arm: its audit rode the
+            // transaction (a failed audit rolls the land back).
+            if let Some(audit) = pending_audit
+                && let Err(e) = db::audit_append(
+                    &cx.cat(),
+                    audit.now_ns,
+                    &audit.principal,
+                    "land",
+                    &audit.details_json,
+                )
+            {
+                tracing::error!(
+                    error = %e,
+                    "land audit row lost after commit (the documented split-mode window)"
+                );
+            }
             crash_point("after_commit");
             Ok(done)
         }
@@ -253,7 +288,7 @@ fn land_in_txn(
     cas: &dyn BlobStore,
     derive: &crate::derive::DeriveRegistry,
     cmd: &LandCommand,
-) -> Result<LandDone, ApiError> {
+) -> Result<(LandDone, Option<PendingAudit>), ApiError> {
     let repo_id = cx.id;
     let conn = cx.db;
     // 1. Idempotency: a settled key replays its recorded result; a
@@ -282,7 +317,7 @@ fn land_in_txn(
                             format!("/v1/repos/{}/land/{}", cmd.repo_name, cmd.key),
                     })));
                 }
-                return replay(row.result_json);
+                return replay(row.result_json).map(|done| (done, None));
             }
             "pending" => {
                 return Err(
@@ -784,7 +819,11 @@ fn land_in_txn(
 /// node itself is a conflicted node — still ONE settlement: the conflicted
 /// node IS the settlement) + the `land` audit entry, and returns the
 /// response payload. `base` is the `main` target the land rebased onto.
-/// Runs inside the caller's transaction.
+/// Runs inside the caller's transaction. The audit row: single-DB mode
+/// (the catalog IS the work connection) appends it INSIDE the land's
+/// transaction — atomic; the split hands the payload back and `execute`
+/// appends it AFTER the commit (the documented after-commit window; an
+/// audit that beat the commit would fabricate a land row on a crash).
 #[allow(clippy::too_many_arguments)]
 fn settle(
     cx: &RepoCx<'_>,
@@ -796,7 +835,7 @@ fn settle(
     rebased: u64,
     note: Option<String>,
     conflicts: &[String],
-) -> Result<LandDone, ApiError> {
+) -> Result<(LandDone, Option<PendingAudit>), ApiError> {
     let state = if conflicts.is_empty() {
         "done"
     } else {
@@ -819,30 +858,37 @@ fn settle(
         &result.to_string(),
     )
     .map_err(ApiError::log_internal)?;
-    db::audit_append(
-        &cx.cat(),
-        cmd.now_ns,
-        &cmd.principal,
-        "land",
-        &serde_json::json!({
-            "repo": cmd.repo_name,
-            "key": cmd.key,
-            "head": cmd.head.to_hex(),
-            "landed": landed.to_hex(),
-            "rebased": rebased,
-            "via": "land",
-            "conflicts": conflicts,
-        })
-        .to_string(),
-    )
-    .map_err(ApiError::log_internal)?;
-    Ok(LandDone {
+    let details_json = serde_json::json!({
+        "repo": cmd.repo_name,
+        "key": cmd.key,
+        "head": cmd.head.to_hex(),
+        "landed": landed.to_hex(),
+        "rebased": rebased,
+        "via": "land",
+        "conflicts": conflicts,
+    })
+    .to_string();
+    let done = LandDone {
         landed,
         main: landed,
         rebased,
         note,
         conflicts: conflicts.to_vec(),
-    })
+    };
+    if cx.cat_is_db() {
+        db::audit_append(&cx.cat(), cmd.now_ns, &cmd.principal, "land", &details_json)
+            .map_err(ApiError::log_internal)?;
+        Ok((done, None))
+    } else {
+        Ok((
+            done,
+            Some(PendingAudit {
+                now_ns: cmd.now_ns,
+                principal: cmd.principal.clone(),
+                details_json,
+            }),
+        ))
+    }
 }
 
 /// Idempotent replay of a settled land's recorded result. Also the join

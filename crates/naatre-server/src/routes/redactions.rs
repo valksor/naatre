@@ -14,6 +14,28 @@ use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+/// The redact route's crash point (debug builds only, the M4
+/// `NAATRE_CRASH_POINT` pattern, its own OnceLock — same contract as
+/// [`crate::gc::crash_point`]):
+///
+/// * `redact_before_audit` — immediately before the `redact` audit append.
+///   In single mode the append is inside the mark's transaction, so the
+///   crash rolls the tombstone and the row back together (the atomicity
+///   pin); in split mode it lands in the documented after-commit window.
+#[cfg(debug_assertions)]
+pub fn crash_point(name: &str) {
+    use std::sync::OnceLock;
+    static POINT: OnceLock<Option<String>> = OnceLock::new();
+    let want = POINT.get_or_init(|| std::env::var("NAATRE_CRASH_POINT").ok());
+    if want.as_deref() == Some(name) {
+        panic!("crash point {name} triggered");
+    }
+}
+
+/// Release no-op (see the debug build above).
+#[cfg(not(debug_assertions))]
+pub fn crash_point(_name: &str) {}
+
 use naatre_core::ids::Id;
 
 use crate::api_code::ApiCode;
@@ -205,52 +227,64 @@ pub async fn create(
                 db::redaction_invalidate_derived(&tx, repo_id, &id)
                     .map_err(ApiError::log_internal)?;
             }
-            tx.commit().map_err(ApiError::log_internal)?;
-            // The audit row is catalog-side and commits AFTER the
-            // tombstone's transaction (audit-after-work: a rolled-back mark
-            // never rows). It rides the 0→1 transition and the re-arm only
-            // (the token_revoke convention: an idempotent re-POST writes
-            // nothing). Split mode: a separate commit — a crash in that
-            // window loses the audit row for a standing tombstone, the
-            // documented split-mode atomicity boundary.
+            // Audit-after-work in the connection shape the caller gave us:
+            // when the catalog IS the work connection (single mode) the
+            // audit row joins the mark's transaction — a crash between the
+            // mark and the audit rolls BOTH back (nothing is lost). When
+            // they differ (split mode) the audit commits after the
+            // tombstone's transaction — a crash in that window loses the
+            // audit row for a standing tombstone, the documented
+            // split-mode atomicity boundary. The crash point sits before
+            // the append in both shapes (the pins assert the single-DB
+            // pair is indivisible). A rolled-back mark never rows.
+            let audit_details = |rearmed: bool| {
+                let mut details = serde_json::json!({
+                    "repo": repo,
+                    "id": id.to_hex(),
+                    "kind": kind,
+                    "reason": reason,
+                });
+                if rearmed {
+                    details["rearmed"] = serde_json::json!(true);
+                }
+                details.to_string()
+            };
+            let same_conn = cx.cat_is_db();
             match &outcome {
                 db::RedactionMarkOutcome::Inserted(_) => {
-                    db::audit_append(
-                        &cx.cat(),
-                        now_ns,
-                        &principal,
-                        "redact",
-                        &serde_json::json!({
-                            "repo": repo,
-                            "id": id.to_hex(),
-                            "kind": kind,
-                            "reason": reason,
-                        })
-                        .to_string(),
-                    )
-                    .map_err(ApiError::log_internal)?;
+                    let details = audit_details(false);
+                    if same_conn {
+                        crash_point("redact_before_audit");
+                        db::audit_append(&tx, now_ns, &principal, "redact", &details)
+                            .map_err(ApiError::log_internal)?;
+                        tx.commit().map_err(ApiError::log_internal)?;
+                    } else {
+                        tx.commit().map_err(ApiError::log_internal)?;
+                        crash_point("redact_before_audit");
+                        db::audit_append(&cx.cat(), now_ns, &principal, "redact", &details)
+                            .map_err(ApiError::log_internal)?;
+                    }
                 }
                 db::RedactionMarkOutcome::Rearmed(_) => {
                     // A re-arm is a real admin action on a purged record —
                     // it rows its own audit entry, never a silent no-op.
-                    db::audit_append(
-                        &cx.cat(),
-                        now_ns,
-                        &principal,
-                        "redact",
-                        &serde_json::json!({
-                            "repo": repo,
-                            "id": id.to_hex(),
-                            "kind": kind,
-                            "reason": reason,
-                            "rearmed": true,
-                        })
-                        .to_string(),
-                    )
-                    .map_err(ApiError::log_internal)?;
+                    let details = audit_details(true);
+                    if same_conn {
+                        crash_point("redact_before_audit");
+                        db::audit_append(&tx, now_ns, &principal, "redact", &details)
+                            .map_err(ApiError::log_internal)?;
+                        tx.commit().map_err(ApiError::log_internal)?;
+                    } else {
+                        tx.commit().map_err(ApiError::log_internal)?;
+                        crash_point("redact_before_audit");
+                        db::audit_append(&cx.cat(), now_ns, &principal, "redact", &details)
+                            .map_err(ApiError::log_internal)?;
+                    }
                 }
                 db::RedactionMarkOutcome::Existing(_)
-                | db::RedactionMarkOutcome::KindMismatch { .. } => {}
+                | db::RedactionMarkOutcome::KindMismatch { .. } => {
+                    tx.commit().map_err(ApiError::log_internal)?;
+                }
             }
             Ok(outcome)
         })

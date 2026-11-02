@@ -3000,7 +3000,7 @@ async fn repo_stats_exclude_this_repo_tombstones() {
 fn stats_of(conn: &naatre_store::Db, repo_id: i64) -> (i64, i64, i64, i64) {
     let changesets = naatre_server::db::repo_changeset_count(conn, repo_id).unwrap();
     let excluded: std::collections::HashSet<naatre_core::ids::Id> =
-        naatre_server::db::redaction_ids_repo(conn)
+        naatre_server::db::redaction_ids_repo(conn, Some(repo_id))
             .unwrap()
             .into_iter()
             .collect();

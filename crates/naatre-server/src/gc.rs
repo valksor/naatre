@@ -127,13 +127,18 @@ pub const GC_BATCH_BLOBS: usize = 256;
 /// * `gc_after_mark` — between mark and sweep (nothing has been written).
 /// * `gc_after_candidates` — the ledger is updated, nothing collected yet.
 /// * `gc_mid_cs_batch` — between changeset collection batches.
+/// * `gc_after_cs_repo_rows` — INSIDE a changeset batch: every repo's row
+///   transaction has committed, the batch's ledger deletes have not (the
+///   phantom-strand pin: the stranded ledger rows are exactly the crash
+///   window the existence-only reap converges on).
 /// * `gc_mid_blob_batch` — INSIDE a blob batch: the CAS bytes are already
 ///   unlinked, the row transactions not yet committed (the orphan-direction
 ///   pin: the re-run must converge over rows claiming absent bytes).
-pub const GC_CRASH_POINTS: [&str; 4] = [
+pub const GC_CRASH_POINTS: [&str; 5] = [
     "gc_after_mark",
     "gc_after_candidates",
     "gc_mid_cs_batch",
+    "gc_after_cs_repo_rows",
     "gc_mid_blob_batch",
 ];
 
@@ -448,10 +453,16 @@ fn exclusively_unreferenced(
         .into_iter()
         .collect();
     let mut referenced: HashSet<Id> = HashSet::new();
-    for repo_id in cx.repo_ids().collect::<Vec<_>>() {
-        let conn = cx.repo(repo_id)?;
+    // Single mode: the one connection IS every repo — one whole-DB probe.
+    if cx.is_single() {
         referenced
-            .extend(db::gc_blob_referenced_among(conn, blobs).map_err(ApiError::log_internal)?);
+            .extend(db::gc_blob_referenced_among(cx.cat(), blobs).map_err(ApiError::log_internal)?);
+    } else {
+        for repo_id in cx.repo_ids().collect::<Vec<_>>() {
+            let conn = cx.repo(repo_id)?;
+            referenced
+                .extend(db::gc_blob_referenced_among(conn, blobs).map_err(ApiError::log_internal)?);
+        }
     }
     Ok(blobs
         .iter()
@@ -605,11 +616,33 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                         // referenced within its own repo, so the probes
                         // are complete per repo.
                         let mut collectible: HashMap<i64, Vec<(Id, i64)>> = HashMap::new();
+                        let mut present: HashSet<Id> = HashSet::new();
                         for repo_id in cx.repo_ids().collect::<Vec<_>>() {
                             let conn = cx.repo(repo_id)?;
                             let rows = db::gc_cs_collectible_probe(conn, repo_id, &candidates)
                                 .map_err(ApiError::log_internal)?;
+                            present.extend(
+                                db::gc_cs_present_among(conn, repo_id, &candidates)
+                                    .map_err(ApiError::log_internal)?,
+                            );
                             collectible.insert(repo_id, rows);
+                        }
+                        // The PHANTOM reap: candidates no repo's
+                        // changesets table contains. A crash between a
+                        // batch's repo deletes and its ledger deletes
+                        // strands ledger rows the collectible probe (which
+                        // requires the changeset row) never re-enters — at
+                        // a full phantom page the `first_ns ASC` head would
+                        // stall all cs collection forever. Deleting them
+                        // here converges the orphans on THIS pass.
+                        let phantoms: Vec<Id> = candidates
+                            .iter()
+                            .filter(|id| !present.contains(*id))
+                            .copied()
+                            .collect();
+                        if !phantoms.is_empty() {
+                            db::gc_candidates_delete(cx.cat(), db::GC_SCOPE_CS, &phantoms)
+                                .map_err(ApiError::log_internal)?;
                         }
                         // Generation-ordered like the batched backfill
                         // (children collect after parents' chains,
@@ -659,6 +692,11 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                             tx.commit().map_err(ApiError::log_internal)?;
                             collected += n;
                         }
+                        // The crash point sits between the repo deletes
+                        // and the ledger deletes: a crash here strands
+                        // ledger rows whose data is already gone (the
+                        // phantom-reap pin).
+                        crash_point("gc_after_cs_repo_rows");
                         db::gc_candidates_delete(cx.cat(), db::GC_SCOPE_CS, &batch)
                             .map_err(ApiError::log_internal)?;
                         Ok((collected, raw_len))
@@ -745,7 +783,9 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                         // describes).
                         crash_point("gc_mid_blob_batch");
                         // Repo membership rows first, then the catalog
-                        // rows (objects + ledger).
+                        // rows (objects + ledger) in ONE catalog
+                        // transaction (the same atomic shape as every
+                        // other call site — not two autocommitted deletes).
                         for repo_id in cx.repo_ids().collect::<Vec<_>>() {
                             let conn = cx.repo(repo_id)?;
                             let tx = conn
@@ -755,8 +795,13 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                                 .map_err(ApiError::log_internal)?;
                             tx.commit().map_err(ApiError::log_internal)?;
                         }
-                        db::gc_collect_blobs_catalog(cx.cat(), &batch)
+                        let tx = cx
+                            .cat()
+                            .transaction_immediate()
                             .map_err(ApiError::log_internal)?;
+                        db::gc_collect_blobs_catalog(&tx, &batch)
+                            .map_err(ApiError::log_internal)?;
+                        tx.commit().map_err(ApiError::log_internal)?;
                         Ok(batch)
                     })
                     .await?
@@ -794,14 +839,24 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                             .map_err(ApiError::log_internal)?;
                         // The per-repo protective-closure probe: which
                         // candidates ANY repo's current closure reaches.
+                        // Single mode: ONE whole-DB call (every repo
+                        // routes to the same connection — the per-repo
+                        // loop would be R identical queries).
                         let mut protected: HashSet<Id> = HashSet::new();
                         if !candidates.is_empty() {
-                            for repo_id in cx.repo_ids().collect::<Vec<_>>() {
-                                let conn = cx.repo(repo_id)?;
+                            if cx.is_single() {
                                 protected.extend(
-                                    db::gc_tree_protected_among(conn, &candidates, now_i)
+                                    db::gc_tree_protected_among(cx.cat(), &candidates, now_i)
                                         .map_err(ApiError::log_internal)?,
                                 );
+                            } else {
+                                for repo_id in cx.repo_ids().collect::<Vec<_>>() {
+                                    let conn = cx.repo(repo_id)?;
+                                    protected.extend(
+                                        db::gc_tree_protected_among(conn, &candidates, now_i)
+                                            .map_err(ApiError::log_internal)?,
+                                    );
+                                }
                             }
                         }
                         let batch: Vec<Id> = candidates
@@ -832,7 +887,14 @@ pub async fn gc_pass(state: &AppState) -> Result<GcReport, ApiError> {
                             .map_err(ApiError::log_internal)?;
                         db::gc_candidates_delete(&tx, db::GC_SCOPE_TREE, &batch)
                             .map_err(ApiError::log_internal)?;
-                        if cs + blobs + trees_so_far + batch.len() > 0 {
+                        // The loop-ENDING batch carries the pass's audit
+                        // row (`batch.len() < GC_BATCH_ROWS` is the loop's
+                        // break condition): a full batch continues the loop,
+                        // and every batch writing its own row would row the
+                        // pass once per batch — ONE row per pass.
+                        if cs + blobs + trees_so_far + batch.len() > 0
+                            && batch.len() < GC_BATCH_ROWS
+                        {
                             let details = json!({
                                 "cs": cs,
                                 "blobs": blobs,
@@ -887,15 +949,28 @@ fn subtract_blob_probes(
     candidates: &[Id],
 ) -> Result<Vec<Id>, ApiError> {
     let mut spared: HashSet<Id> = HashSet::new();
-    for repo_id in cx.repo_ids().collect::<Vec<_>>() {
-        let conn = cx.repo(repo_id)?;
+    // Single mode: one connection, whole-DB probes (the per-repo loop
+    // would run one identical query per registry id).
+    if cx.is_single() {
+        let conn = cx.cat();
         spared.extend(
             db::gc_blob_referenced_among(conn, candidates).map_err(ApiError::log_internal)?,
         );
         spared.extend(
-            db::gc_tombstoned_among(conn, repo_id, "blob", candidates)
+            db::gc_tombstoned_among(conn, None, "blob", candidates)
                 .map_err(ApiError::log_internal)?,
         );
+    } else {
+        for repo_id in cx.repo_ids().collect::<Vec<_>>() {
+            let conn = cx.repo(repo_id)?;
+            spared.extend(
+                db::gc_blob_referenced_among(conn, candidates).map_err(ApiError::log_internal)?,
+            );
+            spared.extend(
+                db::gc_tombstoned_among(conn, Some(repo_id), "blob", candidates)
+                    .map_err(ApiError::log_internal)?,
+            );
+        }
     }
     Ok(candidates
         .iter()
@@ -1066,8 +1141,13 @@ pub async fn redaction_purge_pass(state: &AppState) -> Result<RedactionPurgeRepo
                             }
                             tx.commit().map_err(ApiError::log_internal)?;
                         }
-                        db::gc_collect_blobs_catalog(cx.cat(), &exclusive)
+                        let tx = cx
+                            .cat()
+                            .transaction_immediate()
                             .map_err(ApiError::log_internal)?;
+                        db::gc_collect_blobs_catalog(&tx, &exclusive)
+                            .map_err(ApiError::log_internal)?;
+                        tx.commit().map_err(ApiError::log_internal)?;
                     }
                     Ok((total, exclusive.len()))
                 })
@@ -1128,14 +1208,21 @@ pub async fn redaction_purge_pass(state: &AppState) -> Result<RedactionPurgeRepo
                     // in any repo (the tombstones themselves are the work
                     // list — never an exclusion here, unlike the reachability
                     // sweep's subtract) and no in-window upload touch on the
-                    // catalog.
+                    // catalog. Single mode: one whole-DB probe.
                     let mut referenced: HashSet<Id> = HashSet::new();
-                    for repo_id in cx.repo_ids().collect::<Vec<_>>() {
-                        let conn = cx.repo(repo_id)?;
+                    if cx.is_single() {
                         referenced.extend(
-                            db::gc_blob_referenced_among(conn, &batch)
+                            db::gc_blob_referenced_among(cx.cat(), &batch)
                                 .map_err(ApiError::log_internal)?,
                         );
+                    } else {
+                        for repo_id in cx.repo_ids().collect::<Vec<_>>() {
+                            let conn = cx.repo(repo_id)?;
+                            referenced.extend(
+                                db::gc_blob_referenced_among(conn, &batch)
+                                    .map_err(ApiError::log_internal)?,
+                            );
+                        }
                     }
                     let batch: Vec<Id> = batch
                         .into_iter()

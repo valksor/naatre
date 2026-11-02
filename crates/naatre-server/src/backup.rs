@@ -1094,12 +1094,26 @@ pub fn restore(
     // untouched, not even created. Each finding carries its own on-disk
     // rendering: the S3-arm mismatch names what was ACTUALLY found
     // (objects/ data vs a WAL/SHM sidecar), never the fixed fs string.
+    let stale_repos = cfg.layout == naatre_store::Layout::DbPerRepo
+        && root
+            .join(naatre_store::layout::REPOS_DIR)
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
     let not_empty: Option<(&'static str, &'static str)> = if objects_dir_has_entries(target) {
         Some(("objects/ holds data", "fs (objects/ holds data)"))
     } else if sidecar_present {
         Some((
             "a SQLite WAL/SHM sidecar sits beside a missing naatre.db",
             "fs (a SQLite WAL/SHM sidecar sits beside a missing naatre.db)",
+        ))
+    } else if stale_repos {
+        // A stale repos/ dir would leave ORPHAN repo files after the
+        // restore (only the manifest's artifacts are renamed over it) —
+        // repo files no catalog row names.
+        Some((
+            "a repos/ dir holding entries sits in the target (a previous              restore's or migration's per-repo files)",
+            "fs (a repos/ dir holding entries sits in the target)",
         ))
     } else {
         None
@@ -1204,13 +1218,13 @@ pub fn restore(
         (naatre_store::Layout::DbPerRepo, false) => {
             return Err(BackupError::Manifest {
                 path: backup_dir.to_path_buf(),
-                why: "the backup is a single-DB snapshot but the target config selects                       layout = \"db-per-repo\" — set [layout] mode = \"single-db\" (or take                       the backup again after the migration)",
+                why: "the backup is a single-DB snapshot but the target config selects layout = \"db-per-repo\" — set [layout] mode = \"single-db\" (or take the backup again after the migration)",
             });
         }
         (naatre_store::Layout::Single, true) => {
             return Err(BackupError::Manifest {
                 path: backup_dir.to_path_buf(),
-                why: "the backup is a db-per-repo snapshot but the target config selects                       the single-DB layout — set [layout] mode = \"db-per-repo\"",
+                why: "the backup is a db-per-repo snapshot but the target config selects the single-DB layout — set [layout] mode = \"db-per-repo\"",
             });
         }
         _ => {}
@@ -1291,6 +1305,16 @@ pub fn restore(
                 .and_then(|f| f.sync_all())
                 .map_err(|e| BackupError::io(&dst, e))?;
             if cfg.layout == naatre_store::Layout::DbPerRepo {
+                // The manifest names every repo file the snapshot holds;
+                // anything else in repos/ is a stale target's orphan. The
+                // guard above required --force to reach this point with a
+                // populated repos/, so the wipe is the forced restore's
+                // contract.
+                let repos_dir = root.join(naatre_store::layout::REPOS_DIR);
+                if repos_dir.exists() {
+                    std::fs::remove_dir_all(&repos_dir)
+                        .map_err(|e| BackupError::io(&repos_dir, e))?;
+                }
                 for artifact in &manifest.artifacts {
                     let Some(name) = artifact
                         .path

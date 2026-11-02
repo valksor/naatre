@@ -50,6 +50,13 @@ pub enum StoreError {
     #[error("data dir lock is already held by another process: {0:?}")]
     LockHeld(PathBuf),
 
+    #[error(
+        "the repo registry names {0:?} but the file is missing: the registry row \
+         is unbacked (external deletion?). Restore the file from a backup or \
+         rebuild the store; naatre never recreates an empty repo over a live row"
+    )]
+    RepoFileMissing(PathBuf),
+
     #[error("invalid snapshot id {0:?}: must be 64 lowercase hex characters")]
     InvalidSnapshotId(String),
 

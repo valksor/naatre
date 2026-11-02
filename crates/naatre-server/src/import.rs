@@ -223,14 +223,17 @@ pub fn run(
 /// writes metadata, so it honors `backend.toml` exactly like `serve` —
 /// same open guard, same mismatch refusal, same migrations.
 /// The import's metadata connections: the catalog (`cat`) plus the
-/// target repo's file (`repo_conn`), one `Db` each. Single-DB mode: both
-/// roles are plain connections to `naatre.db` (the import's transaction
-/// shape is unchanged; the two connections' writes interleave through
-/// SQLite's busy timeout exactly as a server's do). Db-per-repo mode:
-/// `open_repo` materializes the repo's file (the shared migrations run on
-/// open) after the registry row exists.
+/// target repo's file (`repo_conn`). Single-DB mode: ONE connection —
+/// both roles are the same `Db` over `naatre.db` (the pre-M13a shape: a
+/// ref move's audit row joins its transaction because the two `&Db`s
+/// alias, and no second connection can block a transaction mid-flight on
+/// the same file). Db-per-repo mode: two connections; `open_repo`
+/// materializes the repo's file (the shared migrations run on open)
+/// before the registry row's transaction commits.
 struct ImportDb {
     cat_db: Db,
+    /// Split mode only (the per-repo file's connection); single mode
+    /// leaves it `None` and `repo_conn` hands back the catalog.
     repo_db: Option<Db>,
     data_dir: DataDir,
     split: bool,
@@ -262,28 +265,26 @@ impl ImportDb {
         &self.cat_db
     }
 
+    /// The target repo's connection (split: its file; single: THE one
+    /// connection — `cat` and `repo_conn` alias, so a ref move's audit
+    /// row lands inside its transaction).
     fn repo_conn(&self) -> &Db {
-        self.repo_db.as_ref().expect("import opened the repo conn")
+        match &self.repo_db {
+            Some(db) => db,
+            None => &self.cat_db,
+        }
     }
 
-    /// Opens (creating when absent) the target repo's file. Idempotent.
+    /// Opens (creating when absent) the target repo's file. Split mode
+    /// only (single mode's repo_conn is the catalog). Idempotent.
     fn open_repo(&mut self, repo_id: i64) -> Result<(), ImportError> {
-        if self.repo_db.is_some() {
+        if !self.split || self.repo_db.is_some() {
             return Ok(());
         }
-        let path = if self.split {
-            naatre_store::layout::repo_db_path(self.data_dir.path(), repo_id)
-        } else {
-            self.data_dir.db_path()
-        };
-        let conn = if self.split {
-            // The per-repo file runs the shared migrations on open
-            // (idempotent for an existing file; creating for a fresh one).
-            naatre_store::store::open_repo_db(&path)
-        } else {
-            naatre_store::store::open_repo_conn(&path)
-        }
-        .map_err(ImportError::DataDir)?;
+        let path = naatre_store::layout::repo_db_path(self.data_dir.path(), repo_id);
+        // The per-repo file runs the shared migrations on open
+        // (idempotent for an existing file; creating for a fresh one).
+        let conn = naatre_store::store::open_repo_db(&path).map_err(ImportError::DataDir)?;
         self.repo_db = Some(conn);
         Ok(())
     }
@@ -331,15 +332,33 @@ pub fn run_backend(
 
     // Target repo, created (and audited) when absent. The registry is
     // catalog-side in both layouts; in db-per-repo mode the create also
-    // materializes the repo's own SQLite file (the shared migrations run
-    // on open).
+    // materializes the repo's own SQLite file INSIDE the registry
+    // transaction (the file exists before the row commits — a crash
+    // leaves an orphan file no row names, never an unbacked row) and
+    // names it in the catalog's NOT NULL `db_file` column.
     let existing = db::repo_id_by_name(cat, &repo_name)?;
     let (repo_id, repo_created) = match existing {
         Some(id) => (id, false),
         None => {
             let now = now_ns();
+            let split = cfg.layout == naatre_store::Layout::DbPerRepo;
             let tx = cat.transaction()?;
-            let id = db::repos_create(&tx, &repo_name, now)?;
+            // The split insert names the auto-assigned id's file in the
+            // catalog's NOT NULL db_file column (placeholder + real name
+            // in this transaction — the placeholder never commits).
+            let (id, _db_file) = if split {
+                db::repos_create_split(&tx, &repo_name, now)?
+            } else {
+                (db::repos_create(&tx, &repo_name, now)?, String::new())
+            };
+            if split {
+                let path = naatre_store::layout::repo_db_path(data, id);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| ImportError::DataDir(e.into()))?;
+                }
+                // The repo file exists BEFORE the registry row commits.
+                naatre_store::store::open_repo_db(&path).map_err(ImportError::DataDir)?;
+            }
             db::audit_append(
                 &tx,
                 now,

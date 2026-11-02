@@ -619,8 +619,6 @@ pub async fn merge_base(
         .read_repo(repo.clone(), move |cx| {
             let repo_id = cx.id;
             let conn = cx.db;
-            let cat = &cx.cat();
-            let _ = cat;
             // Both endpoints must exist before the walk (404 contract).
             for id in [&a, &b] {
                 if db::changeset_graph(conn, repo_id, id)
@@ -1094,8 +1092,6 @@ pub async fn blame(
             let repo_id = cx.id;
             let conn = cx.db;
             let repo = &repo_in_walk;
-            let cat = &cx.cat();
-            let _ = cat;
             // Naming a tombstoned changeset directly is the same 410 as the
             // changeset fetch.
             if db::redaction_active(conn, repo_id, &at).map_err(ApiError::log_internal)? {

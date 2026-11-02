@@ -216,16 +216,30 @@ fn layout_config_and_guards() {
 
     // The guard: db-per-repo config without a catalog → refused (run the
     // migration first); single config with a catalog → refused (flip the
-    // config); the migrated dir (catalog + stale naatre.db) opens under
-    // db-per-repo.
+    // config); a catalog.db WITHOUT the adopted marker is an incomplete
+    // migration → refused both ways; the migrated dir (marked catalog +
+    // stale naatre.db) opens under db-per-repo.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("naatre.db"), b"").unwrap();
     let e = check_data_dir_backend(dir.path(), &split_cfg()).unwrap_err();
     assert!(e.to_string().contains("migrate-db-per-repo"), "{e}");
     assert!(check_data_dir_backend(dir.path(), &BackendConfig::default()).is_ok());
+    // A garbage catalog.db (the crashed-adoption shape: no adopted
+    // marker) refuses the split open with the incomplete-migration text.
     std::fs::write(dir.path().join("catalog.db"), b"").unwrap();
     let e = check_data_dir_backend(dir.path(), &BackendConfig::default()).unwrap_err();
     assert!(e.to_string().contains("db-per-repo"), "{e}");
+    let e = check_data_dir_backend(dir.path(), &split_cfg()).unwrap_err();
+    assert!(e.to_string().contains("incomplete migration"), "{e}");
+    {
+        let cat = rusqlite::Connection::open(dir.path().join("catalog.db")).unwrap();
+        naatre_store::catalog::migrate_catalog(&cat).unwrap();
+        cat.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('adopted', 'db-per-repo')",
+            [],
+        )
+        .unwrap();
+    }
     assert!(check_data_dir_backend(dir.path(), &split_cfg()).is_ok());
 }
 

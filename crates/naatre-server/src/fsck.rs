@@ -258,22 +258,20 @@ async fn scan(state: &AppState) -> Result<FsckReport, ApiError> {
     // The mark + the per-repo dangling checks + the cross-file
     // missing-objects checks + the ledger counts + the stale-candidate
     // check + the redaction counts, in one aggregated read pass. The
-    // cross-file checks keep the single-DB checker's exact names and
-    // row-multiplicity semantics: per repo file the reference rows are
-    // read with multiplicity and probed against the catalog's `objects`
-    // rows; the `tree_entries` leg is FILE-scoped (once per repo file in
-    // the split, once against the whole DB in single mode).
+    // cross-file checks keep the single-DB checker's exact names; the
+    // counts are per-DISTINCT-id: per repo file the reference rows are
+    // read (with multiplicity), but the union dedups before the catalog
+    // presence probe — so a wholesale-copy adoption (every repo file
+    // holding every tree row) cannot inflate `tree_blob_row_missing` with
+    // per-file copies. The `tree_entries` leg is FILE-scoped (once per
+    // repo file in the split, once against the whole DB in single mode).
     let (mark_counts, danglings, candidates, stale_candidates, redactions) = state
         .read_all(move |cx| {
             let mark = gc::mark(cx, now_i).map_err(ApiError::log_internal)?;
             // The dangling checks: the repo-file checks per repo, plus the
             // cross-file checks computed from the reference inventories
-            // against the catalog.
-            const CROSS_FILE: [&str; 3] = [
-                "file_change_blob_row_missing",
-                "tree_blob_row_missing",
-                "membership_row_object_missing",
-            ];
+            // against the catalog (their names ride the single-DB ORDER
+            // list below).
             let mut counts: Vec<(&'static str, i64)> = Vec::new();
             let mut push =
                 |name: &'static str, n: i64| match counts.iter_mut().find(|(n, _)| *n == name) {
@@ -346,7 +344,6 @@ async fn scan(state: &AppState) -> Result<FsckReport, ApiError> {
                     danglings.push((name, *n));
                 }
             }
-            let _ = CROSS_FILE;
             let candidates =
                 db::gc_candidate_counts(cx.cat(), cut).map_err(ApiError::log_internal)?;
             let mut stale = 0usize;
@@ -543,22 +540,31 @@ async fn fsck_repair_candidates(state: &AppState) -> Result<Vec<Id>, ApiError> {
                         .map_err(ApiError::log_internal)?;
                     referenced.extend(files);
                     referenced.extend(members);
+                    // The tombstone exclusion is per REPO file in the
+                    // split (each file holds only its own rows); single
+                    // mode probes the whole store ONCE below (the
+                    // per-repo loop would be R identical whole-DB
+                    // queries).
                     if split {
-                        referenced
-                            .extend(db::fsck_tree_blob_refs(conn).map_err(ApiError::log_internal)?);
+                        tombstoned.extend(
+                            db::redaction_ids_repo(conn, Some(repo_id))
+                                .map_err(ApiError::log_internal)?,
+                        );
                     }
-                    tombstoned
-                        .extend(db::redaction_ids_repo(conn).map_err(ApiError::log_internal)?);
                     Ok(())
                 })
                 .map_err(ApiError::log_internal)?;
             }
             if !split {
-                // Single mode: the tree inventory reads once against the
-                // whole DB (the per-repo loop's file_changes/membership
-                // reads already accumulated — EXTEND, never overwrite).
+                // Single mode: the tree inventory and the tombstone
+                // exclusion read once against the whole DB (the per-repo
+                // loop's file_changes/membership reads already
+                // accumulated — EXTEND, never overwrite).
                 referenced
                     .extend(db::fsck_tree_blob_refs(cx.cat()).map_err(ApiError::log_internal)?);
+                tombstoned.extend(
+                    db::redaction_ids_repo(cx.cat(), None).map_err(ApiError::log_internal)?,
+                );
             }
             referenced.sort_by_key(|id| id.0);
             referenced.dedup();

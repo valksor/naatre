@@ -232,14 +232,23 @@ verifies row-count parity per table per repo, and runs a full `fsck`
 against the new layout (refusing to leave anything but a clean verdict),
 then prints the cutover steps:
 
-1. add `[layout] mode = "db-per-repo"` to `backend.toml`;
-2. delete the old `naatre.db` (keep a `naatre backup` copy until the
-   post-cutover fsck passes);
-3. start naatre — the startup banner names `layout db-per-repo`.
+1. stop naatre (the migration ran offline; keep it stopped for the
+   cutover);
+2. add to `backend.toml`: a `[layout]` table with `mode = "db-per-repo"`;
+3. delete the old `naatre.db` — `rm naatre.db` (keep a `naatre backup`
+   copy until fsck passes);
+4. start naatre — the startup banner names `layout db-per-repo`; run
+   `naatre fsck` once more.
 
-Until the config flip the server keeps serving from the single DB: a
-crashed or abandoned migration leaves a consistent, servable store, and
-the original `naatre.db` is never touched by the tool. Backups cover the
+Between the migration and the config flip nothing serves: with
+`catalog.db` present the old single-DB config refuses to start (the
+layout guard pins the pairing both ways — flip the config to serve the
+split). A crashed or abandoned migration leaves the original `naatre.db`
+consistent and untouched by the tool (a partial catalog carries no
+`adopted` marker and is refused until the migration is re-run). Deleting
+`catalog.db` and `repos/` to abandon a COMPLETED migration serves the old
+`naatre.db` again — any writes the split served after the cutover are
+lost with those files. Backups cover the
 split: `naatre backup` snapshots the catalog and every repo file (the
 coordinated snapshot under the same flock) plus the objects, and
 `naatre restore` refuses a layout-combo mismatch (a single-DB backup into
@@ -856,9 +865,13 @@ Personal-data carriers, explicitly:
 - **Where the rows live per layout (M13a)**: in the `db-per-repo` layout
   the carriers split with the metadata — `changesets.*`, `lands.*`,
   `snapshots.*`, and the `redactions` tombstones live in the REPO's file
-  (`repos/<id>.db`; deleting a repo's file is the repo's erasure), while
+  (`repos/<id>.db`), while
   `principals`, `tokens`, and `audit_log` (with the pseudonymization
-  rules above) stay in the catalog and outlive any single repo. The
+  rules above) stay in the catalog and outlive any single repo. There is
+  no repo-delete verb (removing a repo properly — registry row, repo
+  file, and open connections together — is a recorded follow-up; deleting
+  a `repos/<id>.db` file by hand leaves an unbacked registry row that
+  every guard refuses to serve). The
   `objects` ledger row is catalog-side too; the CAS bytes are global —
   a purged blob's bytes leave the shared CAS only when NO repo references
   remain (the cross-repo refcount rule, unchanged by the layout).

@@ -51,11 +51,33 @@ impl Store {
     /// Opens (creating if absent) the CATALOG database for the
     /// `DbPerRepo` layout ([`crate::layout`]) inside `data`, applying the
     /// same durability pragmas and the catalog's own migration list
-    /// ([`crate::catalog`]). The `Store` handle wraps the catalog
-    /// connection: the server's global-statement paths (`state.write` /
-    /// `state.read`) run against it, while the per-repo connections come
-    /// from [`open_repo_db`] via the server's routing layer.
+    /// ([`crate::catalog`]). The catalog must carry the adoption's
+    /// `adopted` marker ([`crate::catalog::ADOPTED_MARKER`]) — a
+    /// marker-less catalog is a crashed adoption's partial target and is
+    /// refused with the incomplete-migration remedy (the operator deletes
+    /// `catalog.db` + `repos/` and re-runs; the server never serves a
+    /// partial store). The adoption's own verification pass opens the
+    /// not-yet-marked catalog it just built via [`open_catalog_raw`]. The
+    /// `Store` handle wraps the catalog connection: the server's
+    /// global-statement paths (`state.write` / `state.read`) run against
+    /// it, while the per-repo connections come from [`open_repo_db`] via
+    /// the server's routing layer.
     pub fn open_catalog(data: DataDir) -> Result<Store, StoreError> {
+        let conn = open_sqlite_file(&data.path().join(crate::layout::CATALOG_FILE))?;
+        crate::catalog::migrate_catalog(&conn)?;
+        require_adopted_marker(&conn, &data)?;
+        Ok(Store {
+            db: Db::Sqlite(conn),
+            data,
+        })
+    }
+
+    /// [`open_catalog`] WITHOUT the adoption-marker check: the offline
+    /// adoption's verification pass opens the catalog it JUST built, before
+    /// the marker exists (the marker is the adoption's LAST write, after
+    /// fsck). Every other entry point goes through [`open_catalog`], which
+    /// refuses a marker-less catalog.
+    pub fn open_catalog_raw(data: DataDir) -> Result<Store, StoreError> {
         let conn = open_sqlite_file(&data.path().join(crate::layout::CATALOG_FILE))?;
         crate::catalog::migrate_catalog(&conn)?;
         Ok(Store {
@@ -162,10 +184,65 @@ fn open_sqlite_file(path: &Path) -> Result<Connection, StoreError> {
 /// layer keeps one of these open per repo (write) plus a small read-only
 /// pool; the file's WAL + busy settings come from the same pragma helper
 /// as every other store connection.
+///
+/// Creating is the CREATE path's job (repo create, the adoption's fresh
+/// files). A registry row whose file vanished must NOT be silently
+/// masked by an empty repo — those callers use [`open_repo_db_existing`].
 pub fn open_repo_db(path: &Path) -> Result<Db, StoreError> {
     let conn = open_sqlite_file(path)?;
     migrate(&conn)?;
     Ok(Db::Sqlite(conn))
+}
+
+/// [`open_repo_db`] for a file that MUST already exist: refuses an absent
+/// file with the named inconsistency instead of silently creating an empty
+/// repo over a live registry row (the boot walk's recovery open, and the
+/// routing layer's per-repo write connection).
+pub fn open_repo_db_existing(path: &Path) -> Result<Db, StoreError> {
+    if !path.exists() {
+        return Err(StoreError::RepoFileMissing(path.to_path_buf()));
+    }
+    let conn = open_sqlite_file(path)?;
+    migrate(&conn)?;
+    Ok(Db::Sqlite(conn))
+}
+
+/// True when `catalog.db` at `data` carries the adoption's `adopted`
+/// marker ([`crate::catalog::ADOPTED_MARKER`]). An absent or unreadable
+/// catalog is not adopted — the caller refuses.
+pub fn store_has_adopted_marker(data: &Path) -> bool {
+    let conn = match rusqlite::Connection::open_with_flags(
+        data.join(crate::layout::CATALOG_FILE),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(conn) => conn,
+        Err(_) => return false,
+    };
+    conn.query_row(
+        "SELECT 1 FROM meta WHERE key = ?1",
+        [crate::catalog::ADOPTED_MARKER],
+        |r| r.get::<_, i64>(0),
+    )
+    .is_ok()
+}
+
+/// The marker check behind [`Store::open_catalog`] and the layout guard.
+fn require_adopted_marker(conn: &Connection, data: &DataDir) -> Result<(), StoreError> {
+    let adopted: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM meta WHERE key = ?1",
+            [crate::catalog::ADOPTED_MARKER],
+            |r| r.get(0),
+        )
+        .ok();
+    if adopted.is_none() {
+        return Err(StoreError::Backend(
+            crate::backend::BackendError::IncompleteMigration {
+                path: data.path().join(crate::layout::CATALOG_FILE),
+            },
+        ));
+    }
+    Ok(())
 }
 
 /// [`open_repo_db`] WITHOUT the migration run: an additional read-write

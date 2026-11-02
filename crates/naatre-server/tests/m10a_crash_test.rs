@@ -201,7 +201,7 @@ async fn m10a_crash_child() {
 /// commit and an unlanded orphan commit with a unique blob + root tree,
 /// plus the ledger pass at the base clock (the candidates are in place
 /// before the child ages past the window).
-async fn seed_live_and_orphan(dir: &Path) {
+async fn seed_live_and_orphan(dir: &Path, stage_for_blob_child: bool) {
     let a = attach(dir);
     let writer = seed_token_at(&a.db_path, "writer-p", "writer", None);
     let repo_id = seed_repo_at(&a.db_path, REPO);
@@ -290,7 +290,16 @@ async fn seed_live_and_orphan(dir: &Path) {
     // phase of the same pass, while the dying tree's entries still
     // reference it), then one more so phase A CONDEMNS the blob (bytes
     // stay). The child's pass then crashes INSIDE phase B — bytes unlinked,
-    // row transaction rolled back — the orphan-direction state.
+    // row transaction rolled back — the orphan-direction state. STAGED ONLY
+    // for `gc_mid_blob_batch`: its crash needs a CONDEMNED blob at the
+    // child. Every other point fires before or outside the blob phases;
+    // `gc_after_cs_repo_rows` additionally needs the orphan CHANGESET still
+    // present past grace at the child (its crash sits between the cs
+    // batch's repo deletes and its ledger deletes — the phantom-strand
+    // window — and staging would collect the cs before the child runs).
+    if !stage_for_blob_child {
+        return;
+    }
     a.clock.store(
         BASE_NS + 30 * 24 * 3600 * 1_000_000_000 + 1,
         Ordering::Relaxed,
@@ -322,7 +331,7 @@ async fn crash_points_converge_on_rerun() {
         std::fs::create_dir_all(&dir).unwrap();
         let data = DataDir::create(&dir).unwrap();
         std::fs::write(data.db_path(), b"").unwrap();
-        seed_live_and_orphan(&dir).await;
+        seed_live_and_orphan(&dir, point == "gc_mid_blob_batch").await;
 
         let child = spawn_child(&dir, point);
         let collected = wait_bounded(child);
