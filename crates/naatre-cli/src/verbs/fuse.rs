@@ -132,8 +132,8 @@ pub fn run(
     // Scoped runtime-context guard: the handlers install at construction
     // inside this block; the guard drops at its end, and the shutdown
     // future is only POLLED at the `rt.block_on(shutdown)` below. (Not
-    // `block_on(async { .. })`: that holds a guard across the later poll
-    // and clippy::async_yields_async rejects the sync-constructor await.)
+    // `block_on(async { .. })`: clippy::async_yields_async rejects an
+    // async block that yields an un-awaited future.)
     let shutdown = {
         let _g = rt.enter();
         naatre_server::serve::unix_shutdown_signal()

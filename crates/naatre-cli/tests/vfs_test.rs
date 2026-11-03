@@ -1091,8 +1091,10 @@ fn sigterm_immediately_after_the_banner_exits_cleanly() {
     }
     // The watchdog is cancelled FIRST — before any signal and before the
     // gate opens — because from here on the main thread owns the child:
-    // nothing races the reap, and the watchdog's only kill trigger (its
-    // 20 s timeout on the banner read) can no longer fire.
+    // nothing races the reap. Only a banner read that ends at the exact
+    // 20 s edge can still let the watchdog fire first; the child is not
+    // reaped yet then, so its SIGKILL hits the right pid and the test fails
+    // loudly.
     let _ = cancel_tx.send(());
     // The SIGTERM follows the promise line directly, INSIDE the held
     // gate: the daemon is parked in `print_banner` until this test
