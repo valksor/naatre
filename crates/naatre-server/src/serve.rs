@@ -229,18 +229,144 @@ pub async fn serve(
 
 /// Resolves on SIGINT or SIGTERM (unix); on ctrl_c elsewhere. The CLI's
 /// `serve` verb passes this (wrapped) as the shutdown future.
-pub async fn unix_shutdown_signal() {
+///
+/// Contract (unix): the handlers install AT THE CALL — when this function
+/// runs, not when the future is first polled. A signal arriving before the
+/// first poll is buffered by the installed handler and delivered on it, so
+/// there is no default-action window between the call and the first poll.
+/// That is what lets a caller construct this value BEFORE blocking setup
+/// that must stay Ctrl-C/SIGTERM-protected — during that setup (the FUSE
+/// front-end's `spawn_mount`, for example) a SIGINT is buffered, never
+/// default-acted. The NON-UNIX arm installs on FIRST POLL (tokio's lazy
+/// ctrl_c, boxed): construct it inside the runtime before the promise
+/// point, but its buffering only exists from the first poll on.
+///
+/// # Panics
+///
+/// Unix only — the non-unix arm cannot panic at the call. On unix: panics
+/// when called outside a Tokio runtime with an enabled I/O driver (the
+/// `#[tokio::test]` and `Runtime::new()` contexts qualify), or when the OS
+/// refuses the handler installation (the `expect`s on the two `signal()`
+/// calls).
+pub fn unix_shutdown_signal() -> ShutdownSignal {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = terminate.recv() => {}
+        ShutdownSignal {
+            terminate: signal(SignalKind::terminate()).expect("install SIGTERM handler"),
+            interrupt: signal(SignalKind::interrupt()).expect("install SIGINT handler"),
         }
     }
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
+        ShutdownSignal {
+            ctrl_c: Box::pin(async {
+                let _ = tokio::signal::ctrl_c().await;
+            }),
+        }
+    }
+}
+
+/// The shutdown wait ([`unix_shutdown_signal`]): a plain one-shot future,
+/// so it can be awaited, moved into a `tokio::select!`, or passed where
+/// `impl Future<Output = ()> + Send + 'static` is expected. On unix the
+/// handlers installed when [`unix_shutdown_signal`] constructed it; the
+/// NON-UNIX arm's ctrl_c handler installs on the struct's FIRST POLL.
+pub struct ShutdownSignal {
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(not(unix))]
+    ctrl_c: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+}
+
+impl std::future::Future for ShutdownSignal {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        #[cfg(unix)]
+        {
+            use std::task::Poll;
+            // Either signal ends the wait: `Ready(Some)` is a delivery,
+            // and `Ready(None)` (the driver-side lost-callback case) ends
+            // it too — the same end-on-any-poll semantics the previous
+            // `select!` had over a `terminate.recv()` future and
+            // `tokio::signal::ctrl_c()`.
+            if self.terminate.poll_recv(cx).is_ready() {
+                return Poll::Ready(());
+            }
+            if self.interrupt.poll_recv(cx).is_ready() {
+                return Poll::Ready(());
+            }
+            Poll::Pending
+        }
+        #[cfg(not(unix))]
+        {
+            self.ctrl_c.as_mut().poll(cx)
+        }
+    }
+}
+
+/// Signal-contract pins for [`unix_shutdown_signal`].
+///
+/// NOTE: installing the handlers is process-wide and STAYS installed for
+/// the rest of this lib test binary's lifetime — SIGTERM/SIGINT sent to
+/// this process after these tests are caught (buffered), never
+/// default-acted. Any later signal test in this binary must not assume
+/// default dispositions.
+#[cfg(all(test, unix))]
+mod tests {
+    use super::unix_shutdown_signal;
+
+    /// Serializes the two pins: each pins BOTH signals, so a concurrent
+    /// pin's raise would resolve this future too — masking a broken
+    /// install. One raise-and-wait at a time keeps every delivery its own
+    /// pin's. Tokio's mutex because the guard is held across `.await`.
+    static SIGNAL_PINS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Pins install-at-call at the source: the SIGTERM handler must exist
+    /// BEFORE the future's first poll. `raise(SIGTERM)` fires between the
+    /// call and the first poll — under the contract the installed handler
+    /// buffers it and the future resolves on that first poll. If the
+    /// handler were MISSING (a lazy install), the default action would
+    /// TERMINATE THIS PROCESS at the raise line: the whole test binary
+    /// dies by SIGTERM. That process death is the loud, intended failure
+    /// mode of this pin — there is no softer assertion to make, because
+    /// the defect IS the default-action death.
+    #[tokio::test]
+    async fn sigterm_raised_before_the_first_poll_is_delivered_on_it() {
+        let _serialized = SIGNAL_PINS.lock().await;
+        let sig = unix_shutdown_signal();
+        // SAFETY: `raise` has no memory-safety preconditions; its only
+        // failure mode is a nonzero return, asserted below.
+        unsafe {
+            assert_eq!(libc::raise(libc::SIGTERM), 0, "raise(SIGTERM)");
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), sig)
+            .await
+            .expect("SIGTERM raised before the first poll must resolve the future");
+    }
+
+    /// The SIGINT twin: the interrupt arm is what the mount front-ends'
+    /// Ctrl-C protection relies on, pinned the same shape — `raise(SIGINT)`
+    /// between the call and the first poll must be buffered and delivered,
+    /// not default-acted. A missing handler would terminate this process
+    /// at the raise line (see the SIGTERM pin for the failure mode).
+    #[tokio::test]
+    async fn sigint_raised_before_the_first_poll_is_delivered_on_it() {
+        let _serialized = SIGNAL_PINS.lock().await;
+        let sig = unix_shutdown_signal();
+        // SAFETY: `raise` has no memory-safety preconditions; its only
+        // failure mode is a nonzero return, asserted below.
+        unsafe {
+            assert_eq!(libc::raise(libc::SIGINT), 0, "raise(SIGINT)");
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), sig)
+            .await
+            .expect("SIGINT raised before the first poll must resolve the future");
     }
 }

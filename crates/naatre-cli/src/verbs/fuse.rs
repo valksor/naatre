@@ -9,7 +9,10 @@
 //!   there is no network surface at all.
 //! - **Stop**: SIGINT/SIGTERM unmounts first (flush still runs on writable
 //!   mounts); an external `umount <mountpoint>` also stops the daemon
-//!   cleanly, the same flush path runs either way.
+//!   cleanly, the same flush path runs either way. The handlers install
+//!   before the banner prints, so a signal arriving while `spawn_mount`
+//!   (the fusermount3 round-trip) is still running is BUFFERED and takes
+//!   effect once the mount completes.
 //! - Attribute TTL is 0: the writable overlay changes sizes under stable
 //!   paths, so attribute caching is off (stat is cheap — tree entries only).
 //!
@@ -110,7 +113,34 @@ pub fn run(
     ];
     config.acl = SessionACL::Owner;
     config.n_threads = Some(4);
+    // The async runtime comes first: the shutdown handlers install only
+    // inside a runtime context, and they must exist before the banner —
+    // the banner's last line promises "SIGINT/SIGTERM … stops the daemon",
+    // and a client that reads that line and signals immediately must find
+    // the handlers in place, never the default terminating action (the
+    // vfs_test graceful-exit pin).
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&plan.mount_dir);
+            return VerbError::Local(format!("starting the async runtime: {e}")).report();
+        }
+    };
+    let shutdown = rt.block_on(async { naatre_server::serve::unix_shutdown_signal() });
     print_banner(&plan, repo, vfs.pin().changeset.to_hex(), mountpoint);
+    // The FUSE ordering has NO runtime pin yet: the vfs ordering gate is
+    // NFS-only because FUSE needs /dev/fuse (absent in the verification
+    // container and on macOS), and the NFS pin covers the shared
+    // `unix_shutdown_signal` contract the two front-ends install
+    // identically — before their banners, which is what this placement
+    // preserves.
+    eprintln!(
+        "mounting {mountpoint}: Ctrl-C/SIGTERM are caught now (buffered) and take effect once \
+         the mount completes"
+    );
     let session = match fuser::spawn_mount(adapter, mountpoint, &config) {
         Ok(s) => s,
         Err(e) => {
@@ -123,17 +153,7 @@ pub fn run(
 
     // SIGINT/SIGTERM unmounts first; an external umount ends the session
     // on its own and the unmount below then errors harmlessly.
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&plan.mount_dir);
-            return VerbError::Local(format!("starting the async runtime: {e}")).report();
-        }
-    };
-    rt.block_on(naatre_server::serve::unix_shutdown_signal());
+    rt.block_on(shutdown);
     if let Err(e) = session.umount_and_join() {
         eprintln!("note: FUSE session ended: {e}");
     }

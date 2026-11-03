@@ -960,6 +960,170 @@ fn mount_binary_loopback_export_pin_and_sigkill_cleanup() {
     assert!(status.success(), "graceful SIGTERM exits 0: {status}");
 }
 
+/// Kill-on-drop so an early panic (or the watchdog's SIGKILL path) never
+/// leaves the daemon running.
+struct DaemonGuard(std::process::Child);
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        // Still running (`Ok(None)`): kill it. An already-exited or
+        // errored probe leaves the exit status collection to the test.
+        if let Ok(None) = self.0.try_wait() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+/// Pins the graceful-exit contract behind the banner promise: once the
+/// banner prints its "Ctrl-C or SIGTERM stops the daemon" line (read by
+/// CONTENT, not a fixed line count), a SIGTERM sent as the NEXT action
+/// must exit 0 through the graceful tail (mount dir cleaned), never the
+/// default terminating action. The pin is DETERMINISTIC, not a race: the
+/// daemon arms `NAATRE_TEST_BANNER_GATE` (TEST-ONLY handshake, debug
+/// builds ONLY — under `--release` the gate is compiled out and this pin
+/// reverts to racing a microsecond window) and blocks inside
+/// `print_banner`, right after the promise line. The pin signals FIRST
+/// and creates the gate file SECOND, so the SIGTERM lands while the gate
+/// is held: with the handlers installed at the call it is buffered and
+/// the daemon exits 0 once the gate opens; with a LAZY install (the
+/// shutdown future constructed at or after the `select!` — HEAD's shape;
+/// CI 41666929427's daemon exited `signal: 15 (SIGTERM)`) the default
+/// action kills the daemon and this pin fails every run.
+#[test]
+fn sigterm_immediately_after_the_banner_exits_cleanly() {
+    let server = start_server();
+    seed_repo(
+        &server,
+        "banner-sigterm",
+        &[("a.txt", b"one".as_slice(), false)],
+    );
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let gate = cache.path().join("banner-gate");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_naatre"));
+    cmd.args([
+        "mount",
+        "banner-sigterm",
+        "--server",
+        &server.base,
+        "--token",
+        &server.token,
+    ])
+    .env("XDG_CACHE_HOME", cache.path())
+    .env("NAATRE_TEST_BANNER_GATE", &gate)
+    .env_remove("NAATRE_URL")
+    .env_remove("NAATRE_TOKEN")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn naatre mount");
+    // Drain stderr line-by-line into a shared buffer so the daemon never
+    // blocks on a full pipe and every failure below can quote it.
+    let stderr_shared = Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        let sink = Arc::clone(&stderr_shared);
+        let stderr = child.stderr.take().expect("stderr");
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if let Ok(mut buf) = sink.lock() {
+                            buf.push_str(&line);
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let mut guard = DaemonGuard(child);
+    // Watchdog: if the promise line never arrives, SIGKILL the daemon at
+    // the bound so the EOF assert fails the test instead of hanging it.
+    // Kill ONLY on the timeout: a `Disconnected` error means the test
+    // thread is already done — the guard has reaped the child — and a
+    // SIGKILL then could only land on a recycled pid.
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
+    {
+        let pid = guard.0.id() as libc::pid_t;
+        std::thread::spawn(move || {
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                cancel_rx.recv_timeout(Duration::from_secs(20))
+            {
+                // SAFETY: `kill` has no memory-safety preconditions; a
+                // dead/reaped pid answers ESRCH and the result is ignored.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        });
+    }
+    let stderr_now = || stderr_shared.lock().unwrap().clone();
+    let stdout = guard.0.stdout.take().expect("stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut lines = 0;
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).unwrap_or_else(|e| {
+            panic!(
+                "reading banner line {}: {e}; stderr: {}",
+                lines,
+                stderr_now()
+            )
+        });
+        assert!(
+            n > 0,
+            "banner line {lines}: EOF — the daemon died before the promise line; \
+             stderr: {}",
+            stderr_now()
+        );
+        lines += 1;
+        // The promise line, by content: the read-only banner's last line.
+        if line.starts_with("Ctrl-C or SIGTERM") {
+            break;
+        }
+        assert!(
+            lines < 20,
+            "no 'Ctrl-C or SIGTERM' promise line in {lines} banner lines; stderr: {}",
+            stderr_now()
+        );
+    }
+    // The SIGTERM follows the promise line directly, INSIDE the held
+    // gate: the daemon is parked in `print_banner` until this test
+    // creates the gate file below, so the signal arrives at a known
+    // point — exactly the window the promise line talks about.
+    // SAFETY: `kill` has no memory-safety preconditions; a dead pid
+    // answers ESRCH and the result is checked via `wait` below.
+    unsafe {
+        libc::kill(guard.0.id() as libc::pid_t, libc::SIGTERM);
+    }
+    // Gate opens only now: with the handlers installed at the call the
+    // buffered SIGTERM resolves the shutdown and the daemon exits 0; a
+    // lazy install would have died above.
+    std::fs::write(&gate, b"").expect("create the banner gate file");
+    let status = guard.0.wait().expect("wait for graceful exit");
+    let _ = cancel_tx.send(());
+    assert!(
+        status.success(),
+        "SIGTERM right after the banner exits 0: {status}; stderr: {}",
+        stderr_now()
+    );
+    // The graceful tail ran: the mount dir is gone (a default-action
+    // SIGTERM death would have left it for the next mount to evict).
+    let mounts_root = cache.path().join("naatre").join("mounts");
+    let left: Vec<String> = std::fs::read_dir(&mounts_root)
+        .expect("mounts root")
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the mount dir was cleaned: {left:?}; stderr: {}",
+        stderr_now()
+    );
+}
+
 // ---- 8. cargo build against a cold mount (one platform; skips w/o cargo) ----
 
 #[test]
