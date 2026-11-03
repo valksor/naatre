@@ -129,17 +129,23 @@ pub fn run(
             return VerbError::Local(format!("starting the async runtime: {e}")).report();
         }
     };
-    let shutdown = rt.block_on(async { naatre_server::serve::unix_shutdown_signal() });
+    // Scoped runtime-context guard: the handlers install at construction
+    // inside this block; the guard drops at its end, and the shutdown
+    // future is only POLLED at the `rt.block_on(shutdown)` below. (Not
+    // `block_on(async { .. })`: that holds a guard across the later poll
+    // and clippy::async_yields_async rejects the sync-constructor await.)
+    let shutdown = {
+        let _g = rt.enter();
+        naatre_server::serve::unix_shutdown_signal()
+    };
     print_banner(&plan, repo, vfs.pin().changeset.to_hex(), mountpoint);
-    // The FUSE ordering has NO runtime pin yet: the vfs ordering gate is
-    // NFS-only because FUSE needs /dev/fuse (absent in the verification
-    // container and on macOS), and the NFS pin covers the shared
-    // `unix_shutdown_signal` contract the two front-ends install
-    // identically — before their banners, which is what this placement
-    // preserves.
+    // The FUSE ordering has NO runtime pin yet (FUSE needs /dev/fuse,
+    // absent in the verification container and on macOS). The NFS pin
+    // covers the shared `unix_shutdown_signal` contract; FUSE itself is
+    // unpinned.
     eprintln!(
-        "mounting {mountpoint}: Ctrl-C/SIGTERM are caught now (buffered) and take effect once \
-         the mount completes"
+        "mounting {mountpoint}: a stop request (Ctrl-C/SIGTERM) during mounting takes effect \
+         once the mount is up"
     );
     let session = match fuser::spawn_mount(adapter, mountpoint, &config) {
         Ok(s) => s,
