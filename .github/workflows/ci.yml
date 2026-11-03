@@ -20,12 +20,14 @@ jobs:
           components: rustfmt,clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # The vfs_test FUSE leg must RUN here, not skip (runners have /dev/fuse).
+      # fuse3 lets the vfs_test FUSE tests mount in the host run below. That
+      # run sets no NAATRE_REQUIRE_FUSE, so the tests skip silently there if
+      # /dev/fuse or fusermount3 is missing (a refused mount still fails).
       - run: sudo apt-get update -q && sudo apt-get install -y -q fuse3 libfuse3-dev
       - run: cargo test --workspace --locked
-      # The FUSE leg must RUN, not skip: the workspace run above only proves
-      # it compiles, so it runs again inside a FUSE-capable container (own
-      # /dev/fuse). NAATRE_REQUIRE_FUSE=1 turns the vfs_test skip path into a
+      # The FUSE leg must RUN, not skip: the workspace run above may skip it,
+      # so it runs again inside a FUSE-capable container (own /dev/fuse).
+      # NAATRE_REQUIRE_FUSE=1 turns the vfs_test skip path into a
       # hard failure — a green step here means the kernel mount happened.
       # Ubuntu runners apply docker's default AppArmor profile, which denies
       # mount() even with SYS_ADMIN (fusermount3 then fails EACCES); the
@@ -46,7 +48,7 @@ jobs:
           git diff --exit-code docs/openapi.json
       # Run 41733192676 died linking test binaries with an unexplained `ld`
       # SIGBUS that did not recur on re-run; one disk reading on another
-      # runner showed ample space. This line is the only record if it
+      # runner showed ample space. This step is the only record if it
       # comes back.
       - name: Disk usage at the end of the job
         if: always()

@@ -2315,14 +2315,14 @@ fn fuse_kernel_mount_walk_parity() {
 /// buffered while the gate holds the daemon; the daemon then mounts,
 /// `block_on(shutdown)` resolves at once, it unmounts and exits 0. With a
 /// LAZY install (the shutdown future built after `print_banner`, e.g. after
-/// `fuser::spawn_mount`) the default action kills the daemon as the gate
-/// opens — before any kernel mount exists — so it exits by signal and
-/// leaves its mount dir behind; the exit-status assertion carries the pin
-/// (the mount-table check holds either way). The pin is
-/// deterministic only in DEBUG builds: under `--release` the gate is
-/// compiled out and it reverts to racing a microsecond window. Prerequisites
-/// as `fuse_kernel_mount_walk_parity` (SKIP NOTICE, or a panic under
-/// NAATRE_REQUIRE_FUSE=1); CI runs it in the FUSE leg.
+/// `fuser::spawn_mount`) the default action kills the daemon the moment the
+/// SIGTERM is delivered, while it is parked at the gate — before any kernel
+/// mount exists — so it exits by signal and leaves its mount dir behind; the
+/// exit-status assertion carries the pin (the mount-table check holds either
+/// way). The pin is deterministic only in DEBUG builds: under `--release`
+/// the gate is compiled out and it reverts to racing a microsecond window.
+/// Prerequisites as `fuse_kernel_mount_walk_parity` (SKIP NOTICE, or a panic
+/// under NAATRE_REQUIRE_FUSE=1); CI runs it in the FUSE leg.
 #[cfg(target_os = "linux")]
 #[test]
 fn fuse_sigterm_immediately_after_the_banner_exits_cleanly() {
