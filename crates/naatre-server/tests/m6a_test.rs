@@ -521,9 +521,9 @@ async fn st(f: &Fixture, cs_hex: &str) -> Option<DeriveStatus> {
 /// a real queue stall surfaces fast and no larger cap can mask it.
 ///
 /// Each poll also ADVANCES the injected clock (+50 ms): a lease lost to a
-/// busy write slot (the queue aborts the pass rather than fight a request;
-/// the creates here race the 10 ms ticks) is recovered by the sweep at
-/// lease expiry — on the queue's clock. A frozen test clock would make
+/// busy write slot (the queue aborts the pass rather than fight another
+/// writer, and a pass can lose its lease inside itself) is recovered by
+/// the sweep at lease expiry — on the queue's clock. A frozen test clock would make
 /// that recovery impossible and turn one lost lease into an artificial
 /// permanent stall (the flake this replaces: `deriving:1 pending:3`,
 /// every node blocked behind one lost lease, no expiry ever possible).
@@ -1065,7 +1065,9 @@ async fn queue_lifecycle_derives_parents_first() {
     // while they commit (a create meeting a held slot gets the correct,
     // retryable 503 `writer_busy`, which failed this test's sibling on a
     // slow CI runner). The commits enqueue the rows; `serve` then derives
-    // them with zero manual passes.
+    // them with zero manual passes. This test deliberately leaves out a
+    // commit arriving while a pass runs; the direct `derive_pass`
+    // writer-busy tests below cover that interleaving.
     let f = fixture_with(|state| {
         state.derive_queue_interval = Duration::from_millis(10);
         state.gc_enabled = false;

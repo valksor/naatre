@@ -2273,6 +2273,9 @@ async fn background_gc_pass_collects_an_expired_snapshot() {
     // derive backfill/queue take the write slot there, and a snapshot POST
     // that meets the held slot gets the (correct, retryable) 503
     // `writer_busy` — a race that failed this test on a slow CI runner.
+    // The snapshot GC task itself stays off the write slot before expiry
+    // only through its idle probe (`snapshots_gc.rs`, `needs_write`); if
+    // that probe changes, this race can return.
     let f = fixture_with(|state| {
         state.snapshot_gc_interval = Duration::from_millis(10);
         state.gc_enabled = false;

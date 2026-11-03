@@ -24,13 +24,13 @@ jobs:
       - run: sudo apt-get update -q && sudo apt-get install -y -q fuse3 libfuse3-dev
       - run: cargo test --workspace --locked
       # The FUSE leg must RUN, not skip: the workspace run above only proves
-      # it compiles, so it runs again inside a privileged container (own
+      # it compiles, so it runs again inside a FUSE-capable container (own
       # /dev/fuse). NAATRE_REQUIRE_FUSE=1 turns the vfs_test skip path into a
       # hard failure — a green step here means the kernel mount happened.
       # Ubuntu runners apply docker's default AppArmor profile, which denies
       # mount() even with SYS_ADMIN (fusermount3 then fails EACCES); the
       # step-scoped container runs unconfined so the kernel mount can happen.
-      - name: FUSE leg (privileged container; skip = failure)
+      - name: FUSE leg (FUSE-capable container; skip = failure)
         run: >
           docker run --rm --device /dev/fuse --cap-add SYS_ADMIN
           --security-opt apparmor=unconfined
