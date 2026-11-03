@@ -137,19 +137,36 @@ pub(crate) fn mount_client(net: &Net) -> Result<Client, String> {
 /// always passes the process cwd).
 pub(crate) fn mount_client_in(cwd: &Path, net: &Net) -> Result<Client, String> {
     if let Ok(wc) = crate::wc::Wc::open(cwd) {
-        let (server, token) = wc.resolve_server(net.server.as_deref(), net.token.as_deref())?;
-        return Ok(Client::new(&server, token));
+        // The working-copy arm builds through [`Wc::client`], so the F1
+        // plain-http check and the ca_file precedence live in one place.
+        return wc.client(net);
     }
+    // Outside a working copy (mount takes a repo NAME — this is normal)
+    // the same ONE-parse admission applies (`crate::url::parse_remote` +
+    // `admit_remote`; the CLI pre-flight routes the refusal to exit 3),
+    // and `--ca-file` > `NAATRE_CA_FILE` join the platform roots.
     let base = net
         .server
         .clone()
         .or_else(|| std::env::var("NAATRE_URL").ok().filter(|v| !v.is_empty()))
         .unwrap_or_else(|| DEFAULT_URL.to_string());
+    let parsed =
+        crate::url::parse_remote(&base).map_err(|e| format!("NAATRE_URL {base:?}: {e}"))?;
+    crate::wc::admit_remote(
+        &parsed,
+        crate::verbs::invocation_optin(net.insecure_http),
+        None,
+    )?;
     let token = net
         .token
         .clone()
         .or_else(|| std::env::var("NAATRE_TOKEN").ok().filter(|v| !v.is_empty()));
-    Ok(Client::new(&base, token))
+    let ca_file = net.ca_file.clone().or_else(|| {
+        std::env::var("NAATRE_CA_FILE")
+            .ok()
+            .filter(|v| !v.is_empty())
+    });
+    Client::new_with_ca(&parsed.origin(), token, ca_file.as_deref())
 }
 
 /// Maps a VFS failure from mount-time setup into the pinned exit codes.
@@ -929,6 +946,8 @@ mod tests {
         wc.save_config(&crate::wc::Config {
             server_url: "http://127.0.0.1:7499".into(),
             token: Some("wc-token".into()),
+            insecure_http: None,
+            ca_file: None,
         })
         .expect("config");
         // Flags override the file, as everywhere.
@@ -937,6 +956,8 @@ mod tests {
             &Net {
                 server: Some("http://127.0.0.1:7501".into()),
                 token: None,
+                ca_file: None,
+                insecure_http: false,
             },
         )
         .expect("flag wins");

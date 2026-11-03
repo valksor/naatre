@@ -55,3 +55,13 @@ license-files = [{ path = "LICENSE-MIT", hash = 0x0 }]
 [advisories]
 version = 2
 yanked = "deny"
+
+# One TLS stack (F1): the Postgres connector is rustls + ring
+# (crates/naatre-store/src/pg_tls.rs) and OpenSSL must stay out of the
+# graph entirely — even transitively.
+[bans]
+deny = [
+    { name = "openssl-sys" },
+    { name = "openssl" },
+    { name = "native-tls" },
+]

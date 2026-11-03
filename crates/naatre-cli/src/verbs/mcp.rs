@@ -60,6 +60,10 @@ pub fn run(root: &Path, read_only: bool, token: Option<String>) -> i32 {
     let net = Net {
         server: None, // no server override: an MCP session is bound to one checkout
         token,
+        ca_file: None,
+        // The session is an invocation: NAATRE_INSECURE_HTTP=1 admits
+        // plain http for it, exactly as it would for a CLI verb.
+        insecure_http: super::invocation_optin(false),
     };
     serve(root, read_only, &net)
 }
@@ -611,18 +615,19 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
             // sec-C2: the clone tool is the one tool whose target the
             // CALLER names — the channel a prompt injection reaches for.
             // The session's bearer must never cross to a foreign origin:
-            // a url whose origin is not the session's configured server is
-            // refused (error names the configured server; no request is
-            // sent), unless the call carries its own explicit token — which
-            // then REPLACES the session's for that one clone.
-            let session_origin = Wc::open(root)
-                .and_then(|wc| wc.load_config().map(|c| c.server_url))
-                .map_err(ToolFailure::Tool)?
-                .trim_end_matches('/')
-                .to_string();
+            // a url whose ORIGIN (scheme + host + port — an http→https
+            // swap is a different origin, F1) is not the session's
+            // configured server is refused (error names the configured
+            // server; no request is sent), unless the call carries its own
+            // explicit token — which then REPLACES the session's for that
+            // one clone.
+            let cfg = Wc::open(root)
+                .and_then(|wc| wc.load_config())
+                .map_err(ToolFailure::Tool)?;
+            let session_origin = cfg.server_url.trim_end_matches('/').to_string();
             let (url_origin, _) = super::clone::split_url(url, net)
                 .map_err(|e| ToolFailure::Tool(verb_error_text(e)))?;
-            if url_origin.trim_end_matches('/') != session_origin {
+            if !super::clone::origins_match(&url_origin, &session_origin) {
                 match token.as_deref() {
                     None => {
                         return Err(ToolFailure::Tool(format!(
@@ -633,9 +638,13 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
                         )));
                     }
                     Some(explicit) => {
+                        // A different origin never inherits the session
+                        // working copy's ca_file or per-remote opt-in.
                         let net = Net {
                             server: None,
                             token: Some(explicit.to_string()),
+                            ca_file: None,
+                            insecure_http: false,
                         };
                         let payload =
                             tool(super::clone::value(url, &sparse, into.as_deref(), &net))?;
@@ -646,7 +655,32 @@ fn dispatch(name: &str, args: &Value, root: &Path, net: &Net) -> Result<ToolOk, 
                     }
                 }
             }
-            let payload = tool(super::clone::value(url, &sparse, into.as_deref(), net))?;
+            // Same origin: the session working copy's TLS posture applies
+            // (the Wc::client resolution, carried by the clone Net): its
+            // ca_file, and its PER-REMOTE opt-in — which admits EXACTLY
+            // the stored origin. This branch has just verified the url's
+            // origin IS the session's, so collapsing the stored-origin
+            // admission into the clone's invocation flag admits precisely
+            // the opted-in origin, nothing else.
+            let session_parsed = crate::url::parse_remote(&session_origin).ok();
+            let per_remote_admits = match (&cfg.insecure_http, session_parsed.as_ref()) {
+                (Some(origin), Some(session)) => crate::url::parse_remote(origin)
+                    .map(|p| p.scheme == "http" && p.key() == session.key())
+                    .unwrap_or(false),
+                _ => false,
+            };
+            let clone_net = Net {
+                server: None,
+                token: net.token.clone(),
+                ca_file: cfg.ca_file.clone(),
+                insecure_http: per_remote_admits,
+            };
+            let payload = tool(super::clone::value(
+                url,
+                &sparse,
+                into.as_deref(),
+                &clone_net,
+            ))?;
             Ok(ToolOk {
                 payload,
                 notes: vec![],
@@ -1081,6 +1115,8 @@ mod tests {
         wc.save_config(&crate::wc::Config {
             server_url: server_url.to_string(),
             token: Some("session-secret-token".into()),
+            insecure_http: None,
+            ca_file: None,
         })
         .unwrap();
         let path = dir.path().to_path_buf();
@@ -1129,6 +1165,47 @@ mod tests {
             assert!(
                 listener.accept().is_err(),
                 "a request reached the foreign origin"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    /// sec-C2 pins through the MCP clone TOOL path (the review's
+    /// confusion-shape examples): a url whose authority the connecting
+    /// parser would read differently than the session origin is a tool
+    /// error — never a request (the recording listener stays silent).
+    #[test]
+    fn clone_tool_refuses_confusion_shape_urls_before_any_request() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (_dir, root) = session_wc("http://127.0.0.1:7400");
+        for url in [
+            "https://evil.example?@naatre.example.com/lib",
+            "https://a@naatre.example.com:443@evil.example/r",
+            "http://127.0.0.1?@evil.example/lib",
+        ] {
+            let response = handle(
+                &clone_call(&format!("\"url\":\"{url}\""), ""),
+                &root,
+                false,
+                &Net::default(),
+            )
+            .unwrap_or_else(|| panic!("{url}: no response"));
+            let v: Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(v["result"]["isError"], true, "{url}: {response}");
+            let text = v["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(
+                text.contains('@') || text.contains('?') || text.contains("scheme"),
+                "{url}: the refusal names the confusion: {text}"
+            );
+        }
+        // The recording listener stays silent: nothing was sent anywhere.
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        for _ in 0..20 {
+            assert!(
+                listener.accept().is_err(),
+                "a request reached the recording listener"
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }

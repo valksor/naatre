@@ -242,6 +242,8 @@ fn net(server: &TestServer) -> Net {
     Net {
         server: Some(server.base.clone()),
         token: Some(server.token.clone()),
+        ca_file: None,
+        insecure_http: false,
     }
 }
 
@@ -1937,8 +1939,11 @@ fn flush_land_lands_the_staged_writes_via_the_shared_land_path() {
 // ---- M8b item 2: FUSE runtime mount (Linux CI with /dev/fuse only) ---------
 
 /// On Linux CI with /dev/fuse + fusermount3 present this runs the REAL FUSE
-/// mount; without them it prints a SKIP notice (cfg-compile-only
-/// elsewhere — macOS never compiles this test).
+/// mount; without them it prints a SKIP notice — or PANICS naming the
+/// missing prerequisite under NAATRE_REQUIRE_FUSE=1 (CI's privileged
+/// container step sets it: a required-but-skipped FUSE leg is green
+/// vacuously, the same rule as NAATRE_TEST_S3_REQUIRED). cfg-compile-only
+/// elsewhere — macOS never compiles this test.
 #[cfg(target_os = "linux")]
 #[test]
 fn fuse_kernel_mount_walk_parity() {
@@ -1951,8 +1956,20 @@ fn fuse_kernel_mount_walk_parity() {
             .map(|s| s.success())
             .unwrap_or(false);
     if !fuse_ok {
+        let missing = if Path::new("/dev/fuse").exists() {
+            "fusermount3"
+        } else {
+            "/dev/fuse"
+        };
+        if std::env::var("NAATRE_REQUIRE_FUSE").as_deref() == Ok("1") {
+            panic!(
+                "NAATRE_REQUIRE_FUSE=1: {missing} missing — the FUSE leg must RUN \
+                 here; it needs /dev/fuse + fusermount3 (CI runs it in the \
+                 privileged container step)"
+            );
+        }
         println!(
-            "SKIP NOTICE (fuse-e2e): no /dev/fuse or no fusermount3 — the FUSE front-end \
+            "SKIP NOTICE (fuse-e2e): no {missing} — the FUSE front-end \
              is cfg-compile-checked only on this runner"
         );
         return;

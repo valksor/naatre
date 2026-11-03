@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
-use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -19,11 +18,14 @@ use serde_json::json;
 use crate::client::{Client, HttpError, bytes_as_envelope};
 use crate::wc::index::Row;
 
-/// A fetch/verify failure: either HTTP or a local data-integrity error.
+/// A fetch/verify failure: HTTP, a local data-integrity error, or the
+/// policy refusal class (usage, exit 3 — the cache-route plain-http
+/// refusal).
 #[derive(Debug)]
 pub enum FetchError {
     Http(HttpError),
     Local(String),
+    Usage(String),
 }
 
 impl From<HttpError> for FetchError {
@@ -37,6 +39,7 @@ impl std::fmt::Display for FetchError {
         match self {
             FetchError::Http(e) => write!(f, "{e}"),
             FetchError::Local(m) => f.write_str(m),
+            FetchError::Usage(m) => f.write_str(m),
         }
     }
 }
@@ -253,6 +256,36 @@ pub fn fetch_blobs_verified(
     ids: &[Id],
     cache: &mut Option<CacheRoute>,
 ) -> Result<HashMap<Id, Vec<u8>>, FetchError> {
+    // The F1 plain-http rule applies to the CACHE route too, over the one
+    // parse: a non-loopback plain-http tier is admitted only when the
+    // CACHE url's origin equals the working copy's stored per-remote
+    // opt-in origin — the origin's own opt-in never covers a different
+    // cache host. A refusal (or an unparseable tier URL) is a hard usage
+    // error for this invocation — no silent fallback to the origin.
+    if let Some(route) = cache.as_mut() {
+        let parsed = match &route.parsed {
+            Ok(parsed) => parsed.clone(),
+            Err(e) => {
+                return Err(FetchError::Usage(format!(
+                    "refusing the NAATRE_CACHE_URL route: {e}"
+                )));
+            }
+        };
+        if !parsed.is_loopback() && client.insecure_origin.as_ref() != Some(&parsed.key()) {
+            return Err(FetchError::Usage(format!(
+                "refusing plain http:// to the non-loopback cache tier {}: the per-remote \
+                 opt-in covers its own origin only — use https:// for the tier, or set \
+                 `naatre config set insecure_http \"{}\"` in this working copy",
+                parsed.origin(),
+                parsed.origin()
+            )));
+        }
+        // The tier agent rides the SAME root set as the origin client
+        // (platform roots plus the resolved ca_file) — a private-CA tier
+        // needs the same bundle the origin needs. The client build already
+        // validated that bundle, so this cannot fail.
+        route.agent = crate::client::agent(client.ca_file.as_deref()).map_err(FetchError::Local)?;
+    }
     let mut out = HashMap::new();
     let mut pending: Vec<Id> = Vec::new();
     let mut cache_enabled = cache.is_some();
@@ -328,8 +361,15 @@ pub fn fetch_blobs_verified(
 pub struct CacheRoute {
     /// The tier's base URL, no trailing slash.
     base: String,
-    /// A minimal agent for the tier (the same no-TLS posture as the
-    /// origin client: LAN/LAN-localhost).
+    /// The ONE parse of the tier URL ([`crate::url::parse_remote`]): Ok
+    /// the parse, or Err why it was refused. Surfaced by
+    /// [`fetch_blobs_verified`] as a hard usage error — a malformed tier
+    /// URL never silently falls back to the origin.
+    parsed: Result<crate::url::ParsedRemote, String>,
+    /// A minimal agent for the tier, rebuilt over the ORIGIN client's
+    /// root set (platform ∪ ca_file) before the first by-id fetch
+    /// (https works everywhere; plain http is refused to a non-loopback
+    /// tier unless the per-remote opt-in names the tier's origin).
     agent: ureq::Agent,
     /// The live ticket, if minted (None until the first by-id fetch).
     ticket: Option<TicketState>,
@@ -345,20 +385,24 @@ struct TicketState {
 impl CacheRoute {
     /// The `NAATRE_CACHE_URL` route, or `None` when unset/empty.
     pub fn from_env() -> Option<CacheRoute> {
-        let base = std::env::var("NAATRE_CACHE_URL").ok()?;
-        let base = base.trim().trim_end_matches('/').to_string();
+        Self::from_base(&std::env::var("NAATRE_CACHE_URL").ok()?)
+    }
+
+    /// [`CacheRoute::from_env`] at an explicit tier URL (the test seam —
+    /// env mutation is racy under parallel tests). The URL is parsed
+    /// HERE, once; a refusal surfaces at the first fetch, never as a
+    /// silent origin fallback.
+    pub fn from_base(base: &str) -> Option<CacheRoute> {
+        let base = base.trim();
         if base.is_empty() {
             return None;
         }
         Some(CacheRoute {
-            base,
-            agent: ureq::Agent::new_with_config(
-                ureq::config::Config::builder()
-                    .http_status_as_error(false)
-                    .timeout_connect(Some(Duration::from_secs(5)))
-                    .timeout_global(Some(Duration::from_secs(120)))
-                    .build(),
-            ),
+            parsed: crate::url::parse_remote(base),
+            base: base.trim_end_matches('/').to_string(),
+            // The no-ca_file agent build is infallible; the roots join the
+            // origin client's set at the admission point above.
+            agent: crate::client::base_agent(),
             ticket: None,
         })
     }

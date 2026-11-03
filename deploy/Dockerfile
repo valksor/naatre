@@ -13,6 +13,9 @@
 # --- build: musl static binary (the alpine rust image is a musl host) ------
 FROM rust:1.99-alpine@sha256:7e9e2d068a107a2adafd19930011178d14a78326053cd4c3a9f7ad3fd049557d AS build
 WORKDIR /src
+# aws-lc-sys (the S3 backend's rustls crypto provider) builds C code via
+# cmake; the alpine rust image ships none of that toolchain.
+RUN apk add --no-cache cmake clang perl make musl-dev
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # --locked: the committed lockfile is the authority (CI policy).
@@ -27,6 +30,11 @@ COPY THIRD_PARTY_LICENSES.md /usr/share/doc/naatre/THIRD_PARTY_LICENSES.md
 RUN addgroup -g 1000 naatre \
 	&& adduser -D -H -u 1000 -G naatre naatre
 
+# mkdir+chown BEFORE the VOLUME declaration: build steps after VOLUME see an
+# anonymous volume shadowing /data and their changes there are discarded —
+# and a fresh named volume inherits this dir's ownership at first-mount
+# copy-up, so the uid-1000 image user can init it (no manual chown on boot).
+RUN mkdir -p /data && chown naatre:naatre /data
 VOLUME /data
 EXPOSE 7400
 USER naatre:naatre

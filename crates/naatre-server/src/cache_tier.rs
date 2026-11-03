@@ -567,17 +567,40 @@ pub struct OriginClient {
     base: String,
 }
 
+/// The tier's origin agent (F1): rustls with the EXPLICIT ring crypto
+/// provider (aws-lc-rs also sits in the graph, so a process default would
+/// be ambiguous — the same rule the store's TLS follows) over the PLATFORM
+/// roots, and `max_redirects(0)` — a 3xx comes back as the response, never
+/// followed, so `Authorization` can never cross hosts. The tier has no
+/// `ca_file` flag: an origin whose certificate chains to a private CA is
+/// unreachable over https from here — front it with a publicly-rooted cert
+/// or a trusted proxy. There is deliberately no "skip verification" option.
+fn origin_agent() -> ureq::Agent {
+    let roots: Vec<ureq::tls::Certificate<'static>> = rustls_native_certs::load_native_certs()
+        .certs
+        .iter()
+        .map(|c| ureq::tls::Certificate::from_der(c.as_ref()).to_owned())
+        .collect();
+    let tls = ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::Rustls)
+        .unversioned_rustls_crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .root_certs(roots.into())
+        .build();
+    ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .timeout_global(Some(Duration::from_secs(120)))
+            .max_redirects(0)
+            .tls_config(tls)
+            .build(),
+    )
+}
+
 impl OriginClient {
     pub fn new(base: &str) -> OriginClient {
-        let agent = ureq::Agent::new_with_config(
-            ureq::config::Config::builder()
-                .http_status_as_error(false)
-                .timeout_connect(Some(Duration::from_secs(5)))
-                .timeout_global(Some(Duration::from_secs(120)))
-                .build(),
-        );
         OriginClient {
-            agent,
+            agent: origin_agent(),
             base: base.trim_end_matches('/').to_string(),
         }
     }

@@ -4,6 +4,7 @@ description = "naatre server: axum HTTP API over the store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 naatre-core = { path = "../naatre-core" }
@@ -41,8 +42,14 @@ sha2 = "0.10"
 ring = "0.17"
 # The cache tier's origin client (M13b): the same blocking client and
 # version pin the CLI's verbs use — no new external crate (ureq is
-# naatre-cli's pinned HTTP client already).
-ureq = { version = "3", default-features = false, features = ["json"] }
+# naatre-cli's pinned HTTP client already). F1: the rustls connector so an
+# https origin works (platform roots; the tier has no ca_file flag).
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
+# The explicit ring crypto provider for ureq's rustls connector (both ring
+# and aws-lc-rs sit in the graph, so a process default would be ambiguous —
+# the same rule naatre-store's TLS follows) and the platform root store.
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

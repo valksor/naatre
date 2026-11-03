@@ -4,6 +4,7 @@ description = "naatre CLI: host-local admin verbs (init, serve, token) and thin 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "naatre_cli"
@@ -21,9 +22,14 @@ clap = { version = "4", features = ["derive"] }
 # CSPRNG snapshot ids (`naatre snapshot` generates the 64-hex id client-side;
 # same crate the server pins — no new external dependency).
 getrandom = "0.3"
-# Plain-HTTP client for localhost ops (no TLS backend pulled in on purpose:
-# client verbs target the local server; TLS lives behind the operator's proxy).
-ureq = { version = "3", default-features = false, features = ["json"] }
+# HTTP client (F1: rustls + platform roots — https works everywhere, plain
+# http stays loopback/opt-in; no native-tls/OpenSSL, kept out by deny.toml).
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
+# The explicit ring crypto provider for ureq's rustls connector (both ring
+# and aws-lc-rs sit in the graph, so a process default would be ambiguous —
+# the same rule naatre-store's TLS follows) and the platform root store.
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # NFC normalization of disk paths before index comparison (same crate the
@@ -62,3 +68,7 @@ tempfile = "3"
 # Direct-DB seeding of the `main` ref row (land, its only writer, is M4) —
 # the same technique the naatre-server M2a tests use.
 rusqlite = { version = "0.41", features = ["bundled"] }
+# Local rustls TLS server for the ca_file handshake pin (F1 test 13a):
+# rcgen CA + leaf, `rustls::ServerConnection` over a loopback listener.
+# Same crate and pin naatre-store's TLS tests use (already in the lock).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

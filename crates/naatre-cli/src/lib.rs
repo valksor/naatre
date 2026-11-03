@@ -15,6 +15,7 @@
 
 pub mod client;
 pub mod host;
+pub mod url;
 pub mod verbs;
 pub mod vfs;
 pub mod wc;

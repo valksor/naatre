@@ -47,6 +47,10 @@
 //! ([`naatre_core::conflict::carry`]) — a path that re-conflicts under
 //! `--record-conflict` takes the new sides (the conflict composes).
 
+// The crash point's OnceLock is debug-only (the release crash_point is a
+// no-op), so the import is too — `cargo build --release` stays
+// warning-free.
+#[cfg(debug_assertions)]
 use std::sync::OnceLock;
 
 use naatre_store::Db;

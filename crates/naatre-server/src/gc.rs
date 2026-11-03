@@ -87,7 +87,12 @@
 //! lands, uploads, and each other in both layouts.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+// The crash point's OnceLock is debug-only (the release crash_point is a
+// no-op), so the import is too — `cargo build --release` stays
+// warning-free.
+#[cfg(debug_assertions)]
+use std::sync::OnceLock;
 
 use naatre_core::changeset;
 use naatre_core::ids::Id;

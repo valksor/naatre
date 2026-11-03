@@ -308,10 +308,22 @@ fn seed_main(server: &TestServer, repo: &str, target_hex: &str) {
 
 // ---- verb + binary helpers -------------------------------------------------
 
+/// A throwaway CA PEM (rcgen) for the ca_file save-time validation pins —
+/// the same helper crate the rustls handshake test below uses.
+fn test_ca_pem() -> String {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+    let key = KeyPair::generate().expect("CA keygen");
+    let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.self_signed(&key).expect("self-signed CA").pem()
+}
+
 fn net(server: &TestServer) -> Net {
     Net {
         server: Some(server.base.clone()),
         token: Some(server.token.clone()),
+        ca_file: None,
+        insecure_http: false,
     }
 }
 
@@ -884,6 +896,219 @@ fn exit_codes_and_json_shapes() {
     );
 }
 
+/// F1 — the plain-http rule at clone time, through the real binary: a
+/// non-loopback http:// URL refuses (usage, naming the opt-in and the
+/// https alternative), and the opt-in a clone ran with persists into the
+/// working-copy config it writes.
+#[test]
+fn clone_plain_http_rule_and_persisted_opt_in() {
+    let server = start_server();
+    create_repo(&server, "httprule");
+    let v1 = b"seed\n";
+    put_blob(&server, "httprule", v1);
+    let c1 = changeset(
+        &server,
+        "httprule",
+        &[],
+        vec![change("add", "seed.txt", v1)],
+        "c1",
+    );
+    seed_main(&server, "httprule", c1["id"].as_str().unwrap());
+
+    // The refusal: exit 3 before any request is sent (no repo needed).
+    let out = run_binary(
+        &server,
+        server._dir.path(),
+        &[
+            "clone",
+            "http://naatre.example.com:7400/httprule",
+            "--into",
+            "refused",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("--insecure-http"), "{stderr:?}");
+    assert!(stderr.contains("https://"), "{stderr:?}");
+    assert!(!server._dir.path().join("refused").exists());
+
+    // The sec-C2 confusion shapes refuse the same way (exit 3, no
+    // request): userinfo `@` and query-`?` authority tricks.
+    for url in [
+        "https://evil.example?@naatre.example.com/httprule",
+        "https://a@naatre.example.com:443@evil.example/r",
+        "http://lan-host?@127.0.0.1/httprule",
+    ] {
+        let out = run_binary(
+            &server,
+            server._dir.path(),
+            &["clone", url, "--into", "refused"],
+        );
+        assert_eq!(out.status.code(), Some(3), "{url}: {out:?}");
+        assert!(!server._dir.path().join("refused").exists(), "{url}");
+    }
+
+    // The opt-in persists PER REMOTE (the opted-in origin, not a bool): a
+    // clone run with --insecure-http (loopback here, so it actually
+    // succeeds) writes insecure_http = "<its origin>".
+    let wc_dir = server._dir.path().join("opted");
+    let mut opted = net(&server);
+    opted.insecure_http = true;
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/httprule", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &opted
+        ),
+        0
+    );
+    let config = naatre_cli::wc::Wc::open(&wc_dir)
+        .unwrap()
+        .load_config()
+        .unwrap();
+    assert_eq!(
+        config.insecure_http,
+        Some(server.base.clone()),
+        "{config:?}"
+    );
+}
+
+/// F1 — `naatre config set <key> <value>`: the strict working-copy TLS
+/// keys (the persisted opt-in's second way in), through the real binary.
+#[test]
+fn config_set_writes_the_tls_keys_strictly() {
+    let server = start_server();
+    create_repo(&server, "cfgset");
+    let v1 = b"seed\n";
+    put_blob(&server, "cfgset", v1);
+    let c1 = changeset(
+        &server,
+        "cfgset",
+        &[],
+        vec![change("add", "seed.txt", v1)],
+        "c1",
+    );
+    seed_main(&server, "cfgset", c1["id"].as_str().unwrap());
+    let wc_dir = server._dir.path().join("wc");
+    assert_eq!(
+        verbs::clone::run(
+            &format!("{}/cfgset", server.base),
+            &[],
+            Some(wc_dir.to_str().unwrap()),
+            &net(&server)
+        ),
+        0
+    );
+    let config_of = || {
+        naatre_cli::wc::Wc::open(&wc_dir)
+            .unwrap()
+            .load_config()
+            .unwrap()
+    };
+
+    // insecure_http: the PER-REMOTE origin form persists (and `none`
+    // clears); the never-shipped boolean form is refused.
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["config", "set", "insecure_http", "http://naatre.lan:7400"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        config_of().insecure_http,
+        Some("http://naatre.lan:7400".into())
+    );
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["config", "set", "insecure_http", "none"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(config_of().insecure_http, None);
+    for bad in ["true", "false", "yes"] {
+        let out = run_binary(&server, &wc_dir, &["config", "set", "insecure_http", bad]);
+        assert_eq!(out.status.code(), Some(3), "{bad}: {out:?}");
+        assert!(
+            stderr_of(&out).contains("http://host[:port]"),
+            "{bad}: {:?}",
+            stderr_of(&out)
+        );
+        assert_eq!(config_of().insecure_http, None, "{bad} wrote nothing");
+    }
+    // An https origin is not a plain-http opt-in.
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["config", "set", "insecure_http", "https://host.example.com"],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert_eq!(config_of().insecure_http, None);
+
+    // ca_file: a REAL PEM bundle persists CANONICALIZED (absolute), and
+    // validation refuses garbage at save time; `none` clears.
+    let ca = server._dir.path().join("ca.pem");
+    std::fs::write(&ca, test_ca_pem()).unwrap();
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["config", "set", "ca_file", ca.to_str().unwrap()],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        config_of().ca_file,
+        Some(
+            std::fs::canonicalize(&ca)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        ),
+        "the stored path is the canonicalized absolute path"
+    );
+    // A relative path resolves against the process cwd before saving.
+    let relative = wc_dir.join("wc-ca.pem");
+    std::fs::write(&relative, test_ca_pem()).unwrap();
+    let out = run_binary(&server, &wc_dir, &["config", "set", "ca_file", "wc-ca.pem"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(
+        config_of().ca_file,
+        Some(
+            std::fs::canonicalize(&relative)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        ),
+        "a relative ca_file persists absolute"
+    );
+    let garbage = server._dir.path().join("garbage.pem");
+    std::fs::write(&garbage, "ca bytes").unwrap();
+    let out = run_binary(
+        &server,
+        &wc_dir,
+        &["config", "set", "ca_file", garbage.to_str().unwrap()],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "garbage bundle refused: {out:?}"
+    );
+    assert!(
+        stderr_of(&out).contains("PEM CA bundle"),
+        "{:?}",
+        stderr_of(&out)
+    );
+    let out = run_binary(&server, &wc_dir, &["config", "set", "ca_file", "none"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
+    assert_eq!(config_of().ca_file, None);
+
+    // Unknown keys are usage errors naming the set.
+    let out = run_binary(&server, &wc_dir, &["config", "set", "proxy", "x"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("insecure_http"), "{stderr:?}");
+    assert!(stderr.contains("ca_file"), "{stderr:?}");
+}
+
 /// Test 8 — SPARSE: add materializes a second prefix; remove drops its files
 /// from disk AND index; a full (non-sparse) checkout refuses sparse add.
 #[test]
@@ -1286,8 +1511,88 @@ fn run_binary_no_env(cwd: &Path, args: &[&str]) -> Output {
         .env_remove("NAATRE_URL")
         .env_remove("NAATRE_TOKEN")
         .env_remove("NAATRE_AUTHOR")
+        .env_remove("NAATRE_CA_FILE")
+        .env_remove("NAATRE_INSECURE_HTTP")
+        .env_remove("NAATRE_CACHE_URL")
         .output()
         .expect("spawn naatre")
+}
+
+/// Item 12: the plain-http refusal is the USAGE class (exit 3) on EVERY
+/// path — sync (a working copy naming a non-loopback http origin without
+/// any opt-in), and an admin verb (NAATRE_URL to a non-loopback http host;
+/// the invocation opt-in NAATRE_INSECURE_HTTP=1 proceeds past the policy).
+#[test]
+fn plain_http_refusal_is_exit_3_on_sync_and_admin_paths() {
+    // sync: the working-copy config names a non-loopback http origin with
+    // no opt-in → exit 3 before any request (no server involved).
+    let dir = tempfile::tempdir().unwrap();
+    let wc_dir = dir.path().join("wc");
+    std::fs::create_dir_all(wc_dir.join(".naatre")).unwrap();
+    std::fs::write(
+        wc_dir.join(".naatre/config.toml"),
+        "server_url = \"http://naatre.lan:7400\"\n",
+    )
+    .unwrap();
+    let out = run_binary_no_env(&wc_dir, &["sync"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains("refusing plain http://"), "{stderr:?}");
+    assert!(stderr.contains("--insecure-http"), "{stderr:?}");
+
+    // The per-remote opt-in admits EXACTLY its own origin: the same sync
+    // proceeds past the policy (to a dead server → exit 1, not 3).
+    std::fs::write(
+        wc_dir.join(".naatre/config.toml"),
+        "server_url = \"http://naatre.lan:7400\"\n\
+         insecure_http = \"http://naatre.lan:7400\"\n",
+    )
+    .unwrap();
+    let out = run_binary_no_env(&wc_dir, &["sync"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the opted-in origin proceeds to the (dead) server: {out:?}"
+    );
+
+    // Admin verb: NAATRE_URL to a non-loopback http host, no opt-in → 3.
+    let admin_dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_naatre"))
+        .args(["repo", "stats", "any"])
+        .current_dir(admin_dir.path())
+        .env_remove("NAATRE_TOKEN")
+        .env_remove("NAATRE_AUTHOR")
+        .env("NAATRE_URL", "http://naatre.lan:7400")
+        .output()
+        .expect("spawn naatre");
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        stderr_of(&out).contains("refusing plain http://"),
+        "{:?}",
+        stderr_of(&out)
+    );
+    assert!(
+        stderr_of(&out).contains("NAATRE_INSECURE_HTTP"),
+        "the admin refusal names the invocation opt-in: {:?}",
+        stderr_of(&out)
+    );
+
+    // With NAATRE_INSECURE_HTTP=1 the invocation proceeds (dead server →
+    // transport failure, exit 1 — NOT the policy refusal).
+    let out = Command::new(env!("CARGO_BIN_EXE_naatre"))
+        .args(["repo", "stats", "any"])
+        .current_dir(admin_dir.path())
+        .env_remove("NAATRE_TOKEN")
+        .env_remove("NAATRE_AUTHOR")
+        .env("NAATRE_URL", "http://naatre.lan:7400")
+        .env("NAATRE_INSECURE_HTTP", "1")
+        .output()
+        .expect("spawn naatre");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the invocation opt-in proceeds: {out:?}"
+    );
 }
 
 /// The scanner's unit-ish corner: status JSON mirrors the classified
@@ -2149,20 +2454,29 @@ fn sync_applies_a_fully_deleted_cone_prefix() {
     assert_eq!(wc.load_state().unwrap().head, c3["id"].as_str().unwrap());
 }
 
-/// Binary clone usage: a URL whose scheme is not http (https included) is a
-/// usage error (exit 3) naming the scheme and stating the client speaks
-/// plain HTTP only — never silently downgraded.
+/// Binary clone usage: a URL whose scheme is neither https nor http (ftp,
+/// git, …) is a usage error (exit 3) naming the scheme — the client speaks
+/// https (and plain http to loopback hosts), never silently downgraded.
+/// An https:// URL is accepted (F1): the parser passes it and the failure
+/// is transport (exit 1), not usage.
 #[test]
 fn binary_clone_rejects_non_http_schemes() {
     let dir = tempfile::tempdir().unwrap();
-    for url in ["https://example.test/repo", "ftp://example.test/repo"] {
+    for url in ["ftp://example.test/repo", "git://example.test/repo"] {
         let out = run_binary_no_env(dir.path(), &["clone", url]);
         assert_eq!(out.status.code(), Some(3), "{url}: {out:?}");
         let stderr = stderr_of(&out);
-        assert!(stderr.contains("plain HTTP"), "{url}: {stderr:?}");
         let scheme = url.split(':').next().unwrap();
         assert!(stderr.contains(scheme), "{url}: {stderr:?}");
     }
+    // The .test TLD never resolves: the clone fails at the connection.
+    let out = run_binary_no_env(dir.path(), &["clone", "https://example.test/repo"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        stderr_of(&out).contains("request to https://example.test"),
+        "{:?}",
+        stderr_of(&out)
+    );
 }
 
 /// Binary usage errors: clap flag/argument mistakes exit 3 (never 2 — that

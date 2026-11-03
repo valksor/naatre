@@ -430,6 +430,10 @@ pub enum DbError {
     /// named with the file path only (the path is config the operator
     /// wrote; no credential ever rides it).
     SslRootCert(String),
+    /// The TLS setup is locally misconfigured — a connector built for a
+    /// mode that needs none, or no trust anchors at all — named with the
+    /// fix and with NO server or driver detail.
+    TlsConfig(String),
     Io(std::io::Error),
 }
 
@@ -482,6 +486,7 @@ impl std::fmt::Display for DbError {
                  statement surface's value domain"
             ),
             DbError::SslRootCert(why) => write!(f, "sslrootcert: {why}"),
+            DbError::TlsConfig(why) => write!(f, "tls configuration: {why}"),
             DbError::Io(e) => write!(f, "io error: {e}"),
         }
     }
@@ -683,63 +688,15 @@ impl Db {
             kind: PgErrKind::Connect,
             state: None,
         };
-        let tls_redacted = |_: native_tls::Error| DbError::Postgres {
-            kind: PgErrKind::Connect,
-            state: None,
-        };
 
         let client = match pg.tls {
             crate::backend::PgTls::Disable => cfg.connect(postgres::NoTls).map_err(pg_redacted)?,
+            // sslmode only decides "encrypted or not" at the driver; the
+            // verification DEPTH lives in the rustls connector per mode
+            // ([`crate::pg_tls`]).
             tls_mode => {
-                let mut builder = native_tls::TlsConnector::builder();
-                // `sslrootcert`: a private-CA bundle ADDED to the platform
-                // roots (a self-hosted Postgres is exactly the shape the
-                // system trust store cannot verify). The file is
-                // 0600-checked and PEM-parsed here — a broken or loose one
-                // is a named, redaction-safe LOCAL error, not a driver
-                // failure to squint at.
-                if let Some(cert_path) = &pg.sslrootcert {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let mode = std::fs::metadata(cert_path)
-                            .map_err(|e| {
-                                DbError::SslRootCert(format!("{}: {e}", cert_path.display()))
-                            })?
-                            .permissions()
-                            .mode();
-                        if mode & 0o177 != 0 {
-                            return Err(DbError::SslRootCert(format!(
-                                "{} must be 0600 (found mode {:o}); chmod 600 it",
-                                cert_path.display(),
-                                mode & 0o777
-                            )));
-                        }
-                    }
-                    let pem = std::fs::read(cert_path).map_err(|e| {
-                        DbError::SslRootCert(format!("{}: {e}", cert_path.display()))
-                    })?;
-                    let cert = native_tls::Certificate::from_pem(&pem).map_err(|e| {
-                        DbError::SslRootCert(format!("{}: {e}", cert_path.display()))
-                    })?;
-                    builder.add_root_certificate(cert);
-                }
-                match tls_mode {
-                    // `require`: encryption without certificate verification.
-                    crate::backend::PgTls::Require => {
-                        builder.danger_accept_invalid_certs(true);
-                    }
-                    // `verify-ca`: chain verified, hostname not checked.
-                    crate::backend::PgTls::VerifyCa => {
-                        builder.danger_accept_invalid_hostnames(true);
-                    }
-                    // `verify-full`: full chain + hostname verification.
-                    crate::backend::PgTls::VerifyFull => {}
-                    crate::backend::PgTls::Disable => unreachable!("handled above"),
-                }
-                let connector = builder.build().map_err(tls_redacted)?;
-                cfg.connect(postgres_native_tls::MakeTlsConnector::new(connector))
-                    .map_err(pg_redacted)?
+                let tls = crate::pg_tls::make_rustls_connect(tls_mode, pg.sslrootcert.as_deref())?;
+                cfg.connect(tls).map_err(pg_redacted)?
             }
         };
 

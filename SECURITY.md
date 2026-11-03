@@ -22,8 +22,6 @@ limits:
   listings are not yet filtered by scope.
 - Path scopes are not bound to a repo; use private repos to contain a
   token to the repos it should see.
-- The client speaks only plain HTTP, so a client on another machine
-  sends its bearer token unencrypted unless it tunnels to the server.
 - Tokens never expire unless created with a TTL.
 - Requests are not rate-limited per client; front the server with a
   rate-limiting proxy.
@@ -91,16 +89,37 @@ restart them. Both verbs are audited (`cache_key_rotate`,
 `cache_key_drop`). If the list itself leaked, rotate once more (mints
 move to the fresh key) and re-copy.
 
-**TLS posture, stated plainly (M13b-fix)**: ticket-bearing requests
-(`Authorization: NaatreTicket` headers) and tier↔origin object fetches
-have **NO TLS option in naatre today** — the tier's origin client and the
-CLI's cache client are plain HTTP by design (the same posture as the
-CLI's origin traffic). The intended deployment is a TRUSTED LAN; front
-BOTH hops with TLS-terminating proxies if the network is not trusted (the
-proxies' own certificates and access control cover the hop; a followup
-may add native TLS to these clients, tracked as a post-plan item). A
-ticket in transit is a bearer-grade credential for by-id reads within its
-TTL — treat the LAN accordingly.
+**TLS posture, stated plainly (F1 correction round)**: ticket-bearing
+requests (`Authorization: NaatreTicket` headers) and tier↔origin object
+fetches ride rustls with the platform root stores — both the tier's
+origin client and the CLI's cache client speak `https://`, verified
+(there is no "skip verification" option). The tier's origin client has
+**no `ca_file` flag**: a private CA must chain to the platform roots, so
+front an otherwise-private origin with a certificate from a
+publicly-rooted CA or a proxy you trust. (The CLI client DOES take
+`--ca-file` / `NAATRE_CA_FILE` / a working-copy `ca_file` — the bundle
+joins, never replaces, the platform roots — and the cache route rides
+the same root set as the client that built it.)
+
+Plain `http://` follows the loopback rule, enforced on EVERY client path
+(working-copy verbs included; each refusal is a usage error, exit 3):
+loopback hosts are always allowed; a non-loopback host is allowed ONLY
+with an explicit opt-in — a working copy's per-remote
+`insecure_http = "http://host[:port]"` (the stored ORIGIN, applied to
+that origin alone: a `--server`/`NAATRE_URL` override to another host
+does not inherit it), set at clone time by `clone --insecure-http` or
+afterwards with `naatre config set insecure_http "<origin>"` — or, for
+the admin verbs (`token`, `repo`, `principal`: they have no working
+copy), the invocation-level `--insecure-http` flag or
+`NAATRE_INSECURE_HTTP=1`. The `NAATRE_CACHE_URL` cache route is admitted
+for its OWN origin only (loopback, or equal to the stored per-remote
+opt-in) — an origin server's opt-in never covers a different cache host.
+Every remote URL is parsed once with the same parser that connects, so
+userinfo (`@`), query/fragment, backslash, percent-encoded host/port,
+and a non-u16 port are refused outright — they cannot smuggle a
+different origin past the checks. A ticket in transit stays a
+bearer-grade credential for by-id reads within its TTL, so an `https://`
+origin is the recommended shape — treat the LAN accordingly.
 
 The verify list carries no secrets and is the file operators copy to
 `naatre cache` tiers; a tier holds NO secret material and NO origin

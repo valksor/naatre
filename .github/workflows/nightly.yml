@@ -21,30 +21,71 @@ permissions:
 jobs:
   full-matrix:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: naatre
-          POSTGRES_PASSWORD: naatre
-          POSTGRES_DB: naatre_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U naatre"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; the toolchain: input selects the version
+        with:
+          toolchain: 1.99
+      # The Postgres container is step-run, not a `services:` service: a
+      # services container starts BEFORE the steps, so it cannot receive
+      # the step-generated TLS certificate the TLS-enabled legs use.
+      - name: Generate the Postgres TLS chain (CA + CA:FALSE leaf)
+        run: |
+          # verify-full's rustls-webpki rejects a CA:TRUE cert presented as
+          # an end-entity (CaUsedAsEndEntity), so a real chain: a CA, then a
+          # CA:FALSE leaf with the DSN's host name in SAN, signed by the CA.
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -keyout pg-ca.key -out pg-ca.crt \
+            -subj "/CN=naatre-test-ca" \
+            -addext "basicConstraints=critical,CA:TRUE"
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout pg.key -out pg.csr \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          printf 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n' > leaf.ext
+          openssl x509 -req -in pg.csr -CA pg-ca.crt -CAkey pg-ca.key -CAcreateserial \
+            -days 2 -out pg.crt -extfile leaf.ext
+          # 0600: the sslrootcert loader refuses looser files.
+          chmod 600 pg-ca.crt pg.crt pg.key
+          rm leaf.ext pg.csr pg-ca.key pg-ca.srl
+      # postgres:*-alpine runs the server as uid 70, which cannot read a
+      # runner-owned bind mount (and the image's entrypoint fixes only
+      # PGDATA's ownership), so the leaf cert + key are docker-cp'd INTO the
+      # container — as a tar stream carrying uid 70 and mode 600, since
+      # `docker exec` chown is impossible before start (exec needs a running
+      # container). The CA stays on the host for NAATRE_TEST_PG_SSLROOTCERT.
+      - name: Start TLS-enabled Postgres 16 (plan floor)
+        run: |
+          docker create --name pg16 \
+            -p 5432:5432 \
+            -e POSTGRES_USER=naatre -e POSTGRES_PASSWORD=naatre -e POSTGRES_DB=naatre_test \
+            postgres:16-alpine \
+            -c ssl=on \
+            -c ssl_cert_file=/tls/server.crt \
+            -c ssl_key_file=/tls/server.key
+          mkdir -p tls && cp pg.crt tls/server.crt && cp pg.key tls/server.key
+          chmod 600 tls/server.crt tls/server.key
+          tar -C . --owner=70 --group=70 -cf - tls | docker cp - pg16:/
+          docker start pg16
+          for i in $(seq 1 60); do
+            docker exec pg16 pg_isready -h 127.0.0.1 -U naatre >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec pg16 pg_isready -h 127.0.0.1 -U naatre
+          # An unreadable key would land in the log; this must stay empty
+          # (explicit if/exit: `!` pipelines are exempt from `set -e`).
+          if docker logs pg16 2>&1 | grep -qi 'permission denied'; then
+            echo 'FATAL: permission denied in the pg16 log'
+            docker logs pg16 | tail -50
+            exit 1
+          fi
       # The FULL metadata × blob matrix, nightly (the per-PR job is
       # SQLite/fs only). NAATRE_TEST_S3_REQUIRED=1 makes a provisioning
       # failure PANIC — a skipped S3 half would leave the nightly green
       # vacuously.
       - run: cargo test --workspace --locked
         env:
-          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=require
           NAATRE_TEST_PG_PASSWORD: naatre
           NAATRE_TEST_S3_REQUIRED: "1"
       # The M13b suites named explicitly: the server-side ACL/ticket pins
@@ -52,6 +93,6 @@ jobs:
       # nightly's cache-authz phase.
       - run: cargo test -p naatre-server --test m13b_test --locked
         env:
-          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=require
           NAATRE_TEST_PG_PASSWORD: naatre
       - run: cargo test -p naatre-cli --test m13b_e2e_test --locked

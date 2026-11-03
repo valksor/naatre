@@ -14,12 +14,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; the toolchain: input selects the version
         with:
+          toolchain: 1.99
           components: rustfmt,clippy
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The vfs_test FUSE leg must RUN here, not skip (runners have /dev/fuse).
+      - run: sudo apt-get update -q && sudo apt-get install -y -q fuse3 libfuse3-dev
       - run: cargo test --workspace --locked
+      # The FUSE leg must RUN, not skip: the workspace run above only proves
+      # it compiles, so it runs again inside a privileged container (own
+      # /dev/fuse). NAATRE_REQUIRE_FUSE=1 turns the vfs_test skip path into a
+      # hard failure — a green step here means the kernel mount happened.
+      - name: FUSE leg (privileged container; skip = failure)
+        run: >
+          docker run --rm --device /dev/fuse --cap-add SYS_ADMIN
+          -v "$PWD":/src -w /src
+          -e CARGO_TARGET_DIR=/tmp/target
+          -e NAATRE_REQUIRE_FUSE=1
+          rust:1.99 bash -c "apt-get update -qq && apt-get install -y -qq fuse3 libfuse3-dev && cargo test --locked -p naatre-cli --test vfs_test fuse_kernel_mount_walk_parity -- --nocapture"
       # Regenerate the checked OpenAPI artifact through the same render the
       # served route uses, then diff it against the committed file
       # (plan "API conventions": "CI regenerates and diffs").
@@ -31,7 +45,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; the toolchain: input selects the version
+        with:
+          toolchain: 1.99
       # Clean-dir cold boot (plan M5 check): init → serve → token+URL →
       # repo create → clone from a second directory → commit → land →
       # snapshot → restore into a third dir. Must pass, no allow-failure.
@@ -45,33 +61,82 @@ jobs:
     # without NAATRE_TEST_PG_DSN). M9b adds the S3 legs (below): the full
     # four-combo matrix runs in this job.
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: naatre
-          POSTGRES_PASSWORD: naatre
-          POSTGRES_DB: naatre_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U naatre"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; the toolchain: input selects the version
+        with:
+          toolchain: 1.99
+      # The Postgres container is step-run, not a `services:` service: a
+      # services container starts BEFORE the steps, so it cannot receive
+      # the step-generated TLS certificate the TLS-enabled legs use.
+      - name: Generate the Postgres TLS chain (CA + CA:FALSE leaf)
+        run: |
+          # verify-full's rustls-webpki rejects a CA:TRUE cert presented as
+          # an end-entity (CaUsedAsEndEntity), so a real chain: a CA, then a
+          # CA:FALSE leaf with the DSN's host name in SAN, signed by the CA.
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -keyout pg-ca.key -out pg-ca.crt \
+            -subj "/CN=naatre-test-ca" \
+            -addext "basicConstraints=critical,CA:TRUE"
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout pg.key -out pg.csr \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          printf 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n' > leaf.ext
+          openssl x509 -req -in pg.csr -CA pg-ca.crt -CAkey pg-ca.key -CAcreateserial \
+            -days 2 -out pg.crt -extfile leaf.ext
+          # 0600: the sslrootcert loader refuses looser files (verify-full leg).
+          chmod 600 pg-ca.crt pg.crt pg.key
+          rm leaf.ext pg.csr pg-ca.key pg-ca.srl
+      # postgres:*-alpine runs the server as uid 70, which cannot read a
+      # runner-owned bind mount (and the image's entrypoint fixes only
+      # PGDATA's ownership), so the leaf cert + key are docker-cp'd INTO the
+      # container — as a tar stream carrying uid 70 and mode 600, since
+      # `docker exec` chown is impossible before start (exec needs a running
+      # container). The CA stays on the host for NAATRE_TEST_PG_SSLROOTCERT.
+      - name: Start TLS-enabled Postgres 16 (plan floor)
+        run: |
+          docker create --name pg16 \
+            -p 5432:5432 \
+            -e POSTGRES_USER=naatre -e POSTGRES_PASSWORD=naatre -e POSTGRES_DB=naatre_test \
+            postgres:16-alpine \
+            -c ssl=on \
+            -c ssl_cert_file=/tls/server.crt \
+            -c ssl_key_file=/tls/server.key
+          mkdir -p tls && cp pg.crt tls/server.crt && cp pg.key tls/server.key
+          chmod 600 tls/server.crt tls/server.key
+          tar -C . --owner=70 --group=70 -cf - tls | docker cp - pg16:/
+          docker start pg16
+          for i in $(seq 1 60); do
+            docker exec pg16 pg_isready -h 127.0.0.1 -U naatre >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec pg16 pg_isready -h 127.0.0.1 -U naatre
+          # An unreadable key would land in the log; this must stay empty
+          # (explicit if/exit: `!` pipelines are exempt from `set -e`).
+          if docker logs pg16 2>&1 | grep -qi 'permission denied'; then
+            echo 'FATAL: permission denied in the pg16 log'
+            docker logs pg16 | tail -50
+            exit 1
+          fi
       - run: cargo test -p naatre-store --test integration --locked
         env:
           # No inline credentials (the parser rejects them by contract):
           # the user rides in the URL, the password in its own env var.
-          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=require
           NAATRE_TEST_PG_PASSWORD: naatre
       - run: cargo test -p naatre-server --test m9_pg_test --locked
         env:
-          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=require
           NAATRE_TEST_PG_PASSWORD: naatre
+      # One verify-full case (F1): full verification against the generated
+      # cert. The root bundle rides NAATRE_TEST_PG_SSLROOTCERT — the DSN
+      # parser accepts only sslmode as a query parameter.
+      - run: cargo test -p naatre-store --test integration --locked
+        env:
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=verify-full
+          NAATRE_TEST_PG_PASSWORD: naatre
+          NAATRE_TEST_PG_SSLROOTCERT: ${{ github.workspace }}/pg-ca.crt
       # M9b: the S3 legs ride the same job, completing the four-combo
       # matrix (SQLite/PG × fs/S3 all REAL). The harness fetches the
       # PINNED minio binary from the pinned GitHub release and
@@ -83,7 +148,7 @@ jobs:
       # default stays skip-with-notice.
       - run: cargo test -p naatre-store --test integration --locked
         env:
-          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=disable
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=require
           NAATRE_TEST_PG_PASSWORD: naatre
           NAATRE_TEST_S3_REQUIRED: "1"
       - run: cargo test -p naatre-server --test m9_s3_test --locked
@@ -100,6 +165,38 @@ jobs:
       - run: cargo test -p naatre-server --test m10a_s3_test --locked
         env:
           NAATRE_TEST_S3_REQUIRED: "1"
+      # PG18 leg: same TLS shape (the generated cert is still valid —
+      # 2 days), sslmode=require. PG16 above is the plan floor.
+      - name: Stop Postgres 16, start TLS-enabled Postgres 18
+        run: |
+          docker rm -f pg16
+          docker create --name pg18 \
+            -p 5432:5432 \
+            -e POSTGRES_USER=naatre -e POSTGRES_PASSWORD=naatre -e POSTGRES_DB=naatre_test \
+            postgres:18-alpine \
+            -c ssl=on \
+            -c ssl_cert_file=/tls/server.crt \
+            -c ssl_key_file=/tls/server.key
+          mkdir -p tls && cp pg.crt tls/server.crt && cp pg.key tls/server.key
+          chmod 600 tls/server.crt tls/server.key
+          tar -C . --owner=70 --group=70 -cf - tls | docker cp - pg18:/
+          docker start pg18
+          for i in $(seq 1 60); do
+            docker exec pg18 pg_isready -h 127.0.0.1 -U naatre >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec pg18 pg_isready -h 127.0.0.1 -U naatre
+          # An unreadable key would land in the log; this must stay empty
+          # (explicit if/exit: `!` pipelines are exempt from `set -e`).
+          if docker logs pg18 2>&1 | grep -qi 'permission denied'; then
+            echo 'FATAL: permission denied in the pg18 log'
+            docker logs pg18 | tail -50
+            exit 1
+          fi
+      - run: cargo test -p naatre-store --test integration --locked
+        env:
+          NAATRE_TEST_PG_DSN: postgres://naatre@localhost:5432/naatre_test?sslmode=require
+          NAATRE_TEST_PG_PASSWORD: naatre
 
   deny:
     runs-on: ubuntu-latest
@@ -107,16 +204,22 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
+          # No `arguments`: bare `cargo deny check` = advisories + bans +
+          # licenses + sources (same as the local gate). The action puts
+          # `arguments` BEFORE the subcommand, which broke `licenses advisories`.
           command: check
-          arguments: licenses advisories
 
   release-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; the toolchain: input selects the version
         with:
+          toolchain: 1.99
           targets: x86_64-unknown-linux-musl
+      # aws-lc-sys (the S3 backend's rustls crypto provider) builds C code
+      # via cmake; the musl cross-build needs those host tools.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q cmake clang perl make musl-dev musl-tools
       # The M11 release step (scripts/release.sh): build the static musl
       # binary, SHA256SUMS (the M0 behavior), and the CycloneDX SBOM.
       # Signing stays OFFLINE — CI never holds any release key — so the

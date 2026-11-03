@@ -69,6 +69,11 @@ impl PgTarget {
         let mut cfg = BackendConfig::postgres(self.dsn(), None, password, true)
             .expect("test DSN parses (password rides in its own variable)");
         cfg.pg.as_mut().unwrap().schema = Some(fresh_schema());
+        // The TLS legs (F1 CI): the DSN carries sslmode, the CA bundle
+        // rides in its own variable — the same shape as the password.
+        if let Ok(rootcert) = std::env::var("NAATRE_TEST_PG_SSLROOTCERT") {
+            cfg.pg.as_mut().unwrap().sslrootcert = Some(rootcert.into());
+        }
         cfg
     }
 }

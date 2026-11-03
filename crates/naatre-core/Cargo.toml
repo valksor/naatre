@@ -4,6 +4,7 @@ description = "naatre core: object ids, canonical encodings, path grammar, valid
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 blake3 = "1"

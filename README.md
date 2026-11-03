@@ -15,6 +15,16 @@ external services. License: GPL-3.0-only.
 - Deploy: [`deploy/`](deploy/) (Dockerfile, systemd unit),
   [`SECURITY.md`](SECURITY.md), [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)
 
+## Install / build
+
+From a checkout. Minimum Rust 1.99 (the workspace `rust-version`;
+`rust-toolchain.toml` pins the toolchain for rustup users):
+
+```sh
+cargo install --locked --path crates/naatre-cli   # from a checkout
+docker build -f deploy/Dockerfile -t naatre .     # or as a container
+```
+
 ## Quickstart
 
 Everything runs from one binary — server and client verbs. CI extracts the
@@ -144,10 +154,27 @@ TLS-terminating reverse proxy in front (see below).
 
 ## TLS and reverse proxies
 
-naatre speaks plain HTTP and assumes a TLS-terminating reverse proxy for
-anything non-loopback (the client refuses `https://` URLs — it never
-downgrades silently; terminate TLS at the proxy and forward http to
-loopback). Two proxy-relevant facts, both deliberate:
+The server still binds plain HTTP and assumes a TLS-terminating reverse
+proxy for anything non-loopback (terminate TLS at the proxy and forward
+http to loopback). Remote clients connect with `https://…` URLs to the
+proxy: the client verifies the TLS certificate against the platform root
+store and never downgrades silently.
+
+- **Private CAs**: the platform roots are the default trust set; a PEM CA
+  bundle is ADDED to them via `ca_file` in the working copy's
+  `.naatre/config.toml` or the `--ca-file` flag — that is how a proxy
+  with a private CA reaches verification. There is no "skip verify"
+  option.
+- **Plain `http://` is accepted only for loopback hosts** (the
+  quickstart's `http://127.0.0.1:7400` stays valid). For a non-loopback
+  http remote the explicit opt-in is `--insecure-http` at `clone` time,
+  or `naatre config set insecure_http true` in an existing working copy.
+  It exists because a bearer token over unencrypted http crosses the
+  network in cleartext — naatre refuses to let that happen by accident.
+- **Upgrading a working copy cloned with an http URL**: re-clone over
+  `https://…`, or run `naatre config set insecure_http true` in it.
+
+Two further proxy-relevant facts, both deliberate:
 
 - **No peer-address surfaces.** Access logs record method, path, status,
   elapsed, request_id — never a peer address — and are **off by default**
@@ -309,11 +336,13 @@ applies unchanged, with tombstones deleted with their repo's file.
   path-style URLs for minio-shaped endpoints. GC of the ephemeral
   namespace deletes by key prefix with the same both-gates semantics as
   the fs dirs.
-- **Two TLS stacks ship** (stated honestly): Postgres rides
-  `native-tls` (OpenSSL/Security.framework — every rustls connector in the
-  ecosystem targets tokio-postgres, none the sync client naatre uses), S3
-  rides `object_store`'s rustls. Static-musl builds therefore need an
-  OpenSSL for the target — relevant to release/Docker images.
+- **One TLS stack ships (stated honestly): rustls everywhere** — the
+  Postgres connector, the S3 backend (`object_store`), and the HTTP
+  client all ride rustls; OpenSSL is not in the dependency graph at all
+  (enforced by the `deny.toml` bans). Static-musl builds therefore need
+  no OpenSSL for the target; the one C dependency, `aws-lc-sys` (the S3
+  backend's crypto provider), builds via cmake at compile time and needs
+  its build tools present — CI and `deploy/Dockerfile` install them.
 - `naatre init`/`token`/`import` honor the same file, so admin verbs work
   unchanged against a Postgres-backed dir (there is no `naatre.db` in it).
 
@@ -367,11 +396,14 @@ naatre cache-key init --data /srv/naatre        # generates the signing pair onc
 # Copy the PUBLIC verify list to the cache host (it carries no secrets):
 scp /srv/naatre/cache_keys.json cachehost:keys/
 
-# On the CACHE host:
-naatre cache --origin http://origin:7400 --key ./keys/cache_keys.json \
-    --listen 127.0.0.1:7500 --data /srv/naatre-cache
-# Clients point their object fetches at the tier:
-export NAATRE_CACHE_URL=http://cachehost:7500
+# On the CACHE host: the tier binds loopback only — a TLS-terminating proxy
+# on cachehost:7500 fronts it (tickets are bearer-grade, so https in front
+# of the tier is the recommended shape; see "TLS and reverse proxies").
+# The proxy forwards cachehost:7500 -> 127.0.0.1:7501:
+naatre cache --origin https://origin.example:7400 --key ./keys/cache_keys.json \
+    --listen 127.0.0.1:7501 --data /srv/naatre-cache
+# Clients point their object fetches at the proxy:
+export NAATRE_CACHE_URL=https://cachehost:7500
 ```
 
 How it stays honest:

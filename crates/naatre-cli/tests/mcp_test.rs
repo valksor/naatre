@@ -258,6 +258,8 @@ fn net(server: &TestServer) -> Net {
     Net {
         server: Some(server.base.clone()),
         token: Some(server.token.clone()),
+        ca_file: None,
+        insecure_http: false,
     }
 }
 

@@ -11,10 +11,13 @@
 //! error statuses).
 
 use std::env;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+use crate::verbs::Net;
 
 pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:7400";
 
@@ -101,6 +104,93 @@ pub fn report(e: &HttpError) -> i32 {
     e.exit_code()
 }
 
+/// The platform root certificates (`rustls-native-certs`, the F1 root
+/// store). Best-effort like the store's own platform load — a root set
+/// that verifies nothing fails loudly at the first https handshake
+/// (unknown issuer), never here.
+fn platform_root_certs() -> Vec<ureq::tls::Certificate<'static>> {
+    rustls_native_certs::load_native_certs()
+        .certs
+        .iter()
+        .map(|c| ureq::tls::Certificate::from_der(c.as_ref()).to_owned())
+        .collect()
+}
+
+/// Reads and parses `ca_file` as a PEM CA bundle: the file must exist, be
+/// readable, parse as PEM, and carry at least ONE certificate. Only
+/// certificates come back; private keys and other PEM sections are
+/// skipped, not errors (a bundle may carry more than the roots). This is
+/// the save-time validation `config set` and clone run for their stored
+/// bundles, and the agent root builder shares it. The error names the
+/// path.
+pub(crate) fn read_ca_bundle(
+    ca_file: &str,
+) -> Result<Vec<ureq::tls::Certificate<'static>>, String> {
+    let pem = std::fs::read(ca_file).map_err(|e| format!("ca_file {ca_file}: {e}"))?;
+    let mut certs = Vec::new();
+    for item in ureq::tls::parse_pem(&pem) {
+        if let ureq::tls::PemItem::Certificate(cert) =
+            item.map_err(|e| format!("ca_file {ca_file}: must be a PEM CA bundle: {e}"))?
+        {
+            certs.push(cert);
+        }
+    }
+    if certs.is_empty() {
+        return Err(format!(
+            "ca_file {ca_file}: must be a PEM CA bundle (no certificates found)"
+        ));
+    }
+    Ok(certs)
+}
+
+/// The root set for [`agent`]: platform roots PLUS the `ca_file` PEM
+/// certificates — added on top, never replacing (the `sslrootcert` rule).
+/// A missing file, an unparseable one, or one with no certificate in it is
+/// a hard local error naming the path.
+fn root_certs_with_ca(ca_file: &str) -> Result<Vec<ureq::tls::Certificate<'static>>, String> {
+    let mut roots = platform_root_certs();
+    roots.extend(read_ca_bundle(ca_file)?);
+    Ok(roots)
+}
+
+/// The agent every CLI client rides (F1): rustls with the EXPLICIT ring
+/// crypto provider (aws-lc-rs also sits in the graph, so a process default
+/// would be ambiguous — the same rule the store's TLS follows) over the
+/// root set above, and `max_redirects(0)` — a 3xx comes back as the
+/// response, never followed, so no https→http downgrade and `Authorization`
+/// can never cross hosts. There is deliberately no "skip verification"
+/// option.
+fn agent_with_roots(roots: Vec<ureq::tls::Certificate<'static>>) -> ureq::Agent {
+    let tls = ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::Rustls)
+        .unversioned_rustls_crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .root_certs(roots.into())
+        .build();
+    ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .timeout_global(Some(Duration::from_secs(120)))
+            .max_redirects(0)
+            .tls_config(tls)
+            .build(),
+    )
+}
+
+/// The no-`ca_file` agent — infallible ([`agent`] adds the bundle checks).
+pub(crate) fn base_agent() -> ureq::Agent {
+    agent_with_roots(platform_root_certs())
+}
+
+/// [`base_agent`] with an optional PEM CA bundle added to the platform
+/// roots (the `--ca-file` / config `ca_file` private-CA story).
+pub(crate) fn agent(ca_file: Option<&str>) -> Result<ureq::Agent, String> {
+    match ca_file {
+        None => Ok(base_agent()),
+        Some(path) => Ok(agent_with_roots(root_certs_with_ca(path)?)),
+    }
+}
+
 /// The blocking HTTP client shared by all server-talking verbs.
 pub struct Client {
     agent: ureq::Agent,
@@ -108,33 +198,91 @@ pub struct Client {
     pub base: String,
     token: Option<String>,
     version_checked: AtomicBool,
+    /// The ca_file this client's root set was built from (`--ca-file` >
+    /// `NAATRE_CA_FILE` > the working-copy config, resolved at build
+    /// time); the cache route rebuilds the tier agent over the SAME root
+    /// set (`wc::fetch`).
+    pub(crate) ca_file: Option<String>,
+    /// The working copy's PER-REMOTE plain-http opt-in origin key, when
+    /// this client's remote is the opted-in origin; the cache-route
+    /// admission compares the CACHE url's origin against it — the
+    /// origin's opt-in never covers a different cache host (`wc::fetch`).
+    pub(crate) insecure_origin: Option<crate::url::OriginKey>,
 }
 
 impl Client {
     /// Builds a client over `base` (origin URL) with an optional bearer.
     pub fn new(base: &str, token: Option<String>) -> Client {
-        let agent = ureq::Agent::new_with_config(
-            ureq::config::Config::builder()
-                .http_status_as_error(false)
-                .timeout_connect(Some(Duration::from_secs(5)))
-                .timeout_global(Some(Duration::from_secs(120)))
-                .build(),
-        );
+        // The no-ca_file agent build cannot fail (see [`agent`]).
         Client {
-            agent,
+            agent: base_agent(),
             base: base.trim_end_matches('/').to_string(),
             token,
             version_checked: AtomicBool::new(false),
+            ca_file: None,
+            insecure_origin: None,
         }
     }
 
-    /// The admin-verb client: `NAATRE_URL` (default `http://127.0.0.1:7400`)
-    /// and `NAATRE_TOKEN`.
-    pub fn from_env() -> Client {
-        Client::new(
-            &env::var("NAATRE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()),
-            env::var("NAATRE_TOKEN").ok(),
-        )
+    /// [`Client::new`] with an explicit-TLS CA bundle (`--ca-file` /
+    /// `NAATRE_CA_FILE` / config `ca_file`): the bundle's certificates
+    /// join the platform roots (never replace them). A bad bundle is a
+    /// hard local error naming the path. `ca_file = None` cannot fail.
+    pub fn new_with_ca(
+        base: &str,
+        token: Option<String>,
+        ca_file: Option<&str>,
+    ) -> Result<Client, String> {
+        Ok(Client {
+            agent: agent(ca_file)?,
+            base: base.trim_end_matches('/').to_string(),
+            token,
+            version_checked: AtomicBool::new(false),
+            ca_file: ca_file.map(str::to_string),
+            insecure_origin: None,
+        })
+    }
+
+    /// Records the working copy's per-remote plain-http opt-in origin
+    /// (the clone-time `--insecure-http` origin, or the working-copy
+    /// config's stored origin); the cache-route reads compare against it.
+    pub(crate) fn with_insecure_origin(mut self, origin: Option<crate::url::OriginKey>) -> Client {
+        self.insecure_origin = origin;
+        self
+    }
+
+    /// The admin-verb client: `--server` flag > `NAATRE_URL` (default
+    /// `http://127.0.0.1:7400`), `NAATRE_TOKEN`, and `--ca-file` >
+    /// `NAATRE_CA_FILE`. Admin verbs have no working copy, so their only
+    /// plain-http opt-in is the invocation-level one (`--insecure-http` /
+    /// `NAATRE_INSECURE_HTTP=1`); a non-loopback plain-http admin target
+    /// without it is a usage refusal naming the opt-ins.
+    pub fn from_env(net: &crate::verbs::Net) -> Result<Client, String> {
+        let base = net
+            .server
+            .clone()
+            .or_else(|| env::var("NAATRE_URL").ok().filter(|v| !v.is_empty()))
+            .unwrap_or_else(|| DEFAULT_URL.to_string());
+        let parsed =
+            crate::url::parse_remote(&base).map_err(|e| format!("NAATRE_URL {base:?}: {e}"))?;
+        crate::wc::admit_remote(
+            &parsed,
+            crate::verbs::invocation_optin(net.insecure_http),
+            None,
+        )?;
+        let token = net.token.clone().or_else(|| env::var("NAATRE_TOKEN").ok());
+        let ca_file = net
+            .ca_file
+            .clone()
+            .or_else(|| env::var("NAATRE_CA_FILE").ok().filter(|v| !v.is_empty()));
+        Ok(Client {
+            agent: agent(ca_file.as_deref())?,
+            base: parsed.origin(),
+            token,
+            version_checked: AtomicBool::new(false),
+            ca_file,
+            insecure_origin: None,
+        })
     }
 
     fn with_bearer<B>(&self, rb: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
@@ -457,11 +605,26 @@ pub fn uri_segment(segment: &str) -> String {
     out
 }
 
+/// The admin-verb client build: [`Client::from_env`], with the plain-http
+/// refusal (a usage class) printed and returned as exit 3.
+fn admin_client(net: &Net) -> Result<Client, i32> {
+    match Client::from_env(net) {
+        Ok(c) => Ok(c),
+        Err(e) => {
+            eprintln!("error: {e}");
+            Err(3)
+        }
+    }
+}
+
 /// `naatre repo create <name>` (admin). Idempotent POST: routed through
 /// the retry contract (the README quickstart's first write races the boot
 /// backfill for the single-writer slot).
-pub fn repo_create(name: &str) -> i32 {
-    let client = Client::from_env();
+pub fn repo_create(name: &str, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     let body = json!({ "name": name });
     match client.post_json_idempotent("/v1/repos", &body) {
         Ok((_, value)) => {
@@ -473,8 +636,11 @@ pub fn repo_create(name: &str) -> i32 {
 }
 
 /// `naatre repo stats <name>` (admin).
-pub fn repo_stats(name: &str) -> i32 {
-    let client = Client::from_env();
+pub fn repo_stats(name: &str, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     match client.get_json(&format!("/v1/repos/{}/stats", uri_segment(name)), &[]) {
         Ok(value) => {
             println!("changesets: {}", value["changesets"]);
@@ -489,8 +655,11 @@ pub fn repo_stats(name: &str) -> i32 {
 
 /// `naatre token list` (HTTP, admin). Expiry renders as ISO-8601 UTC (or
 /// "never"), not raw epoch ns.
-pub fn token_list() -> i32 {
-    let client = Client::from_env();
+pub fn token_list(net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     match client.get_json("/v1/tokens", &[]) {
         Ok(value) => {
             println!("{:<6} {:<16} {:<8} expires", "id", "principal", "role");
@@ -523,8 +692,12 @@ pub fn token_create(
     role: &str,
     ttl_days: Option<u64>,
     scope: Option<&str>,
+    net: &Net,
 ) -> i32 {
-    let client = Client::from_env();
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     let mut body = json!({ "principal": principal, "role": role });
     if let Some(days) = ttl_days {
         body["ttl_days"] = json!(days);
@@ -546,8 +719,11 @@ pub fn token_create(
 
 /// `naatre token revoke <id>` (admin; idempotent) — through the
 /// idempotent-DELETE retry contract.
-pub fn token_revoke(id: u64) -> i32 {
-    let client = Client::from_env();
+pub fn token_revoke(id: u64, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     match client.delete_json_idempotent(&format!("/v1/tokens/{id}")) {
         Ok(_) => {
             println!("revoked {id}");
@@ -562,8 +738,11 @@ pub fn token_revoke(id: u64) -> i32 {
 /// `deleted:<name>`; history attribution survives unless the changesets
 /// are themselves tombstoned. Through the idempotent-DELETE retry
 /// contract.
-pub fn principal_delete(name: &str) -> i32 {
-    let client = Client::from_env();
+pub fn principal_delete(name: &str, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     let path = format!("/v1/principals/{}", uri_segment(name));
     match client.delete_json_idempotent(&path) {
         Ok(value) => {
@@ -581,8 +760,11 @@ pub fn principal_delete(name: &str) -> i32 {
 /// `naatre repo access grant <repo> <principal> --read|--write` (admin,
 /// M13b). `--write` implies read server-side (the invariant is enforced
 /// at the route: a write-only grant is a 422). Idempotent PUT.
-pub fn repo_access_grant(repo: &str, principal: &str, read: bool, write: bool) -> i32 {
-    let client = Client::from_env();
+pub fn repo_access_grant(repo: &str, principal: &str, read: bool, write: bool, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     let body = json!({ "principal": principal, "read": read, "write": write });
     match client.put_json_idempotent(&format!("/v1/repos/{}/access", uri_segment(repo)), &body) {
         Ok((_, value)) => {
@@ -601,8 +783,11 @@ pub fn repo_access_grant(repo: &str, principal: &str, read: bool, write: bool) -
 /// `--read` or no flag removes the grant entirely (DELETE — write cannot
 /// stand without read). Removing the repo's LAST grant returns it to
 /// public (the documented flip). Idempotent either way.
-pub fn repo_access_revoke(repo: &str, principal: &str, read: bool, write: bool) -> i32 {
-    let client = Client::from_env();
+pub fn repo_access_revoke(repo: &str, principal: &str, read: bool, write: bool, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     // A bare `--write` downgrades to read-only (a PUT with write = false);
     // `--read` (with or without --write) or NO flag removes the grant
     // entirely (write cannot stand without read).
@@ -636,8 +821,11 @@ pub fn repo_access_revoke(repo: &str, principal: &str, read: bool, write: bool) 
 }
 
 /// `naatre repo access list <repo>` (admin).
-pub fn repo_access_list(repo: &str) -> i32 {
-    let client = Client::from_env();
+pub fn repo_access_list(repo: &str, net: &Net) -> i32 {
+    let client = match admin_client(net) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     match client.get_json(&format!("/v1/repos/{}/access", uri_segment(repo)), &[]) {
         Ok(value) => {
             let rows = value["access"].as_array().map_or(&[][..], Vec::as_slice);
@@ -657,5 +845,67 @@ pub fn repo_access_list(repo: &str) -> i32 {
             0
         }
         Err(e) => report(&e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ca_file_errors_name_the_path_and_say_pem_bundle() {
+        // A missing file is a hard error naming the path.
+        let err =
+            root_certs_with_ca("/nonexistent/naatre-ca.pem").expect_err("missing file refused");
+        assert!(err.contains("/nonexistent/naatre-ca.pem"), "{err:?}");
+        // A file with no certificates in it is refused as a PEM-bundle
+        // problem, also naming the path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ca.pem");
+        std::fs::write(&path, "not a pem at all").expect("write");
+        let err = root_certs_with_ca(path.to_str().unwrap()).expect_err("garbage refused");
+        assert!(err.contains("must be a PEM CA bundle"), "{err:?}");
+        assert!(err.contains("ca.pem"), "{err:?}");
+    }
+
+    #[test]
+    fn client_construction_keeps_the_two_argument_form_infallible() {
+        let client = Client::new("http://127.0.0.1:7400/", Some("t".into()));
+        assert_eq!(client.base, "http://127.0.0.1:7400");
+        assert_eq!(client.insecure_origin, None);
+        assert_eq!(client.ca_file, None);
+        // The ca_file=None form is the same client (and cannot fail).
+        let client = Client::new_with_ca("https://naatre.example.com", None, None)
+            .expect("no-ca build is infallible");
+        assert_eq!(client.base, "https://naatre.example.com");
+    }
+
+    #[test]
+    fn from_env_admin_refusal_is_the_plain_http_usage_class() {
+        // The default and any loopback NAATRE_URL need no opt-in.
+        assert!(Client::from_env(&Net::default()).is_ok());
+        let loopback = Net {
+            server: Some("http://127.0.0.1:7499".into()),
+            ..Net::default()
+        };
+        assert!(Client::from_env(&loopback).is_ok());
+        // A non-loopback plain-http admin target without the opt-in is a
+        // usage refusal naming the opt-ins (exit 3 at the verb).
+        let lan = Net {
+            server: Some("http://naatre.lan:7400".into()),
+            ..Net::default()
+        };
+        let Err(err) = Client::from_env(&lan) else {
+            panic!("a non-loopback plain-http admin target must refuse");
+        };
+        assert!(err.contains("--insecure-http"), "{err:?}");
+        assert!(err.contains("NAATRE_INSECURE_HTTP"), "{err:?}");
+        // The invocation-level opt-in admits it (the admin-verb path).
+        let opted = Net {
+            insecure_http: true,
+            ..lan
+        };
+        let client = Client::from_env(&opted).expect("opted in");
+        assert_eq!(client.base, "http://naatre.lan:7400");
     }
 }

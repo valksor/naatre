@@ -47,6 +47,7 @@ pub mod fs_util;
 pub mod layout;
 pub mod meta;
 pub mod migrate;
+pub mod pg_tls;
 pub mod s3;
 pub mod store;
 

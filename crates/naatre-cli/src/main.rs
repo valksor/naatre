@@ -93,16 +93,22 @@ enum Cmd {
         new_admin: bool,
         #[command(subcommand)]
         cmd: Option<TokenCmd>,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// Repo verbs (HTTP client, admin).
     Repo {
         #[command(subcommand)]
         cmd: RepoCmd,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// Principal verbs (HTTP client, admin).
     Principal {
         #[command(subcommand)]
         cmd: PrincipalCmd,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// Import a LOCAL git repository into a naatre repo (one-way, offline,
     /// under the data dir flock; refuses URLs).
@@ -149,9 +155,16 @@ enum Cmd {
         #[arg(long)]
         token: String,
     },
+    /// Working-copy config keys (F1 TLS posture: insecure_http, ca_file).
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+
     /// Clone a repo into a new working copy.
     Clone {
-        /// http://host[:port]/<repo> or just <repo> (uses NAATRE_URL).
+        /// https://host[:port]/<repo> (or http:// to a loopback host, or
+        /// just <repo> to use NAATRE_URL).
         url: String,
         /// Materialize only the given path prefixes (repeatable).
         #[arg(long)]
@@ -428,7 +441,8 @@ enum Cmd {
     /// reads only (refs/logs/writes are never proxied). Fail-closed: no
     /// verify keys, no serve. Ctrl-C/SIGTERM drains gracefully.
     Cache {
-        /// The origin's base URL, e.g. http://origin-host:7400.
+        /// The origin's base URL — https://host[:port] (plain http:// is
+        /// accepted for loopback origins only).
         #[arg(long)]
         origin: String,
         /// The origin's PUBLIC verify-key list (the origin data dir's
@@ -447,6 +461,8 @@ enum Cmd {
         /// Ops log level (access logs are debug-level: off by default).
         #[arg(long, default_value = "info")]
         log_level: String,
+        #[command(flatten)]
+        net: NetOpts,
     },
     /// The origin's cache-ticket signing keys (host-local, M13b): init
     /// once, rotate to retire (retired keys verify unexpired tickets
@@ -585,6 +601,24 @@ enum PrincipalCmd {
     },
 }
 
+/// `naatre config set <key> <value>` — the working-copy TLS-posture keys
+/// (F1). Strict: only `insecure_http` and `ca_file` exist.
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Set one working-copy config key (`naatre config set insecure_http
+    /// "http://host:7400"` opts this working copy's origin in to plain
+    /// http; `none` clears).
+    Set {
+        /// Key: insecure_http (the opted-in origin "http://host[:port]",
+        /// or none to clear) or ca_file (a PEM bundle path, or none to
+        /// clear it).
+        key: String,
+        /// Value: the http origin for insecure_http; a path or `none`
+        /// for ca_file.
+        value: String,
+    },
+}
+
 #[derive(Subcommand)]
 enum SparseCmd {
     /// Fetch and materialize a path prefix at head.
@@ -609,7 +643,11 @@ enum SparseCmd {
     List,
 }
 
-/// `--server`/`--token` overrides (precedence: flags > env > config.toml).
+/// `--server`/`--token`/`--ca-file`/`--insecure-http` overrides
+/// (precedence: flags > env > config.toml). Every server-talking verb
+/// flattens this, so `--ca-file` and `--insecure-http` are GLOBAL options
+/// — admin verbs included (their working-copy-less opt-in for plain http
+/// is exactly `--insecure-http` / `NAATRE_INSECURE_HTTP=1`).
 #[derive(Args)]
 struct NetOpts {
     /// Server origin override.
@@ -618,6 +656,15 @@ struct NetOpts {
     /// Bearer token override.
     #[arg(long)]
     token: Option<String>,
+    /// PEM CA bundle added to the platform roots (private CAs); beats
+    /// NAATRE_CA_FILE and the working-copy config's ca_file.
+    #[arg(long)]
+    ca_file: Option<String>,
+    /// Opt in to plain http:// for this invocation (any host — admin
+    /// verbs have no working copy to carry a per-remote opt-in; env:
+    /// NAATRE_INSECURE_HTTP=1). https:// is always preferred.
+    #[arg(long)]
+    insecure_http: bool,
 }
 
 impl NetOpts {
@@ -625,6 +672,8 @@ impl NetOpts {
         Net {
             server: self.server.clone(),
             token: self.token.clone(),
+            ca_file: self.ca_file.clone(),
+            insecure_http: naatre_cli::verbs::invocation_optin(self.insecure_http),
         }
     }
 }
@@ -651,6 +700,7 @@ fn main() {
             data,
             new_admin,
             cmd,
+            net,
         } => match (new_admin, data, cmd) {
             (true, Some(data), None) => host::new_admin_token(&data),
             (true, None, _) => usage("token --new-admin requires --data <dir>"),
@@ -658,7 +708,7 @@ fn main() {
             (false, _, None) => {
                 usage("token requires --data <dir> --new-admin (host-local) or a subcommand (HTTP)")
             }
-            (false, _, Some(TokenCmd::List)) => client::token_list(),
+            (false, _, Some(TokenCmd::List)) => client::token_list(&net.net()),
             (
                 false,
                 _,
@@ -668,12 +718,12 @@ fn main() {
                     ttl_days,
                     scope,
                 }),
-            ) => client::token_create(&principal, &role, ttl_days, scope.as_deref()),
-            (false, _, Some(TokenCmd::Revoke { id })) => client::token_revoke(id),
+            ) => client::token_create(&principal, &role, ttl_days, scope.as_deref(), &net.net()),
+            (false, _, Some(TokenCmd::Revoke { id })) => client::token_revoke(id, &net.net()),
         },
-        Cmd::Repo { cmd } => match cmd {
-            RepoCmd::Create { name } => client::repo_create(&name),
-            RepoCmd::Stats { name } => client::repo_stats(&name),
+        Cmd::Repo { cmd, net } => match cmd {
+            RepoCmd::Create { name } => client::repo_create(&name, &net.net()),
+            RepoCmd::Stats { name } => client::repo_stats(&name, &net.net()),
             RepoCmd::Access { cmd } => match cmd {
                 AccessCmd::Grant {
                     repo,
@@ -684,7 +734,13 @@ fn main() {
                     if !read && !write {
                         usage("repo access grant takes --read and/or --write")
                     } else {
-                        client::repo_access_grant(&repo, &principal, read || write, write)
+                        client::repo_access_grant(
+                            &repo,
+                            &principal,
+                            read || write,
+                            write,
+                            &net.net(),
+                        )
                     }
                 }
                 AccessCmd::Revoke {
@@ -697,9 +753,9 @@ fn main() {
                     // read-only; `--read` or NO FLAG removes the grant
                     // entirely (write cannot stand without read — the
                     // full-removal DELETE path).
-                    client::repo_access_revoke(&repo, &principal, read, write)
+                    client::repo_access_revoke(&repo, &principal, read, write, &net.net())
                 }
-                AccessCmd::List { repo } => client::repo_access_list(&repo),
+                AccessCmd::List { repo } => client::repo_access_list(&repo, &net.net()),
             },
         },
         Cmd::Import {
@@ -718,6 +774,11 @@ fn main() {
         Cmd::MigrateDbPerRepo { data } => host::migrate_db_per_repo(&data),
         Cmd::Backup { data, dest } => host::backup(&data, &dest),
         Cmd::Login { server, token } => wc_locked(cwd, || verbs::login::run(cwd, &server, &token)),
+        Cmd::Config { cmd } => match cmd {
+            ConfigCmd::Set { key, value } => {
+                wc_locked(cwd, || verbs::config_set(cwd, &key, &value))
+            }
+        },
         Cmd::Clone {
             url,
             sparse,
@@ -729,63 +790,66 @@ fn main() {
                 prefix,
                 force,
                 net: n,
-            } => wc_locked(cwd, || {
-                verbs::sparse::run(cwd, verbs::sparse::Action::Add { prefix, force }, &n.net())
+            } => wc_checked(cwd, &n, |net| {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Add { prefix, force }, &net)
             }),
-            SparseCmd::Remove { prefix, net: n } => wc_locked(cwd, || {
-                verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &n.net())
+            SparseCmd::Remove { prefix, net: n } => wc_checked(cwd, &n, |net| {
+                verbs::sparse::run(cwd, verbs::sparse::Action::Remove(prefix), &net)
             }),
+            // List is local-only (no server calls): no pre-flight.
             SparseCmd::List => wc_locked(cwd, || {
                 verbs::sparse::run(cwd, verbs::sparse::Action::List, &net.net())
             }),
         },
         Cmd::Status { json } => wc_locked(cwd, || verbs::status::run(cwd, json)),
-        Cmd::Sync { force, net } => wc_locked(cwd, || verbs::sync::run(cwd, force, &net.net())),
+        Cmd::Sync { force, net } => wc_checked(cwd, &net, |net| verbs::sync::run(cwd, force, &net)),
         Cmd::Commit {
             message,
             author,
             net,
-        } => wc_locked(cwd, || {
-            verbs::commit::run(cwd, &message, author.as_deref(), &net.net())
+        } => wc_checked(cwd, &net, |net| {
+            verbs::commit::run(cwd, &message, author.as_deref(), &net)
         }),
         Cmd::Land {
             key,
             record_conflict,
             net,
-        } => wc_locked(cwd, || {
-            verbs::land::run(cwd, key.as_deref(), record_conflict, &net.net())
+        } => wc_checked(cwd, &net, |net| {
+            verbs::land::run(cwd, key.as_deref(), record_conflict, &net)
         }),
         Cmd::Resolve { path, net } => {
-            wc_locked(cwd, || verbs::resolve::run(cwd, &path, &net.net()))
+            wc_checked(cwd, &net, |net| verbs::resolve::run(cwd, &path, &net))
         }
-        Cmd::Cat { path, at, net } => wc_locked(cwd, || {
-            verbs::reads::cat(cwd, &path, at.as_deref(), &net.net())
+        Cmd::Cat { path, at, net } => wc_checked(cwd, &net, |net| {
+            verbs::reads::cat(cwd, &path, at.as_deref(), &net)
         }),
         Cmd::Blame {
             path,
             at,
             json,
             net,
-        } => wc_locked(cwd, || {
-            verbs::reads::blame(cwd, &path, at.as_deref(), json, &net.net())
+        } => wc_checked(cwd, &net, |net| {
+            verbs::reads::blame(cwd, &path, at.as_deref(), json, &net)
         }),
         Cmd::Ls {
             path,
             at,
             json,
             net,
-        } => wc_locked(cwd, || {
-            verbs::reads::ls(cwd, path.as_deref(), at.as_deref(), json, &net.net())
+        } => wc_checked(cwd, &net, |net| {
+            verbs::reads::ls(cwd, path.as_deref(), at.as_deref(), json, &net)
         }),
         Cmd::Diff { at, json, net } => {
             let at_pair = at.as_deref().and_then(|v| match v {
                 [a, b] => Some((a.as_str(), b.as_str())),
                 _ => None,
             });
-            wc_locked(cwd, || verbs::reads::diff(cwd, at_pair, json, &net.net()))
+            wc_checked(cwd, &net, |net| {
+                verbs::reads::diff(cwd, at_pair, json, &net)
+            })
         }
         Cmd::Doctor { rebuild, net } => {
-            wc_locked(cwd, || verbs::doctor::run(cwd, rebuild, &net.net()))
+            wc_checked(cwd, &net, |net| verbs::doctor::run(cwd, rebuild, &net))
         }
         Cmd::Gc { data, json } => host::gc(&data, json),
         Cmd::Fsck { data, json, repair } => host::fsck(&data, json, repair),
@@ -796,11 +860,11 @@ fn main() {
             repo,
             data,
         } => host::redact(&data, &repo, &kind, &id, &reason),
-        Cmd::Principal { cmd } => match cmd {
-            PrincipalCmd::Delete { name } => client::principal_delete(&name),
+        Cmd::Principal { cmd, net } => match cmd {
+            PrincipalCmd::Delete { name } => client::principal_delete(&name, &net.net()),
         },
-        Cmd::Snapshot { ttl, net } => wc_locked(cwd, || {
-            verbs::snapshot::run(cwd, ttl.as_deref(), &net.net())
+        Cmd::Snapshot { ttl, net } => wc_checked(cwd, &net, |net| {
+            verbs::snapshot::run(cwd, ttl.as_deref(), &net)
         }),
         Cmd::Restore {
             snap_id,
@@ -815,8 +879,8 @@ fn main() {
                 force,
                 allow_missing.as_deref(),
             ),
-            None => wc_locked(cwd, || {
-                verbs::restore::run(cwd, &snap_id, force, &net.net())
+            None => wc_checked(cwd, &net, |net| {
+                verbs::restore::run(cwd, &snap_id, force, &net)
             }),
         },
         Cmd::Mcp { token, read_only } => verbs::mcp::run(cwd, read_only, token),
@@ -826,7 +890,15 @@ fn main() {
             listen,
             data,
             log_level,
-        } => host::cache_run(&origin, &key, &listen, &data, &log_level),
+            net,
+        } => host::cache_run(
+            &origin,
+            &key,
+            &listen,
+            &data,
+            &log_level,
+            net.net().insecure_http,
+        ),
         Cmd::CacheKey { cmd } => match cmd {
             CacheKeyCmd::Init { data } => host::cache_key_init(&data),
             CacheKeyCmd::Rotate { data } => host::cache_key_rotate(&data),
@@ -847,32 +919,31 @@ fn main() {
             // exactly one of the two `let code` bindings exists per platform.
             #[cfg(target_os = "linux")]
             let code = match fuse.as_deref() {
-                Some(mountpoint) => verbs::fuse::run(
-                    &repo,
-                    at.as_deref(),
-                    writable,
-                    flush_land,
-                    mountpoint,
-                    &net.net(),
-                ),
-                None => verbs::mount::run(
+                Some(mountpoint) => wc_checked(cwd, &net, |net| {
+                    verbs::fuse::run(&repo, at.as_deref(), writable, flush_land, mountpoint, &net)
+                }),
+                None => wc_checked(cwd, &net, |net| {
+                    verbs::mount::run(
+                        &repo,
+                        at.as_deref(),
+                        writable,
+                        flush_land,
+                        listen.as_deref(),
+                        &net,
+                    )
+                }),
+            };
+            #[cfg(not(target_os = "linux"))]
+            let code = wc_checked(cwd, &net, |net| {
+                verbs::mount::run(
                     &repo,
                     at.as_deref(),
                     writable,
                     flush_land,
                     listen.as_deref(),
-                    &net.net(),
-                ),
-            };
-            #[cfg(not(target_os = "linux"))]
-            let code = verbs::mount::run(
-                &repo,
-                at.as_deref(),
-                writable,
-                flush_land,
-                listen.as_deref(),
-                &net.net(),
-            );
+                    &net,
+                )
+            });
             code
         }
     };
@@ -894,6 +965,22 @@ fn wc_locked(root: &std::path::Path, f: impl FnOnce() -> i32) -> i32 {
             1
         }
     }
+}
+
+/// The server-talking working-copy verbs' dispatch, with the plain-http
+/// PRE-FLIGHT (pinned exit code): the refusal must be the usage class
+/// (exit 3) on every path, but the verb cores report their client-build
+/// errors generically (exit 1) — so the SAME admission
+/// (`wc::check_remote_policy`) runs here first, printing the refusal and
+/// exiting 3 before the verb opens anything. Otherwise identical to
+/// [`wc_locked`].
+fn wc_checked(root: &std::path::Path, opts: &NetOpts, f: impl FnOnce(Net) -> i32) -> i32 {
+    let net = opts.net();
+    if let Err(message) = naatre_cli::wc::check_remote_policy(root, &net) {
+        eprintln!("error: {message}");
+        return 3;
+    }
+    wc_locked(root, || f(net))
 }
 
 fn usage(message: &str) -> i32 {

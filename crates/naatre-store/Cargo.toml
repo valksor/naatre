@@ -4,6 +4,7 @@ description = "naatre store: SQLite metadata, content-addressed blob CAS, epheme
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 naatre-core = { path = "../naatre-core" }
@@ -12,8 +13,6 @@ zstd = "0.14"
 thiserror = "2"
 fs2 = "0.4"
 postgres = "0.19"
-postgres-native-tls = "0.5"
-native-tls = "0.2"
 toml = "0.9"
 # S3-compatible CAS backend (M9b): the `aws` feature only — no azure/gcp/http
 # stores, no local-filesystem store (naatre keeps its own fs CAS). rustls
@@ -25,6 +24,21 @@ tokio = { version = "1", default-features = false, features = ["rt", "net", "tim
 # Stream driving for object_store listings (already in the tree via
 # object_store).
 futures = "0.3"
+# Postgres TLS (F1): rustls + ring only — native-tls/OpenSSL left the
+# graph entirely (deny.toml [bans] keeps it out). tokio-postgres-rustls's
+# MakeRustlsConnect implements MakeTlsConnect<Socket>, which the sync
+# postgres::Config::connect accepts; the per-sslmode verifiers live in
+# pg_tls.rs.
+tokio-postgres-rustls = "0.13.0"
+# ring EXPLICITLY: aws-lc-rs (object_store's S3 crypto) is in the graph
+# too, so a process-default provider would be ambiguous — pg_tls.rs
+# never relies on one.
+rustls = { version = "0.23", features = ["ring"] }
+# Platform roots (the system trust store) for verify-ca/verify-full.
+rustls-native-certs = "0.8"
+# sslrootcert PEM parsing; PEM support ships with `std` on 1.x (there is
+# no separate `pem` feature).
+rustls-pki-types = { version = "1", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -35,3 +49,7 @@ sha2 = "0.10"
 # One CreateBucket + health poll per test server; object_store already
 # brings reqwest+rustls into the tree, this only names it for the harness.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "blocking"] }
+# F1 TLS pins: the test CA + server certs the pg_tls verifiers are
+# called with are generated here (tests/pg_tls_test.rs — no network, no
+# live Postgres).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

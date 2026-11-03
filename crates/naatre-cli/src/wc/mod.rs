@@ -1,8 +1,9 @@
 //! The client working copy: the `.naatre/` directory inside a checkout.
 //!
 //! Layout (plan "Client working copy"):
-//! - `config.toml` — `server_url` + optional `token`, written 0600 by
-//!   `clone` and `login`. Precedence for server settings:
+//! - `config.toml` — `server_url` + optional `token`, plus the F1
+//!   TLS-posture keys (`insecure_http`, `ca_file`), written 0600 by
+//!   `clone`, `login`, and `config set`. Precedence for server settings:
 //!   `--server`/`--token` flags > `NAATRE_URL`/`NAATRE_TOKEN` > this file.
 //! - `state.json` — head changeset, base (null until land, M4), the sparse
 //!   prefix list (empty = full checkout), and the server repo name.
@@ -33,19 +34,32 @@ pub const CONFIG_FILE: &str = "config.toml";
 pub const STATE_FILE: &str = "state.json";
 pub const INDEX_FILE: &str = "index.nai";
 
+/// The resolved remote settings: (server, token, per-remote insecure_http
+/// origin, ca_file) — [`Wc::resolve_server`]'s shape.
+pub type ResolvedRemote = (String, Option<String>, Option<String>, Option<String>);
+
 /// Reserved first components: never scanned, never committed.
 pub const RESERVED: &[&str] = &[".naatre", ".git"];
 
 /// Unique temp-name counter (per process) for atomic writes.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// `.naatre/config.toml`. Two known keys, both optional on disk except
-/// `server_url` once a clone wrote the file. Parsing is strict: any other
-/// key or malformed line is an error (never merged into defaults).
+/// `.naatre/config.toml`. Four known keys: `server_url` (required once a
+/// clone wrote the file), optional `token`, and the F1 TLS-posture keys —
+/// `insecure_http` (the PER-REMOTE plain-http opt-in: the opted-in ORIGIN
+/// `http://host[:port]`, absent = nothing opted in; a non-loopback plain
+/// http URL is admitted only when the resolved server's origin equals it)
+/// and `ca_file` (an absolute PEM CA bundle path added to the platform
+/// roots). Parsing is strict: any other key or malformed line is an error
+/// (never merged into defaults).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     pub server_url: String,
     pub token: Option<String>,
+    /// The opted-in origin (written only when set). The old boolean form
+    /// never shipped and is refused by the strict parser.
+    pub insecure_http: Option<String>,
+    pub ca_file: Option<String>,
 }
 
 /// `.naatre/state.json`.
@@ -133,6 +147,14 @@ impl Wc {
         if let Some(token) = &config.token {
             body.push_str(&format!("token = \"{}\"\n", escape_toml(token)));
         }
+        // The TLS-posture keys are written only when set, so configs from
+        // before F1 (and opt-outs) stay byte-identical to the old shape.
+        if let Some(origin) = &config.insecure_http {
+            body.push_str(&format!("insecure_http = \"{}\"\n", escape_toml(origin)));
+        }
+        if let Some(ca_file) = &config.ca_file {
+            body.push_str(&format!("ca_file = \"{}\"\n", escape_toml(ca_file)));
+        }
         write_atomic(&self.config_path(), body.as_bytes(), true)
             .map_err(|e| format!("writing {}: {e}", self.config_path().display()))
     }
@@ -168,14 +190,17 @@ impl Wc {
             .map_err(|e| format!("writing {}: {e}", self.index_path().display()))
     }
 
-    /// Resolves the server settings for a verb, in the pinned precedence:
+    /// Resolves the remote settings for a verb, in the pinned precedence:
     /// `--server`/`--token` flags, then `NAATRE_URL`/`NAATRE_TOKEN` env,
-    /// then `config.toml`.
+    /// then `config.toml`. Returns (server, token, per-remote insecure_http
+    /// origin, ca_file) — the TLS-posture pair comes from the config only
+    /// (the flags ride [`crate::verbs::Net`], which take precedence over
+    /// both at the build site).
     pub fn resolve_server(
         &self,
         flag_server: Option<&str>,
         flag_token: Option<&str>,
-    ) -> Result<(String, Option<String>), String> {
+    ) -> Result<ResolvedRemote, String> {
         let config = self.load_config()?;
         let server = flag_server
             .map(str::to_string)
@@ -188,21 +213,128 @@ impl Wc {
             .map(str::to_string)
             .or_else(|| env_var("NAATRE_TOKEN"))
             .or(config.token);
-        Ok((server, token))
+        Ok((server, token, config.insecure_http, config.ca_file))
     }
 
-    /// A ready HTTP client for this working copy's server.
+    /// A ready HTTP client for this working copy's remote — THE
+    /// enforcement point for the F1 plain-http rule and the `ca_file`
+    /// precedence (`--ca-file` flag > `NAATRE_CA_FILE` env > this
+    /// config's value): every working-copy verb (and the mount client's
+    /// working-copy arm) builds its client here, so the check and the
+    /// bundle live in one place. The plain-http refusal is the usage
+    /// class; the CLI pre-flight ([`check_remote_policy`]) routes it to
+    /// exit 3 before the verb's own reporting (exit 1) can run.
     pub fn client(&self, net: &crate::verbs::Net) -> Result<Client, String> {
-        let (server, token) = self.resolve_server(net.server.as_deref(), net.token.as_deref())?;
-        Ok(Client::new(&server, token))
+        let (server, token, insecure_origin, config_ca_file) =
+            self.resolve_server(net.server.as_deref(), net.token.as_deref())?;
+        let parsed = crate::url::parse_remote(&server).map_err(|e| format!("{server:?}: {e}"))?;
+        admit_remote(&parsed, net.insecure_http, insecure_origin.as_deref())?;
+        let ca_file = net
+            .ca_file
+            .clone()
+            .or_else(|| env_var("NAATRE_CA_FILE"))
+            .or(config_ca_file);
+        let origin_key = match insecure_origin.as_deref() {
+            None => None,
+            // The stored origin was validated at save time; a malformed
+            // one on disk is still a refusal, never a silent admit.
+            Some(origin) => Some(crate::url::parse_remote(origin)?),
+        };
+        Ok(
+            Client::new_with_ca(&parsed.origin(), token, ca_file.as_deref())?
+                .with_insecure_origin(origin_key.as_ref().map(crate::url::ParsedRemote::key)),
+        )
     }
+}
+
+/// The per-remote admission behind the F1 plain-http rule: `https` is
+/// always allowed; plain `http` is allowed to LOOPBACK hosts only, and to
+/// a non-loopback host only when the INVOCATION opted in (`--insecure-http`
+/// / `NAATRE_INSECURE_HTTP=1` — any host, for that invocation) or the
+/// working copy's stored per-remote origin EQUALS this origin (compared
+/// through the one parser's origin key, and stored only for plain http).
+/// The refusal names every opt-in and the https alternative — it never
+/// silently proceeds (a cache-route refusal is a hard error for the
+/// invocation, exactly like the clone-time one).
+pub(crate) fn admit_remote(
+    parsed: &crate::url::ParsedRemote,
+    invocation_optin: bool,
+    stored: Option<&str>,
+) -> Result<(), String> {
+    if parsed.scheme == "https" || parsed.is_loopback() || invocation_optin {
+        return Ok(());
+    }
+    if let Some(origin) = stored
+        && let Ok(stored_parsed) = crate::url::parse_remote(origin)
+        && stored_parsed.scheme == "http"
+        && stored_parsed.key() == parsed.key()
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing plain http:// to the non-loopback host {}: use https://, or opt in for \
+         this invocation with --insecure-http (or NAATRE_INSECURE_HTTP=1), or for this \
+         origin in this working copy with `naatre config set insecure_http \"{}\"`",
+        parsed.host,
+        parsed.origin()
+    ))
+}
+
+/// The F1 plain-http rule over a URL STRING: parse ONCE with the one
+/// parser ([`crate::url::parse_remote`] — the parser that connects), then
+/// [`admit_remote`]. Every client path goes through this or the parsed
+/// form; a URL that fails the parse is refused, never guessed.
+pub(crate) fn ensure_scheme_allowed(
+    base: &str,
+    invocation_optin: bool,
+    stored: Option<&str>,
+) -> Result<(), String> {
+    let parsed = crate::url::parse_remote(base)?;
+    admit_remote(&parsed, invocation_optin, stored)
+}
+
+/// The CLI pre-flight (exit-3 routing): resolves the effective server
+/// exactly as the verb's own client build will and runs the SAME
+/// admission, so the plain-http refusal reaches the user as the usage
+/// class (exit 3) even though the verb's own [`Wc::client`] build reports
+/// through the generic error class. Any OTHER configuration problem (no
+/// working copy, malformed config, no server configured) is left to the
+/// verb's own reporting — this pre-flight refuses ONLY the plain-http
+/// policy.
+pub fn check_remote_policy(root: &Path, net: &crate::verbs::Net) -> Result<(), String> {
+    let (server, stored) = match Wc::open(root) {
+        Ok(wc) => match wc.load_config() {
+            Ok(config) => {
+                let server = net
+                    .server
+                    .clone()
+                    .or_else(|| env_var("NAATRE_URL"))
+                    .unwrap_or(config.server_url);
+                (server, config.insecure_http)
+            }
+            Err(_) => return Ok(()),
+        },
+        // Outside a working copy (`naatre mount` takes a repo name): the
+        // resolved flag/env/default base is what the client will build on.
+        Err(_) => (
+            net.server
+                .clone()
+                .or_else(|| env_var("NAATRE_URL"))
+                .unwrap_or_else(|| crate::client::DEFAULT_URL.to_string()),
+            None,
+        ),
+    };
+    if server.is_empty() {
+        return Ok(());
+    }
+    ensure_scheme_allowed(&server, net.insecure_http, stored.as_deref())
 }
 
 fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// Strict `key = "value"` parser for the two-key config; unknown keys and
+/// Strict `key = "value"` parser for the four-key config; unknown keys and
 /// malformed lines are errors (read-modify-write never merges into defaults).
 fn parse_config(bytes: &[u8]) -> Result<Config, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8".to_string())?;
@@ -225,6 +357,28 @@ fn parse_config(bytes: &[u8]) -> Result<Config, String> {
         match key {
             "server_url" => config.server_url = unescape(value),
             "token" => config.token = Some(unescape(value)),
+            "insecure_http" => {
+                // The PER-REMOTE form: the opted-in ORIGIN, plain http
+                // only, parsed by the one parser. The old boolean form
+                // never shipped in a release — refused like any other
+                // unknown value.
+                let parsed = crate::url::parse_remote(value).map_err(|e| {
+                    format!(
+                        "line {}: insecure_http must be the opted-in origin \
+                         \"http://host[:port]\" (got {value:?}: {e})",
+                        lineno + 1
+                    )
+                })?;
+                if parsed.scheme != "http" {
+                    return Err(format!(
+                        "line {}: insecure_http must be a plain-http origin \
+                         \"http://host[:port]\" (got {value:?})",
+                        lineno + 1
+                    ));
+                }
+                config.insecure_http = Some(parsed.origin());
+            }
+            "ca_file" => config.ca_file = Some(unescape(value)),
             other => return Err(format!("line {}: unknown key {other:?}", lineno + 1)),
         }
     }
@@ -443,4 +597,129 @@ impl Drop for StageDir {
 pub fn is_reserved(rel: &str) -> bool {
     let first = rel.split('/').next().unwrap_or("");
     RESERVED.contains(&first)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_round_trips_the_new_tls_keys() {
+        let config = Config {
+            server_url: "https://naatre.example.com:7443".into(),
+            token: Some("t".into()),
+            insecure_http: Some("http://naatre.lan:7400".into()),
+            ca_file: Some("/etc/pki/naatre-ca.pem".into()),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wc = Wc {
+            root: dir.path().to_path_buf(),
+        };
+        std::fs::create_dir_all(wc.naatre_dir()).expect("naatre dir");
+        wc.save_config(&config).expect("save");
+        // 0600 preserved.
+        let mode = std::fs::metadata(wc.config_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(wc.load_config().expect("load"), config);
+        // No opt-in and no bundle write nothing — the pre-F1 shape.
+        let old = Config {
+            server_url: "http://127.0.0.1:7400".into(),
+            ..Config::default()
+        };
+        wc.save_config(&old).expect("save");
+        let text = std::fs::read_to_string(wc.config_path()).expect("read");
+        assert_eq!(text, "server_url = \"http://127.0.0.1:7400\"\n");
+        assert_eq!(wc.load_config().expect("load"), old);
+    }
+
+    #[test]
+    fn config_parsing_is_strict() {
+        // Old configs without the new keys parse unchanged.
+        let old = b"server_url = \"http://127.0.0.1:7400\"\ntoken = \"t\"\n";
+        let parsed = parse_config(old).expect("old config");
+        assert_eq!(parsed.insecure_http, None);
+        assert_eq!(parsed.ca_file, None);
+        // The per-remote origin form parses (and canonicalizes).
+        let parsed =
+            parse_config(b"server_url = \"x\"\ninsecure_http = \"http://Naatre.lan:7400\"\n")
+                .expect("origin form");
+        assert_eq!(parsed.insecure_http, Some("http://naatre.lan:7400".into()));
+        // The never-shipped boolean form is refused, naming the shape.
+        for bad in ["true", "false", "yes"] {
+            let line = format!("server_url = \"x\"\ninsecure_http = \"{bad}\"\n");
+            let err = parse_config(line.as_bytes()).expect_err(bad);
+            assert!(err.contains("insecure_http"), "{err:?}");
+            assert!(err.contains("http://host[:port]"), "{err:?}");
+        }
+        // Unknown keys are errors.
+        let err = parse_config(b"server_url = \"x\"\nproxy = \"y\"\n").expect_err("unknown key");
+        assert!(err.contains("unknown key"), "{err:?}");
+        // An https origin is not a plain-http opt-in.
+        let err =
+            parse_config(b"server_url = \"x\"\ninsecure_http = \"https://host.example.com\"\n")
+                .expect_err("https origin");
+        assert!(err.contains("plain-http"), "{err:?}");
+    }
+
+    #[test]
+    fn scheme_rule_four_outcomes() {
+        // https: always Ok.
+        assert_eq!(
+            ensure_scheme_allowed("https://host.example.com", false, None),
+            Ok(())
+        );
+        // http loopback: Ok regardless of any opt-in.
+        assert_eq!(
+            ensure_scheme_allowed("http://127.0.0.1:7400", false, None),
+            Ok(())
+        );
+        assert_eq!(
+            ensure_scheme_allowed("http://localhost:7400", false, None),
+            Ok(())
+        );
+        // http non-loopback without any opt-in: refused, naming every
+        // opt-in and the https alternative.
+        let err =
+            ensure_scheme_allowed("http://naatre.lan:7400", false, None).expect_err("refused");
+        assert!(err.contains("--insecure-http"), "{err:?}");
+        assert!(err.contains("NAATRE_INSECURE_HTTP"), "{err:?}");
+        assert!(err.contains("naatre config set insecure_http"), "{err:?}");
+        assert!(err.contains("https://"), "{err:?}");
+        // The invocation-level opt-in admits any host.
+        assert_eq!(
+            ensure_scheme_allowed("http://naatre.lan:7400", true, None),
+            Ok(())
+        );
+        // The per-remote stored origin admits EXACTLY its own origin: the
+        // resolved server on that origin passes; an override to another
+        // host (or scheme, or port) does not inherit it.
+        let stored = Some("http://naatre.lan:7400");
+        assert_eq!(
+            ensure_scheme_allowed("http://naatre.lan:7400", false, stored),
+            Ok(())
+        );
+        assert_eq!(
+            ensure_scheme_allowed("http://naatre.lan:7400/", false, stored),
+            Ok(())
+        );
+        assert!(
+            ensure_scheme_allowed("http://other.lan:7400", false, stored).is_err(),
+            "a --server override to another host does not inherit the opt-in"
+        );
+        assert!(
+            ensure_scheme_allowed("http://naatre.lan:7500", false, stored).is_err(),
+            "a different port is a different origin"
+        );
+        assert!(
+            ensure_scheme_allowed("https://naatre.lan:7400", false, stored).is_ok(),
+            "https never needed the opt-in anyway"
+        );
+        // A stored origin that fails the one parser admits nothing.
+        assert!(
+            ensure_scheme_allowed("http://naatre.lan:7400", false, Some("naatre.lan")).is_err()
+        );
+    }
 }

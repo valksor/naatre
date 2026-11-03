@@ -1251,9 +1251,10 @@ pub fn cache_key_show(data: &Path) -> i32 {
 }
 
 /// `naatre cache --origin <url> --key <path|env:NAME> [--listen ADDR]
-/// --data <dir>`: the LAN read tier (M13b). Fail-closed: the verify keys
-/// load BEFORE the listener binds — zero keys (or a malformed entry) is
-/// exit 1 with the reason, never a serving cache.
+/// --data <dir>`: the LAN read tier (M13b). Fail-closed: the origin's
+/// scheme rule (F1) and the verify keys hold BEFORE the listener binds —
+/// zero keys (or a malformed entry) is exit 1 with the reason, never a
+/// serving cache.
 #[tokio::main]
 pub async fn cache_run(
     origin: &str,
@@ -1261,7 +1262,34 @@ pub async fn cache_run(
     listen: &str,
     data: &Path,
     log_level: &str,
+    insecure_http: bool,
 ) -> i32 {
+    // The F1 origin rule, over the ONE parse (crate::url::parse_remote):
+    // userinfo, query/fragment, backslash, percent-encoded host/port, and
+    // an unparseable port are usage refusals before anything binds. The
+    // tier's origin client speaks https (rustls, platform roots — no
+    // ca_file flag on the tier) and plain http to a LOOPBACK origin only;
+    // a non-loopback http origin is the explicit --insecure-http opt-in.
+    let origin_url = origin.trim().trim_end_matches('/').to_string();
+    let parsed = match crate::url::parse_remote(&origin_url) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "error: --origin {origin_url:?} must be an https:// or http:// URL (the \
+                 origin client speaks https, and plain http to loopback): {e}"
+            );
+            return 3;
+        }
+    };
+    if parsed.scheme == "http" && !parsed.is_loopback() && !insecure_http {
+        eprintln!(
+            "error: refusing plain http:// to the non-loopback origin {}: use https://, \
+             or opt in with --insecure-http",
+            parsed.origin()
+        );
+        return 3;
+    }
+    let origin = parsed.origin();
     // `--key <path>` or `--key env:NAME` (the brief's path-or-env shape;
     // the env form carries no file-permission semantics to check). The
     // PATH arm loads through the same 0600-at-load guard the origin's
@@ -1291,7 +1319,7 @@ pub async fn cache_run(
             "warning: {addr} is non-loopback: cache tickets cross the network in cleartext unless fronted by TLS"
         );
     }
-    let state = match naatre_server::cache_tier::CacheState::new(keys, origin, data) {
+    let state = match naatre_server::cache_tier::CacheState::new(keys, &origin, data) {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
