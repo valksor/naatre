@@ -283,17 +283,19 @@ async fn bare_land(bare: &Router, head: &str, key: &str) -> Resp {
 /// timeout 5 s) — the only place a leader can block, since `state.write`'s
 /// `try_lock` 503s instead of queueing. `hold_write_txn` cannot play this
 /// role: it holds the STORE mutex, which would 503 the leader outright.
-/// Dropping the connection rolls the lock back.
-/// Holds the SQLite write lock on the fixture (BEGIN IMMEDIATE on a
-/// separate connection). The hold SELF-RELEASES after 300 ms on a
-/// dedicated thread: the detached land closure's BEGIN parks in its
-/// 5 s busy wait and must find the lock GONE well inside that window
-/// regardless of test-thread scheduling — a hold that stands longer
-/// than the busy timeout would error the detached BEGIN (a legitimate
-/// product behavior: 503 writer_busy) and the "settles anyway" premise
-/// would flake under load. 300 ms blocks the first BEGIN attempt
-/// deterministically and clears far inside the window; the callers'
-/// explicit ROLLBACKs become no-ops (rolling back no transaction).
+///
+/// The hold stands until the CALLER releases it (`rollback()` — the d/e/f
+/// tests roll back once their cancel has landed, so the detached closure
+/// is provably blocked-in-BEGIN when they abort). A releaser thread
+/// self-releases after 2.5 s as a pure SAFETY FALLBACK: above any test flow
+/// (the tests cancel within milliseconds of the signal), below SQLite's
+/// 5 s busy timeout — so a test that fails BEFORE its rollback still lets
+/// the detached BEGIN (parked in its busy wait) find the lock gone and
+/// finish before the fixture's temp dir drops. (The original 300 ms
+/// self-release was itself the bug: it raced the leader's closure spawn —
+/// a closure starting after the release committed instead of blocking,
+/// and the "blocked / not yet committed" premise broke. See the d/e/f
+/// block.) Dropping the connection rolls the lock back.
 fn hold_sqlite_write(f: &Fixture) -> HoldGuard {
     let conn = conn_at(&f.t.db_path);
     conn.execute_batch("BEGIN IMMEDIATE")
@@ -305,7 +307,7 @@ fn hold_sqlite_write(f: &Fixture) -> HoldGuard {
     let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
     let releaser = std::sync::Arc::clone(&shared);
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(2500));
         if let Ok(c) = releaser.lock() {
             let _ = c.execute_batch("ROLLBACK");
         }
@@ -320,8 +322,10 @@ struct HoldGuard {
 }
 
 impl HoldGuard {
-    /// The caller's explicit early release (a no-op once the 300 ms
-    /// releaser has run — rolling back no transaction is fine).
+    /// The caller's release — the REAL one under the d/e/f contract (the
+    /// 2.5 s releaser is only the failure fallback, so during a passing run
+    /// this fires first). A no-op once the fallback has run (rolling back
+    /// no transaction is fine).
     fn rollback(&self) {
         if let Ok(c) = self.shared.lock() {
             let _ = c.execute_batch("ROLLBACK");
@@ -372,6 +376,28 @@ async fn wait_key_done(f: &Fixture, key: &str) {
         assert!(Instant::now() < deadline, "detached leader never settled");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// Arms [`ServerState::land_test_write_started`] and returns the receiver:
+/// a land's write closure fires it on the blocking pool right before its
+/// `BEGIN IMMEDIATE` (see the d/e/f comment block — the only deterministic
+/// "the detached-capable closure exists" edge a test can wait on, since
+/// nothing observable happens before the transaction opens). One message
+/// per armed land write; only (d) and (f) arm it, and each disarms right
+/// after its cancel — (e) never arms the hook (nothing is detached there).
+fn arm_write_started(f: &Fixture) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *f.t.state.land_test_write_started.lock().unwrap() = Some(tx);
+    rx
+}
+
+/// Bounded wait for the armed write-closure signal: aborting only after it
+/// guarantees the cancelled leader leaves its detached closure behind.
+async fn wait_write_started(mut rx: tokio::sync::mpsc::UnboundedReceiver<()>) {
+    tokio::time::timeout(DEADLINE, rx.recv())
+        .await
+        .expect("the leader's write closure started inside the deadline")
+        .expect("the armed sender lives until disarm");
 }
 
 // ---- c. the joiner-with-the-settled-head fallback ------------------------------
@@ -446,11 +472,18 @@ async fn joiner_with_the_settled_head_replays_despite_the_leaders_409() {
 // The leader task is spawned and given one `yield_now()` — its first poll
 // runs the handler synchronously through the registry `begin`, so the
 // entry exists before the joiner is even spawned, and the joiner (spawned
-// next) joins it. The leader's write closure then blocks INSIDE
-// `BEGIN IMMEDIATE` on the held SQLite lock (busy timeout 5 s) — the only
-// place a leader can block, since `state.write`'s `try_lock` 503s instead
-// of queueing (so `hold_write_txn`, which holds the STORE mutex, cannot
-// play this role: it would 503 the leader outright).
+// next) joins it. That first poll does NOT reach the write closure: the
+// handler's next await is `write_repo`'s repo-resolve pool read, and the
+// closure only spawns once that read returns — scheduler timing (this
+// raced on CI: an `abort()` landing before the spawn left no detached
+// closure, and nothing ever settled). So the cancel tests arm
+// `land_test_write_started` and abort only after its signal: the closure
+// fires it on the blocking pool, past every await, right before
+// `BEGIN IMMEDIATE` — where it then blocks on the held SQLite lock (busy
+// timeout 5 s), the only place a leader can block, since `state.write`'s
+// `try_lock` 503s instead of queueing (so `hold_write_txn`, which holds
+// the STORE mutex, cannot play this role: it would 503 the leader
+// outright).
 
 /// (d) Leader cancelled mid-flight: its guard's Drop fallback publishes an
 /// internal error, so the joiner fails PROMPTLY instead of waiting out the
@@ -459,13 +492,21 @@ async fn joiner_with_the_settled_head_replays_despite_the_leaders_409() {
 async fn cancelled_leader_fails_its_joiner_promptly() {
     let (f, _c0, h1) = base_with_child().await;
     let hold = hold_sqlite_write(&f);
+    let write_started = arm_write_started(&f);
     let bare = bare_router(&f);
     let leader = spawn_bare_land(&bare, &h1, "k-drop");
     first_poll().await;
     let joiner = spawn_bare_land(&bare, &h1, "k-drop");
     first_poll().await;
 
+    // Deterministic mid-flight point: the leader's write closure is
+    // running now, a synchronous step from `BEGIN IMMEDIATE`, which then
+    // blocks on the held lock (the hold stands until this test's rollback
+    // — the 2.5 s fallback is failure-only) — the abort cannot race the
+    // spawn, and the land is provably uncommitted.
+    wait_write_started(write_started).await;
     leader.abort();
+    *f.t.state.land_test_write_started.lock().unwrap() = None;
     let started = Instant::now();
     let resp = tokio::time::timeout(Duration::from_secs(3), joiner)
         .await
@@ -535,13 +576,19 @@ async fn join_deadline_expiry_is_a_prompt_retryable_503() {
 async fn cancelled_leader_that_lands_anyway_heals_via_status_and_retry() {
     let (f, _c0, h1) = base_with_child().await;
     let hold = hold_sqlite_write(&f);
+    let write_started = arm_write_started(&f);
     let bare = bare_router(&f);
     let leader = spawn_bare_land(&bare, &h1, "k-heal");
     first_poll().await;
     let joiner = spawn_bare_land(&bare, &h1, "k-heal");
     first_poll().await;
 
+    // Same deterministic mid-flight point as (d): the closure is a step
+    // from BEGIN IMMEDIATE and blocked by the hold — it exists and is
+    // uncommitted when the abort lands.
+    wait_write_started(write_started).await;
     leader.abort();
+    *f.t.state.land_test_write_started.lock().unwrap() = None;
     let resp = tokio::time::timeout(Duration::from_secs(3), joiner)
         .await
         .expect("joiner answered promptly")
@@ -634,32 +681,56 @@ async fn missing_tree_row_is_corruption_not_silent_empty() {
     assert_eq!(f.main_target().as_deref(), Some(c0.as_str()));
 }
 
-/// The M13b-fix senior-qa C3 pin: the hold SELF-RELEASES within the
-/// documented 300 ms window WITHOUT any caller rollback — a write_repo
-/// (a gate-observing write) proceeds while the hold's guard still lives,
-/// which the pre-fix second-connection ROLLBACK (a per-connection no-op)
-/// could never deliver.
+/// The M13b-fix senior-qa C3 pin, updated to the fallback contract: the
+/// hold SELF-releases — no caller rollback — at the documented 2.5 s
+/// fallback, inside the 5 s busy window a detached land BEGIN works under.
+/// The observer is a write_repo whose closure takes the SQLite write lock
+/// (`BEGIN IMMEDIATE`): it is blocked exactly as long as the hold stands,
+/// so its completion measures the self-release. The elapsed measurement is
+/// anchored at the instant BEFORE the hold's creation: the 2.5 s fallback
+/// starts there, so `elapsed >= 3 s` can never fire "too fast" on a slow
+/// runner (a clock taken after the hold could). (The pre-fix
+/// second-connection ROLLBACK — a per-connection no-op — could never
+/// deliver this, and a read-only closure could never SEE it either: a
+/// gate-observing read does not contend with the hold.)
 #[tokio::test]
 async fn the_hold_self_releases_without_a_caller_rollback() {
     let f = fixture();
+    let started = Instant::now();
     let hold = hold_sqlite_write(&f);
     let state = std::sync::Arc::clone(&f.t.state);
-    let started = Instant::now();
-    let done =
-        tokio::spawn(async move { state.write_repo(m4b_common::REPO, move |_cx| Ok(())).await });
-    // Well inside the 5 s busy window the detached land closure works
-    // under: the release must land at ~300 ms, and the write proceeds.
-    let outcome = tokio::time::timeout(Duration::from_secs(2), done).await;
+    let done = tokio::spawn(async move {
+        state
+            .write_repo(m4b_common::REPO, move |cx| {
+                let tx = cx
+                    .db
+                    .transaction_immediate()
+                    .map_err(naatre_server::api_error::ApiError::log_internal)?;
+                tx.commit()
+                    .map_err(naatre_server::api_error::ApiError::log_internal)?;
+                Ok(())
+            })
+            .await
+    });
+    // Generous upper bound: the release lands ~2.5 s after the hold's
+    // creation; the timeout only catches a fallback that never fired. The
+    // UNDER-5 s property (the fallback must fire inside the detached
+    // BEGIN's 5 s busy window) is enforced by the observer itself: a late
+    // release hits the closure's `BEGIN IMMEDIATE` busy timeout and turns
+    // the result into an `Err` — which fails the `Ok(Ok(Ok(())))` match
+    // below — so no second wall-clock assertion is needed.
+    let outcome = tokio::time::timeout(Duration::from_secs(10), done).await;
     match outcome {
         Ok(Ok(Ok(()))) => {}
-        other => panic!("the hold did not self-release in the documented window: {other:?}"),
+        other => panic!("the hold did not self-release without a caller rollback: {other:?}"),
     }
+    let elapsed = started.elapsed();
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "the gate observed the release at {:?}",
-        started.elapsed()
+        elapsed >= Duration::from_secs(2),
+        "the release must be the 2.5 s fallback (anchored at the hold's \
+         creation), not an early one: {elapsed:?}"
     );
-    // The caller's release is a no-op after the self-release (and the
-    // guard's thread may not have run yet — either way this is legal).
+    // The caller's release is a no-op after the self-release (rolling
+    // back no transaction is fine).
     hold.rollback();
 }

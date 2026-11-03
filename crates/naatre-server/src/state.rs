@@ -182,6 +182,20 @@ pub struct ServerState {
     /// [`ServerState::drain_timeout`]; tests lower it to pin the expiry
     /// behaviour.
     pub join_deadline: Duration,
+    /// Test-only signal from a land's write closure: when armed to
+    /// `Some(sender)`, the land route's write closure sends one `()` right
+    /// before `land::execute` opens its `BEGIN IMMEDIATE` — the closure is
+    /// then running on the blocking pool, detached from the handler future,
+    /// with no await left in between. The M4c cancel tests need exactly
+    /// this edge: the handler's first poll only REGISTERS the land (the
+    /// route's `begin`), and between that poll and the write closure sit
+    /// the repo-resolve pool read and the closure's own spawn — scheduler
+    /// timing invisible to a test, because nothing writes to the store or
+    /// the CAS before `BEGIN IMMEDIATE`. Default `None`, never armed in
+    /// production (same pattern as `derive_test_busy_abort`); one message
+    /// fires per armed land write, and a send past a dropped receiver is
+    /// ignored.
+    pub land_test_write_started: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>>,
     /// Snapshot GC switch: the POST-time opportunistic pass and the serve
     /// background interval task both check it. Off-switch for tests that
     /// drive [`crate::snapshots_gc::gc_snapshots`] directly and assert its
@@ -326,6 +340,7 @@ impl ServerState {
             data_dir_display,
             drain_timeout: Duration::from_secs(30),
             join_deadline: JOIN_DEADLINE,
+            land_test_write_started: Arc::new(Mutex::new(None)),
             snapshot_gc_enabled: true,
             snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
             gc_enabled: true,
@@ -475,6 +490,7 @@ impl ServerState {
             data_dir_display,
             drain_timeout: Duration::from_secs(30),
             join_deadline: JOIN_DEADLINE,
+            land_test_write_started: Arc::new(Mutex::new(None)),
             snapshot_gc_enabled: true,
             snapshot_gc_interval: crate::serve::SNAPSHOT_GC_INTERVAL,
             gc_enabled: cfg.gc_interval_secs != Some(0),

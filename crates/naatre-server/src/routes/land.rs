@@ -191,15 +191,25 @@ pub async fn land(
     let derive = Arc::clone(&state.derive);
     let repo_name = cmd.repo_name.clone();
     // The M13b repo write gate runs INSIDE the write closure, on purpose:
-    // `begin` stays the leader's first await-free step and the write spawn
-    // stays its first poll boundary (the M4c contracts — a joiner's first
-    // poll finds the in-flight land, and an aborted leader's detached
-    // write still settles) — while an invisible repo's leader runs the
-    // gate in the closure and publishes its uniform 404 to its joiners.
-    // Public repos keep the writer matrix (the same 403).
+    // `begin` stays the leader's first await-free step, so the registry
+    // entry exists on the handler's FIRST poll — the M4c contract the
+    // joiner relies on. The write closure is NOT first-poll: `write_repo`
+    // awaits the repo-resolve pool read before its `spawn_blocking`, so an
+    // abort in that window leaves no detached write (nothing commits;
+    // joiners get the guard Drop's fallback internal error). Tests that
+    // need the detached write pin its existence with
+    // `land_test_write_started` and abort only after its signal — while an
+    // invisible repo's leader runs the gate in the closure and publishes
+    // its uniform 404 to its joiners. Public repos keep the writer matrix
+    // (the same 403).
     let gate_principal = auth.principal.clone();
     let gate_role = auth.role;
     let gate_repo = repo.clone();
+    let begin_signal = state
+        .land_test_write_started
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     let result = state
         .write_repo(repo_name.clone(), move |cx| {
             crate::routes::repo_write_gate_sync(
@@ -209,6 +219,13 @@ pub async fn land(
                 gate_role,
                 &gate_repo,
             )?;
+            // Test-only (never armed in production, see
+            // `ServerState::land_test_write_started`): the closure is now
+            // running on the blocking pool — past every await — with the
+            // transaction's BEGIN IMMEDIATE as its next step.
+            if let Some(tx) = &begin_signal {
+                let _ = tx.send(());
+            }
             land::execute(cx, cas.as_ref(), &derive, &cmd)
         })
         .await;
