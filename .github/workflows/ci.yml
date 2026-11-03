@@ -12,6 +12,12 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Full debug info across ~60 test binaries filled the runner's disk:
+    # the linker died with SIGBUS (run 41733192676). Line tables keep
+    # panic backtraces readable at a fraction of the size.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch; the toolchain: input selects the version
@@ -23,6 +29,9 @@ jobs:
       # The vfs_test FUSE leg must RUN here, not skip (runners have /dev/fuse).
       - run: sudo apt-get update -q && sudo apt-get install -y -q fuse3 libfuse3-dev
       - run: cargo test --workspace --locked
+      - name: Disk usage after the test build
+        if: always()
+        run: df -h / && du -sh target 2>/dev/null || true
       # The FUSE leg must RUN, not skip: the workspace run above only proves
       # it compiles, so it runs again inside a FUSE-capable container (own
       # /dev/fuse). NAATRE_REQUIRE_FUSE=1 turns the vfs_test skip path into a
