@@ -12,9 +12,11 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Full debug info across ~60 test binaries filled the runner's disk:
-    # the linker died with SIGBUS (run 41733192676). Line tables keep
-    # panic backtraces readable at a fraction of the size.
+    # Run 41733192676 died linking test binaries with `ld` SIGBUS while the
+    # same code passed on the previous run; the likely cause (unconfirmed)
+    # is the runner's disk filling with full debug info across ~60 test
+    # binaries. Line tables keep panic backtraces readable at a fraction of
+    # the size; the df steps record the headroom.
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -28,6 +30,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # The vfs_test FUSE leg must RUN here, not skip (runners have /dev/fuse).
       - run: sudo apt-get update -q && sudo apt-get install -y -q fuse3 libfuse3-dev
+      - name: Disk usage before the test build
+        run: df -h / || true
       - run: cargo test --workspace --locked
       - name: Disk usage after the test build
         if: always()
@@ -45,6 +49,7 @@ jobs:
           --security-opt apparmor=unconfined
           -v "$PWD":/src -w /src
           -e CARGO_TARGET_DIR=/tmp/target
+          -e CARGO_PROFILE_DEV_DEBUG -e CARGO_PROFILE_TEST_DEBUG
           -e NAATRE_REQUIRE_FUSE=1
           rust:1.99 bash -c "apt-get update -qq && apt-get install -y -qq fuse3 libfuse3-dev && cargo test --locked -p naatre-cli --test vfs_test fuse_kernel_mount_walk_parity -- --nocapture"
       # Regenerate the checked OpenAPI artifact through the same render the
@@ -53,6 +58,9 @@ jobs:
       - run: |
           NAATRE_UPDATE_OPENAPI=1 cargo test -p naatre-server --test openapi_artifact_test --locked
           git diff --exit-code docs/openapi.json
+      - name: Disk usage at the end of the job
+        if: always()
+        run: df -h / || true
 
   coldboot:
     runs-on: ubuntu-latest
