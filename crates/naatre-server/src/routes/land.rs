@@ -198,10 +198,12 @@ pub async fn land(
     // abort in that window leaves no detached write (nothing commits;
     // joiners get the guard Drop's fallback internal error). Tests that
     // need the detached write pin its existence with
-    // `land_test_write_started` and abort only after its signal — while an
-    // invisible repo's leader runs the gate in the closure and publishes
-    // its uniform 404 to its joiners. Public repos keep the writer matrix
-    // (the same 403).
+    // `land_test_write_started` and abort only after its signal.
+    //
+    // Gating inside the closure (rather than before it) is also what
+    // publishes the uniform 404 to joiners: an invisible repo's leader
+    // runs the gate in the closure and its joiners inherit that same 404.
+    // Public repos keep the writer matrix (the same 403).
     let gate_principal = auth.principal.clone();
     let gate_role = auth.role;
     let gate_repo = repo.clone();

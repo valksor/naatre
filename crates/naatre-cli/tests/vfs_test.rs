@@ -21,7 +21,7 @@ use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use naatre_cli::client::Client;
 use naatre_cli::verbs::{self, Net};
@@ -987,7 +987,8 @@ impl Drop for DaemonGuard {
 /// and creates the gate file SECOND, so the SIGTERM lands while the gate
 /// is held: with the handlers installed at the call it is buffered and
 /// the daemon exits 0 once the gate opens; with a LAZY install (the
-/// shutdown future constructed at or after the `select!` — HEAD's shape;
+/// shutdown future constructed at or after the `select!` — the pre-fb1af31
+/// shape;
 /// CI 41666929427's daemon exited `signal: 15 (SIGTERM)`) the default
 /// action kills the daemon and this pin fails every run.
 #[test]
@@ -1088,6 +1089,11 @@ fn sigterm_immediately_after_the_banner_exits_cleanly() {
             stderr_now()
         );
     }
+    // The watchdog is cancelled FIRST — before any signal and before the
+    // gate opens — because from here on the main thread owns the child:
+    // nothing races the reap, and the watchdog's only kill trigger (its
+    // 20 s timeout on the banner read) can no longer fire.
+    let _ = cancel_tx.send(());
     // The SIGTERM follows the promise line directly, INSIDE the held
     // gate: the daemon is parked in `print_banner` until this test
     // creates the gate file below, so the signal arrives at a known
@@ -1101,8 +1107,29 @@ fn sigterm_immediately_after_the_banner_exits_cleanly() {
     // buffered SIGTERM resolves the shutdown and the daemon exits 0; a
     // lazy install would have died above.
     std::fs::write(&gate, b"").expect("create the banner gate file");
-    let status = guard.0.wait().expect("wait for graceful exit");
-    let _ = cancel_tx.send(());
+    // Bounded reap: a plain `wait()` here is UNBOUNDED, so poll `try_wait`
+    // against a 20 s deadline. On expiry kill the OWNED handle (a handle
+    // this thread owns cannot hit a recycled pid) and panic with the
+    // captured stderr — the watchdog is already cancelled, so nothing
+    // races the reap.
+    let reap_deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        match guard.0.try_wait().expect("try_wait on the daemon") {
+            Some(status) => break status,
+            None => {
+                if Instant::now() >= reap_deadline {
+                    guard.0.kill().expect("kill the hung daemon");
+                    let status = guard.0.wait().expect("wait after the kill");
+                    panic!(
+                        "the daemon never exited after SIGTERM + gate open: {status}; \
+                         stderr: {}",
+                        stderr_now()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    };
     assert!(
         status.success(),
         "SIGTERM right after the banner exits 0: {status}; stderr: {}",

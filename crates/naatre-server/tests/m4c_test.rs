@@ -688,7 +688,7 @@ async fn missing_tree_row_is_corruption_not_silent_empty() {
 /// (`BEGIN IMMEDIATE`): it is blocked exactly as long as the hold stands,
 /// so its completion measures the self-release. The elapsed measurement is
 /// anchored at the instant BEFORE the hold's creation: the 2.5 s fallback
-/// starts there, so `elapsed >= 3 s` can never fire "too fast" on a slow
+/// starts there, so `elapsed >= 2 s` can never fire "too fast" on a slow
 /// runner (a clock taken after the hold could). (The pre-fix
 /// second-connection ROLLBACK — a per-connection no-op — could never
 /// deliver this, and a read-only closure could never SEE it either: a
