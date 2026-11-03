@@ -2268,8 +2268,16 @@ async fn misaddressed_snapshot_blob_put_is_400() {
 /// pass can have collected it). Bounded poll.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn background_gc_pass_collects_an_expired_snapshot() {
+    // Only the snapshot GC task under test runs. `serve` fires every
+    // background task's first tick at boot; the reachability GC and the
+    // derive backfill/queue take the write slot there, and a snapshot POST
+    // that meets the held slot gets the (correct, retryable) 503
+    // `writer_busy` — a race that failed this test on a slow CI runner.
     let f = fixture_with(|state| {
         state.snapshot_gc_interval = Duration::from_millis(10);
+        state.gc_enabled = false;
+        state.derive_queue_enabled = false;
+        state.derive_backfill_enabled = false;
     });
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

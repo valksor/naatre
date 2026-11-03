@@ -1051,7 +1051,7 @@ async fn size_cap_poisons_oversized_outputs() {
 
 // ---- a. queue lifecycle (background task, parents first) --------------------
 
-/// Creates via the API against a serving process with a 10 ms injected
+/// Creates via the API, then starts a serving process with a 10 ms injected
 /// queue interval: pending rows appear for the test kind with zero manual
 /// passes, the background task derives them parents-first, and the counts
 /// prove the parents' outputs actually flowed (a child can only reach 2/3
@@ -1059,22 +1059,20 @@ async fn size_cap_poisons_oversized_outputs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_lifecycle_derives_parents_first() {
     let (deriver, h) = counter(KIND, false, 0, false);
+    // The derive queue is the only background task: the reachability GC,
+    // the boot backfill and the snapshot GC are off. The creates run
+    // BEFORE `serve` starts, so no background pass can hold the write slot
+    // while they commit (a create meeting a held slot gets the correct,
+    // retryable 503 `writer_busy`, which failed this test's sibling on a
+    // slow CI runner). The commits enqueue the rows; `serve` then derives
+    // them with zero manual passes.
     let f = fixture_with(|state| {
         state.derive_queue_interval = Duration::from_millis(10);
+        state.gc_enabled = false;
+        state.derive_backfill_enabled = false;
+        state.snapshot_gc_enabled = false;
         state.register_deriver(Arc::new(deriver)).unwrap();
     });
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let (send_shutdown, recv_shutdown) = oneshot::channel::<()>();
-    let serve_task = tokio::spawn(serve(
-        ServeConfig {
-            listener,
-            state: Arc::clone(&f.t.state),
-        },
-        async move {
-            let _ = recv_shutdown.await;
-        },
-    ));
 
     let r1 = create_cs(&f, None, "root", 1).await;
     let c1 = create_cs(&f, Some(&r1), "c1", 2).await;
@@ -1087,6 +1085,18 @@ async fn queue_lifecycle_derives_parents_first() {
         4,
         "one queue row per created changeset"
     );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (send_shutdown, recv_shutdown) = oneshot::channel::<()>();
+    let serve_task = tokio::spawn(serve(
+        ServeConfig {
+            listener,
+            state: Arc::clone(&f.t.state),
+        },
+        async move {
+            let _ = recv_shutdown.await;
+        },
+    ));
 
     wait_queue_done(&f, 4).await;
 
