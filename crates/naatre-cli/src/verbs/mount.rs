@@ -520,17 +520,23 @@ fn print_banner(plan: &MountPlan, port: u16, repo: &str, pinned_cs: String) {
             "Ctrl-C or SIGTERM stops the daemon (writable mounts stage their shadow writes first)."
         );
     }
-    // TEST-ONLY (QA C1): the vfs ordering pin's handshake gate. When
-    // `NAATRE_TEST_BANNER_GATE` names a path, the daemon blocks here —
-    // INSIDE `print_banner`, immediately after the promise line — until
-    // that file exists (bounded at 30 s, then continues so a misconfigured
-    // run cannot hang). The pin signals BEFORE creating the file, so its
-    // SIGTERM lands while the gate is held: with the handlers installed at
-    // the call (unix) the signal is buffered and the daemon proceeds once
-    // the gate opens; with a LAZY install (the shutdown future constructed
-    // at or after the `select!`) the default action kills the daemon and
-    // the pin fails deterministically. Compiled out of release builds;
-    // never set outside that pin.
+    test_banner_gate();
+}
+
+/// TEST-ONLY (QA C1): the vfs ordering pins' handshake gate, called at the
+/// end of BOTH front-ends' `print_banner` (NFS here, FUSE in `fuse.rs`).
+/// When `NAATRE_TEST_BANNER_GATE` names a path, the daemon blocks here —
+/// INSIDE `print_banner`, immediately after the promise line — until
+/// that file exists (bounded at 30 s, then continues so a misconfigured
+/// run cannot hang). The pin signals BEFORE creating the file, so its
+/// SIGTERM lands while the gate is held: with the handlers installed at
+/// the call (unix) the signal is buffered and the daemon proceeds once
+/// the gate opens; with a LAZY install (the shutdown future constructed
+/// after this gate: at the NFS `select!`, or after FUSE's `spawn_mount`)
+/// the default action kills the daemon and
+/// the pin fails deterministically. Compiled out of release builds;
+/// never set outside those pins.
+pub(super) fn test_banner_gate() {
     #[cfg(debug_assertions)]
     if let Ok(gate) = std::env::var("NAATRE_TEST_BANNER_GATE") {
         let gate = std::path::PathBuf::from(gate);

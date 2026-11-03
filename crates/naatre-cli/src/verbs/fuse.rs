@@ -139,10 +139,12 @@ pub fn run(
         naatre_server::serve::unix_shutdown_signal()
     };
     print_banner(&plan, repo, vfs.pin().changeset.to_hex(), mountpoint);
-    // The FUSE ordering has NO runtime pin yet (FUSE needs /dev/fuse,
-    // absent in the verification container and on macOS). The NFS pin
-    // covers the shared `unix_shutdown_signal` contract; FUSE itself is
-    // unpinned.
+    // The FUSE ordering is pinned by vfs_test's
+    // `fuse_sigterm_immediately_after_the_banner_exits_cleanly` (Linux,
+    // /dev/fuse; runs in CI's FUSE leg with NAATRE_REQUIRE_FUSE=1), through
+    // the debug-only banner gate at the end of `print_banner`. The NFS pin
+    // `sigterm_immediately_after_the_banner_exits_cleanly` covers the same
+    // contract for the NFS front-end.
     eprintln!(
         "mounting {mountpoint}: a stop request (Ctrl-C/SIGTERM) during mounting takes effect \
          once the mount is up"
@@ -203,6 +205,7 @@ fn print_banner(plan: &super::mount::MountPlan, repo: &str, pinned_cs: String, m
             "SIGINT/SIGTERM or `umount {mountpoint}` stops the daemon (writable mounts stage their shadow writes first)."
         );
     }
+    super::mount::test_banner_gate();
 }
 
 /// Bridges a session fileid to its VFS path (unknown inos answer ENOENT —

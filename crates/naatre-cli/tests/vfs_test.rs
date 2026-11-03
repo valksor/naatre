@@ -975,47 +975,19 @@ impl Drop for DaemonGuard {
     }
 }
 
-/// Pins the graceful-exit contract behind the banner promise: once the
-/// banner prints its "Ctrl-C or SIGTERM stops the daemon" line (read by
-/// CONTENT, not a fixed line count), a SIGTERM sent as the NEXT action
-/// must exit 0 through the graceful tail (mount dir cleaned), never the
-/// default terminating action. The pin is DETERMINISTIC, not a race: the
-/// daemon arms `NAATRE_TEST_BANNER_GATE` (TEST-ONLY handshake, debug
-/// builds ONLY — under `--release` the gate is compiled out and this pin
-/// reverts to racing a microsecond window) and blocks inside
-/// `print_banner`, right after the promise line. The pin signals FIRST
-/// and creates the gate file SECOND, so the SIGTERM lands while the gate
-/// is held: with the handlers installed at the call it is buffered and
-/// the daemon exits 0 once the gate opens; with a LAZY install (the
-/// shutdown future constructed at or after the `select!` — the pre-fb1af31
-/// shape;
-/// CI 41666929427's daemon exited `signal: 15 (SIGTERM)`) the default
-/// action kills the daemon and this pin fails every run.
-#[test]
-fn sigterm_immediately_after_the_banner_exits_cleanly() {
-    let server = start_server();
-    seed_repo(
-        &server,
-        "banner-sigterm",
-        &[("a.txt", b"one".as_slice(), false)],
-    );
-    let cache = tempfile::tempdir().expect("cache tempdir");
-    let gate = cache.path().join("banner-gate");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_naatre"));
-    cmd.args([
-        "mount",
-        "banner-sigterm",
-        "--server",
-        &server.base,
-        "--token",
-        &server.token,
-    ])
-    .env("XDG_CACHE_HOME", cache.path())
-    .env("NAATRE_TEST_BANNER_GATE", &gate)
-    .env_remove("NAATRE_URL")
-    .env_remove("NAATRE_TOKEN")
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+/// Shared driver of the two banner ordering pins (NFS and FUSE): spawns
+/// the daemon with piped stdio, reads the banner until a line starting with
+/// `promise_prefix` (by CONTENT), sends SIGTERM as the next action, THEN
+/// creates the `gate` file (the caller put its path into `cmd`'s
+/// `NAATRE_TEST_BANNER_GATE`), and reaps the daemon with a bounded wait.
+/// Returns the exit status and the drained stderr buffer for the caller's
+/// own assertions.
+fn sigterm_right_after_banner(
+    cmd: &mut Command,
+    promise_prefix: &str,
+    gate: &Path,
+) -> (std::process::ExitStatus, Arc<std::sync::Mutex<String>>) {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().expect("spawn naatre mount");
     // Drain stderr line-by-line into a shared buffer so the daemon never
     // blocks on a full pipe and every failure below can quote it.
@@ -1079,13 +1051,13 @@ fn sigterm_immediately_after_the_banner_exits_cleanly() {
             stderr_now()
         );
         lines += 1;
-        // The promise line, by content: the read-only banner's last line.
-        if line.starts_with("Ctrl-C or SIGTERM") {
+        // The promise line, by content (not by line count).
+        if line.starts_with(promise_prefix) {
             break;
         }
         assert!(
             lines < 20,
-            "no 'Ctrl-C or SIGTERM' promise line in {lines} banner lines; stderr: {}",
+            "no '{promise_prefix}' promise line in {lines} banner lines; stderr: {}",
             stderr_now()
         );
     }
@@ -1108,7 +1080,7 @@ fn sigterm_immediately_after_the_banner_exits_cleanly() {
     // Gate opens only now: with the handlers installed at the call the
     // buffered SIGTERM resolves the shutdown and the daemon exits 0; a
     // lazy install would have died above.
-    std::fs::write(&gate, b"").expect("create the banner gate file");
+    std::fs::write(gate, b"").expect("create the banner gate file");
     // Bounded reap: a plain `wait()` here is UNBOUNDED, so poll `try_wait`
     // against a 20 s deadline. On expiry kill the OWNED handle (a handle
     // this thread owns cannot hit a recycled pid) and panic with the
@@ -1132,6 +1104,50 @@ fn sigterm_immediately_after_the_banner_exits_cleanly() {
             }
         }
     };
+    (status, stderr_shared)
+}
+
+/// Pins the graceful-exit contract behind the banner promise: once the
+/// banner prints its "Ctrl-C or SIGTERM stops the daemon" line (read by
+/// CONTENT, not a fixed line count), a SIGTERM sent as the NEXT action
+/// must exit 0 through the graceful tail (mount dir cleaned), never the
+/// default terminating action. The pin is DETERMINISTIC, not a race: the
+/// daemon arms `NAATRE_TEST_BANNER_GATE` (TEST-ONLY handshake, debug
+/// builds ONLY — under `--release` the gate is compiled out and this pin
+/// reverts to racing a microsecond window) and blocks inside
+/// `print_banner`, right after the promise line. The pin signals FIRST
+/// and creates the gate file SECOND, so the SIGTERM lands while the gate
+/// is held: with the handlers installed at the call it is buffered and
+/// the daemon exits 0 once the gate opens; with a LAZY install (the
+/// shutdown future constructed at or after the `select!` — the pre-fb1af31
+/// shape;
+/// CI 41666929427's daemon exited `signal: 15 (SIGTERM)`) the default
+/// action kills the daemon and this pin fails every run.
+#[test]
+fn sigterm_immediately_after_the_banner_exits_cleanly() {
+    let server = start_server();
+    seed_repo(
+        &server,
+        "banner-sigterm",
+        &[("a.txt", b"one".as_slice(), false)],
+    );
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let gate = cache.path().join("banner-gate");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_naatre"));
+    cmd.args([
+        "mount",
+        "banner-sigterm",
+        "--server",
+        &server.base,
+        "--token",
+        &server.token,
+    ])
+    .env("XDG_CACHE_HOME", cache.path())
+    .env("NAATRE_TEST_BANNER_GATE", &gate)
+    .env_remove("NAATRE_URL")
+    .env_remove("NAATRE_TOKEN");
+    let (status, stderr_shared) = sigterm_right_after_banner(&mut cmd, "Ctrl-C or SIGTERM", &gate);
+    let stderr_now = || stderr_shared.lock().unwrap().clone();
     assert!(
         status.success(),
         "SIGTERM right after the banner exits 0: {status}; stderr: {}",
@@ -2131,15 +2147,13 @@ fn flush_land_lands_the_staged_writes_via_the_shared_land_path() {
 
 // ---- M8b item 2: FUSE runtime mount (Linux CI with /dev/fuse only) ---------
 
-/// On Linux CI with /dev/fuse + fusermount3 present this runs the REAL FUSE
-/// mount; without them it prints a SKIP notice — or PANICS naming the
-/// missing prerequisite under NAATRE_REQUIRE_FUSE=1 (CI's privileged
-/// container step sets it: a required-but-skipped FUSE leg is green
-/// vacuously, the same rule as NAATRE_TEST_S3_REQUIRED). cfg-compile-only
-/// elsewhere — macOS never compiles this test.
+/// The FUSE tests' shared prerequisite rule: `true` when /dev/fuse and
+/// fusermount3 are both present; otherwise a SKIP NOTICE and `false` — or a
+/// PANIC naming the missing prerequisite under NAATRE_REQUIRE_FUSE=1 (CI's
+/// privileged container step sets it: a required-but-skipped FUSE leg is
+/// green vacuously, the same rule as NAATRE_TEST_S3_REQUIRED).
 #[cfg(target_os = "linux")]
-#[test]
-fn fuse_kernel_mount_walk_parity() {
+fn fuse_prerequisites_or_skip() -> bool {
     let fuse_ok = Path::new("/dev/fuse").exists()
         && Command::new("fusermount3")
             .arg("--version")
@@ -2165,6 +2179,21 @@ fn fuse_kernel_mount_walk_parity() {
             "SKIP NOTICE (fuse-e2e): no {missing} — the FUSE front-end \
              is cfg-compile-checked only on this runner"
         );
+        return false;
+    }
+    true
+}
+
+/// On Linux CI with /dev/fuse + fusermount3 present this runs the REAL FUSE
+/// mount; without them it prints a SKIP notice — or PANICS naming the
+/// missing prerequisite under NAATRE_REQUIRE_FUSE=1 (CI's privileged
+/// container step sets it: a required-but-skipped FUSE leg is green
+/// vacuously, the same rule as NAATRE_TEST_S3_REQUIRED). cfg-compile-only
+/// elsewhere — macOS never compiles this test.
+#[cfg(target_os = "linux")]
+#[test]
+fn fuse_kernel_mount_walk_parity() {
+    if !fuse_prerequisites_or_skip() {
         return;
     }
 
@@ -2272,6 +2301,91 @@ fn fuse_kernel_mount_walk_parity() {
     assert!(
         !linux_mount_table_has(&mnt_str),
         "the FUSE mount is gone after SIGTERM"
+    );
+}
+
+/// The FUSE twin of `sigterm_immediately_after_the_banner_exits_cleanly`:
+/// pins that `fuse.rs` installs the shutdown handlers BEFORE its banner.
+/// Once the FUSE banner's promise line ("SIGINT/SIGTERM or `umount …`
+/// stops the daemon") is read, a SIGTERM sent as the NEXT action must end
+/// in a clean exit 0 with the FUSE mount unmounted and the mount dir
+/// cleaned. The daemon blocks at the debug-only `NAATRE_TEST_BANNER_GATE`
+/// at the end of `print_banner`, and the pin signals BEFORE it creates the
+/// gate file. With the handlers installed at that call, the SIGTERM is
+/// buffered while the gate holds the daemon; the daemon then mounts,
+/// `block_on(shutdown)` resolves at once, it unmounts and exits 0. With a
+/// LAZY install (the shutdown future built after `print_banner`, e.g. after
+/// `fuser::spawn_mount`) the default action kills the daemon as the gate
+/// opens — before any kernel mount exists — so it exits by signal and
+/// leaves its mount dir behind; the exit-status assertion carries the pin
+/// (the mount-table check holds either way). The pin is
+/// deterministic only in DEBUG builds: under `--release` the gate is
+/// compiled out and it reverts to racing a microsecond window. Prerequisites
+/// as `fuse_kernel_mount_walk_parity` (SKIP NOTICE, or a panic under
+/// NAATRE_REQUIRE_FUSE=1); CI runs it in the FUSE leg.
+#[cfg(target_os = "linux")]
+#[test]
+fn fuse_sigterm_immediately_after_the_banner_exits_cleanly() {
+    if !fuse_prerequisites_or_skip() {
+        return;
+    }
+
+    let server = start_server();
+    seed_repo(
+        &server,
+        "fuse-banner-sigterm",
+        &[("a.txt", b"one".as_slice(), false)],
+    );
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let gate = cache.path().join("banner-gate");
+    let mnt_parent = tempfile::tempdir().expect("mnt tempdir");
+    let mnt = mnt_parent.path().join("m");
+    std::fs::create_dir_all(&mnt).expect("mkdir mnt");
+    let mnt_str = std::fs::canonicalize(&mnt)
+        .expect("canonicalize mnt")
+        .to_string_lossy()
+        .to_string();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_naatre"));
+    cmd.args([
+        "mount",
+        "fuse-banner-sigterm",
+        "--server",
+        &server.base,
+        "--token",
+        &server.token,
+        "--fuse",
+        &mnt.to_string_lossy(),
+    ])
+    .env("XDG_CACHE_HOME", cache.path())
+    .env("NAATRE_TEST_BANNER_GATE", &gate)
+    .env_remove("NAATRE_URL")
+    .env_remove("NAATRE_TOKEN");
+    let (status, stderr_shared) =
+        sigterm_right_after_banner(&mut cmd, "SIGINT/SIGTERM or `umount", &gate);
+    let stderr_now = || stderr_shared.lock().unwrap().clone();
+    assert!(
+        status.success(),
+        "SIGTERM right after the FUSE banner exits 0: {status}; stderr: {}",
+        stderr_now()
+    );
+    assert!(
+        !linux_mount_table_has(&mnt_str),
+        "the FUSE mount is gone after SIGTERM; stderr: {}",
+        stderr_now()
+    );
+    // The graceful tail ran: the mount dir is gone (a default-action
+    // SIGTERM death would have left it for the next mount to evict).
+    let mounts_root = cache.path().join("naatre").join("mounts");
+    let left: Vec<String> = std::fs::read_dir(&mounts_root)
+        .expect("mounts root")
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the mount dir was cleaned: {left:?}; stderr: {}",
+        stderr_now()
     );
 }
 
