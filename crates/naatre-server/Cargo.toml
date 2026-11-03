@@ -67,8 +67,9 @@ sha2 = "0.10"
 hmac = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "blocking"] }
 
-# The serve.rs install-at-call pins raise SIGTERM/SIGINT in-process; their
-# only user is `cfg(all(test, unix))` (libc is already in the graph via
-# tokio's unix signal support — no new crate in the lockfile).
+# The install-at-call pins in tests/shutdown_signal_sigterm.rs and
+# tests/shutdown_signal_sigint.rs (both `#![cfg(unix)]`) raise SIGTERM/SIGINT
+# in-process (libc is already in the graph via tokio's unix signal support —
+# no new crate in the lockfile).
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
