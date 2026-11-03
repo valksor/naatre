@@ -13,6 +13,21 @@ Please include: the affected commit or release, a reproduction (script or
 request sequence), and your assessment of impact. You will get an
 acknowledgment and a fix timeline in the advisory thread.
 
+## Known gaps (being fixed on master)
+
+These are open on master now and are scheduled fixes, not accepted
+limits:
+
+- Path-scoped tokens restrict writes, but the `log`, `diff` and `trees`
+  listings are not yet filtered by scope.
+- Path scopes are not bound to a repo; use private repos to contain a
+  token to the repos it should see.
+- The client speaks only plain HTTP, so a client on another machine
+  sends its bearer token unencrypted unless it tunnels to the server.
+- Tokens never expire unless created with a TTL.
+- Requests are not rate-limited per client; front the server with a
+  rate-limiting proxy.
+
 ## Supported versions
 
 Only the latest `master` is supported: naatre is developed without release

@@ -741,9 +741,11 @@ Auth: the session uses the working copy's stored token, or `--token` on the
 command line (**argv is visible in `ps` — prefer the token store**).
 **Use a least-privilege scoped token**: `naatre token create agent \
 --role writer --scope src` mints a token that can only write under
-`src/` of that repo — an agent leaking or misusing it cannot touch other
-repos or paths. (A single trailing slash on `--scope` is trimmed by the
-server; a doubled one is a 422.) `--read-only` runs the allowlist mode:
+`src/` — in **every** repo it can reach. Path scopes are not bound to a
+repo: to keep an agent out of other repos, make those repos private and
+grant read access only to the principals that need it (`repo_access`,
+see "Repo access: private repos"). (A single trailing slash on
+`--scope` is trimmed by the server; a doubled one is a 422.) `--read-only` runs the allowlist mode:
 only the pure reads
 (`status`, `log`, `diff`, `cat`, `ls`, `blame`) answer; every other tool
 returns an error naming the flag.
