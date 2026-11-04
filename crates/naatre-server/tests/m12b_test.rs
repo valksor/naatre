@@ -39,6 +39,8 @@ struct TestApp {
     app: Router,
     db_path: PathBuf,
     state: AppState,
+    /// The injected clock (the GC pin moves it past the grace window).
+    clock: Arc<AtomicU64>,
 }
 
 fn build_app() -> TestApp {
@@ -68,6 +70,7 @@ fn build_app() -> TestApp {
         app,
         db_path,
         state,
+        clock,
     }
 }
 
@@ -702,4 +705,198 @@ async fn blame_poisoned_conflicted_boundary_reports_conflict() {
         !boundary_conflicted.is_empty(),
         "the boundary's marker lines report conflicted: {lines:?}"
     );
+}
+
+// ---- P5: GC and blame after a deletion-side land ----------------------------
+
+/// A modify/delete conflict recorded on main (the F2 deletion side): c1
+/// seeds `f.txt` = "a\n"; main moves to c_mod ("b\n"); the record-conflict
+/// land of c_del settles the v2 node. Returns (v2 id, c1, c_mod).
+async fn deletion_side_main(f: &Fixture) -> (String, String, String) {
+    let (a, b) = (b"a\n".to_vec(), b"b\n".to_vec());
+    let (ba, bb) = (put_blob(f, &a).await, put_blob(f, &b).await);
+    let c1 = create_ok(
+        f,
+        cs_body(
+            json!([]),
+            json!([change("f.txt", "add", &ba, a.len())]),
+            "c1",
+        ),
+    )
+    .await;
+    let c_mod = create_ok(
+        f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([change("f.txt", "mod", &bb, b.len())]),
+            "c-mod",
+        ),
+    )
+    .await;
+    let c_del = create_ok(
+        f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([json!({ "path": "f.txt", "op": "del" })]),
+            "c-del",
+        ),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    f.t.move_main(f.repo_id, &c_mod);
+    let resp = send(
+        &f.t.app,
+        "POST",
+        &format!("/v1/repos/{REPO}/land"),
+        Some(&f.writer),
+        Some(json!({ "head": c_del, "key": "k-del", "record_conflict": true })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    (resp.body["landed"].as_str().unwrap().to_string(), c1, c_mod)
+}
+
+/// P5. After a deletion-side land: GC past the grace window keeps the
+/// surviving side's blob and the base blob byte-identical (also with every
+/// other reference to them stripped, so the representation is provably the
+/// only one), `fsck` is clean, and blame of the marker file reports the
+/// marker lines as conflicted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gc_and_blame_after_a_deletion_side_land() {
+    use naatre_server::gc::{GC_DEFAULT_GRACE_SECS, gc_pass};
+    const GRACE_NS: u64 = GC_DEFAULT_GRACE_SECS * 1_000_000_000;
+    let f = fixture();
+    let (v2, c1, c_mod) = deletion_side_main(&f).await;
+    let surviving = Id::from_hex(&blob_hex(b"b\n")).unwrap();
+    let base = Id::from_hex(&blob_hex(b"a\n")).unwrap();
+
+    // Blame of the marker file at main: the marker lines report as
+    // conflicted (the deletion divider included).
+    f.t.drain().await;
+    let resp = blame(&f, &v2, "f.txt").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let texts: Vec<(&str, bool)> = resp.body["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            (
+                l["text"].as_str().unwrap_or(""),
+                l["conflicted"].as_bool() == Some(true),
+            )
+        })
+        .collect();
+    for needle in [
+        "<<<<<<< naatre side 1/2:",
+        "======= naatre side 2/2: deleted",
+        ">>>>>>> naatre conflict: f.txt",
+    ] {
+        assert!(
+            texts.iter().any(|(t, c)| t.starts_with(needle) && *c),
+            "{needle} blames as conflicted: {texts:?}"
+        );
+    }
+
+    // Garbage to prove the passes collect: an unlanded commit.
+    let bo = put_blob(&f, b"orphan\n").await;
+    create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([change("o.txt", "add", &bo, 7)]),
+            "orphan",
+        ),
+    )
+    .await;
+    let collect = |ticks: u64| {
+        let f = &f;
+        async move {
+            f.t.clock
+                .store(BASE_NS + ticks * GRACE_NS, Ordering::Relaxed);
+            gc_pass(&f.t.state).await.unwrap()
+        }
+    };
+    collect(2).await;
+    let report = collect(3).await;
+    assert!(report.cs_collected >= 1, "garbage collects: {report:?}");
+    for (name, id, content) in [("surviving", surviving, b"b\n"), ("base", base, b"a\n")] {
+        assert_eq!(
+            f.t.state.cas.get(&id).unwrap(),
+            content.to_vec(),
+            "the {name} blob is byte-identical after GC"
+        );
+    }
+    let after = fsck::fsck(&f.t.state).await.unwrap();
+    assert!(after.clean(), "fsck is clean after GC: {after:?}");
+
+    // The representation as the ONLY reference: strip the lands seeds and
+    // the side changesets' rows (m10a's scaffolding), then collect again.
+    // Negative control: a blob nothing references. The same passes must
+    // collect it, so a surviving side blob below cannot be a pass that
+    // simply never collects anything.
+    let control = Id::from_hex(&put_blob(&f, b"control-unreferenced\n").await).unwrap();
+    let trees_before = f.t.count("SELECT COUNT(*) FROM trees");
+    {
+        let conn = f.t.db();
+        conn.execute(
+            "UPDATE lands SET head = NULL, base = NULL WHERE repo_id = ?1",
+            rusqlite::params![f.repo_id],
+        )
+        .unwrap();
+        for cs in [&c1, &c_mod] {
+            let id = Id::from_hex(cs).unwrap();
+            for sql in [
+                "DELETE FROM file_changes WHERE repo_id = ?1 AND cs = ?2",
+                "DELETE FROM changesets WHERE repo_id = ?1 AND id = ?2",
+            ] {
+                conn.execute(sql, rusqlite::params![f.repo_id, id.0.as_slice()])
+                    .unwrap();
+            }
+        }
+    }
+    let first = collect(5).await;
+    let second = collect(6).await;
+    // Blob collection is two-phase (condemn, then delete on a later pass):
+    // pass 7 condemns the unreferenced blobs, pass 8 deletes what is
+    // still condemned. The rep-only blobs below must outlive pass 8.
+    let third = collect(7).await;
+    let fourth = collect(8).await;
+    // The strip made the side changesets' root trees garbage and the
+    // passes collected them (and the control blob), while the rep-only
+    // blobs below stay: they survive because of the representation.
+    assert!(
+        first.trees_collected
+            + second.trees_collected
+            + third.trees_collected
+            + fourth.trees_collected
+            >= 1,
+        "the strip left collectable trees and the passes collected them: {first:?} {second:?} {third:?} {fourth:?}"
+    );
+    assert!(
+        f.t.count("SELECT COUNT(*) FROM trees") < trees_before,
+        "tree rows were removed by the passes"
+    );
+    assert!(
+        first.blobs_collected
+            + second.blobs_collected
+            + third.blobs_collected
+            + fourth.blobs_collected
+            >= 1,
+        "the passes collected blobs: {first:?} {second:?} {third:?} {fourth:?}"
+    );
+    assert_eq!(
+        f.t.state.cas.has(&[control]).unwrap(),
+        vec![false],
+        "the unreferenced control blob was collected"
+    );
+    for (name, id, content) in [("surviving", surviving, b"b\n"), ("base", base, b"a\n")] {
+        assert_eq!(
+            f.t.state
+                .cas
+                .get(&id)
+                .unwrap_or_else(|e| panic!("the {name} blob was collected: {e}")),
+            content.to_vec(),
+            "the {name} blob survives through the representation alone"
+        );
+    }
 }

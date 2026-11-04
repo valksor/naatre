@@ -1,0 +1,6 @@
+<<<<<<< naatre side 1/2: ff8c5bca8586fc07d70242aa6e662f78d7b281b3675180761dd47eb257ae094a
+ours
+||||||| naatre base: 7e1ef3918f598c59304d9f99af0d07b730a7a80837478bf07256f73523ba0481
+base
+======= naatre side 2/2: deleted
+>>>>>>> naatre conflict: src/main.rs

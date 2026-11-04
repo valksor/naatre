@@ -110,12 +110,12 @@ GET /v1/repos/{r}/objects/{id} and build a resolution changeset on head's \
 parent), then re-land with the same key";
 
 /// The recipe variant for the refused-under-opt-in case: the rebase hit a
-/// conflict the v2 representation cannot record (a deletion side has no
-/// blob id to carry), so `record_conflict: true` cannot answer this 409 —
-/// the recipe names the conflict class and advises only the resolution
-/// path, never the flag just used.
-pub const RESOLUTION_RECIPE_REFUSED: &str = "this conflict cannot be recorded: a deletion side \
-has no blob id to carry in the conflict representation — resolve it instead: \
+/// conflict the v2 representation cannot record (the merged result puts a
+/// file and a directory at one path), so `record_conflict: true` cannot
+/// answer this 409 — the recipe names the conflict class and advises only
+/// the resolution path, never the flag just used.
+pub const RESOLUTION_RECIPE_REFUSED: &str = "this conflict cannot be recorded: the merged result \
+is not a consistent tree (a file and a directory at the same path) — resolve it instead: \
 materialize the conflicted main (naatre sync), edit the resolved content, \
 and `naatre resolve <path>` (or fetch the conflict blobs \
 GET /v1/repos/{r}/objects/{id} and build a resolution changeset on head's \
@@ -526,7 +526,7 @@ fn land_in_txn(
         // the guard rolls the (pending-row) transaction back — unless the
         // land opted into recording, where every representable conflict
         // materializes its markers into the merged tree instead and the
-        // unrepresentable ones (a deletion side) still refuse.
+        // unrepresentable ones (a file/directory duality) still refuse.
         let fetch_blob = |id: &Id| -> Result<Vec<u8>, String> {
             cas.get(id)
                 .map_err(|e| format!("blob {} unavailable: {e}", id.to_hex()))

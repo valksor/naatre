@@ -15,7 +15,7 @@
 //! and review the diff in the same change that alters the format.
 
 use naatre_core::changeset::{self, Changeset, FileChange, Op};
-use naatre_core::conflict::ConflictRep;
+use naatre_core::conflict::{self, ConflictRep};
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_core::tree::{self, EntryKind, Tree, TreeEntry};
 use serde_json::{Value, json};
@@ -136,7 +136,10 @@ fn changeset_conflict_v2() -> Changeset {
         conflicts: vec![ConflictRep {
             path: "src/main.rs".into(),
             base: Some(conflict_blob(b"base\n")),
+            base_exec: false,
+            sides_exec: vec![false; sides.len()],
             sides,
+            deleted: false,
         }],
     }
 }
@@ -169,8 +172,80 @@ fn changeset_conflict_v2_three_sides() -> Changeset {
         conflicts: vec![ConflictRep {
             path: "notes.txt".into(),
             base: None,
+            base_exec: false,
+            sides_exec: vec![false; sides.len()],
             sides,
+            deleted: false,
         }],
+    }
+}
+
+/// The deletion-side rep: one blob side, a common base, the other side
+/// deleted the path (the modify/delete shape F2 records).
+fn deletion_side_rep() -> ConflictRep {
+    ConflictRep {
+        path: "src/main.rs".into(),
+        base: Some(conflict_blob(b"base\n")),
+        base_exec: false,
+        sides: vec![conflict_blob(b"ours\n")],
+        sides_exec: vec![false],
+        deleted: true,
+    }
+}
+
+/// The exec-bit rep: an executable base, two blob sides (one executable) —
+/// the shape of a chmod-vs-edit conflict (flags byte 5).
+fn exec_rep() -> ConflictRep {
+    let mut pairs = [
+        (conflict_blob(b"ours\n"), false),
+        (conflict_blob(b"theirs\n"), true),
+    ];
+    pairs.sort_by_key(|(id, e)| (id.0, *e));
+    ConflictRep {
+        path: "bin/run.sh".into(),
+        base: Some(conflict_blob(b"base\n")),
+        base_exec: true,
+        sides: pairs.iter().map(|(id, _)| *id).collect(),
+        sides_exec: pairs.iter().map(|(_, e)| *e).collect(),
+        deleted: false,
+    }
+}
+
+/// Format v2 with exec bits (flags byte 5).
+fn changeset_conflict_v2_exec() -> Changeset {
+    Changeset {
+        repo_id: 1,
+        parents: vec![object_id(Kind::Changeset, b"p1")],
+        author: "Ada <ada@example.com>".into(),
+        message: "exec conflict".into(),
+        timestamp_ns: 7_000_000_007,
+        changes: vec![FileChange {
+            path: "bin/run.sh".into(),
+            op: Op::Mod,
+            blob: Some(conflict_blob(b"<<<<<<< naatre side 1/2\n")),
+            size: Some(24),
+            exec: Some(false),
+        }],
+        conflicts: vec![exec_rep()],
+    }
+}
+
+/// Format v2 with a deletion side (flags byte 3).
+fn changeset_conflict_v2_deletion_side() -> Changeset {
+    Changeset {
+        repo_id: 1,
+        parents: vec![object_id(Kind::Changeset, b"p1")],
+        author: "Ada <ada@example.com>".into(),
+        message: "modify/delete conflict".into(),
+        timestamp_ns: 6_000_000_006,
+        changes: vec![FileChange {
+            path: "src/main.rs".into(),
+            op: Op::Mod,
+            blob: Some(conflict_blob(b"<<<<<<< naatre side 1/2\n")),
+            size: Some(24),
+            exec: Some(false),
+        }],
+        conflicts: vec![deletion_side_rep()],
     }
 }
 
@@ -235,11 +310,25 @@ fn cs_json(cs: &Changeset, id: &Id) -> Value {
             "size": c.size,
             "exec": c.exec,
         })).collect::<Vec<_>>(),
-        "conflicts": cs.conflicts.iter().map(|r| json!({
-            "path": r.path,
-            "base": r.base.as_ref().map(Id::to_hex),
-            "sides": r.sides.iter().map(Id::to_hex).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "conflicts": cs.conflicts.iter().map(|r| {
+            let mut rep = json!({
+                "path": r.path,
+                "base": r.base.as_ref().map(Id::to_hex),
+                "sides": r.sides.iter().map(Id::to_hex).collect::<Vec<_>>(),
+            });
+            // Exec bits are listed only when some bit is set (the pre-F2
+            // fixture files stay byte-identical).
+            if r.base_exec || r.sides_exec.iter().any(|&e| e) {
+                rep["base_exec"] = json!(r.base_exec);
+                rep["sides_exec"] = json!(r.sides_exec);
+            }
+            // Only a deletion side adds the key, so the pre-F2 fixture
+            // files stay byte-identical.
+            if r.deleted {
+                rep["deleted"] = json!(true);
+            }
+            rep
+        }).collect::<Vec<_>>(),
     })
 }
 
@@ -356,6 +445,85 @@ fn changeset_conflict_v2_three_sides_fixture() {
         &|b| changeset::decode(b).is_err(),
     );
     assert_eq!(changeset::decode(&bytes).as_ref(), Ok(&cs));
+}
+
+/// P1: the deletion-side encoding is pinned in bytes (flags byte 3) and
+/// the rendering equals the committed text byte for byte. The pre-F2 v2
+/// fixtures above are untouched.
+#[test]
+fn marker_bytes_deletion_side_golden() {
+    let cs = changeset_conflict_v2_deletion_side();
+    let bytes = changeset::encode(&cs).expect("encode");
+    let id = changeset::changeset_id(&cs).expect("id");
+    assert_eq!(id, naatre_core::ids::object_id_v2(Kind::Changeset, &bytes));
+    check_bytes(
+        "changeset-conflict-v2-deletion-side",
+        &bytes,
+        cs_json(&cs, &id),
+        &|b| changeset::decode(b).is_err(),
+    );
+    assert_eq!(changeset::decode(&bytes).as_ref(), Ok(&cs));
+
+    let rep = deletion_side_rep();
+    let rendered = conflict::marker_bytes(&rep, |id| {
+        [b"ours\n".as_slice(), b"base\n".as_slice()]
+            .into_iter()
+            .find(|c| conflict_blob(c) == *id)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| "unknown blob".to_string())
+    })
+    .expect("render");
+    assert!(conflict::marker_shaped(&rendered));
+    let path = golden_path("conflict-markers-deletion-side", "txt");
+    if update_mode() {
+        fs::write(&path, &rendered).unwrap();
+        return;
+    }
+    let disk = fs::read(&path).unwrap_or_else(|e| panic!("read the rendering golden: {e}"));
+    assert_eq!(rendered, disk, "the deletion-side rendering diverged");
+}
+
+/// The exec-bit encoding (flags bit 2: an exec byte after the base id and
+/// after each side id) and its rendering (` +x` after the blob id) are
+/// pinned in bytes; the pre-F2 fixtures are untouched.
+#[test]
+fn marker_bytes_exec_golden() {
+    let cs = changeset_conflict_v2_exec();
+    let bytes = changeset::encode(&cs).expect("encode");
+    let id = changeset::changeset_id(&cs).expect("id");
+    assert_eq!(id, naatre_core::ids::object_id_v2(Kind::Changeset, &bytes));
+    check_bytes(
+        "changeset-conflict-v2-exec",
+        &bytes,
+        cs_json(&cs, &id),
+        &|b| changeset::decode(b).is_err(),
+    );
+    assert_eq!(changeset::decode(&bytes).as_ref(), Ok(&cs));
+
+    let rep = exec_rep();
+    let rendered = conflict::marker_bytes(&rep, |id| {
+        [
+            b"ours\n".as_slice(),
+            b"theirs\n".as_slice(),
+            b"base\n".as_slice(),
+        ]
+        .into_iter()
+        .find(|c| conflict_blob(c) == *id)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| "unknown blob".to_string())
+    })
+    .expect("render");
+    assert!(conflict::marker_shaped(&rendered));
+    assert!(conflict::marker_opener(
+        &rendered[..rendered.len().min(conflict::MARKER_PREFIX_BYTES)]
+    ));
+    let path = golden_path("conflict-markers-exec", "txt");
+    if update_mode() {
+        fs::write(&path, &rendered).unwrap();
+        return;
+    }
+    let disk = fs::read(&path).unwrap_or_else(|e| panic!("read the exec rendering golden: {e}"));
+    assert_eq!(rendered, disk, "the exec rendering diverged");
 }
 
 #[test]

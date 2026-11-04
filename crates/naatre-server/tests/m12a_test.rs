@@ -3,8 +3,9 @@
 //! `record_conflict` opt-in settles a conflicted (format-v2) node ONCE on
 //! main (`lands.state = 'conflicted'`, `root_tree_id` = the
 //! markers-materialized tree); a conflicted node rebases like any node and
-//! its representations travel; unrepresentable conflicts (a deletion side)
-//! refuse even under the opt-in.
+//! its representations travel; a modify/delete conflict records with a
+//! deletion side (F2) and only a file/directory duality refuses under the
+//! opt-in.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,10 +21,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use naatre_core::changeset;
+use naatre_core::changeset::{FileChange, Op};
 use naatre_core::conflict::{ConflictRep, marker_bytes};
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_server::merge::{MergeOutcome, merge_lines};
+use naatre_server::merge::{MergeOutcome, merge_lines, merge_trees_recording};
 use naatre_server::state::{AppState, ServerState};
+use naatre_server::tree_derive::MemNode;
 use naatre_store::DataDir;
 
 /// Fixed-step clock base: ns for 2023-11-14.
@@ -211,6 +214,32 @@ async fn send(
 
 async fn get(app: &Router, uri: &str, token: &str) -> Resp {
     send(app, "GET", uri, Some(token), None).await
+}
+
+/// GET with the `Naatre-Conflict-Format` header (`None` = absent).
+async fn get_with_format(app: &Router, uri: &str, token: &str, format: Option<&str>) -> Resp {
+    let mut builder = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+    if let Some(n) = format {
+        builder = builder.header("Naatre-Conflict-Format", n);
+    }
+    let res = app
+        .clone()
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .expect("in-memory request");
+    let status = res.status();
+    let bytes = BodyExt::collect(res.into_body())
+        .await
+        .expect("body")
+        .to_bytes()
+        .to_vec();
+    Resp {
+        status,
+        body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    }
 }
 
 async fn post_json(app: &Router, uri: &str, token: &str, value: &Value) -> Resp {
@@ -581,23 +610,23 @@ async fn conflicted_node_rebases_and_the_conflict_travels() {
     assert_eq!(cat(&f, &landed, "other.txt").await, other);
 }
 
-// ---- 4. unrepresentable conflicts refuse even under the opt-in -------------
+// ---- 4. a modify/delete conflict records with a deletion side (F2) ---------
 
-#[tokio::test]
-async fn record_conflict_still_refuses_a_deletion_side() {
-    let f = fixture();
+/// Base c1 (`f.txt` = "a\n"); main moves to c_mod (modified); c_del deletes
+/// the path. Returns (c1, c_mod, c_del).
+async fn modify_delete(f: &Fixture) -> (String, String, String) {
     let base = b"a\n".to_vec();
-    let bb = put_blob(&f, &base).await;
+    let bb = put_blob(f, &base).await;
     let c1 = create_ok(
-        &f,
+        f,
         cs_body(json!([]), json!([add("f.txt", &bb, base.len())]), "c1"),
     )
     .await;
     f.t.seed_main(f.repo_id, &c1);
     let modified = b"b\n".to_vec();
-    let bm = put_blob(&f, &modified).await;
+    let bm = put_blob(f, &modified).await;
     let c_mod = create_ok(
-        &f,
+        f,
         cs_body(
             json!([c1.clone()]),
             json!([mod_("f.txt", &bm, modified.len())]),
@@ -606,23 +635,295 @@ async fn record_conflict_still_refuses_a_deletion_side() {
     )
     .await;
     let c_del = create_ok(
-        &f,
+        f,
         cs_body(json!([c1.clone()]), json!([del("f.txt")]), "c-del"),
     )
     .await;
     f.t.move_main(f.repo_id, &c_mod);
 
-    // A deletion side has no blob id: the v2 representation cannot encode
-    // it, so the opt-in refuses loudly instead of silently resolving.
+    (c1, c_mod, c_del)
+}
+
+/// P17: the opt-in records a modify/delete conflict — the rep carries a
+/// deletion side, main's tree holds the F2 rendering byte for byte.
+#[tokio::test]
+async fn record_conflict_records_a_deletion_side() {
+    let f = fixture();
+    let (_, c_mod, c_del) = modify_delete(&f).await;
+
     let resp = land_opt(&f, &c_del, "k-del", true).await;
-    assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
-    assert_eq!(code_of(&resp), "ref_conflict");
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
     assert_eq!(
-        resp.body["error"]["details"]["conflicts"][0]["reason"],
-        json!("deleted by one side, modified by the other")
+        resp.body["conflicts"].as_array().unwrap(),
+        &[json!("f.txt")]
     );
-    assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
-    assert_eq!(main_target(&f).await, c_mod);
+    assert_eq!(f.t.land_state("k-del"), "conflicted");
+    let landed = resp.body["landed"].as_str().unwrap().to_string();
+    assert_eq!(main_target(&f).await, landed);
+
+    let decoded = changeset::decode(&f.t.canonical_of(f.repo_id, &landed)).unwrap();
+    assert_eq!(decoded.conflicts.len(), 1);
+    let rep = &decoded.conflicts[0];
+    assert!(rep.deleted);
+    assert_eq!(rep.sides, vec![Id::from_hex(&blob_hex(b"b\n")).unwrap()]);
+    assert_eq!(rep.base, Some(Id::from_hex(&blob_hex(b"a\n")).unwrap()));
+
+    // The rendering, byte for byte: side 1 is the modification, the base
+    // sits before the deleted divider, the deleted side renders last.
+    let expected = format!(
+        "<<<<<<< naatre side 1/2: {b}\nb\n||||||| naatre base: {a}\na\n\
+         ======= naatre side 2/2: deleted\n>>>>>>> naatre conflict: f.txt\n",
+        b = blob_hex(b"b\n"),
+        a = blob_hex(b"a\n"),
+    );
+    assert_eq!(cat(&f, &landed, "f.txt").await, expected.as_bytes());
+    assert_ne!(main_target(&f).await, c_mod);
+}
+
+/// A change with an explicit exec bit.
+fn change_exec(path: &str, op: &str, blob: &str, size: usize, exec: bool) -> Value {
+    json!({ "path": path, "op": op, "blob": blob, "size": size, "exec": exec })
+}
+
+/// The v2 representation carries an exec bit per side and for the base, so
+/// a conflict whose sides differ only in the exec bit records (never a 500):
+/// the rep holds the bits, the marker lines show ` +x`, the marker file is
+/// not executable, and `lands.state = conflicted`.
+#[tokio::test]
+async fn record_conflict_records_an_exec_only_conflict() {
+    let content = b"same\n".to_vec();
+    let id = blob_hex(&content);
+
+    // (a) chmod +x (same blob) on main vs a delete of the path.
+    let f = fixture();
+    let bx = put_blob(&f, &content).await;
+    let c1 = create_ok(
+        &f,
+        cs_body(
+            json!([]),
+            json!([change_exec("f.txt", "add", &bx, content.len(), false)]),
+            "c1",
+        ),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    let c_chmod = create_ok(
+        &f,
+        cs_body(
+            json!([c1.clone()]),
+            json!([change_exec("f.txt", "mod", &bx, content.len(), true)]),
+            "c-chmod",
+        ),
+    )
+    .await;
+    let c_del = create_ok(
+        &f,
+        cs_body(json!([c1.clone()]), json!([del("f.txt")]), "c-del"),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c_chmod);
+    let resp = land_opt(&f, &c_del, "k-a", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    assert_eq!(f.t.land_state("k-a"), "conflicted");
+    let landed = resp.body["landed"].as_str().unwrap().to_string();
+    let rep = &changeset::decode(&f.t.canonical_of(f.repo_id, &landed))
+        .unwrap()
+        .conflicts[0];
+    assert!(rep.deleted);
+    assert_eq!(rep.base, Some(Id::from_hex(&id).unwrap()));
+    assert!(!rep.base_exec, "the base was not executable");
+    assert_eq!(rep.sides, vec![Id::from_hex(&id).unwrap()]);
+    assert_eq!(rep.sides_exec, vec![true], "the survivor is the chmod +x");
+    let expected = format!(
+        "<<<<<<< naatre side 1/2: {id} +x\nsame\n||||||| naatre base: {id}\nsame\n\
+         ======= naatre side 2/2: deleted\n>>>>>>> naatre conflict: f.txt\n"
+    );
+    assert_eq!(cat(&f, &landed, "f.txt").await, expected.as_bytes());
+    assert!(!marker_file_exec(&f, &landed, "f.txt").await);
+
+    // (b) add/add: the same blob with different exec bits.
+    let f = fixture();
+    let bx = put_blob(&f, &content).await;
+    let seed = create_ok(
+        &f,
+        cs_body(
+            json!([]),
+            json!([add("seed.txt", &bx, content.len())]),
+            "seed",
+        ),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &seed);
+    let c_plain = create_ok(
+        &f,
+        cs_body(
+            json!([seed.clone()]),
+            json!([change_exec("f.txt", "add", &bx, content.len(), false)]),
+            "c-plain",
+        ),
+    )
+    .await;
+    let c_exec = create_ok(
+        &f,
+        cs_body(
+            json!([seed.clone()]),
+            json!([change_exec("f.txt", "add", &bx, content.len(), true)]),
+            "c-exec",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c_plain);
+    let resp = land_opt(&f, &c_exec, "k-b", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    assert_eq!(f.t.land_state("k-b"), "conflicted");
+    let landed = resp.body["landed"].as_str().unwrap().to_string();
+    let rep = &changeset::decode(&f.t.canonical_of(f.repo_id, &landed))
+        .unwrap()
+        .conflicts[0];
+    assert!(!rep.deleted);
+    assert_eq!(rep.base, None);
+    assert_eq!(rep.sides, vec![Id::from_hex(&id).unwrap(); 2]);
+    assert_eq!(
+        rep.sides_exec,
+        vec![false, true],
+        "ascending by (blob, exec)"
+    );
+    let expected = format!(
+        "<<<<<<< naatre side 1/2: {id}\nsame\n======= naatre side 2/2: {id} +x\nsame\n\
+         >>>>>>> naatre conflict: f.txt\n"
+    );
+    assert_eq!(cat(&f, &landed, "f.txt").await, expected.as_bytes());
+    assert!(!marker_file_exec(&f, &landed, "f.txt").await);
+}
+
+/// The exec bit of `path` at `at`, from the /file route.
+async fn marker_file_exec(f: &Fixture, at: &str, path: &str) -> bool {
+    let resp = get(
+        &f.t.app,
+        &format!("/v1/repos/{REPO}/file?at={at}&path={path}"),
+        &f.reader,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    resp.body["exec"].as_bool().unwrap()
+}
+
+/// Record mode never refuses a single-path content conflict: for every
+/// combination of base, ours and theirs (absent, or one of three contents
+/// with either exec bit — 7^3 cases) `merge_trees_recording` answers Ok.
+/// `take_conflict` turns a rep that `conflict::validate` rejects into an
+/// Err, so Ok proves no reachable shape hits that guard (the decision
+/// table only raises a conflict when ours, theirs and base all differ) —
+/// the file/directory duality stays the one refusal and carries its own
+/// recipe text.
+#[test]
+fn record_mode_never_refuses_a_single_path_conflict() {
+    let contents: [&[u8]; 3] = [b"a\n", b"b\n", b"c\n"];
+    // 0 = absent; 1..=6 = content (n-1)/2 with exec (n-1)%2 == 1.
+    let state =
+        |n: usize| -> Option<(usize, bool)> { (n > 0).then(|| ((n - 1) / 2, (n - 1) % 2 == 1)) };
+    let node = |n: usize| -> MemNode {
+        let mut node = MemNode::empty();
+        if let Some((c, exec)) = state(n) {
+            node.apply(&[FileChange {
+                path: "f.txt".into(),
+                op: Op::Add,
+                blob: Some(object_id(Kind::Blob, contents[c])),
+                size: Some(contents[c].len() as u64),
+                exec: Some(exec),
+            }])
+            .unwrap();
+        }
+        node
+    };
+    let fetch = |id: &Id| -> Result<Vec<u8>, String> {
+        contents
+            .iter()
+            .find(|c| object_id(Kind::Blob, c) == *id)
+            .map(|c| c.to_vec())
+            .ok_or_else(|| "unknown blob".to_string())
+    };
+    let mut recorded = 0;
+    for b in 0..7 {
+        for o in 0..7 {
+            for t in 0..7 {
+                let merged = merge_trees_recording(&node(b), &node(o), &node(t), fetch);
+                let merged = merged.unwrap_or_else(|e| {
+                    panic!("record mode refused base={b} ours={o} theirs={t}: {e:?}")
+                });
+                assert!(merged.oversized.is_empty());
+                recorded += merged.conflicts.len();
+            }
+        }
+    }
+    assert!(recorded > 0, "the sweep reached recorded conflicts");
+}
+
+/// The deletion flag survives a rebase: a deletion-side conflicted node
+/// lands (as an ancestor of a plain head) onto a main that moved to touch
+/// another path. The rebased node carries the rep verbatim, `deleted`
+/// included, and the marker file is byte-identical on main.
+#[tokio::test]
+async fn deletion_side_conflicted_node_rebases_and_the_conflict_travels() {
+    let f = fixture();
+    let (_, c_mod, c_del) = modify_delete(&f).await;
+
+    // Record the modify/delete conflict: m1 lands conflicted (parent c_mod).
+    let resp = land_opt(&f, &c_del, "k-record", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let m1 = resp.body["landed"].as_str().unwrap().to_string();
+    let m1_cs = changeset::decode(&f.t.canonical_of(f.repo_id, &m1)).unwrap();
+    assert_eq!(m1_cs.conflicts.len(), 1);
+    assert!(m1_cs.conflicts[0].deleted);
+
+    // main moves to a divergent tip touching ANOTHER path; a child of m1
+    // lands plain on top, rebasing [c3, m1].
+    let fifth = b"fifth\n".to_vec();
+    let bf = put_blob(&f, &fifth).await;
+    let c5 = create_ok(
+        &f,
+        cs_body(
+            json!([c_mod.clone()]),
+            json!([add("fifth.txt", &bf, fifth.len())]),
+            "c5",
+        ),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c5);
+    let third = b"third\n".to_vec();
+    let bt = put_blob(&f, &third).await;
+    let c3 = create_ok(
+        &f,
+        cs_body(
+            json!([m1.clone()]),
+            json!([add("third.txt", &bt, third.len())]),
+            "c3",
+        ),
+    )
+    .await;
+    let resp = land(&f, &c3, "k-travel").await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let landed = resp.body["landed"].as_str().unwrap().to_string();
+    assert_eq!(main_target(&f).await, landed);
+
+    // The rebased m1' carries the rep verbatim, deletion flag included.
+    let landed_cs = changeset::decode(&f.t.canonical_of(f.repo_id, &landed)).unwrap();
+    let m1_rebased = landed_cs.parents[0];
+    assert_ne!(m1_rebased.to_hex(), m1, "the rebased node got a new id");
+    let carried = changeset::decode(&f.t.canonical_of(f.repo_id, &m1_rebased.to_hex())).unwrap();
+    assert_eq!(carried.conflicts, m1_cs.conflicts);
+    assert!(carried.conflicts[0].deleted, "the deletion flag survived");
+
+    // The marker file is byte-identical on main, and the other paths landed.
+    let expected = format!(
+        "<<<<<<< naatre side 1/2: {b}\nb\n||||||| naatre base: {a}\na\n\
+         ======= naatre side 2/2: deleted\n>>>>>>> naatre conflict: f.txt\n",
+        b = blob_hex(b"b\n"),
+        a = blob_hex(b"a\n"),
+    );
+    assert_eq!(cat(&f, &landed, "f.txt").await, expected.as_bytes());
+    assert_eq!(cat(&f, &landed, "fifth.txt").await, fifth);
+    assert_eq!(cat(&f, &landed, "third.txt").await, third);
 }
 
 // ---- 5. recipe shapes (M12a-fix) -------------------------------------------
@@ -660,6 +961,7 @@ async fn recipes_lead_with_the_api_field_and_name_the_refusal() {
     // and keeps the API request field named for non-CLI clients.
     let resp = land(&f, &c_del, "k-def").await;
     assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
+    assert_eq!(code_of(&resp), "ref_conflict");
     let recipe = resp.body["error"]["details"]["recipe"].as_str().unwrap();
     assert!(
         recipe.starts_with(
@@ -672,19 +974,54 @@ async fn recipes_lead_with_the_api_field_and_name_the_refusal() {
         recipe.contains("the API request field \"record_conflict\": true for non-CLI clients"),
         "{recipe}"
     );
+}
 
-    // The REFUSED-under-opt-in recipe: a deletion side is unrecordable —
-    // it names that, and advises only the resolution path.
-    let resp = land_opt(&f, &c_del, "k-ref", true).await;
+/// The REFUSED-under-opt-in recipe: only a file/directory duality is
+/// unrecordable now — the refusal names it and advises only the
+/// resolution path, never the flag just used.
+#[tokio::test]
+async fn record_conflict_refuses_a_file_directory_duality() {
+    let f = fixture();
+    let seed = b"s\n".to_vec();
+    let bs = put_blob(&f, &seed).await;
+    let c1 = create_ok(
+        &f,
+        cs_body(json!([]), json!([add("seed.txt", &bs, seed.len())]), "c1"),
+    )
+    .await;
+    f.t.seed_main(f.repo_id, &c1);
+    // main gains the FILE `d`; the landing node adds `d/x`: no path-level
+    // conflict, but the merged result straddles file and directory.
+    let bd = put_blob(&f, b"d\n").await;
+    let c_file = create_ok(
+        &f,
+        cs_body(json!([c1.clone()]), json!([add("d", &bd, 2)]), "c-file"),
+    )
+    .await;
+    let bx = put_blob(&f, b"x\n").await;
+    let c_dir = create_ok(
+        &f,
+        cs_body(json!([c1.clone()]), json!([add("d/x", &bx, 2)]), "c-dir"),
+    )
+    .await;
+    f.t.move_main(f.repo_id, &c_file);
+
+    let resp = land_opt(&f, &c_dir, "k-ref", true).await;
     assert_eq!(resp.status, StatusCode::CONFLICT, "body: {}", resp.body);
+    assert_eq!(code_of(&resp), "ref_conflict");
     let recipe = resp.body["error"]["details"]["recipe"].as_str().unwrap();
     assert!(recipe.contains("cannot be recorded"), "{recipe}");
-    assert!(recipe.contains("deletion side"), "{recipe}");
-    assert!(recipe.contains("fetch the conflict blobs"), "{recipe}");
     assert!(
-        !recipe.contains("record_conflict: true does apply"),
+        recipe.contains("a file and a directory at the same path"),
         "{recipe}"
     );
+    assert!(recipe.contains("fetch the conflict blobs"), "{recipe}");
+    assert!(
+        recipe.contains("record_conflict: true does not apply here"),
+        "{recipe}"
+    );
+    assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
+    assert_eq!(main_target(&f).await, c_file);
 }
 
 // ---- 6/7. gate coverage: rep arms and the clean-merge sibling ---------------
@@ -758,7 +1095,10 @@ async fn tombstoned_rep_side_refuses_the_record_before_any_write() {
     let rep = ConflictRep {
         path: "same.txt".into(),
         base: Some(Id::from_hex(&blob_hex(b"l1\nl2\nl3\n")).unwrap()),
+        base_exec: false,
+        sides_exec: vec![false; sides.len()],
         sides,
+        deleted: false,
     };
     let marker = object_id(
         Kind::Blob,
@@ -1189,4 +1529,73 @@ async fn record_conflict_true_on_a_clean_land_is_done() {
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
     assert_eq!(resp.body["conflicts"].as_array().unwrap(), &[] as &[Value]);
     assert_eq!(f.t.land_state("k-clean"), "done");
+}
+
+// ---- P6: /root refuses a client below the node's conflict format -----------
+
+#[tokio::test]
+async fn root_refuses_a_client_below_the_nodes_conflict_format() {
+    let root_uri = |id: &str| format!("/v1/repos/{REPO}/changesets/{id}/root");
+
+    // A format-1 node (content sides only) and its v1 parent.
+    let f = fixture();
+    let (c1, c2, _) = diverged(&f, vec![]).await;
+    let resp = land_opt(&f, &c2, "k1", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let fmt1 = resp.body["landed"].as_str().unwrap().to_string();
+
+    // No header: refused.
+    let r = get_with_format(&f.t.app, &root_uri(&fmt1), &f.reader, None).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "body: {}", r.body);
+    assert_eq!(code_of(&r), "version_skew_conflicted");
+    assert_eq!(
+        r.body["error"]["details"],
+        json!({"needed": 1, "announced": 0})
+    );
+    assert_eq!(
+        r.body["error"]["message"],
+        json!(format!(
+            "changeset {fmt1} carries a first-class conflict in conflict format 1; this \
+             client announces conflict format 0 in its Naatre-Conflict-Format header \
+             (absent or unparsable = 0) and cannot materialize it honestly — upgrade \
+             the client (GET /version reports the server's protocol)"
+        ))
+    );
+    for ok in ["1", "2"] {
+        let r = get_with_format(&f.t.app, &root_uri(&fmt1), &f.reader, Some(ok)).await;
+        assert_eq!(r.status, StatusCode::OK, "header {ok}: {}", r.body);
+    }
+    // An unparsable header counts as 0.
+    let r = get_with_format(&f.t.app, &root_uri(&fmt1), &f.reader, Some("two")).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(
+        r.body["error"]["details"],
+        json!({"needed": 1, "announced": 0})
+    );
+    // A v1 node never refuses, with or without the header.
+    let r = get_with_format(&f.t.app, &root_uri(&c1), &f.reader, None).await;
+    assert_eq!(r.status, StatusCode::OK, "body: {}", r.body);
+
+    // A format-2 node (a deletion side).
+    let f = fixture();
+    let (_, _, c_del) = modify_delete(&f).await;
+    let resp = land_opt(&f, &c_del, "k2", true).await;
+    assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.body);
+    let fmt2 = resp.body["landed"].as_str().unwrap().to_string();
+    let r = get_with_format(&f.t.app, &root_uri(&fmt2), &f.reader, None).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "body: {}", r.body);
+    assert_eq!(
+        r.body["error"]["details"],
+        json!({"needed": 2, "announced": 0})
+    );
+    let r = get_with_format(&f.t.app, &root_uri(&fmt2), &f.reader, Some("1")).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "body: {}", r.body);
+    assert_eq!(
+        r.body["error"]["details"],
+        json!({"needed": 2, "announced": 1})
+    );
+    let r = get_with_format(&f.t.app, &root_uri(&fmt2), &f.reader, Some("2")).await;
+    assert_eq!(r.status, StatusCode::OK, "body: {}", r.body);
+    assert!(r.body["root_tree_id"].is_string());
+    // Header 2 never refuses (no node needs format 3): 200 is the only outcome.
 }

@@ -23,15 +23,16 @@
 //! (`merge_trees_recording`, the `--record-conflict` land): every
 //! representable conflict materializes its markers into the merged tree
 //! instead of failing it, and the conflict list comes back alongside — a
-//! conflict with fewer than two content sides (a deletion side has no blob
-//! id) stays fatal, refusing loudly rather than silently resolving.
+//! modify/delete conflict records with a deletion side and an exec-only
+//! conflict records with per-side exec bits (F2); only a merged result that
+//! is not a consistent tree stays fatal.
 
 use std::collections::BTreeMap;
 
 use similar::{DiffOp, TextDiff};
 
 use naatre_core::changeset::{FileChange, Op};
-use naatre_core::conflict::{ConflictRep, marker_bytes};
+use naatre_core::conflict::{self, ConflictRep, marker_bytes};
 use naatre_core::ids::{Id, Kind, object_id};
 use naatre_store::cas::BLOB_LIMIT;
 
@@ -204,14 +205,18 @@ impl FileMeta {
     }
 }
 
-/// A per-path merge failure: who is on each side, by blob id.
+/// A per-path merge failure: who is on each side, by blob id and exec bit
+/// (`false` for an absent side).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathConflict {
     pub path: String,
     pub reason: String,
     pub base_blob: Option<Id>,
+    pub base_exec: bool,
     pub ours_blob: Option<Id>,
+    pub ours_exec: bool,
     pub theirs_blob: Option<Id>,
+    pub theirs_exec: bool,
 }
 
 /// What a tree merge does at a conflicting path: refuse the merge with the
@@ -299,13 +304,13 @@ pub fn merge_trees(
 /// The recording variant of [`merge_trees`]: every representable conflict
 /// materializes its marker content (the representation's deterministic
 /// rendering) into the merged tree, and [`RecordedMerge::conflicts`] lists
-/// them all. `Err` is reserved for refusals: blob fetch failures, tree
-/// duality violations, and conflicts with fewer than two content sides (a
-/// deletion side has no blob id to carry — the v2 representation cannot
-/// encode it, so the land refuses instead of silently resolving). A marker
-/// whose bytes would exceed the blob limit is PRE-SIZED here and reported
-/// in [`RecordedMerge::oversized`] — the caller refuses 413 before any
-/// bytes reach the CAS.
+/// them all. `Err` is reserved for refusals: blob fetch failures and tree
+/// duality violations (a file and a directory at one path); a modify/delete
+/// conflict records with a deletion side, an exec-only conflict with the
+/// sides' exec bits. A marker whose bytes would exceed
+/// the blob limit is PRE-SIZED here and reported in
+/// [`RecordedMerge::oversized`] — the caller refuses 413 before any bytes
+/// reach the CAS.
 pub fn merge_trees_recording(
     base: &MemNode,
     ours: &MemNode,
@@ -321,21 +326,39 @@ pub fn merge_trees_recording(
     )
 }
 
-/// The representation of a path conflict, when both competing sides carry
-/// content (a deletion side has no blob id and cannot be represented).
-/// The sides are the sorted (ours, theirs) ids — a rep is orderless. Also
-/// the land's rep builder for recorded conflicts.
+/// The representation of a path conflict, or `None` when the conflict is
+/// not recordable. When both competing sides carry content the rep holds
+/// the sides sorted by `(blob, exec)` — a rep is orderless; when one side
+/// deleted the path the rep holds the surviving `(blob, exec)` and
+/// `deleted` (a deletion side has no blob id). The exec bits ride along, so
+/// a conflict whose sides differ only in the exec bit records. A rep that
+/// [`conflict::validate`] rejects is `None`, so none reaches `encode`. The
+/// merge's decision table only raises a content conflict when ours, theirs
+/// and the base all differ by `(blob, exec)`, so no reachable shape is
+/// rejected (the single-path sweep in `m12a_test` pins it); the guard keeps
+/// a future table change from reaching `encode` and answering 500. Also the
+/// land's rep builder for recorded conflicts.
 pub(crate) fn content_rep(c: &PathConflict) -> Option<ConflictRep> {
-    let mut sides = vec![c.ours_blob?, c.theirs_blob?];
-    sides.sort_by_key(|id| id.0);
-    Some(ConflictRep {
+    let mut sides: Vec<(Id, bool)> = c
+        .ours_blob
+        .map(|id| (id, c.ours_exec))
+        .into_iter()
+        .chain(c.theirs_blob.map(|id| (id, c.theirs_exec)))
+        .collect();
+    sides.sort_by_key(|(id, exec)| (id.0, *exec));
+    let rep = ConflictRep {
         path: c.path.clone(),
         base: c.base_blob,
-        sides,
-    })
+        base_exec: c.base_blob.is_some() && c.base_exec,
+        deleted: sides.len() < 2,
+        sides: sides.iter().map(|(id, _)| *id).collect(),
+        sides_exec: sides.iter().map(|(_, exec)| *exec).collect(),
+    };
+    conflict::validate(std::slice::from_ref(&rep)).ok()?;
+    Some(rep)
 }
 
-/// The exec bit of a merged or materialized file: agreeing sides win, one
+/// The exec bit of a cleanly merged file: agreeing sides win, one
 /// side matching the base defers to the other, otherwise ours. A deleted
 /// side (None) leaves the surviving side's bit.
 fn resolve_exec(b: Option<FileMeta>, o: Option<FileMeta>, t: Option<FileMeta>) -> bool {
@@ -367,9 +390,6 @@ fn resolve_exec(b: Option<FileMeta>, o: Option<FileMeta>, t: Option<FileMeta>) -
 fn take_conflict(
     on: OnConflict,
     c: PathConflict,
-    b: Option<FileMeta>,
-    o: Option<FileMeta>,
-    t: Option<FileMeta>,
     recorded: &mut Vec<PathConflict>,
     refused: &mut Vec<PathConflict>,
     merged_files: &mut BTreeMap<String, FileMeta>,
@@ -403,7 +423,10 @@ fn take_conflict(
                 let meta = FileMeta {
                     blob,
                     size: bytes.len() as u64,
-                    exec: resolve_exec(b, o, t),
+                    // The marker file itself is never executable; each
+                    // side's own bit is recorded in the representation and
+                    // shown on the marker line.
+                    exec: false,
                 };
                 if !new_blobs.iter().any(|(id, _)| *id == blob) {
                     new_blobs.push((blob, bytes));
@@ -412,9 +435,8 @@ fn take_conflict(
                 recorded.push(c);
                 Ok(())
             }
-            // Fewer than two content sides (a deletion side has no blob
-            // id): refuse rather than record a lossy non-resolution — the
-            // v2 representation cannot encode it.
+            // `content_rep` built no valid representation (a guard; see its
+            // doc): refuse rather than record a lossy non-resolution.
             None => {
                 refused.push(c);
                 Ok(())
@@ -468,8 +490,11 @@ fn merge_trees_mode(
             path: path.clone(),
             reason: reason.to_string(),
             base_blob: b.map(|m| m.blob),
+            base_exec: b.is_some_and(|m| m.exec),
             ours_blob: o.map(|m| m.blob),
+            ours_exec: o.is_some_and(|m| m.exec),
             theirs_blob: t.map(|m| m.blob),
+            theirs_exec: t.is_some_and(|m| m.exec),
         };
 
         // Decision table (entry-level equality, so `o == t` covers
@@ -536,9 +561,6 @@ fn merge_trees_mode(
                     Ok(None) => take_conflict(
                         on,
                         conflict("both modified, line merge conflict"),
-                        b,
-                        o,
-                        t,
                         &mut recorded,
                         &mut conflicts,
                         &mut merged_files,
@@ -555,9 +577,6 @@ fn merge_trees_mode(
                 take_conflict(
                     on,
                     conflict("both added, different content"),
-                    b,
-                    o,
-                    t,
                     &mut recorded,
                     &mut conflicts,
                     &mut merged_files,
@@ -572,9 +591,6 @@ fn merge_trees_mode(
                 take_conflict(
                     on,
                     conflict("deleted by one side, modified by the other"),
-                    b,
-                    o,
-                    t,
                     &mut recorded,
                     &mut conflicts,
                     &mut merged_files,
@@ -620,8 +636,11 @@ fn merge_trees_mode(
         return Err(vec![PathConflict {
             reason: "merged result is not a consistent tree (file/directory duality)".into(),
             base_blob: None,
+            base_exec: false,
             ours_blob: None,
+            ours_exec: false,
             theirs_blob: None,
+            theirs_exec: false,
             path,
         }]);
     }

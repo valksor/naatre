@@ -67,8 +67,8 @@ pub struct LandRequest {
     /// M12 opt-in (default false): instead of the default 409 + recipe on
     /// a rebase conflict, record the conflict on main as a conflicted
     /// changeset (format v2, markers materialized in its tree) and settle
-    /// ONCE with `lands.state = 'conflicted'`. Unrepresentable conflicts
-    /// (a deletion side) still refuse.
+    /// ONCE with `lands.state = 'conflicted'`. Only file/directory
+    /// conflicts still refuse.
     #[serde(default)]
     pub record_conflict: bool,
 }

@@ -122,24 +122,26 @@ TLS-terminating reverse proxy in front (see below).
   conflicted changeset — a logical conflict stored inside the changeset
   payload (format v2), whose tree holds conflict markers; the land still
   settles exactly once, with land status `conflicted`. Conflicted nodes
-  rebase like any node and the conflict travels; a conflict with a
-  deletion side is not recordable and still refuses. **The client side
+  rebase like any node and the conflict travels; a modify/delete
+  conflict records too (the deleted side renders as `deleted`), and so does
+  a conflict that differs only in the exec bit (an executable side shows
+  ` +x`); only file/directory conflicts still refuse. **The client side
   (M12b):** syncing/cloning a conflicted main materializes the markers
   (the conflicted node's root tree IS the markers-materialized tree);
   `naatre status` marks the conflicted paths (`C <path>`); a commit of
   marker-shaped content refuses with `conflict_markers_present`; the
-  resolution is `naatre resolve <path>` — the resolved content commits as
+  resolution is `naatre resolve <path>` (it takes the exec bit from disk:
+  the marker file is never executable, so `chmod +x` the resolved file
+  first to keep it executable) — the resolved content commits as
   an explicit resolution changeset referencing the conflicted head, and
   the following `naatre land` advances main past the conflict (linear
-  history). **Mixed-fleet honesty:** the documented skew refusal
-  (`version_skew_conflicted`) is emitted by NO shipped binary — it exists
-  only in v2-aware-lineage client builds that lack the v2 capability
-  (unit-pinned as a contract); an UNCHANGED pre-M12 client binary has
-  neither the detection code nor the marker gate, so it syncs a conflicted
-  main as plain marker text and can commit those markers as ordinary
-  content. Operators should upgrade clients before enabling
-  `record_conflict` flows (a server-side marker-shape check at land is
-  the recorded follow-up). Formats: `docs/format.md` §8; semantics:
+  history). **Mixed fleets:** clients send `Naatre-Conflict-Format` on
+  every request (format 2). The server refuses `GET /v1/repos/{r}/changesets/{id}/root`
+  of a conflicted node whose conflict format is higher than the header
+  with 409 `version_skew_conflicted`; an absent header counts as 0, so a
+  client that predates the header cannot materialize any conflicted node
+  and must upgrade. Operators should upgrade clients before enabling
+  `record_conflict` flows. Formats: `docs/format.md` §8; semantics:
   `docs/design.md` ("First-class conflicts").
 - **Deploy note for format v2 (M12a): the schema upgrade is a ONE-WAY,
   store-wide lockout.** The first boot of a format-v2 binary upgrades the
@@ -892,7 +894,7 @@ a generic message + `request_id` only.
 | `git_history_diverged` | 409 | import graft refused: histories diverged |
 | `redacted_base` | 409 | the land's base chain crosses a redacted changeset (details name it) |
 | `conflict_markers_present` | 409 | the CLI's commit gate refuses marker-shaped content (M12; CLI-emitted only — the server never emits it) |
-| `version_skew_conflicted` | 409 | conflicted-node sync refusal (M12) — emitted by NO shipped binary; lives in the registry for v2-aware-lineage builds with the v2 capability absent (unit-pinned as a contract; the server never emits it) |
+| `version_skew_conflicted` | 409 | the client's `Naatre-Conflict-Format` header is lower than the conflict format of the node whose root it requested (absent header = 0) — upgrade the client |
 | `malformed` | 400 | structurally malformed payload |
 | `validation` | 422 | semantic validation failure |
 | `path_not_normalized` | 422 | path is not NFC |

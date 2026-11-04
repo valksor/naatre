@@ -219,22 +219,20 @@ hash input, so a v2 id never equals a v1 id of the same bytes.
 share a data dir: the old binary refuses the store at open (the guard
 above), and `naatre restore` refuses a v12 backup under a v11 binary by
 the same comparison (`staged_version > MAX_SUPPORTED`). The client-side
-case (landed with the M12 client slice): a v2-ignorant client against a
-v2-aware server detects a conflicted node through the changeset read's
-`conflicted` field (M12a) and refuses with `version_skew_conflicted`
-(exit 2) — it never silently materializes marker content it cannot
-interpret, and the message points at `GET /version` (which reports the
-protocol version clients warn on skew about). It never receives v2
-content reinterpreted under v1. A v2-aware client materializes the
-markers (the conflicted node's `root_tree_id` IS the markers-materialized
-tree), `status` marks the conflicted paths from `.naatre/state.json`
-(zero server calls), commits of marker-shaped files refuse with
+case: every client sends its conflict format in the `Naatre-Conflict-Format`
+request header (format 2; absent = 0), and the server refuses
+`GET …/changesets/{id}/root` of a conflicted node whose conflict format is
+higher than the header with 409 `version_skew_conflicted` (exit 2 in the
+CLI), naming the needed and announced formats and pointing at
+`GET /version` (which reports the protocol version clients warn on skew
+about). A client never receives conflict content it cannot materialize
+honestly, and a client that predates the header cannot materialize any
+conflicted node. A v2-aware client materializes the markers (the
+conflicted node's `root_tree_id` IS the markers-materialized tree),
+`status` marks the conflicted paths from `.naatre/state.json` (zero server
+calls), commits of marker-shaped files refuse with
 `conflict_markers_present`, and `naatre resolve <path>` commits the
-resolution. The refusal above needs the M12b detection code; an
-UNCHANGED pre-M12 binary client has neither the detection code nor the
-marker gate — it syncs a conflicted main as plain marker text and can
-commit those markers as ordinary content, and for such a binary the
-store-level schema guard is the only lockout. The same hole exists in
+resolution. One hole remains in
 the current binary's WRITABLE MOUNT: a marker-shaped file written
 through a `--writable --flush-land` mount lands as ordinary content
 (the flush path drives land directly and never passes the client's
@@ -258,16 +256,27 @@ Each conflict rep:
 | Field | Encoding |
 |---|---|
 | path | `str` (a legal path, the conflict's location) |
-| base tag | u8: 0 = no common base (add/add), 1 = base present |
-| base | 32-byte blob id, present only when the tag is 1 |
-| sides | u32le count (>= 2), then that many 32-byte blob ids in strictly ascending byte order |
+| flags | u8: bit 0 = base present, bit 1 = one side deleted the path, bit 2 = exec bits present. Other bits must be 0. |
+| base | 32-byte blob id, present only when bit 0 is set; followed by one u8 base exec (0 or 1) when bit 2 is set |
+| sides | u32le count (>= 2, or >= 1 when bit 1 is set), then per side its 32-byte blob id, followed by one u8 side exec (0 or 1) when bit 2 is set; the `(blob id, exec)` pairs in strictly ascending order (blob id bytes first, then exec) |
+
+With bit 2 set the rep reads: `flags`, `[base id, base exec]` (when bit 0),
+`count`, then `count` × (`side id`, `side exec`). Bit 2 is set exactly when
+the base's or some side's exec is 1: a rep without any executable side or
+base encodes as before (bit 2 clear, no exec bytes), and a decoder refuses
+the flag when every exec byte is 0 (not canonical). Exec bytes other than 0
+or 1 and flags above 7 are invalid.
 
 A side is a competing version's blob id — content-addressed, the bytes live
 in the CAS. The base is the common ancestor version where one exists. A
-deletion side has no blob id and cannot be represented: a conflict with
-fewer than two content sides is not recordable (the server refuses it
-instead of silently resolving). Validation rejects a base that equals any
-side (that side did not change — not a conflict).
+deletion side has no blob id. The flags byte records it, and the rendering
+shows it as the last side with the token `deleted` (see below). The flag
+values 0 and 1 keep their pre-F2 meaning, so every existing v2 frame and id
+is byte-identical, and so is every frame without exec bits. Sides and base are
+`(blob id, exec)` pairs: validation rejects a base that equals any side and
+two equal sides, so a side that matches the base is not a conflict, while the
+same blob with different exec bits is (a chmod-only change against a delete,
+or add/add of one blob with different exec bits).
 
 The node's `root_tree_id` is then the markers-materialized tree: each
 conflicted path holds the deterministic rendering of its rep:
@@ -283,12 +292,50 @@ conflicted path holds the deterministic rendering of its rep:
 >>>>>>> naatre conflict: <path>
 ```
 
+A deletion side renders last, as the divider `======= naatre side N/N:
+deleted` with an empty block (N counts it). With one blob side and a base,
+the base section sits between side 1 and that divider:
+
+```
+<<<<<<< naatre side 1/2: <side-1 id>
+<side-1 content>
+||||||| naatre base: <base id>
+<base content>
+======= naatre side 2/2: deleted
+>>>>>>> naatre conflict: <path>
+```
+
+A side whose exec bit is 1 (and the base, when its exec bit is 1) shows the
+token ` +x` (one space, `+x`) right after its blob id on the opener, a
+divider or the base line — and nowhere else; the token is never doubled,
+and `deleted` never carries it:
+
+```
+<<<<<<< naatre side 1/2: <side-1 id> +x
+<side-1 content>
+||||||| naatre base: <base id>
+<base content>
+======= naatre side 2/2: <side-2 id>
+<side-2 content>
+>>>>>>> naatre conflict: <path>
+```
+
+The longest opener is `<<<<<<< naatre side 1/100000: <64 hex> +x` = 97
+bytes plus the newline, inside the 128-byte prefix the server's marker
+screen reads.
+
+A client announces the highest conflict format it materializes in the
+`Naatre-Conflict-Format` request header (absent = 0). Format 1 = content
+sides only (M12). Format 2 = adds the deletion side and the exec bits (F2). The server refuses
+`GET …/changesets/{id}/root` of a node that needs a higher format with 409
+`version_skew_conflicted`.
+
 Every content block ends in a newline (one is appended to non-empty content
 that lacks it), so dividers always start at line beginnings. The
-materialized file's exec bit: agreeing sides win; a side matching the base
-defers to the other; a bare disagreement (neither side matches the base —
-possible only for add/add) takes OURS' bit — a deterministic, documented
-tie-break, never a refusal. The rendering
+materialized marker file itself is never executable (its tree entry has
+exec 0): each side's own bit lives in the representation and shows as ` +x`
+on its marker line. To resolve to an executable file, run `chmod +x` on it
+before `naatre resolve`: the resolution takes the exec bit from disk. The rendering
 is a pure function of the rep plus the referenced contents: the recording
 server and any later client derive byte-identical markers.
 
@@ -300,6 +347,9 @@ empty delta (the parent already held the same markers). The v2 magic
 appears exactly when the conflict list is non-empty — never under a v1
 changeset.
 
-The golden fixtures `changeset-conflict-v2` and
-`changeset-conflict-v2-three-sides` pin this section byte for byte,
-including their v2-domain ids; the v1 fixtures are unchanged.
+The golden fixtures `changeset-conflict-v2`,
+`changeset-conflict-v2-three-sides`, `changeset-conflict-v2-deletion-side`
+and `changeset-conflict-v2-exec` pin this section byte for byte, including
+their v2-domain ids (the last two with `conflict-markers-deletion-side.txt`
+and `conflict-markers-exec.txt`, their renderings); the v1 fixtures are
+unchanged.

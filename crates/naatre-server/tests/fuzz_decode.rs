@@ -26,8 +26,81 @@
 use proptest::prelude::*;
 
 use naatre_core::changeset::{self, Changeset, FileChange, Op};
+use naatre_core::conflict::ConflictRep;
 use naatre_core::error::CoreError;
 use naatre_core::ids::Id;
+
+/// Conflict-section generator (format v2): 0–2 reps at distinct paths
+/// (sorted into canonical order), base present or absent, 2–5 blob sides in
+/// strictly ascending order, and in some cases the deletion flag — the
+/// deleted side is always the last one, and it may leave a single blob
+/// side. Exec bits ride on the base and on each side (the same blob may
+/// appear twice, differing only in its exec bit). Half the generated sets
+/// are empty, so v1 and v2 frames both occur.
+fn arb_conflicts() -> impl Strategy<Value = Vec<ConflictRep>> {
+    let rep = (
+        prop_oneof![
+            Just("c1".to_string()),
+            Just("c2/x".to_string()),
+            Just("c3".to_string()),
+            Just("d/\u{00e9}".to_string()),
+        ],
+        2u8..=5,
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<u8>(),
+        any::<bool>(),
+        any::<bool>(),
+    );
+    prop::collection::vec(rep, 0..=2).prop_map(|reps| {
+        let by_path: std::collections::BTreeMap<String, ConflictRep> = reps
+            .into_iter()
+            .map(
+                |(path, n, with_base, deleted, one_side, exec_mask, base_exec, same_blob)| {
+                    let n = if deleted && one_side { 1 } else { n };
+                    // Strictly ascending (blob, exec): with `same_blob` the
+                    // first two sides share a blob and differ in exec.
+                    let blob_idx = |i: u8| if same_blob && i >= 1 { i - 1 } else { i };
+                    let exec_of = |i: u8| {
+                        if same_blob && i < 2 {
+                            i == 1
+                        } else {
+                            exec_mask >> i & 1 == 1
+                        }
+                    };
+                    let sides = (0..n)
+                        .map(|i| {
+                            let mut b = [0u8; 32];
+                            b[0] = 0xC0;
+                            b[1] = blob_idx(i);
+                            Id(b)
+                        })
+                        .collect();
+                    let sides_exec = (0..n).map(exec_of).collect();
+                    let base = with_base.then(|| {
+                        let mut b = [0u8; 32];
+                        b[0] = 0xD0;
+                        Id(b)
+                    });
+                    (
+                        path.clone(),
+                        ConflictRep {
+                            path,
+                            base,
+                            base_exec: with_base && base_exec,
+                            sides,
+                            sides_exec,
+                            deleted,
+                        },
+                    )
+                },
+            )
+            .collect();
+        // BTreeMap<String, _> iterates in ascending byte order.
+        by_path.into_values().collect()
+    })
+}
 
 /// Changeset-shaped generator: parents (0–2), distinct paths (sorted into
 /// canonical order — the mutations supply the disorder), blob ids from a
@@ -52,8 +125,9 @@ fn arb_changeset() -> impl Strategy<Value = Changeset> {
         prop::option::of(any::<u64>().prop_map(|s| format!("A{s} <a@b>"))),
         prop::option::of(any::<u64>()), // timestamp base
         path_pool,
+        arb_conflicts(),
     )
-        .prop_map(|(parent_seed, author, ts_seed, paths)| {
+        .prop_map(|(parent_seed, author, ts_seed, paths, conflicts)| {
             let parents: Vec<Id> = (0..parent_seed as usize)
                 .map(|i| {
                     let mut b = [0u8; 32];
@@ -90,7 +164,7 @@ fn arb_changeset() -> impl Strategy<Value = Changeset> {
                 })
                 .collect();
             Changeset {
-                conflicts: Vec::new(),
+                conflicts,
                 repo_id: 7,
                 parents,
                 author: author.unwrap_or_else(|| "A <a@b>".to_string()),
@@ -276,6 +350,18 @@ proptest! {
                     // successfully-decoded input is the input, byte for byte.
                     prop_assert_eq!(reencoded, mutated);
                 }
+                Err(
+                    CoreError::EncodeUnsortedConflicts
+                    | CoreError::EncodeConflictSides
+                    | CoreError::Path(_),
+                ) => {
+                    // The decoder is structural; the conflict section's
+                    // ordering, side rules and path grammar are validate's
+                    // job. A flip inside that section can decode and then
+                    // fail exactly there (never from a truncation, an
+                    // append, or a swap).
+                    prop_assert!(kind == "either", "conflict-section encode error from kind {kind}");
+                }
                 Err(CoreError::EncodeUnsorted) => {
                     // The only legal encode failure: the mutation broke
                     // strictly-ascending path order. Order can break two
@@ -333,4 +419,57 @@ fn swap_mutation_breaks_order_and_entry_spans_walk_the_layout() {
         changeset::encode(&parsed),
         Err(CoreError::EncodeUnsorted)
     ));
+}
+
+/// The same pin with a conflict section (a deletion side included) after
+/// the entries: the span walker still ends at the entry list and the swap
+/// stays order-breaking, with the v2 frame decoding structurally.
+#[test]
+fn swap_mutation_with_a_conflict_section_still_breaks_order() {
+    let mut cs = Changeset {
+        repo_id: 7,
+        parents: vec![],
+        author: "a".into(),
+        message: "m".into(),
+        timestamp_ns: 1,
+        changes: vec![
+            FileChange {
+                path: "a".into(),
+                op: Op::Add,
+                blob: Some(Id([1; 32])),
+                size: Some(1),
+                exec: Some(false),
+            },
+            FileChange {
+                path: "b".into(),
+                op: Op::Del,
+                blob: None,
+                size: None,
+                exec: None,
+            },
+        ],
+        conflicts: vec![ConflictRep {
+            path: "c".into(),
+            base: Some(Id([9; 32])),
+            base_exec: true,
+            sides: vec![Id([2; 32])],
+            sides_exec: vec![true],
+            deleted: true,
+        }],
+    };
+    let bytes = changeset::encode(&cs).unwrap();
+    assert!(bytes.starts_with(changeset::MAGIC_V2));
+    assert_eq!(entry_spans(&bytes).expect("spans parse").len(), 2);
+    let (mutated, kind) = apply_mutation(&bytes, &Mutation::Swap { index: 0 });
+    assert_eq!(kind, "order_breaking");
+    let parsed = changeset::decode(&mutated).unwrap();
+    assert_eq!(parsed.conflicts, cs.conflicts);
+    assert!(matches!(
+        changeset::encode(&parsed),
+        Err(CoreError::EncodeUnsorted)
+    ));
+    cs.conflicts[0].deleted = false;
+    cs.conflicts[0].sides = vec![Id([2; 32]), Id([3; 32])];
+    cs.conflicts[0].sides_exec = vec![true, false];
+    assert!(changeset::decode(&changeset::encode(&cs).unwrap()).is_ok());
 }

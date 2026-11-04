@@ -105,9 +105,13 @@ pub struct Changeset {
 /// `str` path, u8 op tag (Add=0, Mod=1, Del=2) and, for Add/Mod, a 32-byte
 /// blob id, u64le size, u8 exec (0 or 1). The v2 encoding then appends the
 /// conflict section (see [`conflict`] and docs/format.md): u32le conflict
-/// count, each `str` path, u8 base tag (0 absent, 1 present), a 32-byte
-/// base id when present, u32le side count (>= 2), that many 32-byte side
-/// ids in strictly ascending order.
+/// count, each `str` path, u8 flags (bit 0 base present, bit 1 one side
+/// deleted the path, bit 2 exec bits present), a 32-byte base id when bit 0
+/// is set (followed by its u8 exec, 0 or 1, when bit 2 is set), u32le blob
+/// side count (>= 2, or >= 1 when bit 1 is set), then per side its 32-byte
+/// id (followed by its u8 exec when bit 2 is set), the `(id, exec)` pairs in
+/// strictly ascending order. Bit 2 is set exactly when the base's or some
+/// side's exec is 1.
 ///
 /// A conflict-free changeset encodes to exactly the v1 bytes, whatever this
 /// module's future gains — v1 ids are never recomputed under a new meaning.
@@ -161,16 +165,22 @@ pub fn encode(cs: &Changeset) -> Result<Vec<u8>, CoreError> {
         out.extend_from_slice(&(cs.conflicts.len() as u32).to_le_bytes());
         for rep in &cs.conflicts {
             write_str(&mut out, &rep.path);
-            match rep.base {
-                Some(base) => {
-                    out.push(1);
-                    out.extend_from_slice(&base.0);
+            let exec = conflict::has_exec(rep);
+            out.push(
+                u8::from(rep.base.is_some()) | (u8::from(rep.deleted) << 1) | (u8::from(exec) << 2),
+            );
+            if let Some(base) = rep.base {
+                out.extend_from_slice(&base.0);
+                if exec {
+                    out.push(u8::from(rep.base_exec));
                 }
-                None => out.push(0),
             }
             out.extend_from_slice(&(rep.sides.len() as u32).to_le_bytes());
-            for side in &rep.sides {
+            for (side, &side_exec) in rep.sides.iter().zip(&rep.sides_exec) {
                 out.extend_from_slice(&side.0);
+                if exec {
+                    out.push(u8::from(side_exec));
+                }
             }
         }
     }
@@ -183,7 +193,8 @@ pub fn encode(cs: &Changeset) -> Result<Vec<u8>, CoreError> {
 /// Strict decoder: accepts exactly the canonical encoding, v1 or v2.
 ///
 /// Rejects trailing bytes, length claims beyond the remaining input or the
-/// 16 MiB cap, unknown op/exec/base tags, fewer than two sides per conflict,
+/// 16 MiB cap, unknown op/exec/flags tags, fewer than two sides per conflict
+/// (one with a deletion side),
 /// invalid UTF-8, and short input — a v1-era binary fed v2 bytes fails the
 /// magic check loudly (it has no v2 arm to misparse into). The decoder is
 /// structural only: ordering and cross-field coherence are [`validate`]'s
@@ -249,28 +260,64 @@ pub fn decode(bytes: &[u8]) -> Result<Changeset, CoreError> {
         if conflict_count == 0 {
             return Err(CoreError::DecodeEmptyConflictSection);
         }
-        // Every conflict occupies at least 77 bytes (a u64le path length, 1
-        // base tag, a u32le side count, and the two minimum 32-byte sides).
-        if conflict_count.saturating_mul(77) > r.remaining() {
+        // Every conflict occupies at least 45 bytes (a u64le path length, 1
+        // flags byte, a u32le side count, and the one minimum 32-byte side
+        // a deletion conflict carries).
+        if conflict_count.saturating_mul(45) > r.remaining() {
             return Err(CoreError::DecodeTooLarge);
         }
         conflicts = Vec::with_capacity(conflict_count.min(MAX_ENTRIES));
         for _ in 0..conflict_count {
             let path = r.str_field()?;
-            let base = match r.u8()? {
-                0 => None,
-                1 => Some(Id(r.take32()?)),
-                other => return Err(CoreError::DecodeInvalidTag(other)),
+            let flags = r.u8()?;
+            if flags > 7 {
+                return Err(CoreError::DecodeInvalidTag(flags));
+            }
+            let has_exec = flags & 4 == 4;
+            let mut any_exec = false;
+            let mut read_exec = |r: &mut Cursor| -> Result<bool, CoreError> {
+                if !has_exec {
+                    return Ok(false);
+                }
+                match r.u8()? {
+                    0 => Ok(false),
+                    1 => {
+                        any_exec = true;
+                        Ok(true)
+                    }
+                    other => Err(CoreError::DecodeInvalidTag(other)),
+                }
             };
+            let (base, base_exec) = if flags & 1 == 1 {
+                let id = Id(r.take32()?);
+                (Some(id), read_exec(&mut r)?)
+            } else {
+                (None, false)
+            };
+            let deleted = flags & 2 == 2;
             let side_count = r.u32_le()? as usize;
-            if side_count < 2 {
+            if side_count < if deleted { 1 } else { 2 } {
                 return Err(CoreError::DecodeConflictSides);
             }
             let mut sides = Vec::with_capacity(side_count.min(MAX_ENTRIES));
+            let mut sides_exec = Vec::with_capacity(side_count.min(MAX_ENTRIES));
             for _ in 0..side_count {
                 sides.push(Id(r.take32()?));
+                sides_exec.push(read_exec(&mut r)?);
             }
-            conflicts.push(ConflictRep { path, base, sides });
+            // Strict canonical acceptance: the exec flag is set exactly
+            // when some exec byte is 1 (encode never writes it otherwise).
+            if has_exec && !any_exec {
+                return Err(CoreError::DecodeInvalidTag(flags));
+            }
+            conflicts.push(ConflictRep {
+                path,
+                base,
+                base_exec,
+                sides,
+                sides_exec,
+                deleted,
+            });
         }
     }
     if r.remaining() != 0 {
@@ -467,7 +514,10 @@ mod tests {
         cs.conflicts = vec![ConflictRep {
             path: "a.txt".into(),
             base: Some(side(1)),
+            base_exec: false,
             sides: vec![side(2), side(3)],
+            sides_exec: vec![false; 2],
+            deleted: false,
         }];
         let bytes = encode(&cs).unwrap();
         assert!(bytes.starts_with(MAGIC_V2));
@@ -514,7 +564,10 @@ mod tests {
         cs.conflicts = vec![ConflictRep {
             path: "a.txt".into(),
             base: Some(side(1)),
+            base_exec: false,
             sides: vec![side(2), side(3)],
+            sides_exec: vec![false; 2],
+            deleted: false,
         }];
         assert!(decode(&encode(&cs).unwrap()).is_ok());
     }
@@ -534,7 +587,10 @@ mod tests {
             .map(|i| ConflictRep {
                 path: format!("p{i}"),
                 base: None,
+                base_exec: false,
                 sides: vec![side(1), side(2)],
+                sides_exec: vec![false; 2],
+                deleted: false,
             })
             .collect();
         cs.conflicts
@@ -545,6 +601,7 @@ mod tests {
         cs.conflicts = vec![ConflictRep {
             path: "a.txt".into(),
             base: None,
+            base_exec: false,
             sides: (0..=MAX_ENTRIES)
                 .map(|i| {
                     let mut id = side(1);
@@ -553,6 +610,8 @@ mod tests {
                     id
                 })
                 .collect(),
+            sides_exec: vec![false; MAX_ENTRIES + 1],
+            deleted: false,
         }];
         cs.conflicts[0].sides.sort_by_key(|s| s.0);
         assert_eq!(validate(&cs), Err(CoreError::EncodeTooManyEntries));
@@ -563,11 +622,75 @@ mod tests {
             .map(|i| ConflictRep {
                 path: format!("p{i}"),
                 base: None,
+                base_exec: false,
                 sides: vec![side(1), side(2)],
+                sides_exec: vec![false; 2],
+                deleted: false,
             })
             .collect();
         cs.conflicts
             .sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
         assert_eq!(validate(&cs), Ok(()));
+    }
+
+    fn exec_cs(base_exec: bool, sides_exec: Vec<bool>) -> Changeset {
+        let mut cs = base_cs();
+        cs.conflicts = vec![ConflictRep {
+            path: "a.txt".into(),
+            base: Some(side(1)),
+            base_exec,
+            sides: vec![side(2), side(3)],
+            sides_exec,
+            deleted: false,
+        }];
+        cs
+    }
+
+    /// The exec encoding: flags bit 2, an exec byte after the base id and
+    /// after each side id; a rep without exec bits keeps the pre-F2 bytes
+    /// (flags 1, no exec bytes).
+    #[test]
+    fn exec_bits_encode_in_the_documented_layout() {
+        let plain = encode(&exec_cs(false, vec![false, false])).unwrap();
+        let exec = encode(&exec_cs(true, vec![false, true])).unwrap();
+        assert_eq!(exec.len(), plain.len() + 3, "base byte + two side bytes");
+        // The conflict section ends: flags, base(32)+exec, count, then
+        // side(32)+exec per side.
+        let tail = &exec[exec.len() - (1 + 32 + 1 + 4 + 2 * 33)..];
+        assert_eq!(tail[0], 0b101, "base present + exec bits present");
+        assert_eq!(&tail[1..33], &side(1).0);
+        assert_eq!(tail[33], 1, "base exec");
+        assert_eq!(&tail[34..38], &2u32.to_le_bytes());
+        assert_eq!(&tail[38..70], &side(2).0);
+        assert_eq!(tail[70], 0);
+        assert_eq!(&tail[71..103], &side(3).0);
+        assert_eq!(tail[103], 1);
+        assert_eq!(decode(&exec).unwrap(), exec_cs(true, vec![false, true]));
+        // No exec bit set anywhere: the pre-F2 frame, flags byte 1.
+        let tail = &plain[plain.len() - (1 + 32 + 4 + 2 * 32)..];
+        assert_eq!(tail[0], 1);
+    }
+
+    /// Strict decoding of the exec bytes: only 0 or 1, flags above 7 are
+    /// invalid, and the flag cannot be set when no exec byte is 1 (encode
+    /// never writes that, so it is not a canonical frame).
+    #[test]
+    fn decode_rejects_bad_exec_bytes_and_flags() {
+        let good = encode(&exec_cs(true, vec![false, true])).unwrap();
+        let flags_at = good.len() - (1 + 32 + 1 + 4 + 2 * 33);
+        let mut bad = good.clone();
+        bad[flags_at + 33] = 2; // base exec byte
+        assert_eq!(decode(&bad), Err(CoreError::DecodeInvalidTag(2)));
+        let mut bad = good.clone();
+        bad[flags_at + 103] = 7; // last side's exec byte
+        assert_eq!(decode(&bad), Err(CoreError::DecodeInvalidTag(7)));
+        let mut bad = good.clone();
+        bad[flags_at] = 8;
+        assert_eq!(decode(&bad), Err(CoreError::DecodeInvalidTag(8)));
+        // Flag set, every exec byte 0: not canonical.
+        let mut bad = good.clone();
+        bad[flags_at + 33] = 0;
+        bad[flags_at + 103] = 0;
+        assert_eq!(decode(&bad), Err(CoreError::DecodeInvalidTag(0b101)));
     }
 }

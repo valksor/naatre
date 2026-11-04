@@ -1,0 +1,7 @@
+<<<<<<< naatre side 1/2: 16d83afd06df9a33bffd68fd033167ecec23aeb63f097c699852c81f05872bdd +x
+theirs
+||||||| naatre base: 7e1ef3918f598c59304d9f99af0d07b730a7a80837478bf07256f73523ba0481 +x
+base
+======= naatre side 2/2: ff8c5bca8586fc07d70242aa6e662f78d7b281b3675180761dd47eb257ae094a
+ours
+>>>>>>> naatre conflict: bin/run.sh

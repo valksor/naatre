@@ -248,10 +248,7 @@ embed redacted bytes in a fresh marker blob) nor merge (the content flows
 into the markers): remove or rewrite the conflicting edit at that path, or
 resolve with the admin who holds the redaction. `lands.state` is `conflicted` exactly when the settlement
 node (main's new tip) is a conflicted node; a land that merely carries a
-conflicted ancestor through settles `done`. Conflicts with fewer than two
-content sides (a deletion side has no blob id to carry) are not
-representable in v2 and refuse under the opt-in too — loudly, never
-silently "resolved" by recording.
+conflicted ancestor through settles `done`. A modify/delete conflict records like any other: its representation carries a deletion side (no blob id), and the markers show that side as the last one with the token `deleted`. Only a conflict whose merged result is not a consistent tree (a file and a directory at one path) refuses under the opt-in. A conflict whose sides differ only in the exec bit records too: the representation carries an exec bit per side and for the base.
 
 **Client surface (M12b).** The client slice closes the loop: `naatre land
 --record-conflict` (the 409 recipe leads with the flag; the API request
@@ -269,16 +266,13 @@ holds), an ordinary commit whose content is a marker file refuses with
 `naatre resolve <path>`: the resolved content commits as an explicit
 resolution changeset referencing the conflicted head, the conflicted mark
 clears, and the subsequent land advances main past the conflict (linear
-history). **Mixed-fleet honesty:** the documented skew refusal
-(`version_skew_conflicted`) is emitted by NO shipped binary — it exists
-only in v2-aware-lineage client builds that lack the v2 capability
-(unit-pinned as a contract); an UNCHANGED pre-M12 client binary has
-neither the detection code nor the marker gate, so it syncs a conflicted
-main as plain marker text and can commit those markers as ordinary
-content — for such a binary the store-level schema guard is the only
-lockout, and operators upgrade clients before enabling `record_conflict`
-flows (the server-side marker-shape check at land is the recorded
-follow-up). **NAMED FOLLOW-UP (the M12 contract question): landing onto a
+history). **Mixed fleets.** Clients send `Naatre-Conflict-Format` on every request
+(format 2). The server refuses the root of a conflicted node whose
+conflict format is higher than the header with 409
+`version_skew_conflicted`; an absent header counts as 0, so a client that
+predates the header cannot materialize any conflicted node and must
+upgrade, and operators upgrade clients before enabling `record_conflict`
+flows. **NAMED FOLLOW-UP (the M12 contract question): landing onto a
 conflicted main drops the conflict representation.** Observed on a real
 flow (the blocked-land retry pin): a plain re-land of a delta that
 competes with a conflicted main MERGES cleanly against the marker

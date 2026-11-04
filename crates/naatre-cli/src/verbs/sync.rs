@@ -27,80 +27,10 @@ use naatre_core::ids::Id;
 use serde_json::{Value, json};
 
 use super::{Net, VerbError};
-use crate::client::HttpError;
 use crate::wc::fetch::{
     CacheRoute, fetch_blobs_verified, materialize, walk_tree_allowing_missing_prefixes,
 };
 use crate::wc::{State, Wc, remove_and_prune, under_sparse};
-
-/// The build's conflicted-node capability (M12b): this client understands
-/// format v2 — it materializes a conflicted node's markers and gates its
-/// own commits against them (naatre-core carries the v2 frame and the
-/// marker rendering/detector). HONESTY (the mixed-fleet disclosure,
-/// docs/format.md "Mixed-fleet skew"): NO shipped binary emits the
-/// refusal — every naatre build ships this constant true, and an
-/// UNCHANGED pre-M12 client binary predates the branch entirely (it
-/// syncs markers as plain text and can commit them; the store-level
-/// schema guard is that binary's only lockout). The constant and the
-/// decision below are the CONTRACT a v2-aware-lineage build with the
-/// capability absent honors, unit-pinned by
-/// `conflicted_sync_refuses_for_a_pre_v2_client`; the repo-required
-/// comment keeps the dead-in-practice branch from reading as live
-/// behavior.
-const CONFLICT_MATERIALIZATION_SUPPORTED: bool = true;
-
-/// The guarded contract check (see the call site): the changeset fetch
-/// and the skew decision run only when this build's v2 capability is
-/// absent. A plain `if CONST` at the call site would read as live
-/// behavior; this wrapper names the contract and folds away in shipped
-/// builds (a const condition inside a function body, not a call-site
-/// branch).
-fn conflicted_contract_check(
-    client: &crate::client::Client,
-    repo: &str,
-    target: &Id,
-) -> Result<(), VerbError> {
-    if CONFLICT_MATERIALIZATION_SUPPORTED {
-        return Ok(());
-    }
-    let csv = client.get_json(
-        &format!(
-            "/v1/repos/{}/changesets/{}",
-            crate::client::uri_segment(repo),
-            target.to_hex()
-        ),
-        &[],
-    )?;
-    conflicted_sync_decision(
-        csv["conflicted"].as_bool() == Some(true),
-        CONFLICT_MATERIALIZATION_SUPPORTED,
-    )
-}
-
-/// The conflicted-sync decision (unit-pinned both ways): a conflicted
-/// node needs v2 materialization support. A client without it refuses
-/// with the documented version-skew error — it never silently
-/// materializes marker content it cannot interpret, and the error names
-/// the upgrade (GET /version reports the server's protocol, the pointer
-/// docs/format.md pins for skew).
-pub(crate) fn conflicted_sync_decision(
-    conflicted: bool,
-    v2_capable: bool,
-) -> Result<(), VerbError> {
-    if conflicted && !v2_capable {
-        return Err(VerbError::Http(HttpError::Envelope {
-            status: 409,
-            code: "version_skew_conflicted".into(),
-            message: "main's head carries a first-class conflict (format v2); this client \
-                      predates v2 and cannot materialize it honestly — upgrade the client \
-                      (GET /version reports the server's protocol)"
-                .into(),
-            details: None,
-            retry_after: None,
-        }));
-    }
-    Ok(())
-}
 
 /// Runs sync; prints the outcome and returns the exit code.
 pub fn run(root: &Path, force: bool, net: &Net) -> i32 {
@@ -157,16 +87,6 @@ pub fn value(root: &Path, force: bool, net: &Net) -> Result<Value, VerbError> {
     if target == head {
         return Ok(json!({ "up_to_date": true, "head": target.to_hex(), "applied": [] }));
     }
-
-    // The M12 conflicted-node contract (senior-qa A2): the target
-    // changeset's `conflicted` field (served since M12a) is what makes
-    // detection possible — for a build WITHOUT v2 materialization. The
-    // fetch + decision are guarded behind the capability constant: every
-    // shipped build folds this away and issues no GET (the v2-aware path
-    // needs no metadata — detection is the marker content itself); the
-    // branch is a contract kept for a v2-ignorant build, pinned by the
-    // decision-function unit tests, unreachable at runtime.
-    conflicted_contract_check(&client, &repo, &target)?;
 
     // Apply the head → target tree difference through the ONE
     // materialization path (m12b-fix: land's working-copy update shares
@@ -430,40 +350,4 @@ pub(crate) fn apply_tree_diff(
         conflicted,
         index,
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The version-skew refusal (M12b, docs/format.md "Mixed-fleet skew"):
-    /// an old-shape client (one that does not understand v2) syncing a
-    /// conflicted node refuses with the documented skew error naming the
-    /// upgrade — it never silently materializes content it cannot
-    /// interpret. A v2-capable client proceeds to materialize (the e2e
-    /// pins that path against the real binary).
-    #[test]
-    fn conflicted_sync_refuses_for_a_pre_v2_client() {
-        let err = conflicted_sync_decision(true, false).expect_err("old client refuses");
-        match err {
-            VerbError::Http(HttpError::Envelope {
-                status,
-                code,
-                message,
-                ..
-            }) => {
-                assert_eq!(status, 409);
-                assert_eq!(code, "version_skew_conflicted");
-                assert!(message.contains("format v2"), "{message}");
-                assert!(message.contains("upgrade the client"), "{message}");
-                assert!(message.contains("GET /version"), "{message}");
-            }
-            other => panic!("expected the skew envelope, got {other:?}"),
-        }
-        // The same client on a CLEAN main proceeds — the refusal is
-        // conflicted-node-shaped, not a blanket refusal.
-        conflicted_sync_decision(false, false).expect("a clean sync needs no v2 support");
-        // The v2-capable client (this build) proceeds on a conflicted node.
-        conflicted_sync_decision(true, true).expect("v2-capable client materializes");
-    }
 }

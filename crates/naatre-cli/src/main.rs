@@ -222,8 +222,8 @@ enum Cmd {
         /// rebase conflict, record the conflict on main as a conflicted
         /// changeset (format v2, markers materialized in its tree,
         /// `lands.state = 'conflicted'` — still ONE settlement; the same
-        /// key re-lands after the 409). Unrepresentable conflicts (a
-        /// deletion side) still refuse. Resolve afterwards with
+        /// key re-lands after the 409). Only file/directory conflicts
+        /// still refuse. Resolve afterwards with
         /// `naatre resolve <path>`.
         #[arg(long)]
         record_conflict: bool,

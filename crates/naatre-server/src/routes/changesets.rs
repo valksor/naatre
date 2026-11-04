@@ -15,7 +15,7 @@ use std::sync::Arc;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -708,31 +708,46 @@ pub async fn get_changeset(
     }))
 }
 
+/// The request header a client announces its conflict format in (absent or
+/// unparsable = 0); see `naatre_core::conflict::conflict_format`.
+pub const CONFLICT_FORMAT_HEADER: &str = "Naatre-Conflict-Format";
+
 /// Fetches a changeset's derived root-tree id. Tombstoned changesets
 /// answer 410 `object_redacted` (the same gate as the changeset fetch — a
-/// redacted node's subtree pointers do not serve either).
+/// redacted node's subtree pointers do not serve either). A conflicted
+/// node whose conflict format is higher than the request's
+/// `Naatre-Conflict-Format` header (absent = 0) answers 409
+/// `version_skew_conflicted`: the client could not materialize it honestly.
 #[utoipa::path(
     get,
     path = "/v1/repos/{r}/changesets/{id}/root",
     params(
         ("r" = String, Path, description = "Repo name"),
-        ("id" = String, Path, description = "Changeset id, 64 lowercase hex")
+        ("id" = String, Path, description = "Changeset id, 64 lowercase hex"),
+        ("Naatre-Conflict-Format" = Option<u32>, Header, description = "The highest conflict format the client materializes (absent or unparsable = 0)")
     ),
     responses(
         (status = 200, description = "The root tree id", body = ChangesetRootResponse),
         (status = 400, description = "Id is not 64 lowercase hex"),
         (status = 401, description = "Missing, unknown, revoked, or expired token"),
         (status = 404, description = "No such repo, or no such changeset in this repo"),
+        (status = 409, description = "version_skew_conflicted: the node carries a first-class conflict in a conflict format higher than the request's `Naatre-Conflict-Format` header (details.needed, details.announced)"),
         (status = 410, description = "The changeset is redacted in this repo (`object_redacted`)")
     )
 )]
 pub async fn get_root(
     state: State<AppState>,
     Extension(auth): Extension<AuthedPrincipal>,
+    headers: HeaderMap,
     Path((repo, id_hex)): Path<(String, String)>,
 ) -> Result<Json<ChangesetRootResponse>, ApiError> {
     repo_read_gate(&state, &auth, &repo).await?;
     let id = parse_id(&id_hex)?;
+    let announced: u32 = headers
+        .get(CONFLICT_FORMAT_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0);
     let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
     let repo_name = repo.clone();
     let root = state
@@ -745,11 +760,38 @@ pub async fn get_root(
                     format!("changeset {gate_hex} is redacted in {gate_repo}"),
                 ));
             }
-            db::changeset_get(conn, repo_id, &id)
-                .map_err(ApiError::log_internal)
-                .map(|row| row.and_then(|r| r.root_tree_id))
+            let Some(row) =
+                db::changeset_get(conn, repo_id, &id).map_err(ApiError::log_internal)?
+            else {
+                return Ok(None);
+            };
+            // Only a v2 frame can carry reps (the magic peek); v1 nodes
+            // never decode and never refuse.
+            if row.canonical.starts_with(naatre_core::changeset::MAGIC_V2) {
+                let cs = changeset::decode(&row.canonical).map_err(|e| {
+                    ApiError::log_internal(format!("stored changeset {gate_hex} undecodable: {e}"))
+                })?;
+                let needed = naatre_core::conflict::conflict_format(&cs.conflicts);
+                if needed > announced {
+                    return Err(ApiError::new(
+                        ApiCode::VersionSkewConflicted,
+                        format!(
+                            "changeset {gate_hex} carries a first-class conflict in conflict \
+                             format {needed}; this client announces conflict format \
+                             {announced} in its {CONFLICT_FORMAT_HEADER} header (absent or \
+                             unparsable = 0) and cannot materialize it honestly — upgrade \
+                             the client (GET /version reports the server's protocol)"
+                        ),
+                    )
+                    .with_details(
+                        serde_json::json!({ "needed": needed, "announced": announced }),
+                    ));
+                }
+            }
+            Ok(Some(row.root_tree_id))
         })
         .await?;
+    let root = root.flatten();
     root.map(|bytes| Id(bytes.try_into().expect("root tree id is 32 bytes")).to_hex())
         .map(|hex| Json(ChangesetRootResponse { root_tree_id: hex }))
         .ok_or_else(|| {

@@ -845,7 +845,7 @@
             "type": "string"
           },
           "record_conflict": {
-            "description": "M12 opt-in (default false): instead of the default 409 + recipe on\na rebase conflict, record the conflict on main as a conflicted\nchangeset (format v2, markers materialized in its tree) and settle\nONCE with `lands.state = 'conflicted'`. Unrepresentable conflicts\n(a deletion side) still refuse.",
+            "description": "M12 opt-in (default false): instead of the default 409 + recipe on\na rebase conflict, record the conflict on main as a conflicted\nchangeset (format v2, markers materialized in its tree) and settle\nONCE with `lands.state = 'conflicted'`. Only file/directory\nconflicts still refuse.",
             "type": "boolean"
           }
         },
@@ -2453,6 +2453,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The highest conflict format the client materializes (absent or unparsable = 0)",
+            "in": "header",
+            "name": "Naatre-Conflict-Format",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -2475,11 +2489,14 @@
           "404": {
             "description": "No such repo, or no such changeset in this repo"
           },
+          "409": {
+            "description": "version_skew_conflicted: the node carries a first-class conflict in a conflict format higher than the request's `Naatre-Conflict-Format` header (details.needed, details.announced)"
+          },
           "410": {
             "description": "The changeset is redacted in this repo (`object_redacted`)"
           }
         },
-        "summary": "Fetches a changeset's derived root-tree id. Tombstoned changesets\nanswer 410 `object_redacted` (the same gate as the changeset fetch — a\nredacted node's subtree pointers do not serve either).",
+        "summary": "Fetches a changeset's derived root-tree id. Tombstoned changesets\nanswer 410 `object_redacted` (the same gate as the changeset fetch — a\nredacted node's subtree pointers do not serve either). A conflicted\nnode whose conflict format is higher than the request's\n`Naatre-Conflict-Format` header (absent = 0) answers 409\n`version_skew_conflicted`: the client could not materialize it honestly.",
         "tags": [
           "routes::changesets"
         ]

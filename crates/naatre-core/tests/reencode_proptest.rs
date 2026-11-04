@@ -162,6 +162,32 @@ proptest! {
         prop_assert_eq!(a, b);
     }
 
+    /// P3: the opener screen never misses a marker. For every generated
+    /// rep (2–6 blob sides, or one blob side plus a deletion side; UTF-8 side
+    /// contents, as `marker_shaped` requires) both the full
+    /// parse and the 128-byte-prefix predicate hold on the rendering, and
+    /// the rep's conflict format is 2 exactly when it deletes or carries
+    /// an exec bit.
+    #[test]
+    fn marker_opener_never_misses_a_marker(rep in arb_conflict_rep()) {
+        let contents: std::collections::HashMap<[u8; 32], Vec<u8>> = rep
+            .sides
+            .iter()
+            .chain(rep.base.iter())
+            .map(|id| (id.0, id.to_hex().into_bytes()))
+            .collect();
+        let bytes = conflict::marker_bytes(&rep, |id| {
+            contents.get(&id.0).cloned().ok_or_else(|| "missing".into())
+        })
+        .expect("markers");
+        prop_assert!(conflict::marker_shaped(&bytes));
+        let cut = bytes.len().min(conflict::MARKER_PREFIX_BYTES);
+        prop_assert!(conflict::marker_opener(&bytes[..cut]));
+        let format = conflict::conflict_format(std::slice::from_ref(&rep));
+        let execs = rep.base_exec || rep.sides_exec.iter().any(|&e| e);
+        prop_assert_eq!(format, if rep.deleted || execs { 2 } else { 1 });
+    }
+
     /// Same fuzz guarantee for trees.
     #[test]
     fn tree_decode_fuzz(
@@ -346,41 +372,64 @@ fn arb_changeset() -> impl Strategy<Value = Changeset> {
         )
 }
 
-/// One conflict rep: 2–5 distinct strictly-ascending sides (>=3-side cases
-/// exercise the N-way shape), optional base distinct from every side.
+/// One conflict rep: 2–5 distinct strictly-ascending `(blob, exec)` sides
+/// (>=3-side cases exercise the N-way shape; the same blob may appear twice
+/// with different exec bits), optional base distinct from every side by
+/// `(blob, exec)`, and (F2) an optional deletion side — which may leave a
+/// single blob side.
 fn arb_conflict_rep() -> impl Strategy<Value = ConflictRep> {
     (arb_path(), 2usize..=5).prop_flat_map(|(path, n)| {
         (
             Just(path),
-            proptest::collection::vec(arb_id(), n),
+            proptest::collection::vec((arb_id(), any::<bool>()), n),
             any::<bool>(),
-            proptest::collection::vec(arb_id(), 1),
+            proptest::collection::vec((arb_id(), any::<bool>()), 1),
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
         )
-            .prop_map(|(path, mut sides, with_base, base_candidate)| {
-                sides.sort_by_key(|s| s.0);
-                sides.dedup();
-                // A random draw can collide below the two-side minimum;
-                // pad with deterministic out-of-band ids, re-sorting after.
-                let mut pad = 0u8;
-                while sides.len() < 2 {
-                    let mut b = [0u8; 32];
-                    b[0] = 0xfe;
-                    b[1] = pad;
-                    pad += 1;
-                    let cand = Id(b);
-                    if !sides.contains(&cand) {
-                        sides.push(cand);
+            .prop_map(
+                |(path, mut pairs, with_base, base_candidate, deleted, one_side, dup_blob)| {
+                    if dup_blob {
+                        let (id, e) = pairs[0];
+                        pairs.push((id, !e));
                     }
-                }
-                sides.sort_by_key(|s| s.0);
-                // The base must differ from every side.
-                let base = if with_base {
-                    base_candidate.into_iter().find(|c| !sides.contains(c))
-                } else {
-                    None
-                };
-                ConflictRep { path, base, sides }
-            })
+                    pairs.sort_by_key(|(id, e)| (id.0, *e));
+                    pairs.dedup();
+                    // A random draw can collide below the two-side minimum;
+                    // pad with deterministic out-of-band ids, re-sorting after.
+                    let mut pad = 0u8;
+                    while pairs.len() < 2 {
+                        let mut b = [0u8; 32];
+                        b[0] = 0xfe;
+                        b[1] = pad;
+                        pad += 1;
+                        let cand = (Id(b), false);
+                        if !pairs.contains(&cand) {
+                            pairs.push(cand);
+                        }
+                    }
+                    pairs.sort_by_key(|(id, e)| (id.0, *e));
+                    // A deletion side needs only one blob side.
+                    if deleted && one_side {
+                        pairs.truncate(1);
+                    }
+                    // The base must differ from every side by (blob, exec).
+                    let base = if with_base {
+                        base_candidate.into_iter().find(|c| !pairs.contains(c))
+                    } else {
+                        None
+                    };
+                    ConflictRep {
+                        path,
+                        base: base.map(|(id, _)| id),
+                        base_exec: base.is_some_and(|(_, e)| e),
+                        sides: pairs.iter().map(|(id, _)| *id).collect(),
+                        sides_exec: pairs.iter().map(|(_, e)| *e).collect(),
+                        deleted,
+                    }
+                },
+            )
     })
 }
 

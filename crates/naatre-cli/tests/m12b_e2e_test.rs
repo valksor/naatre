@@ -40,7 +40,37 @@ struct Naatre {
 }
 
 impl Naatre {
+    /// Runs the binary once; when it fails with `writer_busy` — the server's
+    /// documented backpressure while its single write slot is held (a
+    /// background derive pass under CPU load), after the CLI's own short
+    /// retry budget ran out and the write was NOT applied — the identical
+    /// command is run again, as the CLI's message instructs. Every retry is
+    /// logged on stderr (`RETRY writer_busy …`), so the pressure stays
+    /// visible in `--nocapture` runs; `NAATRE_TEST_NO_BUSY_RETRY=1` turns the
+    /// retry off (the control run). At most 8 re-runs, so a command that
+    /// stays busy fails within about a minute. Every other outcome
+    /// (including every 409/422 a test asserts) returns as-is. The plan's
+    /// F4 slice measures whether this retry can go.
     fn run(&self, cwd: &Path, args: &[&str]) -> std::process::Output {
+        let mut out = self.run_once(cwd, args);
+        if std::env::var("NAATRE_TEST_NO_BUSY_RETRY").as_deref() == Ok("1") {
+            return out;
+        }
+        for attempt in 1..=8 {
+            if out.status.success() || !string_of(&out.stderr).contains("writer_busy") {
+                break;
+            }
+            eprintln!(
+                "RETRY writer_busy attempt {attempt} for `naatre {}`",
+                args.join(" ")
+            );
+            std::thread::sleep(Duration::from_millis(250));
+            out = self.run_once(cwd, args);
+        }
+        out
+    }
+
+    fn run_once(&self, cwd: &Path, args: &[&str]) -> std::process::Output {
         Command::new(&self.bin)
             .args(args)
             .current_dir(cwd)
@@ -1353,5 +1383,293 @@ fn resolve_unmarked_markers_restore_records_marks_and_misclassification() {
     let v: serde_json::Value = serde_json::from_str(status_b.trim()).unwrap();
     assert_eq!(v["conflicted"], serde_json::json!([]), "{v}");
 
+    serve.stop();
+}
+
+/// Boots a fresh data dir, creates `repo`, seeds it with `files` through
+/// the import path (serve stops for the flock), restarts serve and mints
+/// a writer token. Returns the running server and a CLI handle on it.
+fn seeded(
+    bin: &Path,
+    root: &Path,
+    repo: &str,
+    files: &[(&str, &[u8])],
+    log_prefix: &str,
+) -> (Serve, Naatre) {
+    let data = root.join("data");
+    let (mut serve, admin) = boot(bin, root, &format!("{log_prefix}-1.log"));
+    let mut cli = Naatre {
+        bin: bin.to_path_buf(),
+        url: format!("http://127.0.0.1:{}", serve.port),
+        token: admin,
+    };
+    cli.run_ok(root, &["repo", "create", repo]);
+    let writer = string_of(
+        &cli.run(root, &["token", "create", "agent", "--role", "writer"])
+            .stdout,
+    )
+    .lines()
+    .find_map(|l| l.strip_prefix("token: "))
+    .expect("token printed")
+    .to_string();
+    serve.stop();
+    let seed_git = root.join("seed-git");
+    let git = |args: &[&str]| {
+        let out = Command::new("git").args(args).output().expect("git run");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            string_of(&out.stderr)
+        );
+    };
+    git(&[
+        "-c",
+        "init.defaultBranch=main",
+        "init",
+        "-q",
+        seed_git.to_str().unwrap(),
+    ]);
+    for (name, content) in files {
+        std::fs::write(seed_git.join(name), content).expect("seed file");
+    }
+    git(&["-C", seed_git.to_str().unwrap(), "add", "."]);
+    git(&[
+        "-C",
+        seed_git.to_str().unwrap(),
+        "-c",
+        "user.email=seed@example.com",
+        "-c",
+        "user.name=seed",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
+    cli.run_ok(
+        root,
+        &[
+            "import",
+            "--data",
+            data.to_str().unwrap(),
+            "--into",
+            repo,
+            seed_git.to_str().unwrap(),
+        ],
+    );
+    let serve = Serve::start(bin, &data, &root.join(format!("{log_prefix}-2.log")));
+    cli.url = format!("http://127.0.0.1:{}", serve.port);
+    cli.token = writer;
+    (serve, cli)
+}
+
+/// Clones `repo` into `root/<name>` and returns the path.
+fn clone_into(cli: &Naatre, root: &Path, repo: &str, name: &str) -> PathBuf {
+    let wc = root.join(name);
+    let out = cli.run(
+        root,
+        &[
+            "clone",
+            &format!("{}/{repo}", cli.url),
+            "--into",
+            wc.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "clone {name}: {}",
+        string_of(&out.stderr)
+    );
+    wc
+}
+
+/// P4: a modify/delete conflict recorded under `--record-conflict` is
+/// detected by `status` and `resolve` on a second client. A modifies
+/// `f.txt`, B deletes it and lands with the opt-in; C syncs and sees the
+/// deletion-side markers; `resolve` treats the path as conflicted; after C
+/// edits the file, `resolve` succeeds and `land` advances main.
+#[test]
+fn deletion_side_conflict_status_and_resolve() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_naatre"));
+    let root = tempfile::tempdir().expect("tempdir");
+    let root = root.path();
+    let (mut serve, cli) = seeded(
+        &bin,
+        root,
+        "delside",
+        &[("f.txt", b"base-1\nbase-2\n"), ("keep.txt", b"keep\n")],
+        "serve-del",
+    );
+    let wc_a = clone_into(&cli, root, "delside", "wc_a");
+    let wc_b = clone_into(&cli, root, "delside", "wc_b");
+    let wc_c = clone_into(&cli, root, "delside", "wc_c");
+    let wc_d = clone_into(&cli, root, "delside", "wc_d");
+
+    step!("A modifies f.txt and lands; B deletes it");
+    std::fs::write(wc_a.join("f.txt"), b"alpha-1\nbase-2\n").unwrap();
+    cli.run_ok(&wc_a, &["commit", "-m", "alpha"]);
+    cli.run_ok(&wc_a, &["land", "--key", "ka"]);
+    std::fs::remove_file(wc_b.join("f.txt")).unwrap();
+    cli.run_ok(&wc_b, &["commit", "-m", "delete f"]);
+    let out = cli.run(&wc_b, &["land", "--key", "kb"]);
+    assert_eq!(out.status.code(), Some(2), "the default land 409s");
+    assert!(string_of(&out.stderr).contains("ref_conflict"));
+    step!("B lands --record-conflict (a modify/delete conflict records)");
+    let out = cli.run(&wc_b, &["land", "--key", "kb", "--record-conflict"]);
+    assert!(
+        out.status.success(),
+        "the opt-in records a modify/delete conflict: {}{}",
+        string_of(&out.stdout),
+        string_of(&out.stderr)
+    );
+    assert!(string_of(&out.stdout).contains("conflicted: f.txt"));
+
+    step!("C syncs: status marks the deletion-side conflict");
+    let out = cli.run(&wc_c, &["sync"]);
+    assert!(out.status.success(), "C sync: {}", string_of(&out.stderr));
+    assert!(string_of(&out.stdout).contains("C f.txt"));
+    let human = cli.run_ok(&wc_c, &["status"]);
+    assert!(human.contains("C f.txt"), "{human}");
+    let disk = std::fs::read_to_string(wc_c.join("f.txt")).unwrap();
+    assert!(
+        disk.ends_with("======= naatre side 2/2: deleted\n>>>>>>> naatre conflict: f.txt\n"),
+        "the deleted side renders last:\n{disk}"
+    );
+    assert!(disk.starts_with("<<<<<<< naatre side 1/2: "), "{disk}");
+    assert!(
+        disk.contains("alpha-1\n"),
+        "the surviving side is shown:\n{disk}"
+    );
+
+    step!("resolve treats the path as conflicted (D clone, unchanged markers)");
+    cli.run_ok(&wc_d, &["sync"]);
+    let out = cli.run(&wc_d, &["resolve", "f.txt"]);
+    let text = string_of(&out.stdout) + &string_of(&out.stderr);
+    assert!(
+        !text.contains("is not a conflicted path"),
+        "the deletion-side markers count as a conflicted path: {text}"
+    );
+    // `resolve`'s own `marker_shaped` check recognized the deletion-side
+    // rendering: the honesty warning names the marker content.
+    assert!(
+        text.contains("still carries conflict markers"),
+        "resolve detects the deletion-side markers: {text}"
+    );
+
+    step!("C edits, resolves, lands");
+    std::fs::write(wc_c.join("f.txt"), b"resolved-1\nbase-2\n").unwrap();
+    let out = cli.run(&wc_c, &["resolve", "f.txt"]);
+    assert!(out.status.success(), "resolve: {}", string_of(&out.stderr));
+    let out = cli.run(&wc_c, &["land"]);
+    assert!(out.status.success(), "land: {}", string_of(&out.stderr));
+    let cat = cli.run_ok(&wc_c, &["cat", "f.txt", "--at", "main"]);
+    assert_eq!(cat, "resolved-1\nbase-2\n");
+    let status = cli.run_ok(&wc_c, &["status", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(status.trim()).unwrap();
+    assert_eq!(v["conflicted"], serde_json::json!([]), "{v}");
+    serve.stop();
+}
+
+/// A modify/delete conflict whose surviving side is executable (A: edit and
+/// `chmod +x`; B: delete) recorded under `--record-conflict` and read through
+/// the real client (the client does not see a chmod-only edit, so the exec
+/// bit rides on a content change here): the marker
+/// opener carries the ` +x` token and the marker file is not executable;
+/// `status` marks it, the commit gate refuses a copy of the marker file,
+/// and `resolve` recognizes the markers (so `marker_shaped` and the opener
+/// screen agree on the token end to end).
+#[cfg(unix)]
+#[test]
+fn exec_side_conflict_markers_status_gate_and_resolve() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_naatre"));
+    let root = tempfile::tempdir().expect("tempdir");
+    let root = root.path();
+    let (mut serve, cli) = seeded(
+        &bin,
+        root,
+        "execside",
+        &[("f.txt", b"base-1\nbase-2\n"), ("keep.txt", b"keep\n")],
+        "serve-exec",
+    );
+    let wc_a = clone_into(&cli, root, "execside", "wc_a");
+    let wc_b = clone_into(&cli, root, "execside", "wc_b");
+    let wc_c = clone_into(&cli, root, "execside", "wc_c");
+    let wc_d = clone_into(&cli, root, "execside", "wc_d");
+
+    step!("A edits f.txt and chmod +x and lands; B deletes it");
+    std::fs::write(wc_a.join("f.txt"), b"alpha-1\nbase-2\n").unwrap();
+    std::fs::set_permissions(wc_a.join("f.txt"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    cli.run_ok(&wc_a, &["commit", "-m", "edit and chmod +x"]);
+    cli.run_ok(&wc_a, &["land", "--key", "ka"]);
+    std::fs::remove_file(wc_b.join("f.txt")).unwrap();
+    cli.run_ok(&wc_b, &["commit", "-m", "delete f"]);
+    let out = cli.run(&wc_b, &["land", "--key", "kb", "--record-conflict"]);
+    assert!(
+        out.status.success(),
+        "the opt-in records an exec-only conflict: {}{}",
+        string_of(&out.stdout),
+        string_of(&out.stderr)
+    );
+    assert!(string_of(&out.stdout).contains("conflicted: f.txt"));
+
+    step!("C syncs: ` +x` on the opener, a non-executable marker file");
+    let out = cli.run(&wc_c, &["sync"]);
+    assert!(out.status.success(), "C sync: {}", string_of(&out.stderr));
+    assert!(string_of(&out.stdout).contains("C f.txt"));
+    let disk = std::fs::read_to_string(wc_c.join("f.txt")).unwrap();
+    let first = disk.lines().next().unwrap();
+    assert!(
+        first.starts_with("<<<<<<< naatre side 1/2: ") && first.ends_with(" +x"),
+        "the executable side shows the exec token: {first}"
+    );
+    assert!(disk.ends_with("======= naatre side 2/2: deleted\n>>>>>>> naatre conflict: f.txt\n"));
+    let mode = std::fs::metadata(wc_c.join("f.txt"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o111,
+        0,
+        "the marker file is not executable: {mode:o}"
+    );
+    assert!(cli.run_ok(&wc_c, &["status"]).contains("C f.txt"));
+
+    step!("the commit gate refuses a copy of the exec-token marker file");
+    std::fs::copy(wc_c.join("f.txt"), wc_c.join("copied-marker.txt")).unwrap();
+    let out = cli.run(&wc_c, &["commit", "-m", "try to commit markers"]);
+    assert_eq!(out.status.code(), Some(2), "the marker gate refuses");
+    assert!(string_of(&out.stderr).contains("conflict_markers_present"));
+    std::fs::remove_file(wc_c.join("copied-marker.txt")).unwrap();
+
+    step!("resolve recognizes the markers; an edit resolves");
+    cli.run_ok(&wc_d, &["sync"]);
+    let out = cli.run(&wc_d, &["resolve", "f.txt"]);
+    let text = string_of(&out.stdout) + &string_of(&out.stderr);
+    assert!(
+        text.contains("still carries conflict markers"),
+        "resolve detects the exec-token markers: {text}"
+    );
+    std::fs::write(wc_c.join("f.txt"), b"resolved\n").unwrap();
+    // The marker file is not executable; resolve takes the exec bit from
+    // disk, so keeping the executable side means `chmod +x` first.
+    std::fs::set_permissions(wc_c.join("f.txt"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = cli.run(&wc_c, &["resolve", "f.txt"]);
+    assert!(out.status.success(), "resolve: {}", string_of(&out.stderr));
+    let out = cli.run(&wc_c, &["land"]);
+    assert!(out.status.success(), "land: {}", string_of(&out.stderr));
+    assert_eq!(
+        cli.run_ok(&wc_c, &["cat", "f.txt", "--at", "main"]),
+        "resolved\n"
+    );
+    let wc_e = clone_into(&cli, root, "execside", "wc_e");
+    let mode = std::fs::metadata(wc_e.join("f.txt"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_ne!(
+        mode & 0o111,
+        0,
+        "resolve took the exec bit from disk: main's f.txt is executable ({mode:o})"
+    );
     serve.stop();
 }

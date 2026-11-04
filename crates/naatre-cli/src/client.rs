@@ -21,6 +21,10 @@ use crate::verbs::Net;
 
 pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:7400";
 
+/// The highest conflict format this client materializes. Bump it when the
+/// marker format gains a form.
+pub const CONFLICT_FORMAT: u32 = 2;
+
 /// The 503 envelope codes the CLI retries on idempotent verbs: the
 /// single-writer slot, the concurrent-request shed, and the per-request
 /// time budget — each `retryable: true` with a pinned `Retry-After` in the
@@ -285,7 +289,10 @@ impl Client {
         })
     }
 
+    /// Adds the bearer token and the client's conflict format
+    /// ([`CONFLICT_FORMAT`]) to every API request.
     fn with_bearer<B>(&self, rb: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+        let rb = rb.header("Naatre-Conflict-Format", CONFLICT_FORMAT.to_string());
         match &self.token {
             Some(t) => rb.header("Authorization", format!("Bearer {t}")),
             None => rb,
