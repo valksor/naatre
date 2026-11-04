@@ -270,8 +270,9 @@ history). **Mixed fleets.** Clients send `Naatre-Conflict-Format` on every reque
 (format 2). The server refuses the root of a conflicted node whose
 conflict format is higher than the header with 409
 `version_skew_conflicted`; an absent header counts as 0, so a client that
-predates the header cannot materialize any conflicted node and must
-upgrade, and operators upgrade clients before enabling `record_conflict`
+predates the header cannot fetch the root of a conflicted node and must
+upgrade. The refusal covers `GET …/changesets/{id}/root` of the conflicted
+node itself; it is a compatibility signal, not an access control. Operators upgrade clients before enabling `record_conflict`
 flows. **NAMED FOLLOW-UP (the M12 contract question): landing onto a
 conflicted main drops the conflict representation.** Observed on a real
 flow (the blocked-land retry pin): a plain re-land of a delta that

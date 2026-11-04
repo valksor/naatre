@@ -2848,6 +2848,101 @@ async fn land_refuses_a_tombstoned_rebase_body() {
     );
 }
 
+/// A blob the rebase's LINE MERGE must fetch is redacted and purged
+/// (its bytes are gone, the tombstone stands): the land answers the
+/// documented 410 `object_redacted` naming the blob — in record mode and in
+/// refuse mode — not a 500 from the failed fetch. Nothing persists: no
+/// `lands` row, no changeset rows, main unmoved.
+#[tokio::test]
+async fn land_line_merge_over_a_purged_blob_answers_410() {
+    for record in [true, false] {
+        let f = fixture();
+        let base = b"l1\nl2\nl3\nl4\n".to_vec();
+        let ours = b"O1\nl2\nl3\nl4\n".to_vec();
+        let theirs = b"l1\nl2\nl3\nT4\n".to_vec();
+        let (bb, bo, bt) = (
+            f.put_blob(&base).await,
+            f.put_blob(&ours).await,
+            f.put_blob(&theirs).await,
+        );
+        let (root, _) = f
+            .create_ok(&cs_body(
+                json!([]),
+                json!([m4b_common::add("m.txt", &bb, base.len())]),
+                "root",
+            ))
+            .await;
+        f.seed_main(&root);
+        // main's tip edits the first line; the side head edits the last.
+        let (cx, _) = f
+            .create_ok(&cs_body(
+                json!([root.clone()]),
+                json!([m4b_common::mod_("m.txt", &bo, ours.len())]),
+                "main-edit",
+            ))
+            .await;
+        let resp = f.land(&cx, "k-main").await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+        let (ch, _) = f
+            .create_ok(&cs_body(
+                json!([root.clone()]),
+                json!([m4b_common::mod_("m.txt", &bt, theirs.len())]),
+                "side-edit",
+            ))
+            .await;
+        let main_before = m4b_common::main_target_at(&f.t.db_path, f.repo_id);
+
+        // Redact main's blob, then put it in the state a purge leaves: the
+        // bytes gone from the CAS and the tombstone stamped purged. (The
+        // real GC pass spares a blob a live tree still references, so it
+        // cannot produce this state for main's tip; the gate must still
+        // answer for it, since the contract is "active or purged".)
+        f.redact("blob", &bo, "takedown").await;
+        f.t.state.cas.delete(&[hex_id(&bo)]).unwrap();
+        m4b_common::conn_at(&f.t.db_path)
+            .execute(
+                "UPDATE redactions SET purged_ns = 1 WHERE kind = 'blob' AND object_id = ?1",
+                [&hex_id(&bo).0[..]],
+            )
+            .unwrap();
+        assert!(!f.t.state.cas.has(&[hex_id(&bo)]).unwrap()[0]);
+
+        let changesets_before = f.count("SELECT COUNT(*) FROM changesets");
+        let resp = post_json_on(
+            &f.t.app,
+            &format!("/v1/repos/{REPO}/land"),
+            &f.writer,
+            &json!({ "head": ch, "key": "k-side", "record_conflict": record }),
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::GONE,
+            "record={record}: {}",
+            resp.body
+        );
+        assert_eq!(resp.body["error"]["code"], "object_redacted");
+        let msg = resp.body["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(&bo), "it names the blob id: {msg}");
+        assert!(msg.contains(REPO), "it names the repo: {msg}");
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM lands WHERE key = 'k-side'"),
+            0,
+            "the key stays unsettled"
+        );
+        assert_eq!(
+            m4b_common::main_target_at(&f.t.db_path, f.repo_id),
+            main_before,
+            "main unmoved"
+        );
+        assert_eq!(
+            f.count("SELECT COUNT(*) FROM changesets"),
+            changesets_before,
+            "no changeset rows"
+        );
+    }
+}
+
 /// The batch race-refusal condemns EVERY written id (round 2): the whole
 /// batch's bytes are already in the CAS when one raced mark refuses the
 /// record, and the all-or-nothing row side dies for the clean siblings

@@ -24,7 +24,9 @@ use naatre_core::changeset;
 use naatre_core::changeset::{FileChange, Op};
 use naatre_core::conflict::{ConflictRep, marker_bytes};
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_server::merge::{MergeOutcome, merge_lines, merge_trees_recording};
+use naatre_server::merge::{
+    MergeError, MergeOutcome, flatten_files, merge_lines, merge_trees, merge_trees_recording,
+};
 use naatre_server::state::{AppState, ServerState};
 use naatre_server::tree_derive::MemNode;
 use naatre_store::DataDir;
@@ -687,8 +689,10 @@ fn change_exec(path: &str, op: &str, blob: &str, size: usize, exec: bool) -> Val
 
 /// The v2 representation carries an exec bit per side and for the base, so
 /// a conflict whose sides differ only in the exec bit records (never a 500):
-/// the rep holds the bits, the marker lines show ` +x`, the marker file is
-/// not executable, and `lands.state = conflicted`.
+/// the rep holds the bits, the marker lines show ` +x`, the marker file's
+/// own bit is `resolve_exec(base, ours, theirs)` (the survivor's bit with a
+/// deletion side; ours when the sides disagree and the base is absent), and
+/// `lands.state = conflicted`.
 #[tokio::test]
 async fn record_conflict_records_an_exec_only_conflict() {
     let content = b"same\n".to_vec();
@@ -739,7 +743,9 @@ async fn record_conflict_records_an_exec_only_conflict() {
          ======= naatre side 2/2: deleted\n>>>>>>> naatre conflict: f.txt\n"
     );
     assert_eq!(cat(&f, &landed, "f.txt").await, expected.as_bytes());
-    assert!(!marker_file_exec(&f, &landed, "f.txt").await);
+    // resolve_exec(Some(false), Some(true) /* ours: chmod +x */, None) =
+    // the surviving side's bit = true.
+    assert!(marker_file_exec(&f, &landed, "f.txt").await);
 
     // (b) add/add: the same blob with different exec bits.
     let f = fixture();
@@ -793,6 +799,9 @@ async fn record_conflict_records_an_exec_only_conflict() {
          >>>>>>> naatre conflict: f.txt\n"
     );
     assert_eq!(cat(&f, &landed, "f.txt").await, expected.as_bytes());
+    // resolve_exec(None, Some(false) /* ours: main's plain add */,
+    // Some(true)): the sides disagree and the base is absent, so ours
+    // wins = false.
     assert!(!marker_file_exec(&f, &landed, "f.txt").await);
 }
 
@@ -811,8 +820,9 @@ async fn marker_file_exec(f: &Fixture, at: &str, path: &str) -> bool {
 /// Record mode never refuses a single-path content conflict: for every
 /// combination of base, ours and theirs (absent, or one of three contents
 /// with either exec bit — 7^3 cases) `merge_trees_recording` answers Ok.
-/// `take_conflict` turns a rep that `conflict::validate` rejects into an
-/// Err, so Ok proves no reachable shape hits that guard (the decision
+/// `take_conflict` pushes a rep that `conflict::validate` rejects to
+/// `refused` and the caller returns `Err(MergeError::Conflicts)`, so Ok
+/// proves no reachable shape hits that guard (the decision
 /// table only raises a conflict when ours, theirs and base all differ) —
 /// the file/directory duality stays the one refusal and carries its own
 /// recipe text.
@@ -857,6 +867,60 @@ fn record_mode_never_refuses_a_single_path_conflict() {
         }
     }
     assert!(recorded > 0, "the sweep reached recorded conflicts");
+}
+
+/// The marker entry's exec bit follows `resolve_exec` when the sides
+/// disagree on a content conflict: with a base, the side that CHANGED the
+/// bit wins (the base +x here — the side that drops it wins, whichever
+/// side that is); with no base, ours wins. Asserted on the merged tree's
+/// marker entry in both orientations.
+#[test]
+fn marker_exec_follows_the_side_that_changed_the_bit() {
+    let node = |content: Option<(&[u8], bool)>| -> MemNode {
+        let mut node = MemNode::empty();
+        if let Some((c, exec)) = content {
+            node.apply(&[FileChange {
+                path: "run.sh".into(),
+                op: Op::Add,
+                blob: Some(object_id(Kind::Blob, c)),
+                size: Some(c.len() as u64),
+                exec: Some(exec),
+            }])
+            .unwrap();
+        }
+        node
+    };
+    let fetch = |id: &Id| -> Result<Vec<u8>, String> {
+        [b"a\n".as_slice(), b"b\n", b"c\n"]
+            .iter()
+            .find(|c| object_id(Kind::Blob, c) == *id)
+            .map(|c| c.to_vec())
+            .ok_or_else(|| "unknown blob".to_string())
+    };
+    let marker_exec = |base: Option<bool>, ours: bool, theirs: bool| -> bool {
+        let merged = merge_trees_recording(
+            &node(base.map(|e| (b"a\n".as_slice(), e))),
+            &node(Some((b"b\n", ours))),
+            &node(Some((b"c\n", theirs))),
+            fetch,
+        )
+        .unwrap();
+        assert_eq!(merged.conflicts.len(), 1, "one recorded conflict");
+        flatten_files(&merged.tree.node)["run.sh"].exec
+    };
+    // Base +x: ours drops it, theirs keeps it → ours changed the bit.
+    assert!(!marker_exec(Some(true), false, true));
+    // Base +x: ours keeps it, theirs drops it → theirs changed the bit.
+    assert!(!marker_exec(Some(true), true, false));
+    // Base plain: ours gains +x, theirs keeps plain → ours changed it.
+    assert!(marker_exec(Some(false), true, false));
+    // Base plain: ours keeps plain, theirs gains +x → theirs changed it.
+    assert!(marker_exec(Some(false), false, true));
+    // Both sides agree (+x), base +x: the agreed bit.
+    assert!(marker_exec(Some(true), true, true));
+    // No base: the sides disagree → ours.
+    assert!(marker_exec(None, true, false));
+    assert!(!marker_exec(None, false, true));
 }
 
 /// The deletion flag survives a rebase: a deletion-side conflicted node
@@ -1022,6 +1086,87 @@ async fn record_conflict_refuses_a_file_directory_duality() {
     );
     assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
     assert_eq!(main_target(&f).await, c_file);
+}
+
+/// A blob-fetch failure during a record-mode merge is `MergeError::Fetch`,
+/// never a path conflict: a line-merge fetch (modify/modify) and a marker
+/// fetch (add/add, no base, so only `marker_bytes` fetches) both surface it.
+#[test]
+fn record_mode_fetch_failure_is_not_a_conflict() {
+    let file = |content: &[u8]| -> MemNode {
+        let mut node = MemNode::empty();
+        node.apply(&[FileChange {
+            path: "f.txt".into(),
+            op: Op::Add,
+            blob: Some(object_id(Kind::Blob, content)),
+            size: Some(content.len() as u64),
+            exec: Some(false),
+        }])
+        .unwrap();
+        node
+    };
+    let failing = |_: &Id| -> Result<Vec<u8>, String> { Err("blob store down".to_string()) };
+
+    // modify/modify: the line-merge fetch fails.
+    let err =
+        merge_trees_recording(&file(b"a\n"), &file(b"b\n"), &file(b"c\n"), failing).unwrap_err();
+    assert!(
+        matches!(err, MergeError::Fetch(_, ref m) if m == "blob store down"),
+        "{err:?}"
+    );
+
+    // add/add: the marker fetch fails, and the error names the blob that
+    // failed (only the theirs side's blob is unreadable here).
+    let missing = object_id(Kind::Blob, b"c\n");
+    let only_missing = |id: &Id| -> Result<Vec<u8>, String> {
+        if *id == missing {
+            Err("blob store down".to_string())
+        } else {
+            Ok(b"b\n".to_vec())
+        }
+    };
+    let err = merge_trees_recording(
+        &MemNode::empty(),
+        &file(b"b\n"),
+        &file(b"c\n"),
+        only_missing,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, MergeError::Fetch(id, ref m) if id == missing && m == "blob store down"),
+        "{err:?}"
+    );
+
+    // The refuse-mode merge reports the same failure the same way.
+    let err = merge_trees(&file(b"a\n"), &file(b"b\n"), &file(b"c\n"), failing).unwrap_err();
+    assert!(matches!(err, MergeError::Fetch(..)), "{err:?}");
+}
+
+/// The land route answers a fetch failure during a record-mode rebase as a
+/// 5xx internal error, not as the 409 file/directory recipe — in both
+/// modes. The blob is removed from the CAS after the changesets exist.
+#[tokio::test]
+async fn record_conflict_fetch_failure_answers_internal_not_the_recipe() {
+    for record in [true, false] {
+        let f = fixture();
+        let (_, c2, c2p) = diverged(&f, vec![]).await;
+        let ours = Id::from_hex(&blob_hex(b"L1-ours\nl2\nl3\n")).unwrap();
+        f.t.state.cas.delete(&[ours]).unwrap();
+
+        let resp = land_opt(&f, &c2, "k-fetch", record).await;
+        assert_eq!(
+            resp.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "record={record} body: {}",
+            resp.body
+        );
+        assert_eq!(code_of(&resp), "internal");
+        let text = resp.body.to_string();
+        assert!(!text.contains("cannot be recorded"), "{text}");
+        assert!(!text.contains("recipe"), "{text}");
+        assert_eq!(f.t.count("SELECT COUNT(*) FROM lands"), 0);
+        assert_eq!(main_target(&f).await, c2p);
+    }
 }
 
 // ---- 6/7. gate coverage: rep arms and the clean-merge sibling ---------------
@@ -1556,9 +1701,8 @@ async fn root_refuses_a_client_below_the_nodes_conflict_format() {
         r.body["error"]["message"],
         json!(format!(
             "changeset {fmt1} carries a first-class conflict in conflict format 1; this \
-             client announces conflict format 0 in its Naatre-Conflict-Format header \
-             (absent or unparsable = 0) and cannot materialize it honestly — upgrade \
-             the client (GET /version reports the server's protocol)"
+             client sends no Naatre-Conflict-Format header and cannot materialize it \
+             honestly — upgrade the client (GET /version reports the server's protocol)"
         ))
     );
     for ok in ["1", "2"] {
@@ -1571,6 +1715,15 @@ async fn root_refuses_a_client_below_the_nodes_conflict_format() {
     assert_eq!(
         r.body["error"]["details"],
         json!({"needed": 1, "announced": 0})
+    );
+    assert_eq!(
+        r.body["error"]["message"],
+        json!(format!(
+            "changeset {fmt1} carries a first-class conflict in conflict format 1; this \
+             client announces conflict format 0 in its Naatre-Conflict-Format header (an \
+             unparsable value counts as 0) and cannot materialize it honestly — upgrade \
+             the client (GET /version reports the server's protocol)"
+        ))
     );
     // A v1 node never refuses, with or without the header.
     let r = get_with_format(&f.t.app, &root_uri(&c1), &f.reader, None).await;

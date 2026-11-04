@@ -1573,7 +1573,8 @@ fn deletion_side_conflict_status_and_resolve() {
 /// `chmod +x`; B: delete) recorded under `--record-conflict` and read through
 /// the real client (the client does not see a chmod-only edit, so the exec
 /// bit rides on a content change here): the marker
-/// opener carries the ` +x` token and the marker file is not executable;
+/// opener carries the ` +x` token and the marker file is executable (the
+/// surviving side's bit);
 /// `status` marks it, the commit gate refuses a copy of the marker file,
 /// and `resolve` recognizes the markers (so `marker_shaped` and the opener
 /// screen agree on the token end to end).
@@ -1612,7 +1613,7 @@ fn exec_side_conflict_markers_status_gate_and_resolve() {
     );
     assert!(string_of(&out.stdout).contains("conflicted: f.txt"));
 
-    step!("C syncs: ` +x` on the opener, a non-executable marker file");
+    step!("C syncs: ` +x` on the opener, an executable marker file");
     let out = cli.run(&wc_c, &["sync"]);
     assert!(out.status.success(), "C sync: {}", string_of(&out.stderr));
     assert!(string_of(&out.stdout).contains("C f.txt"));
@@ -1627,10 +1628,10 @@ fn exec_side_conflict_markers_status_gate_and_resolve() {
         .unwrap()
         .permissions()
         .mode();
-    assert_eq!(
+    assert_ne!(
         mode & 0o111,
         0,
-        "the marker file is not executable: {mode:o}"
+        "the surviving side is +x, so the marker file is executable: {mode:o}"
     );
     assert!(cli.run_ok(&wc_c, &["status"]).contains("C f.txt"));
 
@@ -1650,9 +1651,8 @@ fn exec_side_conflict_markers_status_gate_and_resolve() {
         "resolve detects the exec-token markers: {text}"
     );
     std::fs::write(wc_c.join("f.txt"), b"resolved\n").unwrap();
-    // The marker file is not executable; resolve takes the exec bit from
-    // disk, so keeping the executable side means `chmod +x` first.
-    std::fs::set_permissions(wc_c.join("f.txt"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    // The marker file is executable (the surviving side's bit) and resolve
+    // takes the exec bit from disk, so no chmod is needed.
     let out = cli.run(&wc_c, &["resolve", "f.txt"]);
     assert!(out.status.success(), "resolve: {}", string_of(&out.stderr));
     let out = cli.run(&wc_c, &["land"]);
@@ -1671,5 +1671,82 @@ fn exec_side_conflict_markers_status_gate_and_resolve() {
         0,
         "resolve took the exec bit from disk: main's f.txt is executable ({mode:o})"
     );
+    serve.stop();
+}
+
+/// F2a review blocker: the marker file takes the exec bit the sides agree
+/// on (three-way, as a clean merge would), so a content conflict on a
+/// script whose base and both sides are `+x` materializes an EXECUTABLE
+/// marker file. `resolve` records the exec bit from disk, so editing the
+/// markers out without any `chmod` keeps the script executable on main.
+#[cfg(unix)]
+#[test]
+fn exec_script_content_conflict_resolves_executable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_naatre"));
+    let root = tempfile::tempdir().expect("tempdir");
+    let root = root.path();
+    let (mut serve, cli) = seeded(
+        &bin,
+        root,
+        "execscript",
+        &[
+            ("run.sh", b"#!/bin/sh\nbase-1\nbase-2\n"),
+            ("keep.txt", b"keep\n"),
+        ],
+        "serve-script",
+    );
+    let exec_of = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o111;
+
+    step!("a setup clone makes the base run.sh executable (edit + chmod +x)");
+    let wc_0 = clone_into(&cli, root, "execscript", "wc_0");
+    std::fs::write(wc_0.join("run.sh"), b"#!/bin/sh\nbase-1\nbase-2b\n").unwrap();
+    std::fs::set_permissions(wc_0.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    cli.run_ok(&wc_0, &["commit", "-m", "script is executable"]);
+    cli.run_ok(&wc_0, &["land", "--key", "k0"]);
+    let wc_a = clone_into(&cli, root, "execscript", "wc_a");
+    let wc_b = clone_into(&cli, root, "execscript", "wc_b");
+    let wc_c = clone_into(&cli, root, "execscript", "wc_c");
+    assert_ne!(exec_of(&wc_a.join("run.sh")), 0, "the base is executable");
+
+    step!("A and B edit the same line (both stay +x); B lands with the opt-in");
+    std::fs::write(wc_a.join("run.sh"), b"#!/bin/sh\nalpha-1\nbase-2b\n").unwrap();
+    cli.run_ok(&wc_a, &["commit", "-m", "alpha"]);
+    cli.run_ok(&wc_a, &["land", "--key", "ka"]);
+    std::fs::write(wc_b.join("run.sh"), b"#!/bin/sh\nbeta-1\nbase-2b\n").unwrap();
+    cli.run_ok(&wc_b, &["commit", "-m", "beta"]);
+    let out = cli.run(&wc_b, &["land", "--key", "kb", "--record-conflict"]);
+    assert!(
+        out.status.success(),
+        "the opt-in records the content conflict: {}{}",
+        string_of(&out.stdout),
+        string_of(&out.stderr)
+    );
+    assert!(string_of(&out.stdout).contains("conflicted: run.sh"));
+
+    step!("C syncs: the marker file is executable");
+    let out = cli.run(&wc_c, &["sync"]);
+    assert!(out.status.success(), "C sync: {}", string_of(&out.stderr));
+    let disk = std::fs::read_to_string(wc_c.join("run.sh")).unwrap();
+    assert!(disk.starts_with("<<<<<<< naatre side 1/2: "), "{disk}");
+    let mode = exec_of(&wc_c.join("run.sh"));
+    assert_ne!(
+        mode, 0,
+        "the marker file takes the agreed exec bit: {mode:o}"
+    );
+
+    step!("C edits the markers out WITHOUT chmod, resolves and lands");
+    std::fs::write(wc_c.join("run.sh"), b"#!/bin/sh\nresolved-1\nbase-2b\n").unwrap();
+    let out = cli.run(&wc_c, &["resolve", "run.sh"]);
+    assert!(out.status.success(), "resolve: {}", string_of(&out.stderr));
+    let out = cli.run(&wc_c, &["land"]);
+    assert!(out.status.success(), "land: {}", string_of(&out.stderr));
+    assert_eq!(
+        cli.run_ok(&wc_c, &["cat", "run.sh", "--at", "main"]),
+        "#!/bin/sh\nresolved-1\nbase-2b\n"
+    );
+    let wc_e = clone_into(&cli, root, "execscript", "wc_e");
+    let mode = exec_of(&wc_e.join("run.sh"));
+    assert_ne!(mode, 0, "a fresh clone's run.sh is executable ({mode:o})");
     serve.stop();
 }

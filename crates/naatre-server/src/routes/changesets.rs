@@ -748,6 +748,7 @@ pub async fn get_root(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
+    let header_sent = headers.contains_key(CONFLICT_FORMAT_HEADER);
     let (gate_hex, gate_repo) = (id_hex.clone(), repo.clone());
     let repo_name = repo.clone();
     let root = state
@@ -773,14 +774,20 @@ pub async fn get_root(
                 })?;
                 let needed = naatre_core::conflict::conflict_format(&cs.conflicts);
                 if needed > announced {
+                    let client = if header_sent {
+                        format!(
+                            "this client announces conflict format {announced} in its \
+                             {CONFLICT_FORMAT_HEADER} header (an unparsable value counts as 0)"
+                        )
+                    } else {
+                        format!("this client sends no {CONFLICT_FORMAT_HEADER} header")
+                    };
                     return Err(ApiError::new(
                         ApiCode::VersionSkewConflicted,
                         format!(
                             "changeset {gate_hex} carries a first-class conflict in conflict \
-                             format {needed}; this client announces conflict format \
-                             {announced} in its {CONFLICT_FORMAT_HEADER} header (absent or \
-                             unparsable = 0) and cannot materialize it honestly — upgrade \
-                             the client (GET /version reports the server's protocol)"
+                             format {needed}; {client} and cannot materialize it honestly — \
+                             upgrade the client (GET /version reports the server's protocol)"
                         ),
                     )
                     .with_details(

@@ -130,17 +130,21 @@ TLS-terminating reverse proxy in front (see below).
   (the conflicted node's root tree IS the markers-materialized tree);
   `naatre status` marks the conflicted paths (`C <path>`); a commit of
   marker-shaped content refuses with `conflict_markers_present`; the
-  resolution is `naatre resolve <path>` (it takes the exec bit from disk:
-  the marker file is never executable, so `chmod +x` the resolved file
-  first to keep it executable) — the resolved content commits as
+  resolution is `naatre resolve <path>` (it records the exec bit on disk:
+  the marker file takes the exec bit the sides agree on — three-way, as a
+  clean merge would: with no base and disagreeing sides it takes main's
+  side (ours), with a base the side that changed the bit wins, and with a
+  deletion side it takes the surviving side's bit — so
+  `chmod` the resolved file only when you want a different bit) — the resolved content commits as
   an explicit resolution changeset referencing the conflicted head, and
   the following `naatre land` advances main past the conflict (linear
   history). **Mixed fleets:** clients send `Naatre-Conflict-Format` on
   every request (format 2). The server refuses `GET /v1/repos/{r}/changesets/{id}/root`
   of a conflicted node whose conflict format is higher than the header
   with 409 `version_skew_conflicted`; an absent header counts as 0, so a
-  client that predates the header cannot materialize any conflicted node
-  and must upgrade. Operators should upgrade clients before enabling
+  client that predates the header cannot fetch the root of a conflicted
+  node and must upgrade. The refusal covers that one route; it is a
+  compatibility signal, not an access control. Operators should upgrade clients before enabling
   `record_conflict` flows. Formats: `docs/format.md` §8; semantics:
   `docs/design.md` ("First-class conflicts").
 - **Deploy note for format v2 (M12a): the schema upgrade is a ONE-WAY,

@@ -193,8 +193,9 @@ fn deletion_side_rep() -> ConflictRep {
     }
 }
 
-/// The exec-bit rep: an executable base, two blob sides (one executable) —
-/// the shape of a chmod-vs-edit conflict (flags byte 5).
+/// The exec-bit rep: an executable base, two blob sides with different
+/// content (one executable, one not) — the shape of an edit that also drops
+/// `+x` against an edit that keeps it (flags byte 5).
 fn exec_rep() -> ConflictRep {
     let mut pairs = [
         (conflict_blob(b"ours\n"), false),

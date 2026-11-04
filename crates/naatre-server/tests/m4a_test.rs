@@ -24,7 +24,7 @@ use tower::ServiceExt;
 
 use naatre_core::changeset::{self, Changeset, FileChange, Op};
 use naatre_core::ids::{Id, Kind, object_id};
-use naatre_server::merge::{MergeOutcome, merge_lines, merge_trees};
+use naatre_server::merge::{MergeError, MergeOutcome, PathConflict, merge_lines, merge_trees};
 use naatre_server::state::{AppState, ServerState};
 use naatre_server::tree_derive::MemNode;
 use naatre_store::DataDir;
@@ -496,6 +496,14 @@ fn merge_lines_table() {
     conflict(b"text\n", b"\xff\xfe\x01\n", b"\x00\x01\x02\n");
 }
 
+/// The path conflicts of a refused merge (a fetch failure is not one).
+fn conflicts_of(e: MergeError) -> Vec<PathConflict> {
+    match e {
+        MergeError::Conflicts(c) => c,
+        MergeError::Fetch(_, m) => panic!("expected path conflicts, got a fetch failure: {m}"),
+    }
+}
+
 #[test]
 fn merge_trees_table() {
     use naatre_server::merge::flatten_files;
@@ -542,7 +550,7 @@ fn merge_trees_table() {
 
     // add/add different → conflict.
     let theirs = node(&[("f", b"A-theirs\n", false)]);
-    let errs = merge_trees(&base, &ours, &theirs, &fetch).unwrap_err();
+    let errs = conflicts_of(merge_trees(&base, &ours, &theirs, &fetch).unwrap_err());
     assert_eq!(errs.len(), 1);
     assert_eq!(errs[0].path, "f");
     assert_eq!(errs[0].ours_blob, Some(blob(b"A\n")));
@@ -552,7 +560,7 @@ fn merge_trees_table() {
     let base = node(&[("f", b"A\n", false)]);
     let ours = node(&[]);
     let theirs = node(&[("f", b"A-theirs\n", false)]);
-    let errs = merge_trees(&base, &ours, &theirs, &fetch).unwrap_err();
+    let errs = conflicts_of(merge_trees(&base, &ours, &theirs, &fetch).unwrap_err());
     assert_eq!(errs[0].path, "f");
     assert!(errs[0].reason.contains("deleted by one side"));
 
@@ -588,7 +596,7 @@ fn merge_trees_table() {
     let base = node(&[("f", b"l1\nl2\n", false)]);
     let ours = node(&[("f", b"O1\nl2\n", true)]);
     let theirs = node(&[("f", b"T1\nl2\n", false)]);
-    let errs = merge_trees(&base, &ours, &theirs, fetch2).unwrap_err();
+    let errs = conflicts_of(merge_trees(&base, &ours, &theirs, fetch2).unwrap_err());
     assert_eq!(errs[0].path, "f");
     assert!(errs[0].reason.contains("line merge conflict"));
 

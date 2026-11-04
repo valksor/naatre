@@ -225,9 +225,11 @@ request header (format 2; absent = 0), and the server refuses
 higher than the header with 409 `version_skew_conflicted` (exit 2 in the
 CLI), naming the needed and announced formats and pointing at
 `GET /version` (which reports the protocol version clients warn on skew
-about). A client never receives conflict content it cannot materialize
-honestly, and a client that predates the header cannot materialize any
-conflicted node. A v2-aware client materializes the markers (the
+about). The refusal covers `GET …/changesets/{id}/root` of the conflicted
+node itself, so a client that predates the header cannot fetch that root;
+it is a compatibility signal, not an access control: other routes (tree,
+object, history) do not check the header, and a plain node landed after a
+conflicted one carries the marker files in its tree. A v2-aware client materializes the markers (the
 conflicted node's `root_tree_id` IS the markers-materialized tree),
 `status` marks the conflicted paths from `.naatre/state.json` (zero server
 calls), commits of marker-shaped files refuse with
@@ -320,9 +322,21 @@ and `deleted` never carries it:
 >>>>>>> naatre conflict: <path>
 ```
 
+An executable side together with a deletion side (the `deleted` divider
+never carries the token):
+
+```
+<<<<<<< naatre side 1/2: <side-1 id> +x
+<side-1 content>
+||||||| naatre base: <base id>
+<base content>
+======= naatre side 2/2: deleted
+>>>>>>> naatre conflict: <path>
+```
+
 The longest opener is `<<<<<<< naatre side 1/100000: <64 hex> +x` = 97
-bytes plus the newline, inside the 128-byte prefix the server's marker
-screen reads.
+bytes plus the newline, inside the 128-byte prefix that `marker_opener`
+screens as a first line; the bound is pinned by a test.
 
 A client announces the highest conflict format it materializes in the
 `Naatre-Conflict-Format` request header (absent = 0). Format 1 = content
@@ -332,10 +346,13 @@ sides only (M12). Format 2 = adds the deletion side and the exec bits (F2). The 
 
 Every content block ends in a newline (one is appended to non-empty content
 that lacks it), so dividers always start at line beginnings. The
-materialized marker file itself is never executable (its tree entry has
-exec 0): each side's own bit lives in the representation and shows as ` +x`
-on its marker line. To resolve to an executable file, run `chmod +x` on it
-before `naatre resolve`: the resolution takes the exec bit from disk. The rendering
+materialized marker file takes the exec bit the sides agree on (three-way,
+as a clean merge would: when the sides disagree and there is no base, ours —
+main's side — wins; with a base, the side that changed the bit wins; with a
+deletion side, the surviving side's bit);
+each side's own bit also lives in the representation and shows as ` +x` on
+its marker line. `naatre resolve` records the exec bit on disk, so `chmod`
+the resolved file only when you want a different bit. The rendering
 is a pure function of the rep plus the referenced contents: the recording
 server and any later client derive byte-identical markers.
 

@@ -66,7 +66,9 @@ use crate::api_code::ApiCode;
 use crate::api_error::ApiError;
 use crate::authz;
 use crate::db;
-use crate::merge::{PathConflict, content_rep, delta_between, merge_trees, merge_trees_recording};
+use crate::merge::{
+    MergeError, PathConflict, content_rep, delta_between, merge_trees, merge_trees_recording,
+};
 use crate::router::RepoCx;
 use crate::tree_derive::{DeriveError, MemNode};
 
@@ -533,7 +535,9 @@ fn land_in_txn(
         };
         let (merged, reconflicted) = if cmd.record_conflict {
             let rec = merge_trees_recording(&parent_tree, &tip_tree, &node_tree, fetch_blob)
-                .map_err(|c| conflict_error(c, RESOLUTION_RECIPE_REFUSED))?;
+                .map_err(|e| {
+                    merge_error(e, RESOLUTION_RECIPE_REFUSED, conn, repo_id, &cmd.repo_name)
+                })?;
             // Pre-sized marker overflow: refuse 413 BEFORE any CAS write
             // (the marker bytes existed only in memory so far).
             if let Some((path, size)) = rec.oversized.first() {
@@ -549,7 +553,7 @@ fn land_in_txn(
             (rec.tree, rec.conflicts)
         } else {
             let merged = merge_trees(&parent_tree, &tip_tree, &node_tree, fetch_blob)
-                .map_err(|c| conflict_error(c, RESOLUTION_RECIPE))?;
+                .map_err(|e| merge_error(e, RESOLUTION_RECIPE, conn, repo_id, &cmd.repo_name))?;
             (merged, Vec::new())
         };
 
@@ -661,30 +665,11 @@ fn land_in_txn(
                         .iter()
                         .any(|rep| rep.base == Some(*id) || rep.sides.contains(id))
             });
-            let guidance = if conflicted_content {
-                " A side of this conflict is redacted in this repo, so the land can \
-                 neither record nor merge it — remove or rewrite the conflicting edit \
-                 at that path, or resolve with the admin who holds the redaction."
-            } else {
-                ""
-            };
-            return Err(ApiError::new(
-                ApiCode::ObjectRedacted,
-                if count == 1 {
-                    format!(
-                        "blob {} is redacted in {repo}; referencing it is refused{guidance}",
-                        blob.to_hex(),
-                        repo = cmd.repo_name
-                    )
-                } else {
-                    format!(
-                        "blob {} is redacted in {repo}; referencing it is refused \
-                         (+{} more redacted ids){guidance}",
-                        blob.to_hex(),
-                        count - 1,
-                        repo = cmd.repo_name
-                    )
-                },
+            return Err(redacted_blob_error(
+                &cmd.repo_name,
+                blob,
+                count - 1,
+                conflicted_content,
             ));
         }
         if offenders.contains(&new_id) {
@@ -937,6 +922,62 @@ fn rep_paths_of(conn: &Db, repo_id: i64, id: &Id) -> Result<Vec<String>, ApiErro
         None => Vec::new(),
     };
     Ok(reps.iter().map(|r| r.path.clone()).collect())
+}
+
+/// Maps a failed tree merge. Real conflicts answer the 409 with the
+/// request's recipe. A blob-fetch failure is not a conflict: when the blob
+/// is tombstoned in this repo (active or purged — the rebase-body gate's
+/// lookup) it answers the gate's 410 `object_redacted`, since a purged
+/// blob a line merge must read can no longer be fetched; any other miss
+/// is a storage fault and answers the standard 5xx (the cause is logged,
+/// never sent).
+fn merge_error(
+    e: MergeError,
+    recipe: &'static str,
+    conn: &Db,
+    repo_id: i64,
+    repo_name: &str,
+) -> ApiError {
+    match e {
+        MergeError::Conflicts(c) => conflict_error(c, recipe),
+        MergeError::Fetch(id, cause) => match db::redactions_active_among(conn, repo_id, &[id]) {
+            Ok(hits) if hits.contains(&id) => redacted_blob_error(repo_name, id, 0, true),
+            Ok(_) => ApiError::log_internal(cause),
+            Err(db_err) => ApiError::log_internal(format!(
+                "{cause}; the tombstone lookup for blob {} failed: {db_err}",
+                id.to_hex()
+            )),
+        },
+    }
+}
+
+/// The 410 `object_redacted` answer for a blob the land writes or
+/// references that is tombstoned in the repo. `more` counts the further
+/// tombstoned ids of the same land; `conflicted_content` adds the remedy
+/// for a redacted conflict side or merge input.
+fn redacted_blob_error(repo: &str, blob: Id, more: usize, conflicted_content: bool) -> ApiError {
+    let guidance = if conflicted_content {
+        " A side of this conflict is redacted in this repo, so the land can \
+         neither record nor merge it — remove or rewrite the conflicting edit \
+         at that path, or resolve with the admin who holds the redaction."
+    } else {
+        ""
+    };
+    ApiError::new(
+        ApiCode::ObjectRedacted,
+        if more == 0 {
+            format!(
+                "blob {} is redacted in {repo}; referencing it is refused{guidance}",
+                blob.to_hex()
+            )
+        } else {
+            format!(
+                "blob {} is redacted in {repo}; referencing it is refused \
+                 (+{more} more redacted ids){guidance}",
+                blob.to_hex()
+            )
+        },
+    )
 }
 
 /// The 409 payload: every path conflict plus the resolution recipe —

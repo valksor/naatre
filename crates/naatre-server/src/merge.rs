@@ -229,6 +229,21 @@ pub enum OnConflict {
     Record,
 }
 
+/// Why a tree merge failed. A blob-fetch failure is NOT a path conflict —
+/// a missing or unreadable blob of a stored tree is corruption or a storage
+/// fault — so it travels as its own variant with the failing blob id, and
+/// the caller never answers it with a conflict recipe (a tombstoned id
+/// answers 410 `object_redacted`, any other id a server error).
+#[derive(Debug)]
+pub enum MergeError {
+    /// Real refusals: every path conflict (refuse mode), or the
+    /// unrecordable ones (record mode: a file/directory duality, the
+    /// `content_rep` guard).
+    Conflicts(Vec<PathConflict>),
+    /// The blob fetcher failed: the id it was asked for and its own message.
+    Fetch(Id, String),
+}
+
 /// A recording merge ([`merge_trees_recording`]): the merged tree — with
 /// marker content at every conflicting path — plus the conflict list the
 /// markers were materialized from, and any marker whose bytes would exceed
@@ -290,22 +305,24 @@ fn flatten_into(node: &MemNode, prefix: String, out: &mut BTreeMap<String, FileM
 /// Path-level 3-way merge of two trees against their common base. All path
 /// conflicts are collected (the 409 names every one of them, not the
 /// first). `fetch_blob` resolves blob contents for line merging; a fetch
-/// failure aborts with the fetcher's own error (a missing blob of a stored
+/// failure aborts as [`MergeError::Fetch`] (a missing blob of a stored
 /// tree is corruption, not a merge conflict).
 pub fn merge_trees(
     base: &MemNode,
     ours: &MemNode,
     theirs: &MemNode,
     fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
-) -> Result<MergedTree, Vec<PathConflict>> {
+) -> Result<MergedTree, MergeError> {
     merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Refuse).map(|(tree, _, _)| tree)
 }
 
 /// The recording variant of [`merge_trees`]: every representable conflict
 /// materializes its marker content (the representation's deterministic
 /// rendering) into the merged tree, and [`RecordedMerge::conflicts`] lists
-/// them all. `Err` is reserved for refusals: blob fetch failures and tree
-/// duality violations (a file and a directory at one path); a modify/delete
+/// them all. `Err` is reserved for refusals: tree duality violations (a
+/// file and a directory at one path, and the `content_rep` guard) as
+/// [`MergeError::Conflicts`], and blob fetch failures as
+/// [`MergeError::Fetch`]; a modify/delete
 /// conflict records with a deletion side, an exec-only conflict with the
 /// sides' exec bits. A marker whose bytes would exceed
 /// the blob limit is PRE-SIZED here and reported in
@@ -316,7 +333,7 @@ pub fn merge_trees_recording(
     ours: &MemNode,
     theirs: &MemNode,
     fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
-) -> Result<RecordedMerge, Vec<PathConflict>> {
+) -> Result<RecordedMerge, MergeError> {
     merge_trees_mode(base, ours, theirs, fetch_blob, OnConflict::Record).map(
         |(tree, conflicts, oversized)| RecordedMerge {
             tree,
@@ -358,21 +375,21 @@ pub(crate) fn content_rep(c: &PathConflict) -> Option<ConflictRep> {
     Some(rep)
 }
 
-/// The exec bit of a cleanly merged file: agreeing sides win, one
+/// The exec bit of a merged file or a conflict's marker file: agreeing sides win, one
 /// side matching the base defers to the other, otherwise ours. A deleted
 /// side (None) leaves the surviving side's bit.
-fn resolve_exec(b: Option<FileMeta>, o: Option<FileMeta>, t: Option<FileMeta>) -> bool {
+fn resolve_exec(b: Option<bool>, o: Option<bool>, t: Option<bool>) -> bool {
     match (o, t) {
-        (Some(om), Some(tm)) => {
-            if om.exec == tm.exec {
-                om.exec
-            } else if b.is_some_and(|bm| om.exec == bm.exec) {
-                tm.exec
+        (Some(oe), Some(te)) => {
+            if oe == te {
+                oe
+            } else if b == Some(oe) {
+                te
             } else {
-                om.exec
+                oe
             }
         }
-        (Some(om), None) | (None, Some(om)) => om.exec,
+        (Some(e), None) | (None, Some(e)) => e,
         // Unreachable in the both-changed table: both-deleted is handled by
         // the sides-agree branch before any conflict is raised.
         (None, None) => false,
@@ -381,8 +398,8 @@ fn resolve_exec(b: Option<FileMeta>, o: Option<FileMeta>, t: Option<FileMeta>) -
 
 /// Routes one path conflict per the mode: `Refuse` collects it to fail the
 /// merge; `Record` materializes the sides' markers into the merged map. A
-/// fetch failure under `Record` returns the fetcher's error (corruption,
-/// not a conflict). Every input blob id whose content flows into the
+/// fetch failure under `Record` returns the failing blob id and the
+/// fetcher's error (corruption, not a conflict). Every input blob id whose content flows into the
 /// result (marker sides + base) is recorded for the caller's tombstone
 /// gate; an over-limit marker is pre-sized into `oversized` instead of
 /// recorded.
@@ -397,7 +414,7 @@ fn take_conflict(
     input_ids: &mut Vec<Id>,
     oversized: &mut Vec<(String, usize)>,
     fetch_blob: &mut impl FnMut(&Id) -> Result<Vec<u8>, String>,
-) -> Result<(), String> {
+) -> Result<(), FetchFailure> {
     match on {
         OnConflict::Refuse => {
             refused.push(c);
@@ -411,7 +428,12 @@ fn take_conflict(
                     input_ids.push(base);
                 }
                 input_ids.extend(rep.sides.iter().copied());
-                let bytes = marker_bytes(&rep, |id| fetch_blob(id))?;
+                let mut failed: Option<Id> = None;
+                let bytes = marker_bytes(&rep, |id| {
+                    fetch_blob(id).inspect_err(|_| failed = Some(*id))
+                })
+                // `marker_bytes` fails only through its fetcher.
+                .map_err(|e| (failed.expect("a marker_bytes error is a fetch error"), e))?;
                 // Pre-size: a would-be blob-limit overflow refuses 413 at
                 // the caller (before any CAS write), not a 500 from a
                 // rejected CAS put.
@@ -423,10 +445,16 @@ fn take_conflict(
                 let meta = FileMeta {
                     blob,
                     size: bytes.len() as u64,
-                    // The marker file itself is never executable; each
-                    // side's own bit is recorded in the representation and
-                    // shown on the marker line.
-                    exec: false,
+                    // The marker file takes the exec bit a clean merge
+                    // would (three-way; with a deletion side the
+                    // surviving side's bit); each side's own bit is also
+                    // recorded in the representation and shown on the
+                    // marker line.
+                    exec: resolve_exec(
+                        c.base_blob.map(|_| c.base_exec),
+                        c.ours_blob.map(|_| c.ours_exec),
+                        c.theirs_blob.map(|_| c.theirs_exec),
+                    ),
                 };
                 if !new_blobs.iter().any(|(id, _)| *id == blob) {
                     new_blobs.push((blob, bytes));
@@ -445,6 +473,9 @@ fn take_conflict(
     }
 }
 
+/// A fetch failure with the id that was asked for.
+type FetchFailure = (Id, String);
+
 /// Pre-sized over-limit markers: (path, byte size) — the caller refuses
 /// 413 before any CAS write.
 type OversizedMarkers = Vec<(String, usize)>;
@@ -459,7 +490,7 @@ fn merge_trees_mode(
     theirs: &MemNode,
     mut fetch_blob: impl FnMut(&Id) -> Result<Vec<u8>, String>,
     on: OnConflict,
-) -> Result<(MergedTree, Vec<PathConflict>, OversizedMarkers), Vec<PathConflict>> {
+) -> Result<(MergedTree, Vec<PathConflict>, OversizedMarkers), MergeError> {
     let base_files = flatten_files(base);
     let ours_files = flatten_files(ours);
     let theirs_files = flatten_files(theirs);
@@ -526,10 +557,11 @@ fn merge_trees_mode(
         match (b, o, t) {
             (Some(bm), Some(om), Some(tm)) => {
                 // modify/modify: line-merge the blob contents.
-                let merged = (|| -> Result<Option<(FileMeta, Vec<u8>)>, String> {
-                    let base_bytes = fetch_blob(&bm.blob)?;
-                    let ours_bytes = fetch_blob(&om.blob)?;
-                    let theirs_bytes = fetch_blob(&tm.blob)?;
+                let merged = (|| -> Result<Option<(FileMeta, Vec<u8>)>, FetchFailure> {
+                    let mut fetch = |id: &Id| fetch_blob(id).map_err(|e| (*id, e));
+                    let base_bytes = fetch(&bm.blob)?;
+                    let ours_bytes = fetch(&om.blob)?;
+                    let theirs_bytes = fetch(&tm.blob)?;
                     // The inputs' content flowed into the merged blob
                     // (clean merge) or would have (conflict): their ids
                     // join the gate batch either way.
@@ -539,7 +571,11 @@ fn merge_trees_mode(
                         MergeOutcome::Conflict => Ok(None),
                         MergeOutcome::Merged(bytes) => {
                             let blob = object_id(Kind::Blob, &bytes);
-                            let exec = resolve_exec(b, o, t);
+                            let exec = resolve_exec(
+                                b.map(|m| m.exec),
+                                o.map(|m| m.exec),
+                                t.map(|m| m.exec),
+                            );
                             Ok(Some((
                                 FileMeta {
                                     blob,
@@ -569,8 +605,8 @@ fn merge_trees_mode(
                         &mut oversized,
                         &mut fetch_blob,
                     )
-                    .map_err(|e| vec![conflict(&e)])?,
-                    Err(e) => return Err(vec![conflict(&e)]),
+                    .map_err(|(id, e)| MergeError::Fetch(id, e))?,
+                    Err((id, e)) => return Err(MergeError::Fetch(id, e)),
                 }
             }
             (None, Some(_), Some(_)) => {
@@ -585,7 +621,7 @@ fn merge_trees_mode(
                     &mut oversized,
                     &mut fetch_blob,
                 )
-                .map_err(|e| vec![conflict(&e)])?;
+                .map_err(|(id, e)| MergeError::Fetch(id, e))?;
             }
             (Some(_), None, Some(_)) | (Some(_), Some(_), None) => {
                 take_conflict(
@@ -599,7 +635,7 @@ fn merge_trees_mode(
                     &mut oversized,
                     &mut fetch_blob,
                 )
-                .map_err(|e| vec![conflict(&e)])?;
+                .map_err(|(id, e)| MergeError::Fetch(id, e))?;
             }
             // o == t == None with b present is both-deleted: absent, handled
             // by the o == t branch above.
@@ -608,7 +644,7 @@ fn merge_trees_mode(
     }
 
     if !conflicts.is_empty() {
-        return Err(conflicts);
+        return Err(MergeError::Conflicts(conflicts));
     }
 
     // Build the result node with Add changes — `MemNode::apply` enforces the
@@ -633,7 +669,7 @@ fn merge_trees_mode(
             // grammar's depth cap on the way in.
             ApplyError::TooDeep { path } => path.clone(),
         };
-        return Err(vec![PathConflict {
+        return Err(MergeError::Conflicts(vec![PathConflict {
             reason: "merged result is not a consistent tree (file/directory duality)".into(),
             base_blob: None,
             base_exec: false,
@@ -642,7 +678,7 @@ fn merge_trees_mode(
             theirs_blob: None,
             theirs_exec: false,
             path,
-        }]);
+        }]));
     }
     Ok((
         MergedTree {
